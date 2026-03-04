@@ -20,18 +20,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  fetch_precheck:
+  maintain_supabase:
     if: github.repository == 'ziwenhahaha/daily-paper-reader'
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    outputs:
-      should_run: ${{ steps.result.outputs.should_run }}
-      has_data: ${{ steps.result.outputs.has_data }}
-      fetch_count: ${{ steps.result.outputs.fetch_count }}
-      raw_path: ${{ steps.result.outputs.raw_path }}
-      raw_filename: ${{ steps.result.outputs.raw_filename }}
-      run_date: ${{ steps.result.outputs.run_date }}
-      artifact_name: ${{ steps.result.outputs.artifact_name }}
     env:
       SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
       SUPABASE_PAPERS_TABLE: arxiv_papers
@@ -41,24 +33,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Decide run mode
-        id: decide_mode
-        run: |
-          if [ -z "${SUPABASE_SERVICE_KEY}" ]; then
-            echo "[WARN] 未配置 SUPABASE_SERVICE_KEY，已跳过维护同步。"
-            echo "should_run=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "should_run=true" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Setup Python
-        if: ${{ steps.decide_mode.outputs.should_run == 'true' }}
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Cache pip + torch
-        if: ${{ steps.decide_mode.outputs.should_run == 'true' }}
         uses: actions/cache@v4
         with:
           path: |
@@ -67,7 +47,6 @@ jobs:
           key: ${{ runner.os }}-dpr-hf-v2-${{ hashFiles('requirements.txt') }}
 
       - name: Install deps (skip sqlite3)
-        if: ${{ steps.decide_mode.outputs.should_run == 'true' }}
         run: |
           python - <<'PY'
           import re
@@ -79,12 +58,15 @@ jobs:
           python -m pip install uv
           uv pip install --system -r /tmp/req.txt
 
-      - name: Run Maintainer Fetch + Precheck
-        id: fetch_precheck
-        if: ${{ steps.decide_mode.outputs.should_run == 'true' }}
+      - name: Run Maintainer Fetch + Sync
         run: |
           set -euo pipefail
           set -x
+
+          if [ -z "${SUPABASE_SERVICE_KEY}" ]; then
+            echo "[WARN] 未配置 SUPABASE_SERVICE_KEY，已跳过维护同步。"
+            exit 0
+          fi
 
           FETCH_DAYS="${{ github.event.inputs.fetch_days }}"
           RUN_DATE="$(date -u +%Y%m%d)"
@@ -92,8 +74,6 @@ jobs:
           mkdir -p "$(dirname "$RAW_PATH")"
 
           echo "[INFO] 开始维护抓取预检：SUPABASE_PAPERS_TABLE=${SUPABASE_PAPERS_TABLE}，fetch_days=${FETCH_DAYS:-默认}，raw_path=${RAW_PATH}"
-          ARTIFACT_NAME="dpr-raw-${RUN_DATE}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          RAW_FILENAME="arxiv_papers_${RUN_DATE}.json"
           ARGS=(--disable-supabase-read --output "$RAW_PATH")
           if [ -n "$FETCH_DAYS" ]; then
             ARGS+=(--days "$FETCH_DAYS")
@@ -109,147 +89,11 @@ jobs:
             FETCH_COUNT="$(python -c 'import json,sys; path=sys.argv[1]; data=json.load(open(path, "r", encoding="utf-8")); isinstance(data, list) or (_ for _ in ()).throw(SystemExit(f"raw json must be list: {path}")); print(len(data))' "$RAW_PATH")"
           fi
 
-          HAS_DATA=false
+          echo "[INFO] fetch 预检结果：count=${FETCH_COUNT}，raw_path=${RAW_PATH}"
           if [ "$FETCH_COUNT" -gt 0 ]; then
-            HAS_DATA=true
-          fi
-
-          echo "[INFO] fetch 预检结果：count=${FETCH_COUNT}，has_data=${HAS_DATA}，raw_path=${RAW_PATH}"
-          echo "has_data=${HAS_DATA}" >> "$GITHUB_OUTPUT"
-          echo "fetch_count=${FETCH_COUNT}" >> "$GITHUB_OUTPUT"
-          echo "raw_path=${RAW_PATH}" >> "$GITHUB_OUTPUT"
-          echo "raw_filename=${RAW_FILENAME}" >> "$GITHUB_OUTPUT"
-          echo "run_date=${RUN_DATE}" >> "$GITHUB_OUTPUT"
-          echo "artifact_name=${ARTIFACT_NAME}" >> "$GITHUB_OUTPUT"
-
-      - name: Upload raw file for sync job
-        if: ${{ steps.fetch_precheck.outputs.has_data == 'true' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.fetch_precheck.outputs.artifact_name }}
-          path: archive/${{ steps.fetch_precheck.outputs.run_date }}/raw/${{ steps.fetch_precheck.outputs.raw_filename }}
-          if-no-files-found: error
-
-      - name: Finalize precheck outputs
-        id: result
-        if: ${{ always() }}
-        env:
-          SHOULD_RUN_IN: ${{ steps.decide_mode.outputs.should_run }}
-          HAS_DATA_IN: ${{ steps.fetch_precheck.outputs.has_data }}
-          FETCH_COUNT_IN: ${{ steps.fetch_precheck.outputs.fetch_count }}
-          RAW_PATH_IN: ${{ steps.fetch_precheck.outputs.raw_path }}
-          RAW_FILENAME_IN: ${{ steps.fetch_precheck.outputs.raw_filename }}
-          RUN_DATE_IN: ${{ steps.fetch_precheck.outputs.run_date }}
-          ARTIFACT_NAME_IN: ${{ steps.fetch_precheck.outputs.artifact_name }}
-        run: |
-          if [ "${SHOULD_RUN_IN}" != "true" ]; then
-            echo "should_run=false" >> "$GITHUB_OUTPUT"
-            echo "has_data=false" >> "$GITHUB_OUTPUT"
-            echo "fetch_count=0" >> "$GITHUB_OUTPUT"
-            echo "raw_path=" >> "$GITHUB_OUTPUT"
-            echo "raw_filename=" >> "$GITHUB_OUTPUT"
-            echo "run_date=" >> "$GITHUB_OUTPUT"
-            echo "artifact_name=" >> "$GITHUB_OUTPUT"
-            echo "[INFO] 预检输出：未配置 SUPABASE_SERVICE_KEY，本次不执行维护同步。"
-          else
-            echo "should_run=true" >> "$GITHUB_OUTPUT"
-            echo "has_data=${HAS_DATA_IN:-false}" >> "$GITHUB_OUTPUT"
-            echo "fetch_count=${FETCH_COUNT_IN:-0}" >> "$GITHUB_OUTPUT"
-            echo "raw_path=${RAW_PATH_IN:-}" >> "$GITHUB_OUTPUT"
-            echo "raw_filename=${RAW_FILENAME_IN:-}" >> "$GITHUB_OUTPUT"
-            echo "run_date=${RUN_DATE_IN:-}" >> "$GITHUB_OUTPUT"
-            echo "artifact_name=${ARTIFACT_NAME_IN:-}" >> "$GITHUB_OUTPUT"
-            echo "[INFO] 预检输出：has_data=${HAS_DATA_IN:-false}，fetch_count=${FETCH_COUNT_IN:-0}，raw_path=${RAW_PATH_IN:-<empty>}"
-          fi
-
-  sync_supabase:
-    needs: fetch_precheck
-    if: ${{ needs.fetch_precheck.outputs.has_data == 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    env:
-      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-      SUPABASE_PAPERS_TABLE: arxiv_papers
-      PYTHONUNBUFFERED: "1"
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Cache pip + torch
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/pip
-            ~/.cache/torch
-          key: ${{ runner.os }}-dpr-hf-v2-${{ hashFiles('requirements.txt') }}
-
-      - name: Install deps (skip sqlite3)
-        run: |
-          python - <<'PY'
-          import re
-          lines = open("requirements.txt", "r", encoding="utf-8").read().splitlines()
-          lines = [l for l in lines if l.strip() and not re.match(r"^sqlite3\\b", l)]
-          open("/tmp/req.txt", "w", encoding="utf-8").write("\n".join(lines))
-          PY
-          python -m pip install --upgrade pip
-          python -m pip install uv
-          uv pip install --system -r /tmp/req.txt
-
-      - name: Download raw file artifact
-        id: download_raw_artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ needs.fetch_precheck.outputs.artifact_name }}
-          path: ${{ github.workspace }}/.dpr_artifacts
-
-      - name: Run sync_supabase_public
-        env:
-          FETCH_COUNT: ${{ needs.fetch_precheck.outputs.fetch_count }}
-        run: |
-          set -euo pipefail
-          set -x
-          echo "::group::1.2.sync_supabase_public (sync + embedding + upsert)"
-          RAW_PATH="${GITHUB_WORKSPACE}/archive/${{ needs.fetch_precheck.outputs.run_date }}/raw/${{ needs.fetch_precheck.outputs.raw_filename }}"
-          FALLBACK_PATH="${GITHUB_WORKSPACE}/.dpr_artifacts/archive/${{ needs.fetch_precheck.outputs.run_date }}/raw/${{ needs.fetch_precheck.outputs.raw_filename }}"
-          if [ ! -f "$RAW_PATH" ] && [ -f "$FALLBACK_PATH" ]; then
-            RAW_PATH="$FALLBACK_PATH"
-          elif [ ! -f "$RAW_PATH" ]; then
-            FOUND="$(find "${GITHUB_WORKSPACE}/.dpr_artifacts" -type f -name "${{ needs.fetch_precheck.outputs.raw_filename }}" | head -n 1 || true)"
-            if [ -n "$FOUND" ]; then
-              RAW_PATH="$FOUND"
-            fi
-          fi
-          echo "[INFO] 准备下载 raw artifact：name=${{ needs.fetch_precheck.outputs.artifact_name }}"
-          ls -R "${GITHUB_WORKSPACE}/archive/${{ needs.fetch_precheck.outputs.run_date }}/raw" || true
-          ls -R "${GITHUB_WORKSPACE}/.dpr_artifacts" || true
-          echo "[INFO] fetch 预检通过，准备执行同步：count=${FETCH_COUNT}，raw_path=${RAW_PATH}"
-          if [ ! -f "$RAW_PATH" ]; then
-            echo "[ERROR] 未找到可用原始文件：${RAW_PATH}"
-            exit 1
-          fi
-          /opt/hostedtoolcache/Python/3.11.14/x64/bin/python src/1.2.sync_supabase_public.py --raw-input "$RAW_PATH"
-          echo "::endgroup::"
-
-  no_data_notice:
-    needs: fetch_precheck
-    if: ${{ needs.fetch_precheck.outputs.has_data != 'true' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: No data skip notice
-        env:
-          SHOULD_RUN: ${{ needs.fetch_precheck.outputs.should_run }}
-          FETCH_COUNT: ${{ needs.fetch_precheck.outputs.fetch_count }}
-          RAW_PATH: ${{ needs.fetch_precheck.outputs.raw_path }}
-        run: |
-          if [ "${SHOULD_RUN}" != "true" ]; then
-            echo "[INFO] 维护同步跳过：未配置 SUPABASE_SERVICE_KEY。"
+            echo "::group::1.2.sync_supabase_public (sync + embedding + upsert)"
+            /opt/hostedtoolcache/Python/3.11.14/x64/bin/python src/1.2.sync_supabase_public.py --raw-input "$RAW_PATH"
+            echo "::endgroup::"
           else
             echo "[INFO] 本次抓取无新增论文（count=${FETCH_COUNT}），已跳过 Supabase 同步。"
-            echo "[INFO] 预检 raw_path=${RAW_PATH:-<empty>}"
           fi
