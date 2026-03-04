@@ -1,0 +1,694 @@
+Title: Conditional Denoising Model as a Physical Surrogate Model
+
+URL Source: https://arxiv.org/pdf/2601.21021v1
+
+Published Time: Fri, 30 Jan 2026 01:12:33 GMT
+
+Number of Pages: 15
+
+Markdown Content:
+# CONDITIONAL DENOISING MODEL AS A PHYSICAL SURROGATE 
+
+# MODEL 
+
+José Afonso ∗1, Pedro Viegas 1, Rodrigo Ventura 2, and Vasco Guerra 11Instituto de Plasmas e Fusão Nuclear, Instituto Superior Técnico, Av. Rovisco Pais 1, Lisbon, Portugal 
+
+> 2
+
+Instituto de Sistemas e Robotica, Instituto Superior Técnico, Av. Rovisco Pais 1, Lisbon, Portugal 
+
+# ABSTRACT 
+
+Surrogate modeling for complex physical systems typically faces a trade-off between data-fitting accuracy and physical consistency. Physics-consistent approaches typically treat physical laws as soft constraints within the loss function, a strategy that frequently fails to guarantee strict adherence to the governing equations, or rely on post-processing corrections that do not intrinsically learn the underlying solution geometry. To address these limitations, we introduce the Conditional Denoising Model (CDM), a generative model designed to learn the geometry of the physical manifold itself. By training the network to restore clean states from noisy ones, the model learns a vector field that points continuously towards the valid solution subspace. We introduce a time-independent formulation that transforms inference into a deterministic fixed-point iteration, effectively projecting noisy approximations onto the equilibrium manifold. Validated on a low-temperature plasma physics and chemistry benchmark, the CDM achieves higher parameter and data efficiency than physics-consistent baselines. Crucially, we demonstrate that the denoising objective acts as a powerful implicit regularizer: despite never seeing the governing equations during training, the model adheres to physical constraints more strictly than baselines trained with explicit physics losses. 
+
+Keywords Scientific Machine Learning · Surrogate Modeling · Generative Models 
+
+# 1 Introduction 
+
+Generative models are a class of deep learning algorithms designed to estimate and sample from an unknown data distribution. The remarkable advances in this field, particularly for image generation, have been largely driven by the scalable and stable training of diffusion-based and auto-encoding models [1 –3]. These models excel at capturing the global, intrinsic structure of a data manifold. However, their success is fundamentally reliant on massive datasets, making them challenging to apply in specialized scientific domains where data is often scarce and expensive to generate. In various domains of physics and engineering, computational simulations are indispensable for understanding complex phenomena. These processes are typically modeled by solving systems of differential equations derived from physical laws. Frequently, the primary interest lies in the steady-state solution, which formally requires finding the fixed point y
+
+of a non-linear system of algebraic equations: 
+
+F (x, y ; θ) = 0 , (1) where F represents the system of governing equations. In this general formulation, x denotes the experimental control inputs, y represents the physical state of the system, and θ encapsulates the physical hyperparameters. Solving this system repeatedly for vast parameter spaces is often computationally intractable, necessitating the development of fast and accurate surrogate models. In this work, we focus on Low-Temperature Plasma (LTP) physical system as a representative case study. Specifically, we utilize the LisbOn KInetics Boltzmann+Chemistry (LoKI-B+C) simulation tool [4 –6] hereafter referred to as LoKI, a kinetic simulator that models the plasma mixture (e.g., [6, 7]). In this specific context, the input x corresponds to 
+
+> ∗
+
+Corresponding author: josefafonso@tecnico.ulisboa.pt 
+
+> arXiv:2601.21021v1 [cs.LG] 28 Jan 2026
+
+operating conditions, such as gas pressure and reduced electric field. The state y comprises the densities of various particle species (charged and neutral), and θ corresponds to physical hyperparameters, including rate constants and transport coefficients. The surrogate modeling task faces a fundamental obstacle. In many complex simulation domains, including simulators like LoKI, the full algebraic system F is not readily accessible as a differentiable function for training. The simulator often acts as a black-box solver, providing only the final steady-state solutions y for a given set of inputs x. This practical constraint makes the direct implementation of methods that require explicit access to F , such as traditional, residual-based Physics-Informed Neural Networks (PINNs) [8] or methods that project onto the constraint manifold [9], computationally infeasible. Furthermore, even if F were accessible, residual-based physics-informed paradigms suffer from pathologies related to conflicting gradients between data-fitting and physics-penalty terms [10]. Given the inaccessibility of F , standard neural networks act as physics-agnostic regressors (f (x) ≈ y), often yielding physically meaningless results. Recent alternatives attempt to substitute F with general physical invariants (e.g., conservation laws) [11]. However, Valente et al. [11] showed that incorporating these constraints into the loss function is often ineffective. Their proposed output projection successfully enforces validity but operates strictly as a post-hoc correction and hence does not learn the true physical data manifold. To bypass these constraints, we seek a data-driven paradigm capable of implicitly learning the geometry of the physical manifold F (x, y ; θ) = 0 . Score-based and diffusion models [1 – 3] offer a particularly promising direction, as they are designed to model complex distributions by capturing the underlying manifold structure. In physics, these models have been applied as generative solvers for partial differential equations (PDEs) [9, 12, 13] or for modeling molecular dynamics [14, 15]. Regarding their conditional variants [16], they are traditionally applied to inverse problems [12, 17] or time-dependent dynamics [18, 19], and they are typically demonstrated on large-scale datasets. However, recent works [20, 21] have begun to demonstrate their efficacy as direct physical surrogates, validating their potential for sample-efficient learning in data-scarce scientific domains. In this work, we construct conditional surrogate models for deterministic steady-state simulators, effectively modeling a Dirac delta conditional distribution p(y|x). We propose the Conditional Denoising Model (CDM), which generalizes Conditional Denoising Autoencoders [22] to a continuous noise spectrum, bridging the geometric intuition of denoising autoencoders with the objective of diffusion models [2]. We introduce a time-independent formulation of the CDM that learns a static vector field continuously pointing toward the solution manifold. By removing the time-dependency typical of diffusion models, we transform inference into a deterministic, iterative fixed-point refinement. We evaluate the CDM on the LoKI kinetic simulator for Low-Temperature Plasma. Benchmarking against physics-consistent regressors demonstrates that our method robustly captures complex physical correlations, even in low-data regimes. The paper is organized as follows: Section 2 reviews the background on manifold learning and diffusion models. Section 3 details the CDM framework and the proposed deterministic inference scheme (CDM-0). Section 4 evaluates the method on the LoKI plasma dataset, and Section 5 concludes. 
+
+# 2 Background 
+
+2.1 Generative Modeling via Denoising 
+
+Denoising Diffusion Probabilistic Models (DDPMs) [2] generate data by reversing a gradual, intentional corruption process. Given a distribution of original, uncorrupted data x0 ∼ pd(x) (referred to as clean ), a forward diffusion process systematically adds Gaussian noise over time t ∈ [0 , T ], producing a sequence of latent variables xt. The standard training objective involves learning a network ϵθ (xt, t ) to predict the noise component ϵ ∼ N (0 , I ) (where I denotes the identity matrix) that was added to the signal. This is typically formulated as minimizing the variational lower bound (ELBO) on the negative log-likelihood [2, 23]: 
+
+LDiff = Et,x 0,ϵ 
+
+w(t)∥ϵθ (xt, t ) − ϵ∥2 , (2) where ω(t) corresponds to the weighting function. In the unconditional setting, inference is performed by iteratively subtracting the predicted noise to traverse the reverse Markov chain from p(xT ) back to p(x0) [2, 3]. While this ϵ-prediction formulation has popularized diffusion models for large-scale image synthesis, recent theoretical works suggest it may be suboptimal for data governed by strict low-dimensional constraints [24]. We explicitly address this limitation in our proposed method, as detailed below. 22.2 The Physical Manifold Assumption 
+
+A fundamental consequence of the governing equation F (x, y ; θ) = 0 (Eq. (1) ) is that valid physical solutions y do not occupy the entire D-dimensional ambient output space RD . Instead, they are constrained to a lower-dimensional, highly structured subspace M ⊂ RD , commonly referred to as the data manifold [25, 26]. In the context of physical surrogates, this structure is rigorous rather than hypothetical: the manifold is explicitly defined as the set of points satisfying the governing equations. This geometric constraint creates a sharp distinction between the physical signal and auxiliary noise. As analyzed by Li et al. [24], the clean physical state y lies strictly on M, whereas noise ϵ is inherently distributed across the full high-dimensional observation space [27]. Consequently, training a network to predict noisy or unstructured quantities wastes model capacity on the high-entropy ambient space. In contrast, targeting the clean data allows the model to act as a projection operator, focusing solely on the low-dimensional manifold geometry. This distinction is important for our approach: given the scarcity of scientific data, focusing the learning process on the manifold structure maximizes data efficiency and ensures the surrogate adheres to the underlying physical system rather than fitting orthogonal noise components [24]. 
+
+2.3 Manifold Learning via Denoising Autoencoders 
+
+To explicitly constrain the surrogate model to the underlying data manifold, we adopt the Conditional Denoising Autoencoder (CDAE) framework [22]. Unlike standard diffusion implementations that target the noise ϵ, the CDAE is designed to learn the geometry of the physical manifold itself by learning a restoration vector field [28]. The training procedure mirrors the manifold assumption: we start with a valid physical state y ∈ M and corrupt it with isotropic Gaussian noise of intensity σ to produce ˜y ∼ qσ (·| y) = N (˜ y; y, σ 2I). Geometrically, this perturbation pushes the data point off the manifold into the surrounding ambient space [27, 28]. The network gϕ is then tasked with reversing this perturbation. By minimizing the reconstruction error between the prediction and the clean signal: 
+
+LDAE (ϕ) = E(x,y )∼pd E˜y∼qσ (·| y)
+
+∥gϕ(˜ y, x ) − y∥22
+
+ , (3) where pd is the data distribution. This way, the model learns a vector field that effectively projects any point in the vicinity of the manifold back onto it. Crucially, it has been shown that minimizing the denoising objective Eq. (3) is mathematically equivalent to Score Matching [29, 30]. The optimal denoiser gϕ∗ implicitly learns the score function (the gradient of the log-density) of the data distribution [3, 29]. This theoretical connection bridges the gap between denoising autoencoders and score-based generative models, allowing us to leverage the CDAE as a suitable framework for learning the fixed-point solutions of physical systems. 
+
+# 3 Methodology: Conditional Denoising Model (CDM) 
+
+3.1 Training Objective: Multi-Scale Manifold Learning 
+
+While the classical Denoising Autoencoder (DAE) introduced in Section 2.3 provides a mechanism for manifold projection, training at a single noise intensity σ is insufficient for a full generative model. If σ is too small, the model only learns local manifold corrections, failing to capture the global topology of the solution space [3]. Conversely, if σ
+
+is too large, the model learns the coarse global structure but loses fine-grained physical details [22, 27]. To resolve this trade-off between global coherence and local precision, we formulate our Conditional Denoising Model (CDM) as the conditional counterpart to the x-prediction parameterization found in diffusion and score-based models [2, 3, 24, 31]. It extends the autoencoding objective across a continuous spectrum of noise levels σ(t). Following the Variance Exploding (VE) formulation [3], the time variable t defines the noise intensity σ(t), monotonically mapping the interval from a minimum noise level σmin ≈ 0 (at t = 0 ) to a maximum σmax (at t = 1 ). This parameterization allows the network to learn the manifold structure hierarchically, resolving first the global geometry at high noise levels and refining local physical constraints as the noise vanishes [2]. The training objective minimizes the weighted reconstruction error across the entire noise schedule: 
+
+LCDM (ϕ) = Et∼U (0 ,1) E(x,y )∼pd E˜y∼qt(·| y)
+
+ω(t)∥g(t),ϕ (˜ y, x ) − y∥22
+
+ , (4) where U represents the uniform distribution and g(t),ϕ corresponds to the neural network with explicit or implicit time dependency. It is trained to recover the clean physical state y given the noisy input ˜y and experimental conditions x,while using t to index the current noise intensity σ(t). Consistent with the VE schedule, the forward corruption kernel is given by qt(˜ y|y) = N (˜ y; y, σ (t)2I). The complete training procedure is summarized in algorithm 1. 33.2 Theoretical Foundations 
+
+We adopt the standard weighting ω(t) = 1 [2]. Under this configuration, our simple clean-data prediction objective is supported by three complementary theoretical frameworks that justify its use as a generative model. 
+
+Variational and Recovery Perspectives. First, the objective can be viewed through the lens of variational inference. Since the clean data y and noise ϵ are linearly related, predicting y is mathematically equivalent to predicting ϵ up to a scaling factor. Thus, optimizing Eq. (4) effectively maximizes the ELBO objective, forcing the model to approximate the true data distribution by minimizing the accumulated denoising error [2]. Simultaneously, this objective maximizes the expected recovery log-likelihood log pϕ(y|˜y, x ) [27, 32]. By parameterizing the recovery distribution as an isotropic Gaussian centered at the model prediction, pϕ(y|˜y, x ) = N (y; gϕ(˜ y, x, t ), σ 2(t)I), maximizing the likelihood becomes identical to minimizing the MSE: 
+
+max  
+
+> ϕ
+
+E[log pϕ(y|˜y, x )] ⇐⇒ min  
+
+> ϕ
+
+E
+
+ 12σ2(t) ∥gϕ(˜ y, x, t ) − y∥22
+
+
+
+. (5) This ensures the model effectively recovers the clean manifold geometry from any point in the ambient space. 
+
+Distributional Matching via DCD. To quantify the alignment between the modeled and true distributions, we analyze the objective using the Diffusion Contrastive Divergence (DCD) framework [33]. Adapting the formulation to our conditional setting (see derivation in Appendix A.1), our loss function minimizes the following conditional DCD: 
+
+min  
+
+> ϕ
+
+Et∼U (0 ,1) Ex∼pd(x)
+
+h
+
+D(t)DCD (pd(y|x)|| pϕ(y|x)) 
+
+i
+
+, (6) where D(t)DCD is a valid divergence defined as the difference between the KL divergences of the clean and perturbed distributions: 
+
+D(t)DCD (pd|| pϕ) = Epd(x)
+
+h
+
+DKL (pd|| pϕ) − D KL (p(t) 
+
+> d
+
+|| p(t) 
+
+> ϕ
+
+)
+
+i
+
+. (7) The terms p(t) 
+
+> d
+
+and p(t) 
+
+> ϕ
+
+represent the true and model distributions, respectively, after being perturbed by the forward diffusion process qt:
+
+p(t)(˜ y|x) = 
+
+Z
+
+dy q t(˜ y|y)p(y, x ), (8) where the forward diffusion kernel qt(˜ y|y) follows the VE schedule. Since D(t)DCD ≥ 0 and equals zero if and only if pd(y|x) = pϕ(y|x) [33], minimizing Eq. (6) guarantees that our surrogate model converges to the true conditional distribution of the physical system i.e, to the true physical solution. 
+
+Score Matching. Finally, the learned map gϕ has a direct connection to the score function of the data distribution. By the conditional Tweedie ’s formula [34], the optimal MSE denoiser gϕ∗ is related to the score of the noisy density 
+
+∇˜y log p(t) 
+
+> d
+
+(˜ y|x) via: 
+
+gϕ∗ (˜ y, x, t ) = E[y|˜y, x, t ] = ˜ y + σ2(t)∇˜y log p(t) 
+
+> d
+
+(˜ y|x). (9) For completeness, the full derivation is presented in Appendix A.2. This confirms that minimizing Eq. (4) is an implementation of Denoising Score Matching [29]. Accordingly, it ensures that our model learns the gradient vector field required to guide the reverse diffusion process from noise back to the physical manifold. 
+
+3.3 Inference as a Generative Flow 
+
+Inference is the process of generating a physical state y for a given condition x by reversing the diffusion chain. Instead of relying on random steps to find the solution, our goal is to use a deterministic path that leads from the initial noise back to the valid physical manifold. To achieve this, we formulate the inference as a Generative Flow governed by a Probability Flow ODE [35], effectively replacing the random noise injection of stochastic methods with a smooth, deterministic trajectory. 
+
+3.3.1 Derivation of the Inference ODE 
+
+The Variance Exploding (VE) corruption process utilized in our training objective (Eq. 4) corresponds to the following Stochastic Differential Equation (SDE) [35]: 
+
+d˜y =
+
+r d[σ2(t)] 
+
+dt dω, (10) 4where dω denotes a standard Wiener process [35]. To generate samples, we reverse this dynamics using the Probability Flow ODE: 
+
+d˜y = − 12
+
+d[σ2(t)] 
+
+dt ∇˜y log pt(˜ y|x)dt. (11) Leveraging the score approximation inherent in our model via the conditional Tweedie’s formula, we substitute the score term ∇˜y log pt ≈ (gϕ − ˜y)/σ 2(t) to derive the specific inference dynamics for our Conditional Denoising Model: 
+
+d˜y = 1
+
+σ(t)
+
+dσ (t)
+
+dt (˜ y − gϕ(˜ y, x, t )) dt. (12) This equation reveals that the generative flow is driven strictly by the restoration vector (gϕ − ˜y), scaled by the logarithmic rate of change of the noise schedule. 
+
+3.3.2 Discrete Sampling Algorithm 
+
+To solve Eq. (12) numerically, we discretize the time steps i = N, N − 1, . . . , 0, corresponding to a noise schedule 
+
+σN > · · · > σ 0 ≈ 0. Integrating the ODE over a step from σi to σi−1 using a first-order Euler approximation [36], we obtain the iterative update rule: 
+
+yi−1 = yi + σi − σi−1
+
+σi
+
+(gϕ(yi, x, σ i) − yi). (13) Defining the relative step size ηi = ( σi − σi−1)/σ i, where ηi ∈ [0 , 1] , this formulation simplifies the diffusion sampling process into an intuitive iterative refinement: 
+
+y ← y + ηi (gϕ(y, x, σ ) − y). (14) This update rule interprets generation as a sequence of partial projections : at each step, the model predicts the projection onto the clean manifold gϕ, and the sampler moves the current state y a fraction ηi along that vector. 
+
+3.3.3 Architectural Variants: Time-Dependency 
+
+The nature of the learned vector field depends on whether the network g(t),ϕ is explicitly conditioned on the noise level 
+
+t. We explore two distinct design choices: 
+
+Explicit Time-Dependent Vector Field (CDM-t) In the standard diffusion formulation, the network gϕ(y, x, t ) takes 
+
+t (or equivalently σ) as an explicit input. The network learns a dynamic vector field that evolves as the inference trajectory proceeds. This corresponds to the classical ODE solver approach [3, 36]. Algorithm 2 summarizes this procedure. 
+
+Implicit Time-Independent Vector Field (CDM-0) Alternatively, we consider a time-independent parameterization 
+
+gϕ(y, x ), where the network is blind to the noise level σ(t), as implemented in algorithm 3. In this regime, the model learns a static vector field pointing continuously towards the manifold. Since the network is trained via Et (Eq. (4) ) to denoise across all perturbation scales, it learns a global contraction map valid over the entire domain [σ(0) , σ (1)] .This independence allows us to define the effective time axis during inference purely through the step size η. From our derived update rule (Eq. (14) ), choosing a constant step size ηi = η implicitly defines a geometric decay schedule, where σk = σstart (1 − η)k. Under this scheme, the inference process simplifies to a Fixed Point Iteration :
+
+yk+1 = yk + η (gϕ(yk, x ) − yk), (15) which is analogous to performing gradient descent on an implicit energy landscape [37, 38]. Unlike the time-dependent case, CDM-0 relies on convergence criteria: the iteration terminates when the residual norm ∥gϕ(yk, x ) − yk∥2 falls below a tolerance ϵconv , indicating that the state has settled on the physical manifold. In this work, we evaluate two step-size strategies for this fixed-point iteration. First, we use the constant step size described above. Second, to better handle the varying scales of physical quantities, we introduce an adaptive step size. While a constant η implies a standard geometric decay of the noise, this adaptive rate scales with the relative error: 
+
+ηk = ηbase · ∥gϕ(yk, x ) − yk∥1
+
+∥yk∥1 + δ . (16) This formulation allows the solver to take larger steps when far from the solution and finer, more conservative steps as it approaches equilibrium, ensuring convergence across different physical regimes without manual schedule tuning. 5Algorithm 1: CDM Training 
+
+Input :Data pd(x, y ), schedule σ(t), network ϕ
+
+(time-dep. or time-indep.), 
+
+time-dependent flag 
+
+Output : Trained network ϕ
+
+while not converged do 
+
+▷ Data Sampling :
+
+x, y ∼ pd(x, y ), z ← [y, x ]T ,t ∼ U (0 , 1) ,▷ Noise Injection :
+
+σ ← σ(t)˜y ∼ N (y, σ 2I)
+
+▷ Compute Loss :
+
+if gϕ is time-dependent then 
+
+zpred ← gϕ(˜ y, x ; σ)
+
+else 
+
+zpred ← gϕ(˜ y, x )
+
+end 
+
+L ← 1
+
+> B
+
+PBi=1 ∥zpred − zi∥22
+
+▷ Update :
+
+∆ϕ ← ∇ ϕL
+
+Apply Adam update using ∆ϕ
+
+end Algorithm 2: CDM-t Inference 
+
+Input : Condition x, Model gϕ, Noise Schedule 
+
+{σi}0 
+
+> i=N
+
+(where σN > · · · > σ 0 ≈ 0), Steps 
+
+K (optional refinement), Clip ϵmax 
+
+Initialize yN ∼ N (0 , I )
+
+for i = N to 1 do 
+
+▷ Calculate dynamic Euler step size based on schedule :
+
+σcurr ← σi, σnext ← σi−1,ηi ← (σcurr − σnext )/σ curr ,
+
+for k = 1 to K do 
+
+▷ Predict clean data conditioned on time ti:
+
+ˆy ← gϕ(yi, x, σ curr )
+
+▷ Compute displacement vector (residual) :
+
+v ← ˆy − yi
+
+▷ Euler Update: Move towards clean manifold :
+
+yi ← yi + ηi v
+
+end 
+
+yi−1 ← yi
+
+end return y0
+
+Algorithm 3: CDM-0 Inference 
+
+Input : Condition x, Model gϕ, Base Rate η, Max Steps Nmax , Tol ϵconv , Flag Adaptive 
+
+Initialize y0 ∼ N (0 , I )
+
+for k = 0 to Nmax do 
+
+▷ Predict clean manifold projection :
+
+ˆy ← gϕ(yk , x )
+
+▷ Compute displacement vector (Residual) :
+
+v ← ˆy − yk
+
+▷ Check for convergence (Equilibrium reached) :
+
+if ∥v∥2 < ϵ conv then break end 
+
+▷ Optional: Adaptive Step Sizing :
+
+if Adaptive then 
+
+ηk ← η · ∥v∥1  
+
+> ∥yk∥1+δ
+
+▷ Scale by relative error 
+
+else 
+
+ηk ← η ▷ Standard geometric decay 
+
+end 
+
+▷ Fixed Point Update :
+
+yk+1 ← yk + ηk v
+
+end return yk+1 
+
+3.4 Justification of the Denoising Objective 
+
+The choice of the denoising objective (Eq. (4) ) is motivated by both its information-theoretic properties and its superior statistical efficiency in our problem domain. For the following discussion, let Y1 and Y0 be random variables representing a sample from the true data distribution pd(y) = R pd(x, y )dx and the isotropic noise distribution N (0 , I ), respectively. From an Information Bottleneck (IB) perspective [39], our objective is a principled generalization of standard regression. A typical regressor learns E[Y1|X]. Our model learns the more general quantity E[Y1|X, Y t], where Yt = Y1 + σ(t)Y0
+
+contains information about Y1 that is continuously controlled by the noise level σ(t) with t ∈ [0 , 1] . Training across this spectrum forces the model to learn a robust, multi-scale representation. In the high-noise limit (t → 1) , the mutual information I(Y1; Yt) vanishes, and the objective collapses to the standard regression task E[Y1|X]. Conversely, in the zero noise limit (t → 0) , the objective becomes an identity map that anchors the model directly to the data manifold. The intermediate regime teaches the model to combine global guidance from X with local geometry from Yt.6The objective Eq. (4) statistical efficiency becomes clear when compared with alternative generative formulations like Conditional Flow Matching (CFM) [40]. The fundamental difference lies in the regression target. Our denoising model 
+
+gϕ learns to predict Y1. For a deterministic system, the conditional distribution pd(Y1|X) is delta-shaped, implying that the target has zero conditional variance. In contrast, OT-based CFM model vϕ learns to predict the transport vector 
+
+Y1 − Y0 from the interpolated state Yt = (1 − t)Y0 + tY 1 and condition X. The conditional distribution of this target, 
+
+(Y1 − Y0)|X, remains a unit variance stochastic variable. This is because Y1|X is fixed, but Y0 is an independent random variable, so Var [( Y1 − Y0)|X] = Var [Y1|X] + Var [Y0] = 1 .Crucially, the argument for statistical efficiency concerns the prediction target, not the input. While exposing the model to noisy inputs Yt is essential for learning the global manifold geometry, including noise in the target (e.g., predicting velocity Y1 − Y0) forces the network to model high-entropy stochasticity [24]. By targeting the clean state Y1 directly, our approach utilizes noise solely as a probe to explore the state space. This keeps the regression task deterministic, ensuring the model focuses entirely on resolving the physical signal rather than fitting random fluctuations. 
+
+# 4 Experiments 
+
+This section evaluates the proposed Conditional Denoising Models (CDM) on the Low-Temperature Plasma (LTP) benchmark. Following a description of the experimental setup, architectures, and baselines, we present and analyze the results, assessing both predictive accuracy and physical adherence. 
+
+4.1 Experimental Setup Dataset and Preprocessing. We evaluate our model on the low-temperature plasma dataset introduced by Valente et al. [11], generated using the LoKI 2 simulator [4, 5] The dataset comprises 3000 samples mapping three scalar experimental controls (gas pressure, discharge current, and container radius) to a state vector of 17 chemical species densities. More details on the physical system can be found in [6]. Prior to training, all input and output features are standardized (zero mean, unit variance) to ensure stable optimization dynamics. By default, the data is partitioned into a training set of 2550 samples ( 85% ), a test set of 315 samples (10 .5% ), and a validation set of 135 samples ( 4.5% ) for hyperparameter tuning. 
+
+CDM-t Architecture and Inference. We adopt a multi-stream encoder-decoder architecture where the encoder independently processes three inputs: the physical condition x, the noisy state ˜y, and the noise level σ. To handle the continuous nature of the time coordinate, σ is projected using transformer-style sinusoidal positional embeddings [2,41]. The resulting feature vectors are concatenated into a unified representation, which the decoder processes via layer normalization to regress the clean state y concatenated with the input x. Layer configurations are detailed in Appendix A.3. For the inference phase, we analyze two different sampling strategies with a comparable computational budget of approximately 1300 function evaluations. The first configuration, denoted as CDM-t-dense , employs a high-resolution noise schedule with T = 130 levels and moderate refinement ( K = 10 steps per level), prioritizing a smooth trajectory along the diffusion path. In contrast, the second configuration, denoted as CDM-t-sparse , utilizes a coarse noise schedule with only T = 10 levels, but performs more refinement ( K = 130 steps per level). 
+
+CDM-0 Architecture and Inference. To isolate the effect of time-dependency, the time-independent model shares the same architectural backbone as the time-dependent variant but removes the noise-embedding branch. This modification forces the encoder to learn a static, global vector field solely from the condition x and the noisy state ˜y.For inference, we evaluate the two fixed-point strategies defined in Algorithm 3. We denote the model as CDM-0-const 
+
+when using the fixed step size η (implying geometric noise decay), and CDM-0-adapt when employing the adaptive step size based on the relative residual. 
+
+Noise Schedule. To ensure stable training and high-quality generation, we adopt a sine noise schedule adapted from [42]. Unlike linear schedules, which can degrade performance by removing information too abruptly, the sine schedule maintains a smooth transition of noise levels. We parametrize the variance σ2(t) as: 
+
+σ2(t) = σ2max · sin 2
+
+ t + s
+
+1 + s · π
+
+2
+
+
+
+, (17) where s = 0 .008 [42] and σmax that we set as the default value of σmax = 1 .
+
+> 2https://nprime.tecnico.ulisboa.pt/loki/tools.html
+
+7Baseline Architectures. We benchmark our physics-agnostic model against two physics-consistent baselines established in prior work [11]. To ensure a rigorous comparison, both baselines replicate the exact neural architecture and training hyperparameters described in [11]. The first baseline is a Physics-consistent Regressor (NN) , a standard neural network trained to minimize a composite loss function, which enforces general physical laws (current conservation, the ideal gas law, and quasi-neutrality) alongside the data reconstruction error [11]. The second baseline is the Regressor with Projection (NN+Projection) ,which augments the physics-consistent regressor with a post-processing projection step [11]. This additional stage strictly enforces the physical constraints during inference, converting the soft penalties of the loss function into hard geometric constraints. 
+
+Evaluation Metrics. We assess model performance using two complementary metrics: the standard Root Mean Square Error (RMSE) of the test set and the Physics RMSE. The former measures the Euclidean distance between the predicted chemical densities and the ground truth simulator outputs. The latter evaluates physical consistency by computing the RMSE of the constraint residuals G(x, ˆy), which represents the deviation from the physical laws (Charge Conservation, Ideal Gas Law, and Quasi-Neutrality). Ideally, this value should be zero, indicating strict adherence to the physical manifold. To ensure statistical robustness, we train an ensemble of models using 10 distinct train-test-validation splits. 
+
+4.2 Results and Discussion 
+
+We start by presenting the model and training set size efficiency comparison between the CDM variants (the time-independent CDM-0 ones and the time-dependent CDM-t ones) and the baselines (NN and NN+Projection). Figure 1 
+
+Figure 1: Performance comparison between Physics-Consistent Baselines and Conditional Denoising Models (CDM). The top row (a, b) reports the predictive accuracy (Test RMSE), while the bottom row (c, d) evaluates physical consistency (Physics RMSE, measuring constraint violations). The left column (a, c) analyzes the impact of model complexity (number of parameters), while the right column (b, d) evaluates robustness to data scarcity (training set fraction). Shaded regions indicate the standard deviation across 10 independent training runs. For the data-scarcity plots, the CDMs and baselines models have ∼ 15000 . Shaded regions represent the standard deviation across 10 distinct train-test-validation splits. 8presents a quantitative comparison between the physics-informed baselines (NN and NN+Projection) and the proposed Conditional Denoising Models (CDM). We analyze performance across two dimensions: model complexity (Panels 1-(a), 1-(c) and data scarcity (Panels 1-(b), 1-(d)). Regarding predictive accuracy on the held-out test set (Panels 1-(a) and 1-(b)), we observe that all CDM variants consistently outperform the baselines across the entire spectrum of parameter counts. Notably, the time-independent CDM-0 variants achieve a significantly lower RMSE ( ≈ 0.028 ) with as few as 5000 parameters, whereas the NN baselines stagnate around an RMSE of 0.045 regardless of capacity. Furthermore, the CDM models exhibit substantially reduced variance (narrower shaded regions), suggesting that the denoising objective acts as a robust regularizer that stabilizes optimization compared to the supervised losses. We also note that the specific inference strategies within each model class, specifically the comparison between constant and adaptive steps for CDM-0, and between dense and sparse schedules for CDM-t, yield very similar performance behaviors. This suggests that given a sufficient computational budget for inference (many steps), the generative flow robustly converges to the manifold regardless of the specific scheduling details. Evaluating robustness to data scarcity (Panel 1-(b)), we vary the training set fraction from 0.25 (≈ 800 samples) to 0.85 
+
+(≈ 2550 samples). The results indicate that the CDM variants generalize better in the low-data regime. Specifically, the CDM-t variants demonstrate superior performance at the smallest sample sizes, suggesting that the continuous noise injection serves as an effective implicit data augmentation, allowing the model to capture the manifold geometry even when explicit training samples are sparse. Finally, Panels 1-(c) and 1-(d) provide insight into physical consistency. While the NN+Projection baseline achieves zero error by construction, the standard Physics-consistent NN exhibits the highest physics error ( ≈ 0.04 − 0.06 ) despite explicit training penalties. In contrast, the CDM variants achieve consistently lower errors ( ≈ 0.02 − 0.03 ) without ever seeing the conservation equations. This empirically validates the manifold hypothesis introduced before: rather than merely fitting a function, the CDM captures the topology of the solution subspace M. By learning to project points from the ambient space back onto the manifold, the model implicitly adheres to physical laws more effectively than standard regression constrained by soft penalties. Figure 2 presents an ablation study analyzing the sensitivity of the proposed models to the noise scale and inference hyperparameters. First, we analyze the impact of the training noise scale σmax in Panel 2-(a). We observe that all model variants, both time-independent and time-dependent, exhibit nearly identical behaviors: performance is poor at low noise levels ( σmax < 0.2) but improves rapidly and stabilizes once σmax ≥ 0.4. This indicates that the corruption process must be sufficiently aggressive to cover the off-manifold neighborhood required for learning. Notably, the performance plateau beyond σmax = 0 .4 suggests that the model is robust to hyperparameter tuning; it does not degrade even when trained with excessive noise due to the strong guiding signal provided by the conditional input x.Panel 2-(b) illustrates the fixed-point convergence of the time-independent CDM-0 variants. Note the use of a logarithmic scale on the y-axis, highlighting the rapid error reduction. The curves reveal that the model effectively converges to the steady-state solution within approximately 50 − 80 iterations. Moreover, the adaptive step-size variant exhibits a steeper initial descent compared to the constant-step variant, confirming that the adaptive mechanism effectively accelerates convergence in the early high-error phase. For the time-dependent CDM-t variants, we decouple the computational budget into the schedule resolution T and the refinement depth per level K. Panel 2-(c) shows the effect of increasing the schedule resolution T while fixing the refinement to a single step per level ( K = 1 ). The results indicate that increasing the number of noise levels significantly improves accuracy up to a threshold of roughly T ≈ 50 , beyond which the benefits saturate. Conversely, Panel 2-(d) analyzes the impact of local refinement K using a very sparse schedule of only T = 3 levels. The curve reveals that even with such a coarse schedule, the model can recover performance via intensive local refinement, saturating at approximately K ≈ 10 steps per level. A cross-comparison of these convergence profiles reveals a significant efficiency advantage. Unlike typical generative diffusion models for images that often require ∼ 1000 sampling steps [2], our physical surrogates converge to the optimal solution manifold with a total budget of roughly 50 − 100 function evaluations. We attribute this efficiency to two factors: the lower intrinsic dimensionality of the physical manifold compared to complex image spaces, and the strong conditioning signal provided by the inputs x, which effectively restricts the search space and guides the trajectory toward the solution. 9Figure 2: Ablation study on noise scaling and inference convergence. (a) Impact of the training noise scale σmax on test accuracy (b) Convergence profile of time-independent CDM-0 models; the adaptive step size accelerates early-stage convergence, with both variants saturating around 50 –80 iterations. (c, d) Analysis of CDM-t inference parameters. Panel (c) shows the effect of schedule resolution T (with fixed K = 1 ), saturating at T ≈ 30 . Panel (d) shows the impact of refinement steps K (using a sparse schedule T = 3 ). Shaded regions represent the standard deviation across 10 distinct train-test-validation splits. Note the logarithmic scale on the y-axis for Panels (b-c). 
+
+# 5 Conclusion 
+
+In this work, we introduce the Conditional Denoising Model (CDM), a generative surrogate model designed to implicitly learn the geometry of physical solution manifolds in data-scarce regimes. By generalizing the classical Denoising Autoencoder to a continuous spectrum of noise levels, we study the gap between geometric manifold learning and diffusion-based generation. Crucially, we propose a time-independent formulation (CDM-0) that transforms the inference process from a reverse stochastic differential equation into a deterministic, iterative fixed-point refinement, acting as a learned contraction mapping towards the physical equilibrium. Our experimental results on plasma physics simulations demonstrate that this approach offers superior parameter and data efficiency compared to physics-informed baselines. The CDM variants achieved a significant reduction in predictive error (RMSE ≈ 0.03 vs. baseline ≈ 0.045 ) even when trained on as few as 30% of the available data ( 1000 
+
+samples). Furthermore, despite being physics-agnostic during training, the CDM implicitly captured the governing physical laws with greater fidelity than the physics-consistent neural network baseline, reducing constraint violations by approximately 50% . These findings validate that the denoising objective serves as a powerful implicit regularizer, allowing the model to internalize complex physical correlations without requiring explicit equation-based loss functions. Looking forward, the results of the static CDM-0 suggest that time-independence is a robust and simpler inductive bias for steady-state problems. Future work will extend this finding by exploring energy-based formulations, where vector fields are derived from implicit potentials, and by scaling the framework to high-dimensional spatiotemporal domains. Ultimately, this work opens new perspectives for the modeling of complex, steady-state physical systems, 10 suggesting that implicitly learning the geometric manifold of solutions offers a robust and data-efficient alternative to explicit equation-based constraints. 
+
+# Code Availability 
+
+The source code implementing the Conditional Denoising Models (CDM) and the reproduction scripts are openly available at https://github.com/joseAf28/CDM-PhysicsSurrogate. 
+
+# Acknowledgments 
+
+This work was supported by the Portuguese FCT - Fundação para a Ciência e a Tecnologia, under project ref-erence UID/50010/2023, UID/PRR/50010/2025 and LA/P/0061/2020, and by the European Union under Hori-zon Europe project CANMILK (DOI:https://doi.org/10.3030/101069491). PV acknowledges support by project CEECIND/00025/2022 of FCT. 
+
+# References 
+
+[1] Jascha Sohl-Dickstein, Eric A. Weiss, Niru Maheswaranathan, and Surya Ganguli. Deep unsupervised learning using nonequilibrium thermodynamics. arXiv preprint arXiv:1503.03585 , 2015. [2] Jonathan Ho, Ajay Jain, and Pieter Abbeel. Denoising diffusion probabilistic models. arXiv preprint arXiv:2006.11239 , 2020. [3] Yang Song and Stefano Ermon. Generative modeling by estimating gradients of the data distribution. arXiv preprint arXiv:1907.05600 , 2020. [4] Antonio Tejero-del Caz, Vasco Guerra, Duarte Gonçalves, Mário Lino da Silva, Luís Marques, Nuno Pinhão, Carlos D Pintassilgo, and Luís L Alves. The Lisbon KInetics Boltzmann solver. Plasma Sources Science and Technology , 28(4):043001, 2019. [5] Antonio Tejero-del Caz, Vasco Guerra, Nuno Pinhão, Carlos D Pintassilgo, and Luís L Alves. On the quasi-stationary approach to solve the electron boltzmann equation in pulsed plasmas. Plasma Sources Science and Technology , 30(6):065008, 2021. [6] Tiago C Dias, Chloé Fromentin, Luís L Alves, Antonio Tejero-del Caz, Tiago Silva, and Vasco Guerra. A reaction mechanism for oxygen plasmas. Plasma Sources Science and Technology , 32(8):084003, aug 2023. [7] Pedro Viegas, Jorge Silveira, Tiago Cunha Dias, Olivier Guaitella, Ana Sofía Morillo Candás, and Vasco Guerra. Surface recombination in pyrex in oxygen dc glow discharges: mesoscopic modelling and comparison with experiments. Plasma Sources Science and Technology , 33(5):055003, 2024. [8] Maziar Raissi, Paris Perdikaris, and George E. Karniadakis. Physics-informed neural networks: A deep learning framework for solving forward and inverse problems involving nonlinear partial differential equations. Journal of Computational Physics , 378:686–707, 2019. [9] Christian Jacobsen, Yilin Zhuang, and Karthik Duraisamy. Cocogen: Physically consistent and conditioned score-based generative models for forward and inverse problems. SIAM Journal on Scientific Computing ,47(2):C399–C425, 2025. [10] Sifan Wang, Yujan Teng, and Paris Perdikaris. Understanding and mitigating gradient pathologies in physics-informed neural networks. arXiv preprint arXiv:2001.04536 , 2020. [11] Matilde Valente, Tiago C. Dias, Vasco Guerra, and Rodrigo Ventura. Physics-consistent machine learning with output projection onto physical manifolds. Communications Physics , 8(1):433, 2025. [12] Yankun Hong, Harshit Bansal, and Karen Veroy. A score-based generative solver for pde-constrained inverse problems with complex priors. arXiv preprint arXiv:2408.16626 , 2024. [13] Sungje Park and Stephen Tu. Integration matters for learning pdes with backwards sdes. arXiv preprint arXiv:2505.01078 , 2025. [14] Tim Hsu, Babak Sadigh, Vasily Bulatov, and Fei Zhou. Score dynamics: Scaling molecular dynamics with picoseconds time steps via conditional diffusion model. Journal of Chemical Theory and Computation , 20(6):2335– 2348, 2024. PMID: 38489243. [15] Liang Wang, Chao Song, Zhiyuan Liu, Yu Rong, Qiang Liu, Shu Wu, and Liang Wang. Diffusion models for molecules: A survey of methods and tasks. arXiv preprint arXiv:2502.09511 , 2025. 11 [16] Jonathan Ho and Tim Salimans. Classifier-free diffusion guidance. arXiv preprint arXiv:2207.12598 , 2022. [17] Yang Song, Liyue Shen, Lei Xing, and Stefano Ermon. Solving inverse problems in medical imaging with score-based generative models. arXiv preprint arXiv:2111.08005 , 2022. [18] Jonathan Ho, Tim Salimans, Alexey Gritsenko, William Chan, Mohammad Norouzi, and David J. Fleet. Video diffusion models. arXiv preprint arXiv:2204.03458 , 2022. [19] Ye Yuan, Jiaming Song, Umar Iqbal, Arash Vahdat, and Jan Kautz. Physdiff: Physics-guided human motion diffusion model. arXiv preprint arXiv:2212.02500 , 2023. [20] Jin-wu Kang, Jiwu Wang, Xiao Han, and Qichao Zhao. Deep learning based heat transfer simulation of the casting process. Scientific Reports , 14, 11 2024. [21] Shijun Cheng, Xinru Mu, and Tariq Alkhalifah. Physics-informed conditional diffusion model for generalizable elastic wave-mode separation. arXiv preprint arXiv:2506.23007 , 2025. [22] Pascal Vincent, Hugo Larochelle, Yoshua Bengio, and Pierre-Antoine Manzagol. Extracting and composing robust features with denoising autoencoders. In Proceedings of the 25th International Conference on Machine Learning ,ICML ’08, page 1096–1103, New York, NY, USA, 2008. Association for Computing Machinery. [23] Diederik P. Kingma, Tim Salimans, Ben Poole, and Jonathan Ho. Variational diffusion models. arXiv preprint arXiv:2107.00630 , 2023. [24] Tianhong Li and Kaiming He. Back to basics: Let denoising generative models denoise. arXiv preprint arXiv:2511.13720 , 2025. [25] Lawrence Cayton. Algorithms for manifold learning. Univ. of California at San Diego Tech. Rep , 12(1-17):1, 2005. [26] Hariharan Narayanan and Sanjoy Mitter. Sample complexity of testing the manifold hypothesis. Advances in Neural Information Processing Systems (NeurIPS) , 23, 2010. [27] Yoshua Bengio, Li Yao, Guillaume Alain, and Pascal Vincent. Generalized denoising auto-encoders as generative models. arXiv preprint arXiv:1305.6663 , 2013. [28] Guillaume Alain andYoshua Bengio. What regularized auto-encoders learn from the data generating distribution. 
+
+arXiv preprint arXiv:1211.4246 , 2014. [29] Pascal Vincent. A connection between score matching and denoising autoencoders. Neural Computation ,23(7):1661–1674, 2011. [30] Aapo Hyvärinen. Estimation of non-normalized statistical models by score matching. Journal of Machine Learning Research , 6:695–709, 2005. [31] Tim Salimans and Jonathan Ho. Progressive distillation for fast sampling of diffusion models. arXiv preprint arXiv:2202.00512 , 2022. [32] Ruiqi Gao, Yang Song, Ben Poole, Ying Nian Wu, and Diederik P. Kingma. Learning energy-based models by diffusion recovery likelihood. arXiv preprint arXiv:2012.08125 , 2021. [33] Weijian Luo, Hao Jiang, Tianyang Hu, Jiacheng Sun, Zhenguo Li, and Zhihua Zhang. Training energy-based models with diffusion contrastive divergences. arXiv preprint arXiv:2307.01668 , 2023. [34] Chicago Y. Park, Michael T. McCann, Cristina Garcia-Cardona, Brendt Wohlberg, and Ulugbek S. Kamilov. Random walks with tweedie: A unified view of score-based diffusion models [in the spotlight]. IEEE Signal Processing Magazine , 42(3):40–51, May 2025. [35] Yang Song, Jascha Sohl-Dickstein, Diederik P. Kingma, Abhishek Kumar, Stefano Ermon, and Ben Poole. Score-based generative modeling through stochastic differential equations. arXiv preprint arXiv:2011.13456 ,2021. [36] Tero Karras, Miika Aittala, Timo Aila, and Samuli Laine. Elucidating the design space of diffusion-based generative models. In Advances in Neural Information Processing Systems , volume 35, pages 26565–26577, 2022. [37] Runqian Wang and Yilun Du. Equilibrium matching: Generative modeling with implicit energy-based models. 
+
+arXiv preprint arXiv:2510.02300 , 2025. [38] Will Grathwohl, Kuan-Chieh Wang, Jörn-Henrik Jacobsen, David Duvenaud, Mohammad Norouzi, and Kevin Swersky. Your classifier is secretly an energy based model and you should treat it like one. arXiv preprint arXiv:1912.03263 , 2020. [39] Naftali Tishby, Fernando C. Pereira, and William Bialek. The information bottleneck method. arXiv preprint arXiv:physics/0004057 , 2000. 12 [40] Yaron Lipman, Ricky T. Q. Chen, Heli Ben-Hamu, Maximilian Nickel, and Matt Le. Flow matching for generative model. arXiv preprint arXiv:2210.02747 , 2023. [41] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N. Gomez, Lukasz Kaiser, and Illia Polosukhin. Attention is all you need. arXiv preprint arXiv:1706.03762 , 2023. [42] Alex Nichol and Prafulla Dhariwal. Improved denoising diffusion probabilistic models. arXiv preprint arXiv:2102.09672 , 2021. [43] Diederik P. Kingma and Jimmy Lei Ba. Adam: A method for stochastic optimization. arXiv preprint arXiv:1412.6980 , 2017. 
+
+# A Appendix 
+
+A.1 Derivation of the Conditional DCD Objective 
+
+For completeness, we present the derivation of the objective in Eq. (6) , adapting the formulation from [33] to the conditional setting. We assume the model’s marginal pθ (x) is fixed to the data marginal pd(x), allowing us to analyze the expected conditional KL divergence: 
+
+DKL (pd(x, y )|| pθ (x, y )) = Ex∼pd(x)[DKL (pd(y|x)|| pθ (y|x))] . (18) We start with the reconstruction objective (the expected conditional log-likelihood) and demonstrate its equivalence to the difference of KL divergences. 
+
+max  
+
+> θ
+
+Epd(x,y )Eqt(˜ y|y,x ) [log pθ (y|˜y, x )] = max  
+
+> θ
+
+Epd(x,y )Eqt(˜ y|y,x )
+
+"
+
+log pθ (y|˜y, x )p(t) 
+
+> θ
+
+(˜ y|x)
+
+pd(y|˜y, x )p(t) 
+
+> d
+
+(˜ y|x)
+
+#
+
+− Epd(x,y )Eqt(˜ y|y,x )
+
+"
+
+log p(t) 
+
+> θ
+
+(˜ y|x)
+
+p(t) 
+
+> d
+
+(˜ y|x)
+
+#! 
+
+(Using Bayes’ rule: p(y|˜y, x )p(t)(˜ y|x) = qt(˜ y|y, x )p(y|x) for both pd and pθ )
+
+= min  
+
+> θ
+
+Epd(x,y )Eqt(˜ y|y,x )
+
+
+
+log pd(y|x)qt(˜ y|y, x )
+
+pθ (y|x)qt(˜ y|y, x )
+
+
+
+− Epd(x,y )Eqt(˜ y|y,x )
+
+"
+
+log p(t) 
+
+> θ
+
+(˜ y|x)
+
+p(t) 
+
+> d
+
+(˜ y|x)
+
+#! 
+
+(Canceling qt and noting the first term is independent of ˜y)
+
+= min  
+
+> θ
+
+Epd(x,y )
+
+
+
+log pd(y|x)
+
+pθ (y|x)
+
+
+
+− Epd(x,y )Eqt(˜ y|y,x )
+
+"
+
+log p(t) 
+
+> θ
+
+(˜ y|x)
+
+p(t) 
+
+> d
+
+(˜ y|x)
+
+#! 
+
+(Identifying the terms as expectations of KL divergences) 
+
+= min  
+
+> θ
+
+Epd(x)
+
+h
+
+DKL (pd(y|x)|| pθ (y|x)) − D KL (p(t) 
+
+> d
+
+(˜ y|x)|| p(t) 
+
+> θ
+
+(˜ y|x)) 
+
+i
+
+= min  
+
+> θ
+
+Epd(x)
+
+h
+
+D(t)DCD (pd(y|x)|| pθ (y|x)) 
+
+i
+
+where we used the definition p(t)(˜ y|x) = R dy q t(˜ y|y)p(y|x). Thus, maximizing the reconstruction objective is equivalent to minimizing the conditional DCD divergence. 
+
+A.2 Relation between the Optimal Denoiser and Conditional Score 
+
+In this section, also for completeness, we present the derivation the conditional version of Tweedie ’s formula [34]. We show that the optimal denoiser gϕ∗ is related to the score of the conditional marginal perturbed data distribution 
+
+∇˜y log qt(˜ y|x).We assume the forward process is defined as qt(˜ y|y, x ) = N (˜ y; y, σ 2(t)I). This implies ˜y = y + σ(t)ϵ for ϵ ∼ N (0 , I ).As a result, we can find the gradient of the log-likelihood: 
+
+∇˜y log qt(˜ y|y, x ) = ∇˜y
+
+
+
+− 12σ2(t) ∥˜y − y∥22
+
+
+
+= − 1
+
+σ2(t) (˜ y − y) = y − ˜yσ2(t) . (19) 13 We begin with the definition of the conditional score s∗(˜ y, x ) and show its relation to gϕ∗ (˜ y, x, t ):
+
+s∗(˜ y, x ) = ∇˜y log qt(˜ y|x) = 1
+
+qt(˜ y|x) ∇˜y qt(˜ y|x) = 1
+
+qt(˜ y|x) ∇˜y
+
+Z
+
+dy p (y|x)qt(˜ y|y, x )= 1
+
+qt(˜ y|x)
+
+Z
+
+dy p (y|x) ( qt(˜ y|y, x )∇˜y log qt(˜ y|y, x )) = 1
+
+qt(˜ y|x)
+
+Z
+
+dy p (y|x)qt(˜ y|y, x )
+
+ y − ˜yσ2(t)
+
+
+
+> (Using Gaussian assumption)
+
+=
+
+Z
+
+dy p(y|x)qt(˜ y|y, x )
+
+qt(˜ y|x)
+
+ y − ˜yσ2(t)
+
+
+
+=
+
+Z
+
+dy q (y|˜y, x, t ) y − ˜yσ2(t) (By conditional Bayes’ rule) 
+
+= 1
+
+σ2(t) Eq(y|˜y,x,t )[y − ˜y] = 1
+
+σ2(t) E[y − ˜y|˜y, x, t ].
+
+Since the optimal denoiser corresponds to gϕ∗ (˜ y, x, t ) = E[y|˜y, x, t ], we arrive at the following formula: 
+
+gϕ∗ (˜ y, x, t ) = E[y|˜y, x, t ] = ˜ y + σ2(t)∇˜y log qt(˜ y|x). (20) 
+
+A.3 CDM Model Architecture and Default Hyperparameters 
+
+The detailed layer-by-layer specification of our CDM-t model is provided in Table 1. Table 1: Layer-wise architecture and default dimensions of the CDM-t model. B denotes the batch size. 
+
+Module Operation Output Dimension 
+
+— Inputs — 
+
+Input Y Noisy State ˜y (B, #y)
+
+Input X Input Condition x (B, #x)
+
+Input σ Noise Level σ (B, 1) 
+
+— Encoder / Projections — 
+
+Noise Embedding Sinusoidal Emb. + 2-Layer MLP (B, 10) 
+
+Encoder Y Path 2-Layer MLP (GELU) (B, 58) 
+
+Encoder X Path 2-Layer MLP (GELU) (B, 16) 
+
+Fusion Concatenate [Enc(Y), Enc(X), Emb( σ)] (B, 84) 
+
+— Decoder — 
+
+Pre-processing Layer Normalization (B, 84) 
+
+Main Block Linear → GELU (B, 58) 
+
+Output Head Linear Layer (predicts y and x) (B, #y + # x)
+
+To ensure stable convergence, we enforce a minimum training duration of 4500 epochs before activating the stopping criteria. Beyond this point, we employ Early Stopping monitoring the validation loss with a patience of 20 epochs. The default hyperparameters used for model training and inference are detailed in Table 2. 14 Table 2: Default training hyperparameters. 
+
+Parameter Value 
+
+Noise Configuration 
+
+Noise Kernel ( qt(· | y)) Isotropic Gaussian N (y, σ (t)2I)
+
+Noise Schedule ( σ(t)) sine schedule Eq.(17) Max Noise Level ( σmax ) 1.0 CDM-0-const step size ( η) 0.1 CDM-0-adapt base step size ( ηbase ) 1.0 CDM-0 (Nmax ) 1300 CDM-0 (ϵconv ) 10 −5
+
+Optimizer Configuration 
+
+Optimizer Adam [43] Learning Rate 1 × 10 −3
+
+Batch Size 128 Min Number Training Epochs 4500 15

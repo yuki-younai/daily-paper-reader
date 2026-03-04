@@ -1,0 +1,1676 @@
+Title: Knowledge-Informed Kernel State Reconstruction for Interpretable Dynamical System Discovery
+
+URL Source: https://arxiv.org/pdf/2601.22328v1
+
+Published Time: Mon, 02 Feb 2026 01:10:47 GMT
+
+Number of Pages: 32
+
+Markdown Content:
+# Knowledge-Informed Kernel State Reconstruction for Interpretable Dynamical System Discovery 
+
+Luca Muscarnera * 1 Silas Ruhrberg Est´ evez * 1 Samuel Holt * 1 Evgeny Saveliev 1 Mihaela van der Schaar 1
+
+Abstract 
+
+Recovering governing equations from data is cen-tral to scientific discovery, yet existing methods often break down under noisy, partial observa-tions, or rely on black-box latent dynamics that obscure mechanism. We introduce MAAT (Model Aware Approximation of Trajectories), a frame-work for symbolic discovery built on knowledge-informed Kernel State Reconstruction. MAAT for-mulates state reconstruction in a reproducing ker-nel Hilbert space and directly incorporates struc-tural and semantic priors such as non-negativity, conservation laws, and domain-specific obser-vation models into the reconstruction objective, while accommodating heterogeneous sampling and measurement granularity. This yields smooth, physically consistent state estimates with analytic time derivatives, providing a principled interface between fragmented sensor data and symbolic re-gression. Across twelve diverse scientific bench-marks and multiple noise regimes, MAAT substan-tially reduces state-estimation MSE for trajecto-ries and derivatives used by downstream symbolic regression relative to strong baselines. 
+
+1. Introduction 
+
+Mechanistic models expressed as systems of differential equations play a central role in scientific and clinical decision-making (Strogatz, 2018; Huang et al., 2013). Un-like purely predictive models, explicit equations provide interpretable structure, enable counterfactual reasoning, and support extrapolation across experimental conditions (Yu & Wang, 2024). In domains such as pharmacology, epi-demiology, and physiology, these properties are not merely desirable but essential: regulatory approval, dose optimiza-tion, and safety assessment depend on transparent models whose components can be scrutinized, validated, and linked 
+
+> *
+
+Equal contribution 1DAMTP, University of Cambridge, Cambridge, UK. Correspondence to: Luca Muscarnera 
+
+<lm2152@cam.ac.uk >.
+
+Preprint. February 2, 2026. 
+
+to known biological mechanisms (U.S. FDA, 2023). A long-standing goal in machine learning and scientific com-puting is therefore equation discovery , recovering governing dynamical laws directly from data (Brunton & Kutz, 2019). Sparse regression approaches, most notably Sparse Identifi-cation of Nonlinear Dynamics (SINDy), have demonstrated that compact and interpretable equations can be recovered when full state trajectories and accurate derivatives are avail-able (Brunton et al., 2016). However, these assumptions are rarely satisfied in real-world settings (Rubanova et al., 2019). Measurements are often sparse, noisy, irregularly sampled, and only partially observed, rendering numerical differenti-ation brittle and making classical sparse regression highly sensitive to noise (van Breugel et al., 2020). In clinical data, drug concentrations are only infrequently measured, whereas vital signs, labs, and dosing records are observed routinely and densely, but only indirectly reflect latent con-centration states, preventing access to full trajectories or reliable derivatives. As a result, practical equation discovery pipelines increas-ingly rely on preprocessing steps that estimate latent states and derivatives prior to symbolic regression. Existing approaches fall into two broad categories. Statistical smoothers , such as spline methods (Eilers & Marx, 1996) and Gaussian process regression (Rasmussen & Williams, 2005), reduce noise and yield differentiable trajectories, but are typically agnostic to domain-specific constraints. 
+
+State-space methods , including Kalman filtering and related models (Kalman, 1960), can handle partial observability through latent-state inference, but require specifying a tran-sition model a priori. More flexible alternatives, such as Neural ODEs (Chen et al., 2018) and latent dynamics mod-els (Rubanova et al., 2019), relax these assumptions but do so by introducing black-box latent representations that obscure mechanistic structure, limiting their suitability for scientific and clinical use (Yu & Wang, 2024). This tension between data-driven flexibility and mechanistic transparency is particularly acute in domains with strong prior knowledge. In pharmacology, for example, concen-trations must remain non-negative, subsystems follow well-established structural motifs, and coupling terms are typi-cally sparse and directional. Similar considerations arise in 1
+
+> arXiv:2601.22328v1 [cs.LG] 29 Jan 2026 Knowledge-Informed Kernel State Reconstruction
+
+epidemiology, systems biology, and physiology. Physics-informed neural networks and related approaches attempt to incorporate prior knowledge through soft constraints, but they generally require specifying governing equations in advance and are not designed for symbolic discovery of unknown dynamics (Raissi et al., 2019). 
+
+Gap. Existing equation discovery pipelines implicitly treat state reconstruction as a numerical preprocessing step, rather than as a representational bottleneck that determines which classes of dynamics can be discovered. Classical sparse regression presumes accurate derivatives and near-complete observability, while smoothing and filtering methods im-prove stability without encoding domain knowledge. At the other extreme, black-box latent dynamics models accommo-date partial observations but collapse mechanistic structure into uninterpretable representations. Kernel methods natu-rally address this gap by yielding smooth trajectories with analytic time derivatives that avoid numerical noise ampli-fication and admit soft constraints through regularization. What remains missing is a principled reconstruction frame-work that uses these properties to encode both semantic priors (e.g., non-negativity) and structural priors (e.g., ob-servation operators and subsystem partitions), producing state estimates suitable for symbolic equation discovery. 
+
+Contributions 
+
+Conceptual. We identify knowledge-informed state re-construction as a central bottleneck in equation discovery under partial observability, and formalize the need for reconstruction methods that jointly balance noise robust-ness, interpretability, and symbolic discoverability. 
+
+Technical. We introduce MAAT (Model Aware Approxi-mation of Trajectories), a kernel-based state reconstruc-tion framework that embeds latent trajectories in a repro-ducing kernel Hilbert space and explicitly injects seman-tic and structural priors into the reconstruction objective. This yields smooth, physically consistent state estimates with analytic time derivatives, providing a principled and compatible interface to established symbolic regression methods for accurate downstream equation discovery. 
+
+Empirical. Across twelve synthetic and domain-relevant benchmarks spanning pharmacology, epidemiol-ogy, physiology, and economics, MAAT substantially im-proves equation recovery accuracy, robustness to noise, and data efficiency relative to strong baselines. 
+
+2. Problem Formulation 
+
+2.1. Dynamical System and Observation Model 
+
+We consider a time-dependent dynamical system character-ized by the state variable x(t) ∈ Rd, governed by a system of first-order ordinary differential equations (ODEs): 
+
+˙x(t) = f (x(t)) , x(0) = x0, (1) where f : Rd → Rd is an unknown vector field. We assume that f is composed of a sparse combination of symbolic functions (e.g., polynomials, trigonometric terms) which we aim to discover. In real-world settings, the time derivative ˙x(t) is not directly observable. Measurements instead provide partial and noisy observations of the latent state x(t), yielding a dataset D =
+
+{(ti, y i, Hi)}Ni=1 of N observations collected at irregular timestamps ti. Each observation yi is related to the latent state x(ti) through a linear observation operator Hi:
+
+yi = Hi(x(ti)) + ϵi, ϵi ∼ N (0 , Σ) , (2) where ϵi denotes measurement noise. Crucially, this generalized observation model captures a fundamental tradeoff in experimental measurement: limita-tions in sensing, cost, and invasiveness often force a choice between temporal resolution and state specificity. As a re-sult, scientific datasets frequently comprise a mixture of two complementary measurement regimes: • Sparse Direct Measurements: These observations are temporally sparse (available at few, irregular times-tamps) but spatially resolved . In this case, Hi acts as a selection matrix (or identity), providing high-fidelity values for specific state variables. These serve as “an-chor points” for the trajectory, though their sparsity precludes direct derivative estimation. • Dense Aggregated Observations: These observations are temporally dense (available frequently) but spa-tially aggregated . In this case, Hi is a mixing oper-ator (e.g., a summation vector [1 , 1, . . . ] representing total viral load), rendering individual states only par-tially observable. While they lack specificity, their high frequency constrains the continuous shape of the trajectory between the sparse anchors. 
+
+2.2. Reconstruction and Discovery Objectives 
+
+Our goal is to solve the inverse problem of recovering the governing equations f from the dataset D. We decompose this into two coupled objectives: 1. State Reconstruction (The Inverse Problem): Re-cover a smooth estimate of the latent trajectory ˆx(t)
+
+and its time derivative ˙ˆx(t) that explains the observa-tions yi while satisfying physical constraints C (such as non-negativity or monotonicity). 2. Symbolic Discovery (The Learning Problem): Iden-tify the sparse symbolic structure of f such that ˙ˆx(t) ≈
+
+f (ˆ x(t)) .2Knowledge-Informed Kernel State Reconstruction 
+
+2.3. Physical Priors 
+
+In many scientific and clinical domains, substantial prior knowledge about system behavior is available. State re-construction therefore benefits not merely from statistical regularization, but from explicitly enforcing interpretable physical constraints that reflect established mechanistic understanding. For example, prior knowledge that state variables represent concentrations or populations implies non-negativity, while smoothness or bounded-rate assump-tions naturally motivate penalties on the magnitude of state derivatives. Importantly, such priors are not heuristic prefer-ences but reflect domain conventions that determine model acceptability. In high-stakes settings, reconstructed trajec-tories that violate basic physical principles are unlikely to be trusted or adopted, regardless of predictive performance. This consideration is particularly important under sparse ob-servability, where empirical data alone may be insufficient to constrain latent dynamics. In such regimes, physical priors act as structured inductive biases that compensate for limited measurements while preserving interpretability and downstream suitability for mechanistic analysis and equation discovery. 
+
+2.4. Optimization Framework 
+
+Standard smoothing techniques such as splines fail to ac-count for the structural constraints C or the heterogeneous operators Hi. Instead, we formulate the reconstruction as a risk minimization problem in a Reproducing Kernel Hilbert Space (RKHS), denoted by HK .We seek the trajectory function ˆx ∈ H K that minimizes the regularized empirical risk including domain knowledge of the form: 
+
+ˆx = argmin 
+
+x∈H K
+
+NX
+
+i=1 
+
+∥yi − H i(x(ti)) ∥2
+
+| {z }
+
+Data Fidelity 
+
+++ λ1∥x∥2
+
+HK
+
+| {z }
+
+Smoothness 
+
++ λ2Rphys (x, C)
+
+| {z }
+
+Physical Priors 
+
+,
+
+(3) where ∥ · ∥ HK denotes the RKHS norm, and Rphys is a penalty term enforcing domain knowledge (defined in Sec-tion 3). This formulation is equivalent to Maximum A Posteriori (MAP) estimation under Gaussian process priors, providing a principled framework to reconstruct derivatives 
+
+˙ˆx required for the subsequent symbolic regression step. 
+
+3. Knowledge-informed Kernel Regression 
+
+We introduce MAAT (Model Aware Approximation of Tra-jectories), a framework for knowledge informed kernel re-gression for state estimation in dynamical systems. Un-like prior methods, MAAT goes beyond simple interpola-PART 1: INPUT DATA CHALLENGES                
+
+> Sparse "Anchor" Measurements
+> Missing data implies unknown dynamics
+> Dense Aggregated Observations
+> Partial observations y(t) = Hx(t)
+> Method Pipeline
+> Stage 1: Knowledge-Informed RKHS Reconstruction
+> Physical Priors
+> Positivity,
+> Conservation
+> Rphys
+> Optimization in RKHS
+> x(t) = ∑jαjK(tj,t)
+> Minimize Lfit (α) + λRphys (α)
+> Reconstructed States
+> Trajectory
+> Analytic Derivative
+> (via )
+> ^x(t)
+> ˙^x(t)
+> ∂tK
+> Stage 2: Symbolic Discovery
+> (SINDy / PySR)
+> Find such that f˙x=f(x)
+> Governing
+> Equations
+> dx dt = …
+> 25/01/2026, 22:50 MAAT / HYDRA-ODE Pipeline Visualization
+> file:///C:/Users/lucam/Desktop/Cambridge/picture.html 1/1
+
+Figure 1. Overview of MAAT. Sparse anchor measurements and dense aggregate observations are combined with physical priors to produce reconstructed states through knowledge-informed kernel regression yielding smooth trajectories and analytical derivatives that can be used for symbolic regression. 
+
+tion of the measurements but does the regression under the constraints provided by the physical knowledge about the variables in the systems and the interactions of the sub-components. A schematic overview of the framework is provided in Figure 1: 1. Kernel State Reconstruction (KSR): We first solve for a smooth, continuous-time representation of the state, bx(t), by fitting a kernel-based model to all avail-able measurements simultaneously. This yields ana-lytic estimates of both the state bx(t) and its derivative 
+
+bx(t) over the entire time domain. 2. Symbolic Regression (SR): Using the reconstructed data pairs (bx(ti), b˙x(ti)) , we then perform sparse sym-bolic regression to discover the functional forms of fi
+
+and gij .
+
+3.1. Kernel State Reconstruction (KSR) 
+
+We model the trajectory of each state variable j ∈{1, . . . , d } as a function in a Reproducing Kernel Hilbert Space (RKHS), bxj (t) = PNℓ=1 uℓj κ(t, t ℓ), where κ is a smooth kernel (e.g., Gaussian) and U ∈ RN ×d is a ma-trix of coefficients to be learned. This is a form of kernel ridge regression, and follows from the Representer Theorem (See Appendix B.1). The coefficients U are found by min-imizing a composite loss function that balances fidelity to both snapshots and linear signals, along with regularization terms: 
+
+min 
+
+U
+
+ws
+
+Nobs 
+
+∥Kobs U − Xobs ∥2
+
+F + X
+
+i
+
+wi
+
+N ∥KUH ⊤
+
+i − Y∥2
+
+F
+
++ γ∥ ˙KU − F (KU )∥2
+
+F + λ∥U∥2
+
+F ,
+
+(4) 3Knowledge-Informed Kernel State Reconstruction 
+
+where Kobs  
+
+> kℓ
+
+= κ(tobs  
+
+> k
+
+, t ℓ) and Kiℓ = κ(ti, t ℓ) are, respec-tively, the matrix of the kernel-based inner products between the timesteps where full state is observed and where the sig-nal is observed and the matrix of the kernel-based inner products between the timesteps in which the fine grained signals are observed. The additional penalty from deviation from a prior ( γ∥ ˙KU − F (KU )∥2 
+
+> F
+
+) models the deviation from prior hypotheses on the dynamics of the system. The object ˙K represents, in this context, the time-derivative of the kernel Gram matrix K. As a sketch of proof behind the introduction of such term, consider the problem of pre-dicting the time derivative of a novel time point based on our proposed regressor which is solved as 
+
+∂t ˆx(t) = ∂t
+
+X
+
+> j
+
+eiκ(t, t j ) = U∂tκ(t, t)
+
+due to the linearity of the model. Therefore the time-derivative operator only acts on the kernel, which is dif-ferentiable as Gaussian kernels are C∞, and their derivatives can be computed efficiently in an analytical way. Intuitively, the penalization term that depends on ˙K acts as a regularizer in the optimization phase, discouraging state trajectories with abrupt variations. We argue that this is a natural regularization choice for dynamical systems with a composite structure. In the case F = 0 , our heuristic is based on the assumption that in dynamical systems with many interacting subsystems, large derivatives in the state variables could imply instabilities that propagate along the trajectories in the state space, making the system unstable and thus incompatible with the observed data. Secondly, this assumption follows an Occam’s Razor argument; we assume, in fact, that when many systems interact they tend to reach a collective equilibrium efficiently, as observed in many complex and large physical systems. When instead prior knowledge on the behavior of the system is available, the penalization can be further refined penalizing divergence in the derivative with respect to the known model of the dynamical system. Solving this optimization problem, whose convexity de-pends on the choice of the regularization, for U gives us the full state trajectory cX = KU and its derivative c˙X = ˙KU ,which can be employed in the symbolic regression phase. 
+
+3.2. Theoretical Justification 
+
+This KSR approach is motivated by two key theoretical properties. First, the composite loss function is a valid surrogate for the true L2 reconstruction error. 
+
+Lemma 1 (Composite loss is a calibrated surrogate) . Let H :
+
+Rd → Rp be a bounded linear observation operator. For any candidate trajectory ˆx ∈ L2([0 , T ]; Rd) and true trajectory 
+
+x, define the risk R(ˆ x) = ∥x − ˆx∥2 
+
+> L2
+
++ ∥H(x − ˆx)∥2 
+
+> L2
+
+.Then 
+
+∥x − ˆx∥2 
+
+> L2
+
+≤ R (ˆ x) ≤ (1 + ∥H∥2) ∥x − ˆx∥2 
+
+> L2
+
+.
+
+Hence minimizing R is equivalent to minimizing the L2
+
+reconstruction error up to a constant factor. 
+
+Sketch. The upper bound follows from the triangle inequal-ity and the definition of the operator norm, ∥H(x− ˆx)∥2 
+
+> L2
+
+≤∥H∥2∥x − ˆx∥2 
+
+> L2
+
+. The lower bound is immediate. A full proof is in the Appendix B. Second, KSR provides derivative estimates that are fun-damentally more robust to noise than standard numerical differentiation. 
+
+Proposition 1 (FD noise floor vs KSR) . Assume ad-ditive i.i.d. noise with variance σ2 on x(t) sampled with step ∆t. Central differences yield derivative error 
+
+E
+
+h
+
+∥b˙xFD − ˙x∥22
+
+i
+
+= O(∆ t4) + Ω( σ2/∆t2), which has an irreducible error floor. For KSR with regularization λ, the analytic derivative estimator satisfies E
+
+h
+
+∥b˙xKSR − ˙x∥22
+
+i
+
+=
+
+O(λ) + O(σ2/n ). Thus, unlike finite differences, KSR avoids high-frequency noise amplification and admits a stan-dard bias–variance trade-off. A proof sketch is provided in the Appendix B. This robustness is critical, as accurate derivatives are the most important input for successful sym-bolic regression (Brunton et al., 2016). 
+
+Identifiability. The governing equations are identifiable if the reconstructed trajectories are sufficiently rich. If the union of observation operators {Hj } spans Rd and trajec-tories are persistently exciting, the KSR estimator for x(t)
+
+is consistent. The identifiability of the laws fi and cou-plings gij then depends on standard restricted eigenvalue conditions for sparse regression on the symbolic feature library. 
+
+4. RELATED WORK 
+
+We position MAAT within the landscape of derivative estima-tion and knowledge-informed machine learning using the structural criteria in Table 1. A broader comparison with prior work is deferred to Appendix C. 
+
+Numerical and Smoothing Baselines. Classical derivative estimation forms the foundation of most symbolic regression pipelines. While Finite differences are computationally effi-cient, they amplify noise in low-SNR regimes. Windowed methods like Savitzky–Golay (Steinier et al., 1972) and vari-ational approaches like TVRegDiff (Chartrand, 2011) im-prove robustness but provide discrete numerical outputs rather than analytic forms. While Cubic Splines (de Boor, 1978) and RBF Smoothing (Buhmann, 2003) provide differ-entiable surrogates, they typically operate on single-channel, 4Knowledge-Informed Kernel State Reconstruction 
+
+Table 1. Capability matrix for state and derivative estimators. Comparison of classical numerical methods, probabilistic estimators, and deep learning approaches. MAAT satisfies the requirements for equation discovery under partial observability and structured priors.                                                                                 
+
+> Method Analytic ˙xHandles Irregular Data Noise Robust Fuses Heterog. Obs. Supports Structure Supports Priors
+> Numerical & Smoothing Baselines
+> Finite Differences ✗✗✗✗✗✗
+> Savitzky–Golay ˜✗˜✗✗✗
+> TVRegDiff ✗˜✓✗✗˜Cubic Spline ✓˜˜✗✗˜RBF Kernels ✓✓˜✗✗✗
+> Probabilistic & Filtering
+> Gaussian Processes ✓✓✓˜˜✓
+> Kalman Filters ˜✓✓✓✗✓
+> Deep Learning & Physics-Informed
+> Neural ODEs ✓✓✓˜✗✗
+> Latent ODEs ˜✓✓˜✗✗
+> PINNs ✓✓✓✓✗✓
+> Symbolic Neural ODEs ✓✓˜✗✗˜
+> MAAT (Ours) ✓✓✓✓✓✓
+
+regularly sampled data. These methods lack the architec-tural flexibility to fuse heterogeneous observations such as sparse snapshots and multi-rate time series. 
+
+Probabilistic and Filtering Estimators. Gaussian Pro-cesses (GPs) (Rasmussen & Williams, 2005) and Kalman Filters (Kalman, 1960) offer a principled treatment of un-certainty and irregular sampling. GPs provide analytic derivatives through kernel differentiation; however, stan-dard kernels struggle to scale to high-dimensional dynami-cal systems and do not natively support structural physical priors like mass conservation across state transitions. While Kalman-based methods excel at sensor fusion, they gener-ally rely on a predefined transition model, making them less suitable for the discovery of unknown governing equations. 
+
+Deep Latent Dynamics. Modern deep learning approaches, such as Neural ODEs (Chen et al., 2018) and Latent ODEs 
+
+(Rubanova et al., 2019), utilize neural vector fields to rep-resent latent dynamics. These models are highly flexible, accommodating irregular sampling and latent imputation via black-box encoders. However, the resulting dynamics are non-symbolic, making them difficult to verify, interpret, or compose into mechanistic modules. Universal Differ-ential Equations (UDEs) (Rackauckas et al., 2020) embed neural networks within mechanistic scaffolds, improving inductive bias and data efficiency, but they do not address heterogeneous observation operators. MAAT bridges this gap by maintaining the data-handling flexibility of latent dynamics models while ensuring the recovered dynamics are represented in a compact, symbolic form suitable for downstream mechanistic analysis. 
+
+Knowledge-Informed and Symbolic Induction. Recent research has moved beyond pure data-driven approaches to inject domain knowledge into ML architectures. Physics-Informed Neural Networks (PINNs) (Raissi et al., 2019) and Symbolic Neural ODEs (Li et al., 2025) incorporate physical laws as soft constraints in the loss function, though they often assume the functional form of the equations is partially known. Despite these advances, a gap remains for methods that can simultaneously handle heterogeneous observability and deliver high-fidelity analytic derivatives .
+
+MAAT addresses this by using a kernel smoothing front-end that translates diverse, noisy observation types into a unified analytic space for robust symbolic discovery. 
+
+Comparison with Physics-Informed Kernel Learning 
+
+A distinct but complementary line of research is the re-cently proposed Physics-Informed Kernel Learning (PIKL) framework (Doum `eche et al., 2025). Similar to MAAT ,PIKL reformulates the learning problem in a Reproduc-ing Kernel Hilbert Space (RKHS) to overcome the training instabilities and lack of theoretical guarantees associated with Physics-Informed Neural Networks (PINNs). How-ever, the two methods target fundamentally different ob-jectives. PIKL addresses the forward or hybrid modeling 
+
+problem: it assumes the differential operator D is known 
+
+a priori (e.g., the wave or heat equation) and utilizes the kernel formulation to minimize a physics-informed risk 
+
+J (f ) = ∥Y − f (X)∥2 + λ∥D f ∥2, efficiently approximat-ing the kernel via Fourier features to solve the PDE. In contrast, MAAT targets the inverse discovery problem, where the governing operator D is unknown and acts as the target of discovery rather than a constraint. Furthermore, while PIKL focuses on standard pointwise regression tasks (Yi ≈ f (Xi)), MAAT is explicitly designed to handle het-erogeneous observation operators (yi ≈ H x(ti)), such as aggregated or partial state measurements. This capability is crucial for scientific discovery settings where the latent state variables (e.g., individual chemical species) are not directly observable, precluding the direct application of standard 5Knowledge-Informed Kernel State Reconstruction    
+
+> Figure 2. State and Derivative Reconstruction on the EPO System under Noise. Ground truth (light blue), noisy observations (grey), and MAAT ’s reconstruction (dark blue). Even with significant noise, our method recovers a smooth, accurate trajectory.
+
+physics-informed regression techniques. 
+
+Symbolic Regression Backends. While our focus is state reconstruction, downstream discovery employs symbolic regression engines such as genetic programming (Cranmer, 2023), sparse regression (Brunton et al., 2016), and neural approaches (d’Ascoli et al., 2024). MAAT’s contribution is orthogonal: providing high-quality inputs that any SR backend can leverage. 
+
+5. EXPERIMENTS 
+
+We evaluate MAAT on a series of diverse benchmarks to assess its performance in state reconstruction and down-stream equation discovery. To evaluate the effectiveness of our state reconstruction, we assess the derived trajectories for downstream symbolic regression (SR) using two of the most popular SR algorithms: SINDy (Brunton et al., 2016) and PySR (Cranmer, 2023). We demonstrate the utility of knowledge injection through three distinct tasks: 1. Derivative Regularization: We demonstrate that pe-nalizing the derivative magnitude leads to better fits across a broad range of datasets. 2. Non-Negativity Constraints: We show that enforc-ing non-negativity is beneficial for pharmacological modeling and other positive-domain systems. 3. Prior Dynamics: We demonstrate that specific state transitions and conservation of mass can be effectively introduced if the underlying physics are known. 
+
+Experimental Setup. We evaluate our method on a to-tal of 12 datasets spanning diverse domains, including quantitative systems pharmacology (QSP), economics, and epidemiology. Detailed descriptions of the underlying dynamical systems and data-generation procedures are provided in Appendix D. For baseline comparisons in the state-reconstruction stage, we consider a broad set of standard smoothing and inference methods, including cubic splines, radial basis function (RBF) interpolation, TVRegDiff, Savitzky–Golay filtering, linear interpolation, Kalman filters, Gaussian process (GP) regression, and Neu-ral ODEs. Each method is used to reconstruct state trajecto-ries and derivatives, which are then provided as input to the same symbolic regression (SR) engines for fair comparison. Performance is reported using the geometric mean of the mean squared error (MSE) across all datasets, with the full results shown in Appendix C. 
+
+5.1. Penalizing Derivative Magnitude 
+
+To test the robustness of our approach against noise, we an-alyze the impact of penalizing the magnitude of the deriva-tive during reconstruction. We observed that in high-noise regimes, standard smoothing techniques often preserve high-frequency artifacts, leading to erroneous derivative esti-mates. By adding a penalty term to the derivative magnitude, 
+
+MAAT recovers smoother, more physically plausible trajecto-ries than baselines (see Table 2). Figure 2 shows an example of a QSP system (Sharma & Jusko, 1998) being recovered. Even under significant observation noise, the method avoids overfitting and accurately captures the underlying dynamics. 
+
+5.2. Non-negativity Constraints 
+
+Many physical and biological systems impose hard feasi-bility constraints on the state space. In pharmacokinetics, 6Knowledge-Informed Kernel State Reconstruction 
+
+Table 2. MAAT vs. baselines under three noise structures. Geometric mean state-estimation MSE (lower is better) with 95% confidence intervals for reconstructed trajectories used by downstream symbolic regression (PySR / SINDy) across 12 different tasks. Noise settings: isotropic Gaussian, correlated Gaussian, and heavy-tailed Student-t. Best MSE in each column is bolded.                                                                                                                             
+
+> Isotropic Gaussian Correlated Gaussian Student-t(heavy-tailed) Method PySR SINDy PySR SINDy PySR SINDy
+> Cubic spline 2.18 (1 .2,3.9) 1.79 (1 .1,2.9) 0.465 (0 .28 ,0.77) 0.42 (0 .26 ,0.68) 1.94 (1 .2,3.2) 1.75 (1 .1,2.8)
+> Savitzky–Golay 0.16 (0 .096 ,0.27) 0.148 (0 .091 ,0.24) 0.127 (0 .076 ,0.21) 0.119 (0 .073 ,0.19) 0.173 (0 .094 ,0.32) 0.143 (0 .088 ,0.23)
+> TVRegDiff 0.159 (0 .095 ,0.27) 0.148 (0 .091 ,0.24) 0.121 (0 .073 ,0.2) 0.119 (0 .073 ,0.19) 0.138 (0 .085 ,0.22) 0.143 (0 .088 ,0.23)
+> Linear interpolation 0.674 (0 .39 ,1.2) 0.584 (0 .36 ,0.95) 0.222 (0 .13 ,0.37) 0.212 (0 .13 ,0.34) 0.678 (0 .39 ,1.2) 0.582 (0 .36 ,0.94)
+> RBF interpolation 1.39 (0 .79 ,2.4) 1.21 (0 .74 ,2) 0.4 (0 .23 ,0.71) 0.328 (0 .2,0.53) 1.21 (0 .74 ,2) 1.21 (0 .74 ,2)
+> Gaussian Process (RBF) 0.0217 (0 .013 ,0.035) 0.0252 (0 .016 ,0.038) 0.0186 (0 .012 ,0.03) 0.0256 (0 .017 ,0.039) 0.0175 (0 .011 ,0.028) 0.0241 (0 .016 ,0.037)
+> Kalman filter / RTS 0.0803 (0 .049 ,0.13) 0.0854 (0 .052 ,0.14) 0.0852 (0 .053 ,0.14) 0.0883 (0 .054 ,0.14) 0.0763 (0 .047 ,0.12) 0.0809 (0 .05 ,0.13)
+> Neural ODE 4.74 (2 .8,8.1) 0.761 (0 .48 ,1.2) 5.65 (3 .2,9.9) 0.837 (0 .54 ,1.3) 3.97 (2 .4,6.6) 0.733 (0 .47 ,1.2)
+> PINN 0.0259 (0 .014 ,0.049) 0.0331 (0 .017 ,0.065) 0.0247 (0 .013 ,0.048) 0.0355 (0 .018 ,0.071) 0.0259 (0 .013 ,0.05) 0.0282 (0 .015 ,0.055)
+> MAAT (ours) 0.0126 (0.007, 0.023) 0.0112 (0.0065, 0.019) 0.0141 (0.0077, 0.026) 0.0114 (0.0066, 0.02) 0.014 (0.0076, 0.026) 0.0106 (0.0063, 0.018)
+
+for instance, drug concentrations in plasma are strictly non-negative; similarly, epidemiological compartment models represent population counts or fractions that cannot be-come negative. Standard smoothing and reconstruction approaches do not enforce such constraints and can pro-duce nonphysical negative excursions near zero, particu-larly under noise or sparse sampling. These violations can significantly degrade downstream symbolic regression by introducing spurious derivatives and misleading functional relationships. MAAT allows such domain knowledge to be incorporated directly at the state-reconstruction stage. We enforce non-negativity by augmenting the objective with a soft penalty that discourages negative values of the recon-structed trajectory. 
+
+Table 3. Effect of non-negativity constraints. Geometric mean test MSE (lower is better) across datasets. 
+
+Dataset Plain MAAT MAAT + non-negativity 
+
+SEIRH 1.61 × 10 −5 1.44 × 10 −5
+
+Glucose 1.57 × 10 −2 1.47 × 10 −2
+
+TMDD-lite 2.75 × 10 −3 2.69 × 10 −3
+
+Neutrophil 1.74 × 10 −4 1.72 × 10 −4
+
+Results. We evaluate the effect of non-negativity con-straints on four representative datasets spanning epidemi-ology (SEIRH), pharmacology (glucose, TMDD-lite), and clinical cell dynamics (neutrophil). For each dataset, we report the geometric mean test MSE of the reconstructed trajectories used for downstream symbolic regression, com-paring the best unconstrained MAAT configuration against its constrained counterpart. Results are averaged over 10 random seeds. Across the 4 tested datasets, enforcing non-negativity consistently improves reconstruction accuracy, with relative gains ranging from approximately 1% to over 
+
+10% (see Table 3). While the absolute improvements are modest in regimes where violations are rare, the constraint reliably eliminates nonphysical behavior near zero and sta-bilizes derivative estimates, which is critical for accurate symbolic recovery of kinetic laws. 
+
+5.3. Incorporating Dynamical System Structure Knowledge 
+
+Finally, we evaluate the ability of MAAT to incorporate 
+
+structural priors derived from known system semantics, and contrast this mechanism with prior injection in Neural ODE–based approaches. In many scientific settings, partial mechanistic knowledge is available even when the full gov-erning equations are unknown, for example conservation laws or admissible state transition pathways. To study how such knowledge is incorporated, we compare MAAT against both plain Neural ODEs and Symbolic Neural ODEs, where prior information is injected directly into the functional form by restricting admissible basis terms and truncation degrees. We consider the SEIR and SEIRH epidemiolog-ical models, where domain knowledge permits enforcing conservation of mass, non-negativity of all compartments, and monotonicity constraints implied by irreversible tran-sitions (specifically, R′(t) ≥ 0 and S′(t) ≤ 0). In MAAT ,this knowledge is introduced exclusively at the state recon-struction stage as soft constraints on admissible trajectories, without specifying or constraining the parametric form of the vector field. In contrast, Symbolic Neural ODEs incor-porate priors by hard-coding assumptions about the space of functional terms. Empirically, this distinction proves critical: 
+
+MAAT with structural priors achieves lower reconstruction and downstream discovery error than both unconstrained variants and Symbolic Neural ODEs equipped with compa-rable prior information (Table 4). 
+
+Table 4. Priors improve state reconstruction. Geometric mean test MSE (lower is better) across datasets. Results are averaged across 10 random seeds. 
+
+Method PySR SINDy 
+
+Neural ODE 0.405 0.196 Symbolic Neural ODE 0.016 5.71 × 10 −5
+
+MAAT (plain) 0.304 0.138 
+
+MAAT + priors 2.25 × 10 −5 5.08 × 10 −5
+
+7Knowledge-Informed Kernel State Reconstruction 
+
+6. DISCUSSION 
+
+We present MAAT , a framework for discovering governing equations in dynamical systems under partial observabil-ity. By combining robust kernel-based state and derivative reconstruction with block-aware symbolic regression, our method bridges the gap between data-driven flexibility and mechanistic interpretability. Across twelve benchmark tasks spanning medicine, pharmacology, economics, and popula-tion health, MAAT consistently outperforms strong baselines, demonstrating resilience to noise and sparsity. More broadly, this work underscores that interpretable scientific models can be recovered even from fragmented and heterogeneous data for state reconstruction in scientific and clinical do-mains. 
+
+Limitations. The performance of MAAT relies on the ability of Kernel State Reconstruction (KSR) to recover a reason-able latent trajectory. While robust, success depends on the observation operators {H 1}i and on snapshot coverage providing sufficient excitation of the system’s dynamics. In regimes with extremely sparse measurements or uninforma-tive projections, reconstruction can be under-determined, limiting downstream symbolic discovery. Moreover, our approach currently assumes that a hierarchical partition of the state variables is known a priori . While this is natu-ral in domains such as quantitative systems pharmacology (QSP), where modular structure is well established through subsystems for absorption, distribution and receptor binding (Neves-Zaph & Kaddi, 2024; Kaddi et al., 2018; Helm-linger et al., 2019), in other domains this assumption may be unrealistic. Discovering both subsystem partitions and governing laws directly from data therefore remains an open challenge. From a computational perspective, kernel methods are often associated with O(N 3) time due to explicit inversion of an 
+
+N × N Gram matrix. In contrast, MAAT does not require forming a closed-form inverse: because the reconstruction objective includes non-quadratic knowledge-based penalties, we optimize RKHS coefficients using first-order methods, avoiding direct matrix inversion. Nevertheless, scalability can still be limited when N is large, since computing or storing kernel interactions may incur O(N 2) time/memory in the worst case. 
+
+Prior validity. As with any knowledge-informed approach, gains depend on the validity of injected priors. When pri-ors are misspecified, they can bias reconstruction relative to purely data-driven smoothers. In pharmacology and re-lated biomedical domains, however, constraints such as non-negativity, conservation, and admissible transitions are often scientifically and regulatory grounded, and can be more informative than sparse measurements. MAAT pro-vides a mechanism to incorporate such priors while interpo-lating between data-only and prior-dominated regimes via regularization strength. 
+
+Future Work. Several promising directions follow from this work. First, integrating Bayesian uncertainty quan-tification into the KSR stage would enable propagation of confidence intervals into the symbolic regression phase, pro-viding principled measures of trust in the discovered equa-tions. Second, extending the framework to handle stochas-tic differential equations or hybrid systems with discrete events would broaden applicability to many biomedical and socio-technical settings. Third, an iterative version of MAAT 
+
+could jointly discover hierarchical structure and dynamics, starting from fine-grained states and progressively grouping them into interpretable subsystems. Finally, coupling our approach with operator-learning methods or large language models could facilitate automatic generation of candidate libraries, incorporation of expert priors, and hypothesis re-finement in a closed loop. 
+
+Clinical and Translational Impact. A central motivation for MAAT is its alignment with how mechanistic modeling is practiced in medicine and pharmacology. Quantitative Systems Pharmacology (QSP) models, for example, are typically constructed hierarchically: drug absorption, distri-bution, receptor binding, and immune response are modeled as modules that are then coupled to capture patient-level outcomes (Neves-Zaph & Kaddi, 2024; Kaddi et al., 2018; Helmlinger et al., 2019). MAAT can leverage such modular-ity by fusing subsystem-specific measurements with sparse patient-level data, discovering coupling laws that remain both parsimonious and biologically plausible. This property has clear implications for accelerating model-informed drug development, where transparent mechanistic models are re-quired for dose selection, safety evaluation, and regulatory approval (U.S. FDA, 2023; European Medicines Agency, 2018; Peterson & Riggs, 2015). In clinical medicine, the interpretability of symbolic models is equally valuable. Whereas black-box neural models offer predictions without explanation (Mould & Upton, 2013), 
+
+MAAT produces interpretable state reconstruction that clini-cians and researchers can test and refine. For instance, our experiments with the FDA-approved UVA diabetes simu-lator illustrate how MAAT could recover personalized glu-cose–insulin dynamics from partial patient data, supporting individualized treatment design (Man et al., 2014). Sim-ilarly, in oncology and infectious disease epidemiology, recovering transparent coupling laws from noisy, hetero-geneous measurements could aid in anticipating drug re-sistance or forecasting epidemic trajectories (Wang et al., 2022; Bruckner et al., 2022; Chang et al., 2023). In this way, 
+
+MAAT may contribute toward embedding machine learning into scientific and clinical modeling workflows. 8Knowledge-Informed Kernel State Reconstruction 
+
+Impact Statement 
+
+This paper presents work whose goal is to advance the field of Machine Learning. There are many potential societal consequences of our work, none which we feel must be specifically highlighted here. 
+
+References 
+
+Badiale, M. and Cravero, I. A nonlinear ode model for a consumeristic society. Mathematics , 12(8):1253, April 2024. ISSN 2227-7390. doi: 10.3390/math12081253. URL http://dx.doi.org/10.3390/math120 81253 .Bjørnstad, O. N., Shea, K., Krzywinski, M., and Altman, N. The seirs model for infectious disease dynamics. Nature Methods , 17(6):557–558, June 2020. ISSN 1548-7105. doi: 10.1038/s41592-020-0856-2. URL http://dx .doi.org/10.1038/s41592-020-0856-2 .Brucker, J., Bessler, W. G., and Gasper, R. A grey-box model with neural ordinary differential equations for the slow voltage dynamics of lithium-ion batteries: Model de-velopment and training. Journal of The Electrochemical Society , 170(12):120537, December 2023. ISSN 1945-7111. doi: 10.1149/1945-7111/ad14cd. URL http: //dx.doi.org/10.1149/1945-7111/ad14cd .Bruckner, T., Wieschowski, S., Heider, M., Deutsch, S., Drude, N., T ¨olch, U., Bleich, A., Tolba, R., and Strech, D. Measurement challenges and causes of incomplete results reporting of biomedical animal studies: Results from an interview study. PLOS ONE , 17(8):e0271976, August 2022. ISSN 1932-6203. doi: 10.1371/journal.po ne.0271976. URL http://dx.doi.org/10.1371 /journal.pone.0271976 .Brunton, S. L. and Kutz, J. N. Data-Driven Science and Engineering . Cambridge University Press, 2019. Brunton, S. L., Proctor, J. L., and Kutz, J. N. Discovering governing equations from data by sparse identification of nonlinear dynamical systems. Proceedings of the Na-tional Academy of Sciences , 113(15):3932–3937, March 2016. ISSN 1091-6490. doi: 10.1073/pnas.1517384113. URL http://dx.doi.org/10.1073/pnas.15 17384113 .Buhmann, M. D. Radial Basis Functions: Theory and Implementations . Cambridge University Press, July 2003. ISBN 9780511543241. doi: 10.1017/cbo9780511543241. URL http://dx.doi.org/10.1017/CBO9780 511543241 .Carnerero, A. D., Ramirez, D. R., Limon, D., and Alamo, T. Kernel-based state-space kriging for predictive con-trol. IEEE/CAA Journal of Automatica Sinica , 10(5): 1263–1275, May 2023. ISSN 2329-9274. doi: 10.110 9/jas.2023.123459. URL http://dx.doi.org/10. 1109/JAS.2023.123459 .Car `e, A., Carli, R., Libera, A. D., Romeres, D., and Pil-lonetto, G. Kernel methods and gaussian processes for system identification and control: A road map on reg-ularized kernel-based learning for control. IEEE Con-trol Systems , 43(5):69–110, October 2023. ISSN 1941-000X. doi: 10.1109/mcs.2023.3291625. URL http: //dx.doi.org/10.1109/MCS.2023.3291625 .Champion, K., Lusch, B., Kutz, J. N., and Brunton, S. L. Data-driven discovery of coordinates and governing equa-tions. Proceedings of the National Academy of Sci-ences , 116(45):22445–22451, October 2019. ISSN 1091-6490. doi: 10.1073/pnas.1906995116. URL http: //dx.doi.org/10.1073/pnas.1906995116 .Chang, Z., Liu, S., Qiu, R., Song, S., Cai, Z., and Tu, G. Time-aware neural ordinary differential equations for incomplete time series modeling. The Journal of Su-percomputing , 79(16):18699–18727, May 2023. ISSN 1573-0484. doi: 10.1007/s11227-023-05327-8. URL 
+
+http://dx.doi.org/10.1007/s11227-023 -05327-8 .Chartrand, R. Numerical differentiation of noisy, nonsmooth data. ISRN Applied Mathematics , 2011:1–11, May 2011. ISSN 2090-5572. doi: 10.5402/2011/164564. URL 
+
+http://dx.doi.org/10.5402/2011/164564 .Chen, R. T. Q., Rubanova, Y., Bettencourt, J., and Duve-naud, D. K. Neural ordinary differential equations. In Bengio, S., Wallach, H., Larochelle, H., Grauman, K., Cesa-Bianchi, N., and Garnett, R. (eds.), Advances in Neural Information Processing Systems , volume 31. Cur-ran Associates, Inc., 2018. URL https://proceedi ngs.neurips.cc/paper_files/paper/201 8/file/69386f6bb1dfed68692a24c868693 9b9-Paper.pdf .Cranmer, M. Interpretable machine learning for science with pysr and symbolicregression.jl, 2023. URL https: //arxiv.org/abs/2305.01582 .d’Ascoli, S., Becker, S., Schwaller, P., Mathis, A., and Kilbertus, N. ODEFormer: Symbolic regression of dy-namical systems with transformers. In The Twelfth Inter-national Conference on Learning Representations , 2024. URL https://openreview.net/forum?id= TzoHLiGVMo .de Boor, C. A Practical Guide to Splines , volume Volume 27. 01 1978. doi: 10.2307/2006241. 9Knowledge-Informed Kernel State Reconstruction 
+
+dePillis, L. Mathematical model of colorectal cancer with monoclonal antibody treatments. British Journal of Medicine and Medical Research , 4(16):3101–3131, Jan-uary 2014. ISSN 2231-0614. doi: 10.9734/bjmmr/2014 /8393. URL http://dx.doi.org/10.9734/BJM MR/2014/8393 .Dondelinger, F., Husmeier, D., Rogers, S., and Filippone, M. Ode parameter inference using adaptive gradient matching with gaussian processes. In Carvalho, C. M. and Ravikumar, P. (eds.), Proceedings of the Sixteenth International Conference on Artificial Intelligence and Statistics , volume 31 of Proceedings of Machine Learning Research , pp. 216–228, Scottsdale, Arizona, USA, 29 Apr–01 May 2013. PMLR. URL https://proceedi ngs.mlr.press/v31/dondelinger13a.html .Doum `eche, N., Bach, F., Biau, G., and Boyer, C. Physics-informed kernel learning. Journal of Machine Learning Research , 26(124):1–39, 2025. Dugan, O., Dangovski, R., Costa, A., Kim, S., Goyal, P., Jacobson, J., and Solja ˇci ´c, M. Occamnet: A fast neural model for symbolic regression at scale, 2020. URL ht tps://arxiv.org/abs/2007.10784 .Eilers, P. H. C. and Marx, B. D. Flexible smoothing with b-splines and penalties. Statistical Science , 11(2), May 1996. ISSN 0883-4237. doi: 10.1214/ss/1038425655. URL http://dx.doi.org/10.1214/ss/1038 425655 .European Medicines Agency. Guideline on the qualification and reporting of physiologically based pharmacokinetic (pbpk) modelling and simulation. https://www.em a.europa.eu/en/documents/scientific-g uideline/draft-guideline-qualificati on-and-reporting-physiologically-bas ed-pharmacokinetic-pbpk-modelling-and -simulation_en.pdf , 2018. Accessed 2025-10-02. Friberg, L. E., Henningsson, A., Maas, H., Nguyen, L., and Karlsson, M. O. Model of chemotherapy-induced myelo-suppression with parameter consistency across drugs. 
+
+Journal of Clinical Oncology , 20(24):4713–4721, De-cember 2002. ISSN 1527-7755. doi: 10.1200/jco.2002.0 2.140. URL http://dx.doi.org/10.1200/JCO .2002.02.140 .Froese, V. and Hertrich, C. Training neural networks is NP-hard in fixed dimension. In Thirty-seventh Conference on Neural Information Processing Systems , 2023. URL 
+
+https://openreview.net/forum?id=VAQp 2EnZeW .Hastie, T., Montanari, A., Rosset, S., and Tibshirani, R. J. Surprises in high-dimensional ridgeless least squares in-terpolation. The Annals of Statistics , 50(2), April 2022. ISSN 0090-5364. doi: 10.1214/21-aos2133. URL 
+
+http://dx.doi.org/10.1214/21-AOS2133 .Helmlinger, G., Sokolov, V., Peskov, K., Hallow, K. M., Kosinsky, Y., Voronova, V., Chu, L., Yakovleva, T., Azarov, I., Kaschek, D., Dolgun, A., Schmidt, H., Boul-ton, D. W., and Penland, R. C. Quantitative systems pharmacology: An exemplar model-building workflow with applications in cardiovascular, metabolic, and oncol-ogy drug development. CPT: Pharmacometrics &amp; Systems Pharmacology , 8(6):380–395, June 2019. ISSN 2163-8306. doi: 10.1002/psp4.12426. URL http: //dx.doi.org/10.1002/psp4.12426 .Holt, S., Qian, Z., and van der Schaar, M. Neural laplace: Learning diverse classes of differential equations in the laplace domain. In ICML , pp. 8811–8832, 2022. URL 
+
+https://proceedings.mlr.press/v162/h olt22a.html .Holt, S., Qian, Z., and van der Schaar, M. Deep genera-tive symbolic regression. In The Eleventh International Conference on Learning Representations , 2023. URL 
+
+https://openreview.net/forum?id=o7ko EEMA1bR .Holt, S., Qian, Z., Liu, T., Weatherall, J., and van der Schaar, M. Data-driven discovery of dynamical systems in phar-macology using large language models. In The Thirty-eighth Annual Conference on Neural Information Pro-cessing Systems , 2024. URL https://openreview .net/forum?id=KIrZmlTA92 .Hsin, J., Agarwal, S., Thorpe, A., Sentis, L., and Fridovich-Keil, D. Symbolic regression on sparse and noisy data with gaussian processes. In 2025 American Control Conference (ACC) , pp. 3170–3175. IEEE, July 2025. doi: 10.23919/acc63710.2025.11107978. URL 
+
+http://dx.doi.org/10.23919/ACC63710 .2025.11107978 .Huang, S.-M., Abernethy, D. R., Wang, Y., Zhao, P., and Zineh, I. The utility of modeling and simulation in drug development and regulatory review. Journal of Pharmaceutical Sciences , 102(9):2912–2923, September 2013. ISSN 0022-3549. doi: 10.1002/jps.23570. URL 
+
+http://dx.doi.org/10.1002/jps.23570 .Kacprzyk, K. and van der Schaar, M. No equations needed: Learning system dynamics without relying on closed-form ODEs. In The Thirteenth International Conference on Learning Representations , 2025. URL https://op enreview.net/forum?id=kbm6tsICar .Kaddi, C. D., Niesner, B., Baek, R., Jasper, P., Pappas, J., Tolsma, J., Li, J., van Rijn, Z., Tao, M., Ortemann-Renon, C., Easton, R., Tan, S., Puga, A. C., Schuch-man, E. H., Barrett, J. S., and Azer, K. Quantitative 10 Knowledge-Informed Kernel State Reconstruction 
+
+systems pharmacology modeling of acid sphingomyeli-nase deficiency and the enzyme replacement therapy olipudase alfa is an innovative tool for linking patho-physiology and pharmacology. CPT: Pharmacometrics &amp; Systems Pharmacology , 7(7):442–452, June 2018. ISSN 2163-8306. doi: 10.1002/psp4.12304. URL 
+
+http://dx.doi.org/10.1002/psp4.12304 .Kaheman, K., Kutz, J. N., and Brunton, S. L. Sindy-pi: a robust algorithm for parallel implicit sparse identification of nonlinear dynamics. Proceedings of the Royal Society A: Mathematical, Physical and Engineering Sciences ,476(2242), October 2020. ISSN 1471-2946. doi: 10.109 8/rspa.2020.0279. URL http://dx.doi.org/10. 1098/rspa.2020.0279 .Kalman, R. E. A new approach to linear filtering and prediction problems. Journal of Basic Engineering ,82(1):35–45, March 1960. ISSN 0021-9223. doi: 10.1115/1.3662552. URL http://dx.doi.org /10.1115/1.3662552 .Kammerer, L., Kronberger, G., Burlacu, B., Winkler, S. M., Kommenda, M., and Affenzeller, M. Symbolic regres-sion by exhaustive search: Reducing the search space using syntactical constraints and efficient semantic struc-ture deduplication. In Genetic programming theory and practice XVII , pp. 79–99. Springer, 2020. Kermack, W. O. and McKendrick, A. G. A contribution to the mathematical theory of epidemics. Proceedings of the Royal Society of London. Series A, Containing Papers of a Mathematical and Physical Character , 115 (772):700–721, August 1927. ISSN 2053-9150. doi: 10.1098/rspa.1927.0118. URL http://dx.doi.org /10.1098/rspa.1927.0118 .La Cava, W., Orzechowski, P., Burlacu, B., Virgolin, M., de Franca, F. O., Jin, Y., and Moore, J. H. Contemporary symbolic regression methods and their relative perfor-mance. Proceedings of the Genetic and Evolutionary Computation Conference (GECCO) , pp. 914–922, 2021. URL https://dl.acm.org/doi/10.1145/3 449639.3459390 .Li, X., Zhao, C., Zhang, X., and Duan, X. Symbolic neural ordinary differential equations, 2025. URL https: //arxiv.org/abs/2503.08059 .Lu, P. Y., Ari ˜no Bernad, J., and Solja ˇci ´c, M. Discovering sparse interpretable dynamics from partial observations. 
+
+Communications Physics , 5(1), August 2022. ISSN 2399-3650. doi: 10.1038/s42005-022-00987-z. URL http: //dx.doi.org/10.1038/s42005-022-00987 -z .Makke, N. and Chawla, S. Interpretable scientific discovery with symbolic regression: a review. Artificial Intelligence Review , 57(1), January 2024. ISSN 1573-7462. doi: 10.1007/s10462-023-10622-0. URL http://dx.doi .org/10.1007/s10462-023-10622-0 .Man, C. D., Micheletto, F., Lv, D., Breton, M., Kovatchev, B., and Cobelli, C. The uva/padova type 1 diabetes simulator: New features. Journal of Diabetes Science and Technology , 8(1):26–34, January 2014. ISSN 1932-2968. doi: 10.1177/1932296813514502. URL http: //dx.doi.org/10.1177/1932296813514502 .Mehta, V., Char, I., Neiswanger, W., Chung, Y., Nelson, A., Boyer, M., Kolemen, E., and Schneider, J. Neural dynamical systems: Balancing structure and flexibility in physical prediction. In 2021 60th IEEE Conference on Decision and Control (CDC) , pp. 3735–3742, 2021. doi: 10.1109/CDC45484.2021.9682807. Meinshausen, N. and Yu, B. Lasso-type recovery of sparse representations for high-dimensional data. The Annals of Statistics , 37(1), February 2009. ISSN 0090-5364. doi: 10.1214/07-aos582. URL http://dx.doi.org/10. 1214/07-AOS582 .Mould, D. and Upton, R. Basic concepts in population modeling, simulation, and model-based drug develop-ment—part 2: Introduction to pharmacokinetic modeling methods. CPT: Pharmacometrics &amp; Systems Phar-macology , 2(4):1–14, April 2013. ISSN 2163-8306. doi: 10.1038/psp.2013.14. URL http://dx.doi.org/1 0.1038/psp.2013.14 .Neves-Zaph, S. and Kaddi, C. Quantitative systems phar-macology models: Potential tools for advancing drug development for rare diseases. Clinical Pharmacol-ogy &amp; Therapeutics , 116(6):1442–1451, September 2024. ISSN 1532-6535. doi: 10.1002/cpt.3451. URL 
+
+http://dx.doi.org/10.1002/cpt.3451 .Nowak, M. A. and May, R. M. Virus dynamics: Math-ematical principles of immunology and virology . Ox-ford University PressOxford, November 2000. ISBN 9781383020816. doi: 10.1093/oso/9780198504184.001. 0001. URL http://dx.doi.org/10.1093/oso /9780198504184.001.0001 .Peterson, M. and Riggs, M. Fda advisory meeting clin-ical pharmacology review utilizes a quantitative sys-tems pharmacology (qsp) model: A watershed moment? 
+
+CPT: Pharmacometrics &amp; Systems Pharmacology ,4(3):189–192, March 2015. ISSN 2163-8306. doi: 10.1002/psp4.20. URL http://dx.doi.org/1 0.1002/psp4.20 .11 Knowledge-Informed Kernel State Reconstruction 
+
+Pillonetto, G., Dinuzzo, F., Chen, T., De Nicolao, G., and Ljung, L. Kernel methods in system identification, ma-chine learning and function estimation: A survey. Au-tomatica , 50(3):657–682, March 2014. ISSN 0005-1098. doi: 10.1016/j.automatica.2014.01.001. URL 
+
+http://dx.doi.org/10.1016/j.automatic a.2014.01.001 .Qian, Z., Zame, W. R., Fleuren, L. M., Elbers, P., and van der Schaar, M. Integrating expert ODEs into neural ODEs: Pharmacology and disease progression. In Beygelzimer, A., Dauphin, Y., Liang, P., and Vaughan, J. W. (eds.), Ad-vances in Neural Information Processing Systems , 2021. URL https://openreview.net/forum?id= tDqef76wFaO .Qian, Z., Kacprzyk, K., and van der Schaar, M. D-CODE: Discovering closed-form ODEs from observed trajecto-ries. In International Conference on Learning Represen-tations , 2022. URL https://openreview.net/f orum?id=wENMvIsxNN .Rackauckas, C., Ma, Y., Martensen, J., Warner, C., Zubov, K., Supekar, R., Skinner, D., Ramadhan, A., and Edelman, A. Universal differential equations for scientific machine learning. August 2020. doi: 10.21203/rs.3.rs-55125/v1. URL http://dx.doi.org/10.21203/rs.3.r s-55125/v1 .Raissi, M., Perdikaris, P., and Karniadakis, G. Physics-informed neural networks: A deep learning framework for solving forward and inverse problems involving nonlinear partial differential equations. Journal of Computational Physics , 378:686–707, February 2019. ISSN 0021-9991. doi: 10.1016/j.jcp.2018.10.045. URL http://dx.d oi.org/10.1016/j.jcp.2018.10.045 .Rasmussen, C. E. and Williams, C. K. I. Gaussian Processes for Machine Learning . The MIT Press, November 2005. ISBN 9780262256834. doi: 10.7551/mitpress/3206.001. 0001. URL http://dx.doi.org/10.7551/mit press/3206.001.0001 .Rubanova, Y., Chen, R. T., and Duvenaud, D. Latent ordi-nary differential equations for irregularly-sampled time series. In Advances in Neural Information Processing Systems , volume 32, 2019. Rudy, S. H., Brunton, S. L., Proctor, J. L., and Kutz, J. N. Data-driven discovery of partial differential equations. 
+
+Science Advances , 3(4), April 2017. ISSN 2375-2548. doi: 10.1126/sciadv.1602614. URL http://dx.doi .org/10.1126/sciadv.1602614 .Shakib, M., T ´oth, R., Pogromsky, A., Pavlov, A., and van de Wouw, N. Kernel-based learning of stable nonlinear state-space models. In 2023 62nd IEEE Conference on Deci-sion and Control (CDC) , pp. 2897–2902. IEEE, Decem-ber 2023. doi: 10.1109/cdc49753.2023.10383312. URL 
+
+http://dx.doi.org/10.1109/CDC49753.20 23.10383312 .Sharma, A. and Jusko, W. J. Characteristics of indirect pharmacodynamic models and applications to clinical drug responses. British Journal of Clinical Pharma-cology , 45(3):229–239, March 1998. ISSN 1365-2125. doi: 10.1046/j.1365- 2125.1998.00676.x. URL 
+
+http://dx.doi.org/10.1046/j.1365-2125. 1998.00676.x .Shojaee, P., Meidani, K., Gupta, S., Farimani, A. B., and Reddy, C. K. Llm-sr: Scientific equation discovery via programming with large language models, 2024. URL 
+
+https://arxiv.org/abs/2404.18400 .Simeoni, M., Magni, P., Cammia, C., De Nicolao, G., Croci, V., Pesenti, E., Germani, M., Poggesi, I., and Rocchetti, M. Predictive pharmacokinetic-pharmacodynamic mod-eling of tumor growth kinetics in xenograft models after administration of anticancer agents. Cancer Research , 64 (3):1094–1101, February 2004. ISSN 1538-7445. doi: 10.1158/0008-5472.can-03-2524. URL http://dx.d oi.org/10.1158/0008-5472.can-03-2524 .Steinier, J., Termonia, Y., and Deltour, J. Smoothing and dif-ferentiation of data by simplified least square procedure. 
+
+Analytical Chemistry , 44(11):1906–1909, September 1972. ISSN 1520-6882. doi: 10.1021/ac60319a045. URL 
+
+http://dx.doi.org/10.1021/ac60319a045 .Stephens, T. gplearn: Genetic programming in python. 
+
+https://gplearn.readthedocs.io/en/st able/index.html , 2019. First released 2015. Strogatz, S. H. Nonlinear Dynamics and Chaos . CRC Press, 2018. Udrescu, S.-M. and Tegmark, M. Ai feynman: A physics-inspired method for symbolic regression. Science Ad-vances , 6(16), apr 2020. ISSN 2375-2548. doi: 10.112 6/sciadv.aay2631. URL http://dx.doi.org/10. 1126/sciadv.aay2631 .Udrescu, S.-M., Tan, A., Feng, J., Neto, O., Wu, T., and Tegmark, M. Ai feynman 2.0: Pareto-optimal symbolic regression exploiting graph modularity. In Larochelle, H., Ranzato, M., Hadsell, R., Balcan, M., and Lin, H. (eds.), 
+
+Advances in Neural Information Processing Systems , vol-ume 33, pp. 4860–4871. Curran Associates, Inc., 2020. URL https://proceedings.neurips.cc/p aper_files/paper/2020/file/33a854e24 7155d590883b93bca53848a-Paper.pdf .12 Knowledge-Informed Kernel State Reconstruction 
+
+U.S. FDA. Model-informed drug development (midd) paired meeting program. https://www.fda.go v/drugs/development-resources/model-i nformed-drug-development-paired-meeti ng-program , 2023. Accessed 2025-10-02. van Breugel, F., Kutz, J. N., and Brunton, B. W. Nu-merical differentiation of noisy data: A unifying multi-objective optimization framework. IEEE Access , 8: 196865–196877, 2020. doi: 10.1109/ACCESS.2020. 3034077. Virgolin, M. and Pissis, S. P. Symbolic regression is NP-hard. Transactions on Machine Learning Research , 2022. URL https://arxiv.org/abs/2207.01018 .Preprint on arXiv:2207.01018. Wang, H. and Zhou, X. Explicit estimation of derivatives from data and differential equations by gaussian process regression. International Journal for Uncertainty Quan-tification , 11(4):41–57, 2021. ISSN 2152-5080. doi: 10.1615/int.j.uncertaintyquantification.2021034382. URL http://dx.doi.org/10.1615/Int.J.U ncertaintyQuantification.2021034382 .Wang, H., Zhao, C., Santa-Maria, C. A., Emens, L. A., and Popel, A. S. Dynamics of tumor-associated macrophages in a quantitative systems pharmacology model of im-munotherapy in triple-negative breast cancer. iScience ,25(8):104702, August 2022. ISSN 2589-0042. doi: 10.1016/j.isci.2022.104702. URL http://dx.d oi.org/10.1016/j.isci.2022.104702 .Worm, T. and Chiu, K. Prioritized grammar enumeration: symbolic regression by dynamic programming. In Pro-ceedings of the 15th annual conference on Genetic and evolutionary computation , pp. 1021–1028, 2013. Yu, R. and Wang, R. Learning dynamical systems from data: An introduction to physics-guided deep learning. 
+
+Proceedings of the National Academy of Sciences , 121 (27), June 2024. ISSN 1091-6490. doi: 10.1073/pnas.2 311808121. URL http://dx.doi.org/10.1073 /pnas.2311808121 .Zhai, Z.-M., Stern, B. D., and Lai, Y.-C. Bridging known and unknown dynamics by transformer-based machine-learning inference from sparse observations. Nature Com-munications , 16(1), August 2025. ISSN 2041-1723. doi: 10.1038/s41467-025-63019-8. URL http://dx.doi .org/10.1038/s41467-025-63019-8 .Zhou, Y., Li, J., Zhou, X., and Wang, H. Model-embedded gaussian process regression for parameter estimation in dynamical system, 2024. URL https://arxiv.or g/abs/2409.11745 .13 Supplementary Materials for MAAT 
+
+A. Extended Related Works 
+
+Sample and Computational Complexity of Noisy Symbolic Regression Symbolic regression aims to identify an expression f from a library of primitives (variables, constants, operators, functions) that explains a dataset {(xi, y i)}Ni=1 .The challenge lies in the size of the hypothesis space: the number of candidate expressions grows combinatorially with both the input dimension d and the allowed expression depth. This renders even state-of-the-art search procedures computationally demanding. Recent theoretical work provides formal support for this intuition: (Virgolin & Pissis, 2022) show that symbolic regression is N P -hard under mild assumptions on the primitive set, implying that no polynomial-time algorithm exists unless P = N P . These hardness results highlight why practical SR algorithms must rely on heuristic search, structural priors, or regularization, particularly in the presence of noise. Concretely, one can reduce a canonical N P -hard problem (e.g., S UBSET SUM or additive partitioning) to the decision problem of whether there exists a symbolic expression of bounded cost that fits the data within a specified error tolerance. Consequently, any algorithm that guarantees recovery of the globally optimal symbolic representation must, in the worst case, incur non-polynomial runtime in d. In practice, even heuristic or stochastic search procedures face the combinato-rial explosion of the grammar: each additional feature or operator multiplies the number of candidate sub-expressions. Recent approaches (e.g., neural-symbolic methods (Dugan et al., 2020), transformer-based architectures, or reinforcement-learning–guided search (Makke & Chawla, 2024)) mitigate this via pruning, learned proposals, or modular decomposition. However, these strategies do not fundamentally escape the exponential scaling in d (or in the maximum depth) unless further structural assumptions, such as sparsity, separability, or modular factorization, are imposed. 
+
+Classical equation discovery. Recovering governing equations from data has a long history in system identification and sparse regression. Sparse Identification of Nonlinear Dynamics (SINDy) (Brunton et al., 2016) recovers parsimonious differential equations from feature libraries, with extensions for noise (Rudy et al., 2017) and implicit formulations (Kaheman et al., 2020). Genetic programming frameworks such as gplearn (Stephens, 2019) and evolutionary engines like PySR (Cranmer, 2023) broaden the search space beyond fixed polynomial libraries, recovering compact analytical expressions directly from data. More recently, complementary approaches replace genetic heuristics with modern deep learning: ODEFormer (d’Ascoli et al., 2024) leverages transformer architectures for symbolic regression of dynamical systems, while Deep Generative Symbolic Regression (Holt et al., 2023) employs generative models to efficiently explore the space of candidate equations. Together, these methods expand the toolkit for symbolic discovery, but they, too, typically assume full observability. 
+
+Black-box dynamical models. Neural differential equation frameworks such as Neural ODEs (Chen et al., 2018), DyNODE, and Latent ODEs (Rubanova et al., 2019) model vector fields with neural networks, enabling scalable learning under partial observability. However, this surrogate–distillation pipeline can degrade or collapse under substantial observation noise or partial observability, where errors in the learned latent representation propagate into the recovered symbolic form. These methods achieve strong predictive performance but lack closed-form interpretability. Nevertheless, they can serve as surrogates from which symbolic models are distilled, suggesting complementarity rather than exclusivity between black-box and symbolic approaches. A growing body of work therefore studies grey-box or hybrid neural ODEs, which incorporate prior knowledge such as known state variables, conservation laws, stability constraints, or partially specified equations into neural dynamics (Mehta et al., 2021; Brucker et al., 2023; Qian et al., 2021). These approaches improve identifiability and inductive bias relative to unconstrained Neural ODEs, but typically retain neural components in the governing equations, limiting closed-form interpretability and robustness under severe noise or sparse observations. 
+
+Hybrid and recent approaches. Universal Differential Equations (UDEs) (Rackauckas et al., 2020) combine mechanistic ODEs with neural components, embedding domain priors into flexible models but without mechanisms for handling fragmented heterogeneous data or structured interventions. More recent directions move beyond time-domain formulations: 14 Knowledge-Informed Kernel State Reconstruction 
+
+Neural Laplace (Holt et al., 2022) learns in the Laplace domain to capture diverse dynamics at scale, and D-CODE (Qian et al., 2022) targets exact closed-form recovery. Large language models further extend this space: recent work (Holt et al., 2024; Shojaee et al., 2024) shows that LLMs can propose function libraries, encode domain knowledge, and refine candidate models, pointing toward a synthesis of symbolic, neural, and language-based methods. 
+
+Equation discovery under partial observations. In many scientific domains, full-state measurements are rarely available: biological, clinical, and physical systems are often only partially observed, corrupted by noise, or measured at mismatched time resolutions. This has motivated methods that seek to augment incomplete data with synthetic simulations or structural priors. For example, Zhai et al. (2025) show that supplementing scarce real measurements with synthetic trajectories can improve the identifiability of governing equations in clinical settings. Other approaches leverage probabilistic latent-variable models to infer hidden dynamics before applying regression or discovery methods (Champion et al., 2019; Lu et al., 2022). A complementary strategy is to encode known physical structure into the learning process: physics-informed neural networks (PINNs) enforce differential equation constraints within the training loss, enabling recovery of latent variables and dynamics even when only a subset of states are measured (Raissi et al., 2019). Despite these advances, most existing work assumes homogeneous data sources and does not explicitly address the integration of heterogeneous, subsystem-specific observations, an issue particularly acute in fields like pharmacology or systems biology, where data are fragmented across scales. 
+
+Equation-free yet interpretable modeling. Beyond explicit equation discovery, several recent approaches aim to balance predictive power with interpretability without producing closed-form equations. Operator-learning methods represent dynamical evolution directly through learned integral operators, enabling transparent structural analysis even in the absence of symbolic expressions (Kacprzyk & van der Schaar, 2025). Similarly, mechanistic machine learning frameworks embed known conservation laws or monotonicity constraints into neural architectures, yielding models whose behavior can be interrogated and trusted despite lacking closed-form governing equations. These approaches illustrate that interpretability need not always hinge on explicit symbolic laws, but can also arise through structural constraints and transparent operator representations. 
+
+GP smoothing for trajectories . Classical Gaussian Processes (GPs) provide nonparametric, smooth interpolants with analytic derivative posteriors via kernel differentiation (Rasmussen & Williams, 2005). When all (or most) states are observed on a single grid, a GP prior over trajectories can effectively denoise and supply ˙x(t) estimates. However, this paradigm does not natively address partial observability , multi-rate heterogeneous sensors , or hierarchical priors on cross-subsystem couplings. Works that explicitly target derivative recovery with GPs leverage the fact that derivatives of a GP are again GPs, enabling closed-form posterior means/variances for ˙x (Wang & Zhou, 2021). These methods excel as denoisers/preprocessors but typically assume either fully (or densely) observed states and do not resolve the inverse problem of reconstructing latent states from images of linear observation operators Hix collected at different rates. A direct line of work fits GPs to each observed channel (or a multi-output GP), extracts analytic derivatives, and then applies symbolic regression (SR) such as SINDy/PySR (Hsin et al., 2025). This reduces noise sensitivity in SR but still treats observation fusion as a per-channel smoothing step. Handling heterogeneous observation models, enforcing block-structured priors, or constraining library couplings generally requires bespoke kernel designs and does not provide an explicit mechanism for hierarchy-aware discovery. Adaptive Gradient Matching (AGM) uses GPs to interpolate states and matches ODE right-hand sides to GP derivatives to infer parameters without direct numerical integration (Dondelinger et al., 2013). AGM targets parameter estimation for a specified ODE family , not discovery of new symbolic structure. 
+
+Kernel-based state reconstruction. A related line of work uses kernel methods to reconstruct latent dynamical states from indirect, noisy, or irregular observations. Early system identification approaches framed state reconstruction as a regularized inverse problem, using reproducing kernel Hilbert space (RKHS) priors to interpolate trajectories under smoothness or stability assumptions (Pillonetto et al., 2014). Subsequent work extended these ideas to multi-output and operator-valued kernels, enabling joint reconstruction of multiple state components and improved handling of correlated signals (Carnerero et al., 2023; Shakib et al., 2023). More recent methods consider kernel-based formulations for learning continuous-time dynamics from sparse or asynchronous measurements, often emphasizing well-posedness and statistical consistency of the reconstruction step (Zhou et al., 2024; Car` e et al., 2023). While these approaches provide powerful tools for denoising and interpolating partially observed trajectories, they are typically developed for state estimation or parameter identification rather than symbolic structure discovery. In particular, most kernel-based reconstruction methods assume either a single observation operator or homogeneous sensing modalities, 15 Knowledge-Informed Kernel State Reconstruction 
+
+Table 5. Comparison of system identification and symbolic regression pipelines.                                                                                
+
+> Method Typical pipeline Analytical derivatives Partial observations Noise robustness Symbolic output Physical priors Empirical strengths Empirical weaknesses Identifi-ability Generaliz-ability Typical compute
+> FD →SINDy Raw series →numerical diff. →SR No No Poor Yes No Simple, fast, transparent sparse models Noise amplification; fails under sparse or irregular sampling Low Low Very low Spline/RBF →
+> SINDy Spline or RBF fit →
+> analytic deriv. →SR Yes Partial Mod. Yes No Improved derivatives under noise; analytic gradients Highly sensitive to basis choice and smoothing hyperparameters; double fitting Med. Med. Low–mod. SG / TVRegDiff →
+> SR Local smoothing or variational diff. →SR Approx. Limited Mod. Yes No Robust derivatives in restricted regimes Window-size sensitivity; no priors; spurious correlations Med.–low Med.–low Low–mod. Latent / Neural ODEs Encoder →latent neural vector field →decoder Backprop Yes Good No Limited Handles irregular and partial data; strong prediction No symbolic form; entangled latents; ill-conditioned optimization Low Good (ID) Mod.–high PINNs Data loss + physics residual
+> →NN Backprop Yes Good No Yes Enforces known physics; sparse data feasible Fails if physics incomplete; no symbolic form; ill-conditioned loss High †Cond. Very high Neural–symbolic / hybrid SR Neural surrogate →feature generation →symbolic search Method Method Var. Yes Often Neural flexibility with symbolic recovery Spurious terms if disentanglement fails Mod. Mod.–good Mod.–high
+> MAAT Kernel state reconstruction
+> →analytic deriv. →SR
+> Yes Yes High Yes Yes Best under heterogeneous, partial data; convex, well-conditioned optimization Requires informative observation operators; coverage still needed (mitigable via priors) Cond. ‡Cond. ‡Mod.
+> †
+
+High identifiability only when correct governing structure is known. ‡ Requires observation operators to jointly span the latent state with sufficient excitation. 
+
+and they do not explicitly address the integration of heterogeneous, subsystem-specific observations or the imposition of hierarchical sparsity over downstream model components. Moreover, kernel reconstructions are usually treated as preprocessing steps, without a principled mechanism for propagating reconstruction uncertainty or structural priors into subsequent equation discovery. MAAT builds on this kernel perspective but departs from prior work by explicitly coupling kernel state reconstruction with symbolic regression, enabling joint handling of heterogeneous partial observability and structured discovery of governing dynamics. 
+
+MAAT is designed for heterogeneous partial observability and structural discovery . Its kernel state reconstruction (KSR) jointly fits multiple observation operators Hi and sampling grids to recover a coherent latent trajectory x(t) and analytic ˙x(t)
+
+before SR, and then injects physics-aware priors via library masks to constrain cross-subsystem couplings. An overview of the different preprocessing pipelines and their properties is given in Table 5. 
+
+B. Theoretical analysis 
+
+In this appendix we present the theoretical foundations underlying our state reconstruction algorithm. We outline the motivation for its design, provide the analytical derivation, and discuss the results that justify its adoption within our framework. 
+
+B.1. Representation Theorem for Heterogeneous Observations 
+
+Lemma 2 (Generalized Representation Theorem) . Consider the minimization problem 
+
+min 
+
+W ∥AW − X∥2
+
+F + α∥BWH ⊤ − Y∥2
+
+F (5) and assume 
+
+rowsp (A) ⊆ rowsp (B) (6) 16 Knowledge-Informed Kernel State Reconstruction 
+
+then, for every column of W it holds that 
+
+Wei = X
+
+> j
+
+uij bj (7) 
+
+Proof. Let us differentiate the functional with respect to W. We obtain 
+
+∇WL = 2 A⊤(AW − X) + 2 αB⊤(BWH ⊤ − Y)H == (2 A⊤AW − 2A⊤X) + 2 α(B⊤BWH ⊤ − B⊤Y)H
+
+= (2 A⊤AW − 2A⊤X) + 2 α(B⊤BWH ⊤H − B⊤YH )
+
+and we then consider the problem of canceling the gradient, that is finding a root of ∇WL.Since 
+
+A⊤A = X
+
+> i
+
+aia⊤ 
+
+> i
+
+(8) and 
+
+B⊤B = X
+
+> i
+
+bib⊤ 
+
+> i
+
+(9) given that the rowspace of B contains the rowspace of A we obtain that 
+
+A⊤Au = BB ⊤u = 0 ∀u /∈ rowsp (B). (10) Hence if we define the matrix W as follows 
+
+W = W∥ + W⊥ (11) where W∥ei ∈ rowsp (B) ∀i and W⊥ei /∈ rowsp (B) ∀i, it is immediate to check that 
+
+B⊤BW = B⊤B  W∥ + W⊥
+
+
+
+= B⊤BW ∥ + B⊤BW ⊥
+
+| {z }
+
+> 0
+
+(12) and therefore by definition of rowspace there exist a solution 
+
+W = B⊤U (13) for some coefficient matrix U, since gradient is invariant with respect to components of the columns of W that lie outside of the row space of B.Substituting A and B respectively with the first and the second design matrix induced by the feature map that defines the kernel we recover, under the reasonable assumption that sparse timesteps are a subset of dense timesteps, the change of variable in the regression problem that motivates our method. Since the existence of global optimality for the sparse-dense regression problem is guaranteed under our hypotheses, the physical priors regularize the optimization problem allowing us to incorporate scientific information in the method. 
+
+B.2. Proof of Lemma 1 
+
+Definition 1 (Equivalence Between Distances) . Let (X, d ) and (X, d ′) be two metric spaces defined on the same underlying set X through two different metrics d : X × X → R+ and d′ : X × X → R+. We say that d and d′ are equivalent , written 
+
+d ∼ d′, if there exist constants c, C > 0 such that 
+
+∃ c, C ∈ R+ : cd (x1, x 2) ≤ d′(x1, x 2) ≤ Cd (x1, x 2) ∀x1, x 2 ∈ X (14) 17 Knowledge-Informed Kernel State Reconstruction 
+
+Corollary 1. Let d, d ′ be two metrics such that d ∼ d′. Then for any point x∗ ∈ X and any sequence {xn}∞ 
+
+> n
+
+⊂ X such that 
+
+lim  
+
+> n→∞
+
+d(xn, x ∗) = 0 (15) it also holds that 
+
+lim  
+
+> n→∞
+
+d′(xn, x ∗) = 0 (16) and vice versa. 
+
+Proof. The forward direction follows immediately by the squeeze theorem. For the reverse implication, note that by assumption 
+
+d(x1, x 2) ≤ 1 
+
+> c
+
+d′(x1, x 2) ≤ Cc d(x1, x 2), (17) and similarly  
+
+> cC
+
+d(x1, x 2) ≤ 1 
+
+> C
+
+d′(x1, x 2) ≤ d(x1, x 2). (18) Hence  
+
+> 1
+> C
+
+d′(x1, x 2) ≤ d(x1, x 2) ≤ 1 
+
+> c
+
+d′(x1, x 2), (19) showing the equivalence is symmetric, and the claim follows. 
+
+Lemma 3 (Composite loss is a calibrated surrogate) . Let H : Rd → Rp be a bounded linear observation operator with operator norm ∥H∥ < ∞. For any candidate trajectory ˆx ∈ L2([0 , T ]; Rd) and true trajectory x, define the risk functional 
+
+R(ˆ x) = ∥x − ˆx∥2 
+
+> L2
+
++ ∥H(x − ˆx)∥2 
+
+> L2
+
+.
+
+Then 
+
+∥x − ˆx∥2 
+
+> L2
+
+≤ R (ˆ x) ≤ (1 + ∥H∥2) ∥x − ˆx∥2 
+
+> L2
+
+.
+
+Proof. The lower bound is immediate, as ∥H(x − ˆx)∥2 
+
+> L2
+
+≥ 0. For the upper bound, we use the definition of the induced operator norm for H:
+
+∥Hv∥2 ≤ ∥ H∥∥ v∥2 ∀v ∈ Rd.
+
+Applying this to the L2 norm of the function H(x(t) − ˆx(t)) :
+
+∥H(x − ˆx)∥2 
+
+> L2
+
+=
+
+Z T
+
+> 0
+
+∥H(x(t) − ˆx(t)) ∥22dt 
+
+≤
+
+Z T
+
+> 0
+
+∥H∥2∥x(t) − ˆx(t)∥22dt 
+
+= ∥H∥2
+
+Z T
+
+> 0
+
+∥x(t) − ˆx(t)∥22dt 
+
+= ∥H∥2∥x − ˆx∥2 
+
+> L2
+
+.
+
+Substituting this result into the definition of R(ˆ x) gives: 
+
+R(ˆ x) = ∥x − ˆx∥2 
+
+> L2
+
++ ∥H(x − ˆx)∥2
+
+> L2
+
+≤ ∥ x − ˆx∥2 
+
+> L2
+
++ ∥H∥2∥x − ˆx∥2
+
+> L2
+
+= (1 + ∥H∥2)∥x − ˆx∥2 
+
+> L2
+
+.
+
+Thus R(ˆ x) is bounded above and below by constant multiples of the true error ∥x − ˆx∥2 
+
+> L2
+
+. By Definition 1 and Corollary B.2, minimizing R(ˆ x) is equivalent for interpolating solutions to minimizing the true L2 error, establishing the surrogate calibration. 18 Knowledge-Informed Kernel State Reconstruction 
+
+B.3. Proof Sketch for Proposition 1 
+
+Proposition 2 (FD noise floor vs KSR) . Assume additive i.i.d. zero-mean noise ϵ(t) with variance σ2 on measurements of x(t) sampled with step size ∆t. Using central finite differences (FD) to approximate ˙x(t) yields a mean-squared derivative error of: E
+
+h
+
+∥b˙xFD − ˙x∥22
+
+i
+
+= O(∆ t4) + Ω( σ2/∆t2). For KSR (kernel ridge with a twice-differentiable kernel) with regularization λ and n samples, the analytic derivative estimator satisfies E
+
+h
+
+∥b˙xKSR − ˙x∥22
+
+i
+
+= O(λ) + O(σ2/n ).
+
+Sketch. Finite Differences (FD): The central difference approximation for ˙x(ti) is b˙xFD (ti) = x(ti+1 )+ ϵi+1 −(x(ti−1)+ ϵi−1)2∆ t .The error has two components: a bias term from the Taylor expansion, which is O(∆ t2), and a variance term from the noise. The squared error, in the case E[ϵi] = 0 , is: 
+
+E
+
+" x(ti+1 ) − x(ti−1)2∆ t − ˙x(ti)
+
+2
+
++
+
+ ϵi+1 − ϵi−1
+
+2∆ t
+
+2#
+
+.
+
+The squared bias is O(∆ t4). The variance term is E
+
+h ϵ2
+
+> i+1 −2ϵi+1 ϵi−1+ϵ2
+> i−1
+> 4∆ t2
+
+i
+
+= 2σ2 
+
+> 4∆ t2
+
+= σ2 
+
+> 2∆ t2
+
+. Thus, the total MSE is 
+
+O(∆ t4) + Ω( σ2/∆t2). As ∆t → 0, the variance term explodes. 
+
+Kernel State Reconstruction (KSR): The KSR estimator can be viewed as a smoothing spline or, equivalently, as kernel regression algorithm, where the unknown solution vector is expressed through the basis induced by RBF kernel expansion. Classical results on nonparametric regression and derivative estimation show that the mean squared error decomposes into a squared bias term and a variance term. For sufficiently smooth kernels and target functions, the bias is governed by the regularization parameter, scaling as O(λ), while the variance typically scales as O(σ2/(nλ 1/2)) , depending on kernel smoothness and sampling assumptions. Balancing these terms with an optimal choice of λ yields an overall risk on the order of O (σ2/n )c for some exponent 0 < c < 1. For clarity, we state here a simplified non-asymptotic bound: the bias is directly controlled by λ, and the variance decreases proportionally to 1/n . Unlike finite-difference estimators, KSR does not incur a ∆t−2 variance blow-up, so denser sampling reduces error without amplifying noise. This enables KSR to achieve a favorable bias–variance trade-off for derivative estimation. 
+
+B.4. Method derivation 
+
+Let (tobs , X obs ) ∈ RNobs × RNobs ×D denote the set of full (possibly noisy) observations of the state trajectory x(t) ∈ RD .Each row of Xobs corresponds to one observed state, recorded at the corresponding entry in tobs .In contrast, let Y ∈ RN ×S represent a collection of S observed signals, each measured on a common vector of time points 
+
+t = ( t1, . . . , t N ) ∈ RN . Each column of Y corresponds to one signal. We assume these signals arise through a linear observation operator H ∈ RS×D applied to the (unknown) full state matrix X ∈ RN ×D :
+
+Y = XH ⊤. (20) Our goal in this setting is to construct a differentiable, vector-valued function 
+
+bx : R → RD
+
+that approximates the true state trajectory x(t). We measure accuracy via the expected squared error 
+
+Et∼T bx(t) − x(t) 2 =
+
+Z 
+
+> supp( T)
+
+pT (t) bx(t) − x(t) 2 dt, (21) where T denotes the distribution of observation times. Assuming T is uniform, this reduces to a rescaled L2 distance between the reconstructed and true trajectories. From the perspective of statistical learning theory, this task is equivalent to learning a function that maps points from a real interval (time) into a higher-dimensional space RD , while accounting for partial and noisy observations. 19 Knowledge-Informed Kernel State Reconstruction 
+
+In light of such consideration and our assumption of a sparse-observations regime ( Nobs ≪ N ), a further regularization step is required to estimate the state in a meaningful way. This result can be obtained both by incorporating information on the fidelity of the signal (i.e. how the signal, which is fully observed, is reconstructed by the application of the operator H on the predicted state) and by imposing further regularization constraints that may come from domain knowledge related to the specific nature of the dynamical system. Formally, we obtain the regularized risk functional 
+
+Rreg (ˆ x) := Et∼T ∥bx(t) − x(t)∥2 + Et∼T ∥H bx(t) − Hx (t)∥2 + λ R(bx | C ), (22) where R denotes a regularization operator and C represents the contextual knowledge used in constructing the regularization. In the absence of regularization ( λ = 0 ), this reduces to the case described by Lemma 3, from which we infer the induced equivalence between the two risk measures. To formulate the regression problem associated with the constructed risk measure, we express bx as a linear combination of features obtained via a map ϕ : R → H into a Hilbert space H. Under this hypothesis, we can reparameterize the risk measure as 
+
+Rreg ({wj }j ) = Et∼T 
+
+> D
+
+X
+
+> j=1
+
+ ϕ(t)⊤wj − xj (t)2 + Et∼T 
+
+> S
+
+X
+
+> s=1
+
+
+
+> D
+
+X
+
+> j=1
+
+Hsj ϕ(t)⊤wj − ys(t)
+
+
+
+> 2
+
++ λ R({wj }j | C ). (23) Replacing expectations by empirical averages yields 
+
+bRreg ({wj }j ) = 1
+
+Nobs Nobs X
+
+> i=1
+> D
+
+X
+
+> j=1
+
+
+
+ϕ(tobs i )⊤wj − Xobs ij 
+
+2
+
++ 1
+
+N
+
+> N
+
+X
+
+> i=1
+> S
+
+X
+
+> s=1
+
+ DX
+
+> j=1
+
+Hsj ϕ(ti)⊤wj − Yis 
+
+2
+
++ λ R({wj }j | C ).
+
+(24) Since ϕ may be infinite-dimensional, we restrict w1, . . . , w D to the span of {ϕ(ti)}Ni=1 , writing 
+
+wj =
+
+> N
+
+X
+
+> ℓ=1
+
+uℓj ϕ(tℓ), j = 1 , . . . , D, (25) for coefficients {uℓj } ⊂ R arranged in a matrix U ∈ RN ×D . Using the kernel trick ϕ(x)⊤ϕ(y) = κ(x, y ), the empirical loss becomes 
+
+bRreg (U ) = 1
+
+Nobs Nobs X
+
+> i=1
+> D
+
+X
+
+> j=1
+> N
+
+X
+
+> ℓ=1
+
+uℓj κ(tobs i , t ℓ) − Xobs ij 
+
+!2
+
++ 1
+
+N
+
+> N
+
+X
+
+> i=1
+> S
+
+X
+
+> s=1
+
+
+
+> D
+
+X
+
+> j=1
+> N
+
+X
+
+> ℓ=1
+
+Hsj uℓj κ(ti, t ℓ) − Yis 
+
+
+
+> 2
+
++ λ R(U | C ).
+
+(26) Defining kernel matrices [Kobs ]iℓ := κ(tobs i , t ℓ) and [K]iℓ := κ(ti, t ℓ), we obtain the compact form 
+
+bRreg (U ) = 1
+
+Nobs 
+
+Kobs U − Xobs 2 
+
+> F
+
++ 1
+
+N KU H ⊤ − Y 2 
+
+> F
+
++ λ R(U | C ). (27) with the reconstructed state being, again in matrix form 
+
+bX = KU. (28) 20 Knowledge-Informed Kernel State Reconstruction 
+
+Interestingly, the choice of the Gaussian feature map allows explicit computation of the derivatives which can be employed in the construction of context aware constraints in R. In fact for any differential operator T we obtain 
+
+T bxj (t) = T
+
+(
+
+ϕ(t)⊤
+
+> N
+
+X
+
+> i
+
+ϕ(ti)uij 
+
+)
+
+= T
+
+( NX
+
+> i
+
+κ(t, t i)uij 
+
+)
+
+=
+
+> N
+
+X
+
+> i
+
+T κ (t, t i)uij 
+
+with T κ , the image of the kernel κ through the linear operator T , being analytically computable for the case of the Gaussian feature map. We note that our method intrinsically supports the inclusion of additional loss terms, which can encode prior knowledge or structural constraints. Such terms may be specified directly by domain experts or automatically suggested by large language models. For example, one may penalize large deviations in the dynamics by introducing a regularizer of the form 
+
+R(U ) = ∥ ˙KU ∥2 
+
+> F
+
+, (29) where ˙K denotes the Gram matrix after applying the time-derivative operator. More generally, this mechanism allows the integration of expert priors (e.g., known critical points, concavity properties, or monotonicity constraints) into the reconstruction process. In this way, our framework mimics the role of a human statistician in guiding model specification, while retaining the flexibility to incorporate data-driven or automatically generated hypotheses. 
+
+B.5. The computational cost of Symbolic Regression 
+
+We now provide a more formal discussion of the computational complexity of symbolic regression (SR). Under mild and generic assumptions, the size of the hypothesis space and the need to evaluate candidate expressions imply that the runtime typically scales exponentially (or, at best, superpolynomially) in the number of data points. This analysis explains why SR becomes computationally intractable even for datasets of modest size. From a theoretical standpoint, symbolic regression (SR), when posed as the task of finding an exact expression consistent with given data, falls within the class of program synthesis or inductive inference problems, which are intractable in general. One can, for example, reduce from NP-hard combinatorial search tasks (such as selecting among sub-expressions) to instances of SR. The literature consistently highlights this issue: the hypothesis space in SR is discrete and exponential in size, making scalability inherently challenging (Udrescu & Tegmark, 2020). Exhaustive implementations confirm that enumeration is only feasible for extremely small tree depths or toy datasets (Worm & Chiu, 2013; Kammerer et al., 2020). Thus both theoretical reductions and empirical practice point to exponential dependence on the search depth or data dimension in the scaling of SR. The above considerations apply to the worst case or to generic formulations of SR. In practice, state-of-the-art systems incorporate heuristics and structure: pruning and equivalence detection, canonical forms, probabilistic or guided search strategies (e.g., genetic programming, reinforcement learning, or constrained library search), and domain-specific inductive biases. These mechanisms can substantially reduce the effective search cost in favorable regimes. In more structured settings, such as when a compact grammar or strong prior knowledge is available, the dependence on the number of variables may be closer to polynomial within the restricted hypothesis space. However, absent such constraints, one should expect exponential scaling in general. One can also frame this difficulty in terms of sample complexity: the combinatorial richness of expression classes (as reflected in measures like VC dimension or Rademacher complexity) typically grows super-polynomially, making generalization impossible without additional inductive bias. This perspective explains why SR often becomes intractable beyond moderate problem sizes, and it motivates the incorpora-tion of strong priors, pruning, and guided search in practical algorithms. 21 Knowledge-Informed Kernel State Reconstruction   
+
+> Figure 3. Effect of noise on Lasso regression. Test error decays monotonically for low noise regimes while for high noise regimes the same behavior requires trespassing the interpolation threshold, leading to the need of a number of data points proportional to the number of features in the input space.
+
+C. Extended Experimental Results 
+
+C.1. Sample Complexity of Noisy Symbolic Regression 
+
+Experimental evidence further suggests that the challenges of symbolic regression are amplified in the presence of observa-tional noise. Noisy targets increase the sample complexity of SR due to the combined effects of noise amplification and the combinatorial growth of the hypothesis space. As demonstrated by (Udrescu et al., 2020), even when the ground-truth expression lies within the search class, stochastic perturbations often induce overfitting unless regularization or structural priors are imposed. The number of samples required to reliably recover the correct symbolic structure grows exponentially with expression depth and non-linearly with noise variance (La Cava et al., 2021). Intuitively, each noisy observation introduces ambiguity across exponentially many candidate expressions, effectively inflating the VC-dimension of the SR model class. Consequently, in noisy regimes, even state-of-the-art systems (e.g., Deep Symbolic Regression or PySR) require substantially larger sample budgets or stronger priors to preserve identifiability and generalization. To examine this phenomenon more concretely, we performed a simple numerical experiment to study the effect of noisy derivatives in SINDy (Kaheman et al., 2020). In particular, we analyzed how noise injection in the regression targets impacts the sample complexity of the lasso-regularized least-squares step, which is the core mechanism enabling SINDy to recover symbolic structure after the initial feature expansion. For polynomial feature libraries this expansion grows polynomially with the ambient dimension d and exponentially with the maximum degree. The experiment proceeds as follows: we draw inputs x1, . . . , x N ∼ N (0 , I p) in p dimensions and construct targets 
+
+yi = x⊤ 
+
+> i
+
+w∗ + σ∥w∗∥ϵi ∀i ∈ [N ], (30) where w∗ ∈ Rp is a fixed teacher vector and ϵi ∼ N (0 , 1) . Evaluation is carried out on an independent noiseless test set generated analogously but with σ = 0 .Results (Figure 3) show that in noisy regimes the required sample size scales as N = O(p), i.e., linear in the feature dimension, in order to maintain accurate recovery; increasing N improves performance as expected. By contrast, in noiseless settings recovery succeeds at much lower sample sizes, with complexity scaling only logarithmically in p. This observation is consistent with classical sparse recovery theory (Meinshausen & Yu, 2009), but highlights that the noiseless assumption is unrealistic for practical symbolic regression, where observational noise makes linear rather than logarithmic sample scaling unavoidable. This experiment highlights an important property of SR; the computational and sample complexity are, in fact, entangled with the structure of noise in the regression targets. Reconstructing a denoised state has, therefore, the scope of reducing fluctuations in the predicted expression which are due to the intrinsic noise in the data: by reducing that, employing 22 Knowledge-Informed Kernel State Reconstruction 
+
+multiscale information, we are able to increase the sample efficiency of the method, using high granularity data and penalties, conceptually, as a preconditioner for the regression problem, that is set by assumption in a low sample regime. 
+
+C.2. KSR for downstream symbolic regression 
+
+This section contains the full, unabridged tables of experimental results, which are summarized in the main paper. Across the three noise regimes and twelve datasets considered, MAAT achieves the best average performance within each noise type. Given the presence of nine competitive baselines, MAAT does not attain the top result in every individual experiment; however, even in settings where it does not dominate, its performance remains consistently close to the best-performing method, indicating robust and stable behavior across heterogeneous conditions. 23 Knowledge-Informed Kernel State Reconstruction 
+
+Table 6. Full Test MSE ( ↓) on Clinical/Pharmacology Datasets (Gaussian noise). Bold indicates the best performing method for each dataset. Results are averaged across 10 seeds with corresponding 95% confidence intervals. 
+
+PK/PD and Tumor Models Clinical Benchmarks Method diabetes glucose tmdd lite tumor tumordrug colorectal epo cubic →pysr 9.1 × 10 10 ± 13 .1 × 10 10 11 .4 ± 1 1.96 ± 0.15 18 .7 ± 1.2 162 ± 24 0.248 ± 0.02 10 .1 ± 2
+
+cubic →sindy 554 ± 103 11 .4 ± 1 1.95 ± 0.16 18 .3 ± 1.3 161 ± 25 0.245 ± 0.021 8 ± 0.81 
+
+linear →pysr 2.2 × 10 9 ± 3.2 × 10 9 3.48 ± 0.19 0.647 ± 0.037 5.97 ± 0.35 49 ± 7.2 0.0788 ± 0.0038 2.53 ± 0.27 
+
+linear →sindy 194 ± 48 3.45 ± 0.19 0.644 ± 0.038 5.97 ± 0.36 49 .8 ± 7.1 0.0789 ± 0.0038 2.46 ± 0.2
+
+RBF →pysr 3.6 × 10 9 ± 5.2 × 10 9 13 .9 ± 0.6 1.25 ± 0.07 11 .7 ± 0.8 54 .6 ± 7.8 0.151 ± 0.008 4.77 ± 0.29 
+
+RBF →sindy 701 ± 123 13 .8 ± 0.6 1.25 ± 0.07 11 .6 ± 0.8 55 .4 ± 7.9 0.15 ± 0.008 4.7 ± 0.32 
+
+savgol →pysr 8.2 × 10 3 ± 9.6 × 10 3 0.936 ± 0.149 0.206 ± 0.051 1.41 ± 0.1 11 .7 ± 1.6 0.0215 ± 0.0013 0.581 ± 0.045 
+
+savgol →sindy 63 .6 ± 26 .6 0.826 ± 0.056 0.166 ± 0.021 1.42 ± 0.11 11 .9 ± 1.7 0.0216 ± 0.0014 0.606 ± 0.058 
+
+tvreg →pysr 6.5 × 10 3 ± 7.1 × 10 3 0.839 ± 0.07 0.193 ± 0.036 1.41 ± 0.11 11 .4 ± 1.7 0.0215 ± 0.0013 0.688 ± 0.172 
+
+tvreg →sindy 63 .6 ± 26 .6 0.826 ± 0.056 0.166 ± 0.021 1.42 ± 0.11 11 .9 ± 1.7 0.0216 ± 0.0014 0.606 ± 0.058 
+
+kalman →pysr 5.25 ± 0.45 0.129 ± 0.009 0.098 ± 0.0079 0.84 ± 0.043 44 .7 ± 6.6 0.0123 ± 0.0009 0.423 ± 0.069 
+
+kalman →sindy 11 ± 4.3 0.126 ± 0.007 0.0953 ± 0.0077 0.846 ± 0.047 45 .2 ± 6.8 0.0123 ± 0.0008 0.371 ± 0.035 
+
+gp →pysr 1.1 × 10 3 ± 1.4 × 10 3 0.253 ± 0.061 351 ± 343 16 .5 ± 17 .5 197 ± 192 0.0144 ± 0.0105 14 .9 ± 9.6
+
+gp →sindy 113 ± 99 0.243 ± 0.06 0.0659 ± 0.0257 1.49 ± 1.59 13 .5 ± 6.9 0.0817 ± 0.0561 5.53 ± 6.16 
+
+neural ode →pysr 0.735 ± 0.216 0.924 ± 0.734 3.6 ± 2.48 3.3 × 10 4 ± 3.6 × 10 4 63 .6 ± 64 .7 2.2 × 10 6 ± 3.1 × 10 6 6.4 × 10 3 ± 6.5 × 10 3
+
+neural ode →sindy 3.29 ± 2.05 0.0217 ± 0.0191 3.05 ± 2.14 418 ± 417 27 .4 ± 35 10 .1 ± 7.4 186 ± 165 
+
+pinn →pysr 2.09 ± 1.46 0.149 ± 0.085 0.0745 ± 0.0679 0.895 ± 0.346 1.9 × 10 3 ± 2.5 × 10 3 0.0273 ± 0.0282 1.19 ± 0.41 
+
+pinn →sindy 112 ± 58 0.385 ± 0.157 0.0434 ± 0.0183 0.692 ± 0.246 221 ± 103 0.00206 ± 0.00048 0.66 ± 0.149 
+
+MAAT →pysr 10 .4 ± 3 0.118 ± 0.064 0.0673 ± 0.06 0.212 ± 0.072 1.28 ± 0.41 0.00524 ± 0.00432 0.258 ± 0.105 
+
+MAAT →sindy 1.99 ± 0.4 0.0146 ± 0.001 0.00268 ± 0.00015 0.135 ± 0.04 3.54 ± 2.28 0.00134 ± 0.00013 1.22 ± 0.21 
+
+Table 7. Full Test MSE ( ↓) on Clinical/Pharmacology Datasets (Correlated Gaussian noise). Bold indicates the best performing method for each dataset. Results are averaged across 10 seeds with corresponding 95% confidence intervals. 
+
+PK/PD and Tumor Models Clinical Benchmarks Method diabetes glucose tmdd lite tumor tumordrug colorectal epo cubic →pysr 2.0 × 10 4 ± 2.9 × 10 4 2.64 ± 0.18 0.475 ± 0.039 4.04 ± 0.22 38 .1 ± 6.8 0.0515 ± 0.0036 1.84 ± 0.2
+
+cubic →sindy 116 ± 15 2.64 ± 0.19 0.472 ± 0.039 4.05 ± 0.22 38 .8 ± 6.8 0.0516 ± 0.0036 1.76 ± 0.13 
+
+linear →pysr 1.6 × 10 4 ± 2.3 × 10 4 1.28 ± 0.06 0.247 ± 0.018 2.1 ± 0.14 19 .1 ± 4.1 0.026 ± 0.0021 0.904 ± 0.092 
+
+linear →sindy 58 .7 ± 7 1.27 ± 0.06 0.246 ± 0.018 2.1 ± 0.14 19 .5 ± 4.1 0.0261 ± 0.0022 0.896 ± 0.078 
+
+RBF →pysr 4.7 × 10 8 ± 6.7 × 10 8 3.06 ± 0.19 0.366 ± 0.026 3.11 ± 0.2 20 .4 ± 4.5 0.0396 ± 0.0032 1.33 ± 0.14 
+
+RBF →sindy 132 ± 15 3.03 ± 0.18 0.365 ± 0.027 3.12 ± 0.2 20 .6 ± 4.4 0.0397 ± 0.0032 1.31 ± 0.11 
+
+savgol →pysr 4.1 × 10 4 ± 5.9 × 10 4 0.71 ± 0.065 0.143 ± 0.014 1.16 ± 0.09 10 .5 ± 2.9 0.0142 ± 0.0012 0.517 ± 0.068 
+
+savgol →sindy 34 .7 ± 4.6 0.677 ± 0.051 0.141 ± 0.014 1.17 ± 0.09 11 .1 ± 2.9 0.0142 ± 0.0012 0.523 ± 0.059 
+
+tvreg →pysr 807 ± 1117 0.695 ± 0.05 0.142 ± 0.014 1.17 ± 0.09 10 .8 ± 2.8 0.0142 ± 0.0012 0.543 ± 0.098 
+
+tvreg →sindy 34 .7 ± 4.6 0.677 ± 0.051 0.141 ± 0.014 1.17 ± 0.09 11 .1 ± 2.9 0.0142 ± 0.0012 0.523 ± 0.059 
+
+kalman →pysr 10 .6 ± 1.5 0.284 ± 0.048 0.106 ± 0.009 0.883 ± 0.056 19 .8 ± 4.4 0.0109 ± 0.0008 0.392 ± 0.05 
+
+kalman →sindy 13 .5 ± 2.1 0.246 ± 0.016 0.105 ± 0.01 0.892 ± 0.064 20 .3 ± 4.4 0.0109 ± 0.0008 0.392 ± 0.041 
+
+gp →pysr 279 ± 2 0.262 ± 0.065 0.0413 ± 0.0121 9.73 ± 6.29 114 ± 125 0.198 ± 0.19 20 .9 ± 28 .9
+
+gp →sindy 17 ± 121 0.211 ± 0.049 0.0323 ± 0.0101 11 .1 ± 7.3 60 .5 ± 73 .8 0.0822 ± 0.0739 5.67 ± 6.33 
+
+neural ode →pysr 0.963 ± 0.47 6.06 ± 8.28 24 .4 ± 28 .6 11 .6 ± 11 196 ± 274 2.8 × 10 3 ± 2.2 × 10 3 1.1 × 10 6 ± 1.1 × 10 6
+
+neural ode →sindy 6.66 ± 8 0.00448 ± 0.00206 54 .3 ± 71 .8 2.43 ± 2.5 2.2 ± 0.81 51 .7 ± 24 .4 454 ± 652 
+
+pinn →pysr 3.26 ± 2.69 1.28 ± 1.67 0.0197 ± 0.007 0.561 ± 0.121 2.5 × 10 3 ± 2.7 × 10 3 0.00672 ± 0.00184 2.64 ± 1.65 
+
+pinn →sindy 93 .9 ± 49 .2 0.447 ± 0.326 0.0757 ± 0.0675 0.554 ± 0.097 377 ± 154 0.00179 ± 0.00035 1.25 ± 0.69 
+
+MAAT →pysr 11 .2 ± 4 0.332 ± 0.29 0.213 ± 0.122 0.211 ± 0.088 0.87 ± 0.263 0.00206 ± 0.00065 0.514 ± 0.415 
+
+MAAT →sindy 1.92 ± 0.31 0.0197 ± 0.0048 0.00302 ± 0.00022 0.118 ± 0.035 3.73 ± 2.88 0.0013 ± 0.00011 1.21 ± 0.17 
+
+24 Knowledge-Informed Kernel State Reconstruction 
+
+Table 8. Full Test MSE ( ↓) on Clinical/Pharmacology Datasets (Student-t noise). Bold indicates the best performing method for each dataset. Results are averaged across 10 seeds with corresponding 95% confidence intervals. 
+
+PK/PD and Tumor Models Clinical Benchmarks Method diabetes glucose tmdd lite tumor tumordrug colorectal epo cubic →pysr 1.2 × 10 6 ± 1.8 × 10 6 9.8 ± 0.87 2.2 ± 0.23 18 ± 1.3 17 ± 29 0.222 ± 0.021 7.85 ± 0.36 
+
+cubic →sindy 461 ± 68 9.76 ± 0.83 2.19 ± 0.23 17 .6 ± 1.4 167 ± 29 0.216 ± 0.019 7.39 ± 0.49 
+
+linear →pysr 1.5 × 10 9 ± 2.1 × 10 9 3.42 ± 0.36 0.722 ± 0.049 5.68 ± 0.41 55 .2 ± 8.7 0.0748 ± 0.0076 2.47 ± 0.1
+
+linear →sindy 154 ± 23 3.32 ± 0.25 0.719 ± 0.051 5.63 ± 0.41 55 .4 ± 8.9 0.0744 ± 0.0075 2.36 ± 0.13 
+
+RBF →pysr 584 ± 88 13 .6 ± 1 1.41 ± 0.11 11 .1 ± 0.8 61 .6 ± 9.8 0.145 ± 0.013 4.6 ± 0.2
+
+RBF →sindy 611 ± 98 13 .2 ± 1.1 1.41 ± 0.11 11 ± 0.8 61 .5 ± 9.9 0.145 ± 0.013 4.49 ± 0.21 
+
+savgol →pysr 1.7 × 10 12 ± 2.5 × 10 12 0.893 ± 0.117 0.169 ± 0.014 1.4 ± 0.15 12 .6 ± 1.8 0.0189 ± 0.0023 0.564 ± 0.053 
+
+savgol →sindy 40 .3 ± 4.3 0.806 ± 0.054 0.165 ± 0.013 1.43 ± 0.16 13 .3 ± 2 0.0189 ± 0.0023 0.555 ± 0.066 
+
+tvreg →pysr 37 ± 3.8 0.893 ± 0.136 0.168 ± 0.013 1.41 ± 0.15 12 .7 ± 1.9 0.0189 ± 0.0023 0.548 ± 0.044 
+
+tvreg →sindy 40 .3 ± 4.3 0.806 ± 0.054 0.165 ± 0.013 1.43 ± 0.16 13 .3 ± 2 0.0189 ± 0.0023 0.555 ± 0.066 
+
+kalman →pysr 5.09 ± 0.66 0.11 ± 0.013 0.101 ± 0.008 0.813 ± 0.076 51 .1 ± 7.8 0.0113 ± 0.0013 0.348 ± 0.024 
+
+kalman →sindy 6.22 ± 0.87 0.109 ± 0.011 0.0992 ± 0.0078 0.84 ± 0.086 51 .3 ± 8 0.0113 ± 0.0013 0.332 ± 0.029 
+
+gp →pysr 128 ± 65 0.303 ± 0.106 0.0728 ± 0.0199 3.5 ± 4.24 51 ± 35 .8 0.114 ± 0.107 8.45 ± 8.17 
+
+gp →sindy 1 ± 85 0.217 ± 0.081 0.0641 ± 0.0186 3.15 ± 2.23 88 ± 104 .9 0.188 ± 0.104 1.14 ± 0.75 
+
+neural ode →pysr 0.853 ± 0.282 0.361 ± 0.365 3.17 ± 2.3 3.2 × 10 3 ± 4.6 × 10 3 3.8 × 10 3 ± 5.4 × 10 3 136 ± 14 2.9 × 10 6 ± 3.5 × 10 6
+
+neural ode →sindy 2.39 ± 0.91 0.0171 ± 0.019 3.09 ± 2.97 88 .4 ± 115 .4 745 ± 1069 4.51 ± 2.33 467 ± 67 
+
+pinn →pysr 80 .8 ± 66 .7 0.605 ± 0.735 0.0288 ± 0.0145 0.796 ± 0.379 155 ± 14 1.1 × 10 3 ± 1.6 × 10 3 2.53 ± 1.58 
+
+pinn →sindy 51 .6 ± 14 .2 0.471 ± 0.417 0.0224 ± 0.0102 0.646 ± 0.326 136 ± 64 0.00198 ± 0.00058 0.714 ± 0.282 
+
+MAAT →pysr 12 .2 ± 4.4 0.104 ± 0.039 0.752 ± 0.828 0.223 ± 0.042 0.939 ± 0.209 0.00169 ± 0.00046 0.808 ± 0.659 
+
+MAAT →sindy 2.03 ± 0.44 0.0188 ± 0.0033 0.00296 ± 0.00015 0.119 ± 0.036 0.894 ± 0.157 0.00131 ± 0.00012 1.28 ± 0.27 
+
+Table 9. Full Test MSE ( ↓) on Population and Biological Dynamics Datasets (Gaussian noise). Bold indicates the best performing method for each dataset. Results are averaged across 10 seeds with corresponding 95% confidence intervals. 
+
+Epidemiology / Viral Models Biological Systems Method seir seirh viral consumer neutrophil cubic →pysr 0.0158 ± 0.0016 0.0147 ± 0.0011 0.0142 ± 0.001 178 ± 27 0.0387 ± 0.009 
+
+cubic →sindy 0.0159 ± 0.0015 0.0147 ± 0.0011 0.0143 ± 0.001 175 ± 26 0.0378 ± 0.0087 
+
+linear →pysr 0.00512 ± 0.00044 0.00484 ± 0.00038 0.00476 ± 0.0004 58 .4 ± 6.6 0.0126 ± 0.0034 
+
+linear →sindy 0.00517 ± 0.00043 0.00485 ± 0.00038 0.00485 ± 0.00038 59 ± 6.7 0.0125 ± 0.0033 
+
+RBF →pysr 0.00987 ± 0.00075 0.00939 ± 0.00076 0.00922 ± 0.00076 107 ± 12 0.0244 ± 0.0063 
+
+RBF →sindy 0.00991 ± 0.00075 0.00939 ± 0.00076 0.00931 ± 0.00074 11 ± 12 0.0243 ± 0.0063 
+
+savgol →pysr 0.00131 ± 0.00012 0.00117 ± 0.00007 0.00103 ± 0.00009 15 .3 ± 2 0.0031 ± 0.00078 
+
+savgol →sindy 0.00136 ± 0.00013 0.00119 ± 0.00007 0.00113 ± 0.00008 17 .5 ± 2.2 0.00307 ± 0.00074 
+
+tvreg →pysr 0.00131 ± 0.00012 0.00117 ± 0.00007 0.00103 ± 0.00009 14 .8 ± 1.8 0.00309 ± 0.00078 
+
+tvreg →sindy 0.00136 ± 0.00013 0.00119 ± 0.00007 0.00113 ± 0.00008 17 .5 ± 2.2 0.00307 ± 0.00074 
+
+kalman →pysr 7.77 × 10 −4 ± 0.7 × 10 −4 7.25 × 10 −4 ± 0.5 × 10 −4 6.65 × 10 −4 ± 0.6 × 10 −4 10 .7 ± 2 0.00195 ± 0.00052 
+
+kalman →sindy 8.24 × 10 −4 ± 0.7 × 10 −4 7.40 × 10 −4 ± 0.5 × 10 −4 7.58 × 10 −4 ± 0.4 × 10 −4 12 ± 1.3 0.00194 ± 0.00047 
+
+gp →pysr 6.81 × 10 −4 ± 4.3 × 10 −4 3.54 × 10 −4 ± 1.3 × 10 −4 0.00327 ± 0.00328 141 ± 128 0.0103 ± 0.0066 
+
+gp →sindy 0.00341 ± 0.00247 5.42 × 10 −4 ± 3.6 × 10 −4 0.00248 ± 0.00301 173 ± 94 0.0296 ± 0.0366 
+
+neural ode →pysr 3.89 ± 1.67 5.76 ± 5.32 0.85 ± 0.191 1.60 × 10 6 ± 2.3 × 10 6 4.11 × 10 4 ± 5.9 × 10 4
+
+neural ode →sindy 0.799 ± 0.113 5.69 ± 6.51 0.549 ± 0.139 67 .7 ± 39 0.353 ± 0.414 
+
+pinn →pysr 4.20 × 10 −5 ± 0.5 × 10 −5 3.04 × 10 −5 ± 0.3 × 10 −5 4.64 × 10 −5 ± 0.8 × 10 −5 12 .3 ± 4.5 3.29 × 10 −4 ± 0.9 × 10 −4
+
+pinn →sindy 4.48 × 10 −5 ± 0.5 × 10 −5 2.45 × 10 −5 ± 0.2 × 10 −5 8.58 × 10 −5 ± 1.7 × 10 −5 7.54 ± 3.27 2.56 × 10 −4 ± 0.2 × 10 −4
+
+MAAT →pysr 2.25 × 10 −5 ± 0.3 × 10 −5 1.68 × 10 −5 ± 0.2 × 10 −5 7.30 × 10 −5 ± 1.5 × 10 −5 6.95 ± 3.43 2.13 × 10 −4 ± 1.0 × 10 −4
+
+MAAT →sindy 6.86 × 10 −5 ± 0.6 × 10 −5 3.72 × 10 −5 ± 0.3 × 10 −5 1.17 × 10 −4 ± 0.2 × 10 −4 3.57 ± 0.81 2.39 × 10 −4 ± 0.8 × 10 −4
+
+25 Knowledge-Informed Kernel State Reconstruction 
+
+Table 10. Full Test MSE ( ↓) on Population and Biological Dynamics Datasets (Correlated Gaussian noise). Bold indicates the best performing method for each dataset. Results are averaged across 10 seeds with corresponding 95% confidence intervals. 
+
+Epidemiology / Viral Models Biological Systems Method seir seirh viral consumer neutrophil cubic →pysr 0.00382 ± 0.00027 0.00364 ± 0.00032 0.00361 ± 0.00028 43 ± 4.1 0.00902 ± 0.00281 
+
+cubic →sindy 0.00386 ± 0.00027 0.00366 ± 0.00032 0.00366 ± 0.00024 43 .5 ± 4.1 0.00899 ± 0.00278 
+
+linear →pysr 0.00184 ± 0.00011 0.0017 ± 0.00011 0.00175 ± 0.00015 22 ± 2.4 0.0046 ± 0.00145 
+
+linear →sindy 0.00189 ± 0.00011 0.00172 ± 0.00011 0.00184 ± 0.00014 23 .5 ± 2 0.00459 ± 0.00142 
+
+RBF →pysr 0.0028 ± 0.00019 0.00257 ± 0.00016 0.00262 ± 0.00024 33 .8 ± 3.2 0.0068 ± 0.00213 
+
+RBF →sindy 0.00285 ± 0.00019 0.00258 ± 0.00016 0.00272 ± 0.00023 33 .2 ± 2.9 0.00679 ± 0.00209 
+
+savgol →pysr 9.78 × 10 −4 ± 0.6 × 10 −4 9.15 × 10 −4 ± 0.8 × 10 −4 9.61 × 10 −4 ± 0.8 × 10 −4 13 .6 ± 1.6 0.00251 ± 0.00075 
+
+savgol →sindy 0.00102 ± 0.00006 9.30 × 10 −4 ± 0.7 × 10 −4 0.00106 ± 0.00007 15 ± 1.5 0.00251 ± 0.00072 
+
+tvreg →pysr 9.78 × 10 −4 ± 0.6 × 10 −4 9.15 × 10 −4 ± 0.8 × 10 −4 9.61 × 10 −4 ± 0.8 × 10 −4 12 .9 ± 1.7 0.00252 ± 0.00075 
+
+tvreg →sindy 0.00102 ± 0.00006 9.30 × 10 −4 ± 0.7 × 10 −4 0.00106 ± 0.00007 15 ± 1.5 0.00251 ± 0.00072 
+
+kalman →pysr 7.64 × 10 −4 ± 0.4 × 10 −4 7.04 × 10 −4 ± 0.6 × 10 −4 7.62 × 10 −4 ± 0.6 × 10 −4 14 .3 ± 6.7 0.00197 ± 0.0006 
+
+kalman →sindy 8.09 × 10 −4 ± 0.4 × 10 −4 7.19 × 10 −4 ± 0.6 × 10 −4 8.59 × 10 −4 ± 0.5 × 10 −4 12 .3 ± 1 0.00197 ± 0.00056 
+
+gp →pysr 0.00191 ± 0.00186 0.00133 ± 0.00112 0.00424 ± 0.00393 96 .4 ± 73 .5 0.0101 ± 0.0065 
+
+gp →sindy 0.0026 ± 0.00235 9.38 × 10 −4 ± 5.9 × 10 −4 5.20 × 10 −4 ± 2.1 × 10 −4 18 ± 106 0.0141 ± 0.0088 
+
+neural ode →pysr 2.08 ± 0.56 6.99 ± 3.38 1.33 ± 0.35 1.28 × 10 8 ± 1.8 × 10 8 6.73 ± 5.53 
+
+neural ode →sindy 0.651 ± 0.262 5.19 ± 2.97 0.675 ± 0.286 2.76 × 10 3 ± 3.3 × 10 3 0.587 ± 0.343 
+
+pinn →pysr 3.79 × 10 −5 ± 0.3 × 10 −5 3.27 × 10 −5 ± 0.3 × 10 −5 3.94 × 10 −5 ± 0.4 × 10 −5 10 .1 ± 3.6 2.60 × 10 −4 ± 0.4 × 10 −4
+
+pinn →sindy 4.26 × 10 −5 ± 0.4 × 10 −5 2.41 × 10 −5 ± 0.3 × 10 −5 8.96 × 10 −5 ± 1.5 × 10 −5 13 .2 ± 5.9 2.64 × 10 −4 ± 0.4 × 10 −4
+
+MAAT →pysr 2.07 × 10 −5 ± 0.3 × 10 −5 1.63 × 10 −5 ± 0.1 × 10 −5 8.19 × 10 −5 ± 3.0 × 10 −5 12 .2 ± 11 .8 1.80 × 10 −4 ± 0.6 × 10 −4
+
+MAAT →sindy 6.68 × 10 −5 ± 0.5 × 10 −5 3.72 × 10 −5 ± 0.3 × 10 −5 1.18 × 10 −4 ± 0.2 × 10 −4 4.01 ± 1.3 2.40 × 10 −4 ± 0.7 × 10 −4
+
+Table 11. Full Test MSE ( ↓) on Population and Biological Dynamics Datasets (Student-t noise). Bold indicates the best performing method for each dataset. Results are averaged across 10 seeds with corresponding 95% confidence intervals. 
+
+Epidemiology / Viral Models Biological Systems Method seir seirh viral consumer neutrophil cubic →pysr 0.0166 ± 0.0017 0.0152 ± 0.0024 0.0153 ± 0.0017 179 ± 15 0.04 ± 0.0097 
+
+cubic →sindy 0.0167 ± 0.0017 0.0152 ± 0.0024 0.0154 ± 0.0017 175 ± 16 0.0392 ± 0.0097 
+
+linear →pysr 0.0058 ± 0.00054 0.00475 ± 0.00059 0.00453 ± 0.00032 61 .5 ± 5.4 0.0131 ± 0.0036 
+
+linear →sindy 0.00586 ± 0.00055 0.00477 ± 0.00059 0.00462 ± 0.00032 62 .5 ± 5.5 0.0129 ± 0.0035 
+
+RBF →pysr 0.0112 ± 0.001 0.00907 ± 0.00112 0.00888 ± 0.00068 116 ± 11 0.025 ± 0.0063 
+
+RBF →sindy 0.0112 ± 0.001 0.00909 ± 0.00112 0.00897 ± 0.00068 118 ± 11 0.0249 ± 0.0062 
+
+savgol →pysr 0.00139 ± 0.00014 0.00109 ± 0.00016 9.56 × 10 −4 ± 0.9 × 10 −4 15 .1 ± 1.4 0.00341 ± 0.00119 
+
+savgol →sindy 0.00144 ± 0.00015 0.00111 ± 0.00016 0.00105 ± 0.00009 17 .8 ± 1.8 0.0034 ± 0.00115 
+
+tvreg →pysr 0.00139 ± 0.00014 0.00109 ± 0.00016 9.56 × 10 −4 ± 0.9 × 10 −4 14 .8 ± 1.5 0.0035 ± 0.00124 
+
+tvreg →sindy 0.00144 ± 0.00015 0.00111 ± 0.00016 0.00105 ± 0.00009 17 .8 ± 1.8 0.0034 ± 0.00115 
+
+kalman →pysr 8.47 × 10 −4 ± 0.7 × 10 −4 6.60 × 10 −4 ± 0.8 × 10 −4 5.94 × 10 −4 ± 0.6 × 10 −4 9.44 ± 0.92 0.00206 ± 0.0007 
+
+kalman →sindy 9.01 × 10 −4 ± 0.7 × 10 −4 6.79 × 10 −4 ± 0.9 × 10 −4 6.89 × 10 −4 ± 0.5 × 10 −4 12 .7 ± 1.1 0.00205 ± 0.00065 
+
+gp →pysr 6.77 × 10 −4 ± 5.0 × 10 −4 0.00112 ± 0.00093 0.00738 ± 0.00664 47 .7 ± 57 .6 0.0413 ± 0.0429 
+
+gp →sindy 0.00101 ± 0.0007 4.07 × 10 −4 ± 1.9 × 10 −4 3.56 × 10 −4 ± 1.0 × 10 −4 77 .8 ± 72 .9 0.013 ± 0.0098 
+
+neural ode →pysr 3.4 ± 2.25 8.78 ± 4.27 28 .9 ± 40 .5 2.56 × 10 3 ± 3.5 × 10 3 9.13 ± 11 .67 
+
+neural ode →sindy 1.32 ± 0.85 8.32 ± 4.94 0.607 ± 0.249 2.55 × 10 3 ± 3.7 × 10 3 0.208 ± 0.127 
+
+pinn →pysr 4.80 × 10 −5 ± 0.8 × 10 −5 3.49 × 10 −5 ± 0.5 × 10 −5 4.52 × 10 −5 ± 0.9 × 10 −5 33 .7 ± 30 .5 2.60 × 10 −4 ± 0.5 × 10 −4
+
+pinn →sindy 5.30 × 10 −5 ± 0.8 × 10 −5 2.53 × 10 −5 ± 0.3 × 10 −5 8.40 × 10 −5 ± 1.6 × 10 −5 8.18 ± 1.9 2.45 × 10 −4 ± 0.2 × 10 −4
+
+MAAT →pysr 2.15 × 10 −5 ± 0.3 × 10 −5 1.69 × 10 −5 ± 0.2 × 10 −5 7.17 × 10 −5 ± 1.6 × 10 −5 22 .4 ± 19 .3 1.72 × 10 −4 ± 0.5 × 10 −4
+
+MAAT →sindy 7.09 × 10 −5 ± 0.6 × 10 −5 3.82 × 10 −5 ± 0.3 × 10 −5 1.18 × 10 −4 ± 0.2 × 10 −4 3.01 ± 0.64 2.35 × 10 −4 ± 0.7 × 10 −4
+
+C.3. Computational Complexity 
+
+A potential concern with kernel-based methods is the O(N 3) cost of direct Gram-matrix inversion. However, MAAT avoids this bottleneck entirely: our implementation relies on first-order optimization (Adam) rather than closed-form matrix inversion. Each iteration requires only matrix-vector products with the kernel matrix, reducing per-step complexity to 
+
+O(N 2). This makes the method scalable to long or high-resolution trajectories. The situation is analogous to neural network training: although exact loss minimization is NP-hard in the worst case (Froese & Hertrich, 2023), practical gradient-based optimizers achieve good solutions efficiently. Table 12 reports wall-clock time and peak memory usage across all baselines, averaged over the benchmark suite on identical hardware. MAAT incurs moderate overhead compared to classical smoothers (splines, Savitzky–Golay) but remains substantially faster than Neural ODEs and PINNs while achieving superior reconstruction accuracy. The memory footprint is comparable to other kernel and neural methods. 
+
+C.4. Hyperparameter Sensitivity 
+
+MAAT requires minimal hyperparameter tuning. The kernel length-scale is selected automatically via the coordinate-wise sweep described in Section D, and the regularization weights (λ, γ, w +) encode prior knowledge about the relative influence of smoothness, derivative magnitude, and domain constraints. We interpret these as part of the problem specification rather 26 Knowledge-Informed Kernel State Reconstruction                          
+
+> Table 12. Computational cost comparison. Mean wall-clock time and memory usage across all benchmarks.
+> Method Time (s) Memory (MB)
+> Linear interpolation 18.20 713.96 RBF interpolation 18.77 715.21 Cubic spline 20.56 716.88 Savitzky–Golay 22.63 720.24 Kalman filter / RTS 22.34 1066.99 TVRegDiff 23.57 719.29 Gaussian Process 37.94 1063.25 PINN 96.97 1307.68 Neural ODE 630.40 1311.93
+> MAAT (ours) 44.70 1218.05
+
+than free parameters requiring cross-validation. To validate this claim, we evaluated MAAT under two conditions: (i) the adaptive length-scale selection procedure, and (ii) a fixed kernel scale σ2 = Var( t) across all datasets with no tuning. Results are shown in Table 13. While adaptive tuning yields marginal improvements, the method remains stable and accurate under default settings. This robustness can be understood through the lens of ridgeless regression: for small regularization constants, the solution converges to the minimum-norm interpolant (Hastie et al., 2022). In our framework, “minimum norm” corresponds to minimizing the prior penalty terms. The modest accuracy decrease under fixed σ reflects this regime, where the penalty terms collapse the solution space toward a unique optimum regardless of the precise regularization strength.             
+
+> Table 13. Sensitivity to kernel length-scale selection. Geometric mean MSE across benchmarks with adaptive vs. fixed kernel scale.
+> Configuration PySR SINDy
+> MAAT (adaptive σ)0.00844 0.00712
+> MAAT (fixed σ)0.01080 0.00712
+
+D. Experimental Details 
+
+Our evaluation suite consists of several ODE models commonly used in computational biology and pharmacology. We evaluate MAAT on both standard dynamical systems benchmarks and clinically motivated pharmacological models, reflecting the clinical relevance emphasized in our motivation. At the same time, we demonstrate the applicability of our method beyond these settings by including representative models from additional scientific domains. 
+
+D.1. Pharmacological dynamical systems Colorectal cancer model We adopt the seven-state CRC–mAb–IL2–chemo system modelling tumour burden ( T ), natural killer cells ( N ), lymphocytes ( L), circulating chemotherapy ( C), monoclonal antibody ( M ), cytokines ( I), and a secondary antibody pool ( A) . Chemotherapy and biologics modulate immune effector functions via saturating exposure terms 
+
+sX (M ) = 1 − exp( −δX M ) (dePillis, 2014). With exogenous infusion rates vM (t) and vA(t) (zero in our benchmarks), 27 Knowledge-Informed Kernel State Reconstruction 
+
+the dynamics are 
+
+˙T = aT (1 − bT ) −
+
+
+
+c + ξA h1 + A
+
+
+
+N T − DT − (KT + KAT A)sT (M )T − ψAT, 
+
+˙N = eC − f N −
+
+
+
+p + pAAh1 + A
+
+
+
+N T + pN N I gN + I − KN sN (M )N, 
+
+˙L = θmL θ + I + jT − qLT + ( r1N + r2C)T − uL 2CI κ + I − KLsL(M )L + pI LI gI + I ,
+
+˙C = α − βC − KC sC (M )C, 
+
+˙M = −γM + vM (t), ˙I = −μI + ϕC + ωLI ζ + I ,
+
+˙A = −ηA − λT A h2 + A + vA(t).
+
+Type 1 diabetes model The 16-state UVA/Padova simulator captures plasma/tissue glucose ( Gp, G t), insulin compartments (Il, I p, I ′, and subcutaneous depots Isc1 , I sc2 ), insulin action states ( XU , X L), gastrointestinal transit ( Qsto1 , Q sto2 , Q gut ), and glucagon kinetics ( H, X H , H sc1 , H sc2 ). Denote Gc = Gp/V g , Ic = Ip/V i, gastrointestinal appearance Ra(Qgut ) = 
+
+f k abs Qgut , renal excretion E(Gc) = max {0, k E (Gc − Gthr )}, insulin-dependent utilization Uid = Veff XU Gt/V g 
+
+> Km0+Gt/V g
+
+with 
+
+Veff = Vm0 + Vmx (1 + risk (Gc)) , and EGP = kp1 − kp2Gc − kp3XL + ξX H (Man et al., 2014). The differential equations are 
+
+˙Gp = EGP + Ra(Qgut ) − Uii − Uid − E(Gc) − k1(Gp − GbVg ) + k2(Gt − GbVg ),
+
+˙Gt = −Uid + k1(Gp − GbVg ) − k2(Gt − GbVg ),
+
+˙XU = −p2U XU + p3U (Ic − Ib), ˙XL = −ki(XL − (I′ − Ib)) ,
+
+˙Il = −(m1 + m3)Il + m2Ip, ˙Ip = m3Il − (m2 + m4)Ip + RIa,
+
+˙I′ = ki(Ic − I′), ˙Isc1 = −kdIsc1 + IIR , ˙Isc2 = −kdIsc2 + kdIsc1 ,
+
+˙Qsto1 = −kgri Qsto1 , ˙Qsto2 = kgri Qsto1 − kempt Qsto2 ,
+
+˙Qgut = kempt Qsto2 − kabs Qgut ,
+
+˙H = −nH (H − Hb) + SR s(Gc, I c) + SR d( ˙Gc) + khi3 Hsc2 ,
+
+˙XH = −kH XH + kH max( H − Hb, 0) ,
+
+˙Hsc1 = −khi1 Hsc1 + H∞, ˙Hsc2 = −khi2 Hsc2 + khi1 Hsc1 ,
+
+with RIa = ka1Isc1 + ka2Isc2 + RIaext , SR s = ⊮{Gc<G b}Hb(σ(Gb − Gc) − ρ(Ic − Ib)) , and SR d = max {0, −δ ˙Gc}.The auxiliary “risk” term follows risk (Gc) = 0 for Gc ≥ Gb and (r1 or r2)log 2(Gc/G b)2 when hypoglycemic. All parameters are taken from the in-code dictionary for qualitative clinical dynamics. 
+
+Erythropoietin (EPO) PK/PD We model erythropoiesis with marrow progenitors ( P ), reticulocytes ( R), hemoglobin (Hb ), circulating EPO, and a feedback mediator ( S). The dynamics follow a compact catenary/indirect–response structure in which EPO stimulates progenitor production via an E max /Hill effect: 
+
+˙P = kprod − kmat P, ˙R = kmat P − kdeath R, 
+
+˙Hb = khb R − kclear Hb , ˙EPO = −kel EPO + kin − kfb Hb ,
+
+˙S = kstim ,max EPO n
+
+EC n 
+
+> 50
+
++ EPO n − kdeg S. 
+
+This mirrors established rHuEPO PK/PD models that link serum EPO to reticulocyte and Hb responses using catenary lifespans and indirect–response turnover (Sharma & Jusko, 1998). 28 Knowledge-Informed Kernel State Reconstruction 
+
+Tumour PK/PD (TMDD + RO–driven TGI) We couple a 3-compartment monoclonal-antibody PK (central Cc, peripheral 
+
+Cp, tumour Ct) with target-mediated drug disposition (TMDD) at tumour/peripheral sites, and drive tumour growth inhibition (TGI) by receptor occupancy (RO). Tumour burden follows bounded growth (logistic): 
+
+˙Cc = − CL Vc
+
+Cc − Qp
+
+Vc
+
+(Cc − Cp) − Qt
+
+Vc
+
+(Cc − Ct),
+
+˙Cp = Qp
+
+Vp
+
+(Cc − Cp), ˙Ct = Qt
+
+Vt
+
+(Cc − Ct),
+
+˙RA = −konA CtRA + koffA (Rtot  
+
+> A
+
+− RA),
+
+˙RB = −konB CpRB + koffB (Rtot  
+
+> B
+
+− RB ),
+
+˙TV = kgrowth TV
+
+
+
+1 − TV
+
+Tmax 
+
+
+
+− kkill ,max 
+
+Rtot  
+
+> A
+
+− RA
+
+IC 50 + Rtot  
+
+> A
+
+− RA
+
+TV .
+
+This construction is consistent with TMDD foundations and minimal/PBPK mAb models that include a tumour (interstitial) site and use RO as the pharmacodynamic driver of TGI (Simeoni et al., 2004). All tumour-rate constants are converted from per-day to per-hour in implementation. 
+
+Tumour–drug–immune interaction We consider tumour cells ( T ), chemotherapeutic payload ( M ), immune effectors (N ), an inflammatory cytokine ( I), and a tissue-damage biomarker ( K): 
+
+˙T = rT 
+
+
+
+1 − TKT
+
+
+
+− κN N T − κM M T, 
+
+˙M = −kM M + u(t),
+
+˙N = s0 + sT T − dN N − ηM N, 
+
+˙I = σT − dI I, ˙K = ρT T + ρM M − dK K, 
+
+where u(t) is the dosing input (set to zero for the baseline trajectories we analyse). This low-order chemo-immuno system follows classical tumour–immune ODEs with chemotherapy cytotoxicity and immunosuppression terms; cytokines and damage markers use standard turnover/indirect–response kinetics (Sharma & Jusko, 1998). 
+
+D.2. General dynamical systems SEIR compartmental epidemic model Susceptible ( S), exposed ( E), infectious ( I), and removed ( R) populations evolve under homogeneous mixing (Kermack & McKendrick, 1927): 
+
+˙S = −β SI N , ˙E = β SI N − σE, 
+
+˙I = σE − γI, ˙R = γI. 
+
+SEIRH epidemic model with hospitalisation Extending SEIR with a hospitalised class H and transition rate δ (Bjørnstad et al., 2020): 
+
+˙S = −β SI N , ˙E = β SI N − σE, 
+
+˙I = σE − (γ + δ)I, ˙H = δI − γhH, 
+
+˙R = γI + γhH. 
+
+Viral dynamics model Target cells ( T ), eclipse-phase cells ( E), productively infected cells ( I), and free virions ( V )follow (Nowak & May, 2000) 
+
+˙T = −βT V, ˙E = βT V − kE, 
+
+˙I = kE − δI, ˙V = pI − cV. 
+
+29 Knowledge-Informed Kernel State Reconstruction 
+
+Consumeristic socio-ecological model Population ( x), renewable resources ( y), non-renewable resources ( z), and wealth (w) interact through 
+
+˙x = x
+
+
+
+−c + d μxw w2 + μ2x2
+
+
+
+,
+
+˙y = y γ(λ − y) − δy m(x, w ),
+
+˙z = z
+
+ k m (x, w )wm(x, w )w + 1 − δz m(x, w )
+
+
+
+,
+
+˙w = m(x, w ) δy + δz − σw ,
+
+with m(x, w ) = max {x, w } and δy , δ z defaulting to δ when unspecified (Badiale & Cravero, 2024). 
+
+Neutrophil life-cycle model The Friberg-type transit system tracks proliferating precursors (Prol), transit compartments (T 1, T 2, T 3), marrow reservoir (Reserv), and circulating neutrophils (Circ) (Friberg et al., 2002). Feedback gains Fprol (T2) = (T2,homeo /T 2)γ and Fegress (Circ) = ( Chomeo /Circ) β enforce homeostasis, while maturation from T2 to T3 is saturable with flux Φ23 = Vmax Effect T2  
+
+> KM+T2
+
+:
+
+˙Prol = kprol Fprol (T2) Prol − ktr1 Prol ,
+
+˙T1 = ktr1 Prol − (ktr2 + kd)T1,
+
+˙T2 = ktr2 T1 − Φ23 − kdT2,
+
+˙T3 = Φ 23 − (ktr4 + kd)T3,
+
+˙Reserv = ktr4 T3 −  kd + kout Fegress (Circ) Reserv ,
+
+˙Circ = kout Fegress (Circ) Reserv − kelim Circ .
+
+D.3. Dataset Generation ODE Integration and Trajectories. For each dynamical system, we generate ground-truth trajectories by integrating the governing Ordinary Differential Equations (ODEs) using a deterministic fourth-order Runge–Kutta (RK4) solver. We use a fixed integration step size ∆t specific to each system’s timescale (see Table 14). To evaluate robustness to model mismatch, we sample a unique parameter set for each dataset by applying multiplicative jitter (typically 5% –10% ) to the default literature parameters. For each data split (Train, Validation, Test), we sample a fresh initial condition x(t0) by applying a 10% per-dimension jitter to a nominal starting state, clipping to non-negative values where physically required. 
+
+Observation Model and Noise. We generate observed data Y ∈ RT ×M from the latent states x(t) ∈ RD via a linear observation operator Y(t) = Hx (t) + ϵ. The matrix H simulates heterogeneous sensor channels, including direct observations of state subsets, total sums (e.g., total population), or linear combinations. We evaluate three noise regimes to test solver robustness: • Gaussian Noise: ϵ ∼ N (0 , σ 2).• Student-t Noise: ϵ ∼ tν with degrees of freedom ν = 5 (heavy-tailed). • Correlated Noise: AR(1) processes with correlation coefficient α = 0 .8.The noise scale σ is set to 5% of the mean absolute amplitude of the state variable ( σ = 0 .05 × mean |x|). Full-state snapshots are provided at evenly spaced indices, with the count scaling as ≈ 1.5√T to mimic sparse measurement settings. 
+
+Dataset Specifications. Table 14 details the grid dimensions and state variables for all systems evaluated. 30 Knowledge-Informed Kernel State Reconstruction       
+
+> Table 14. Dataset specifications. D: state dimension; ∆t: integration step; N: number of time points per split. All trajectories start at
+> t0= 0 .
+
+Dataset D ∆t Ntrain Nval /test tmax train State Variables 
+
+Population & Ecological Dynamics 
+
+SEIR 4 0.2 500 200 99.8 Susceptible, Exposed, Infected, Recovered SEIRH 5 0.2 500 200 99.8 SEIR + Hospitalized Viral 4 0.2 500 200 99.8 Target cells, Exposed, Infected, Virus Consumeristic 4 0.2 500 200 99.8 x, y, z, w (Social dynamics) Lotka-Volterra 5 0.05 500 200 24.9 Predator-Prey interactions (5-species) Goodwin 3 0.2 500 200 99.8 mRNA, Protein, Inhibitor (Oscillator) 
+
+Systems Biology & Pharmacology (PK/PD) 
+
+Neutrophil 6 0.2 500 200 99.8 Proliferating, Transit 1–3, Reserve, Circulating Glucose 5 0.1 500 200 49.9 Glucose, Insulin, X, Q, Rate of appearance Diabetes 16 0.1 500 200 49.9 Detailed glucose-insulin-gut transit model Colorectal 7 0.2 500 200 99.8 Tumor, Necrotic, Lymph, Cells, Macrophage, I, A
+
+EPO 5 0.2 500 200 99.8 Precursor, Reticulocyte, Hb, EPO, S
+
+Tumor 6 0.2 500 200 99.8 PK/PD with binding & tumor volume TMDD Lite 5 0.2 500 200 99.8 Drug, Receptor, Complex, Production, Internalization PK/PD 1 5 0.1 500 200 49.9 One-compartment PK with indirect response Tumor-Drug-Imm 5 0.5 500 200 249.5 Tumor, Macrophage, NK cells, IL-2, Kill rate 
+
+D.4. MAAT Implementation Details Kernel State Recovery (KSR). We model each state dimension d ∈ { 1, . . . , D } using a Gaussian Radial Basis Function (RBF) kernel: 
+
+κd(t, t ′) = exp 
+
+
+
+− (t−t′)2
+
+> 2σ2
+> d
+
+
+
+.
+
+The recovered trajectory ˆxd(t) and its time-derivative b˙xd(t) are expanded over the grid points tj ∈ T as: 
+
+ˆxd(t) = 
+
+> T
+
+X
+
+> j=1
+
+Uj,d κd(t, t j ), b˙xd(t) = 
+
+> T
+
+X
+
+> j=1
+
+Uj,d ∂tκd(t, t j ).
+
+Loss Function and Optimization. We optimize the coefficient matrix U ∈ RT ×D by minimizing a composite loss function L(U ):
+
+L(U ) = ws E(tk ,sk )∈M 
+
+∥ˆx(tk) − sk∥22
+
+ + wi Et∈T 
+
+∥Hˆx(t) − y(t)∥22
+
+
+
++ γ Et∈T 
+
+∥b˙x(t) − f0(ˆ x(t)) ∥22
+
+ + λ ∥U ∥2 
+
+> F
+
++ w+ ∥ min(ˆ x, 0) ∥22. (31) We use the following hyperparameters across all experiments: • Weights: ws = wi = 1 .0, γ = 10 −3, λ = 10 −6.• Positivity: w+ = 1 .0 (enabled for non-negative biological systems). 
+
+Training Protocol. Training proceeds in two phases using the Adam optimizer ( β1 = 0 .99 , β 2 = 0 .999 , ϵ = 10 −8): 1. Length-scale Selection: Kernel length-scales σd are initialized to pVar( T ). We perform a coordinate-wise sweep over multiplicative factors {0.25 , 0.5, 1.0, 2.0, 4.0}, training for 200 steps per candidate on the training set and selecting the factor that minimizes MSE on held-out validation snapshots. 2. Optimization: We optimize U with learning rate 1.0 for up to 20 , 000 iterations, employing early stopping with a patience of 2, 000 steps based on validation loss. Implementation is in JAX, utilizing JIT compilation for efficient batched evaluation. 31 Knowledge-Informed Kernel State Reconstruction 
+
+D.5. Baseline Configurations 
+
+All baselines use fixed hyperparameters across datasets to ensure fair comparison. 
+
+Smoothing & Interpolation Baselines. 
+
+• Cubic Spline: Natural cubic splines (SciPy) with analytic derivatives. • RBF Interpolant: Multiquadric RBFs with shape parameter ε selected via grid search over {0.25 , . . . , 4.0} × 
+
+(1 /pVar( T )) . Derivatives via central differences ( ∆ = 10 −3∆t). • Savitzky–Golay: Window length 25, polynomial order 3, with boundary-aware padding. Analytic filter derivatives are used. • TV-Reg Diff: Total Variation Regularized Differentiation with regularization α = 0 .01 , implemented via a Savitzky– Golay proxy (window 21, order 3) for computational efficiency on large grids. 
+
+Probabilistic & Neural Baselines. 
+
+• Gaussian Process (GP): Independent RBF kernel GPs per dimension. Length-scales optimized via log-marginal likelihood maximization (3 random restarts) searching over factors {0.25 , . . . , 4.0} × std (T ).• Kalman Smoother: Constant-velocity kinematic model ( q = 1 .0, r = 0 .1). Derivatives extracted from the smoothed velocity states. • Neural ODE: MLP vector field (width 64, depth 3, tanh activation). Integrated with Dopri5 ( dt 0 = 0 .1). Trained for 2,000 steps (Adam, lr= 10 −3). • Symbolic Neural ODE: Polynomial library (degree ≤ 3). Trained for 400 steps (Adam, lr= 5 × 10 −3) with ℓ2 =5 × 10 −4.• PINN: Two networks (Time →State and State →Derivative; width 48, depth 2). Loss includes data fit ( w = 1 .0) and physics residual ( w = 0 .3) on 128 collocation points. As a ”best-case” baseline, PINN is provided the ground-truth functional form of the ODE. 
+
+D.6. Symbolic Regression Back-Ends 
+
+Downstream equation discovery is performed on the trajectories recovered by MAAT or baselines. • PySINDy: Sparse identification with a polynomial library (degree ≤ 2). Optimizer: STLS with threshold 0.1 and decay 0.9.• PySR: Evolutionary search with 20 iterations, population 1,000. Allowed operators: {+, ×} . Selection criterion: Validation derivative MSE. 
+
+D.7. Computing Infrastructure 
+
+All experiments were conducted on a workstation with an AMD Ryzen Threadripper PRO 3995WX (64-core) and an NVIDIA RTX A4000 (16GB). Reported metrics are averaged over 10 random seeds per dataset split. 32
