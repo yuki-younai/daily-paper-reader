@@ -1,0 +1,623 @@
+Title: FedMomentum: Preserving LoRA Training Momentum in Federated Fine-Tuning
+
+URL Source: https://arxiv.org/pdf/2603.08014v1
+
+Published Time: Tue, 10 Mar 2026 01:50:35 GMT
+
+Number of Pages: 18
+
+Markdown Content:
+# FedMomentum : Preserving LoRA Training Momentum in Federated Fine-Tuning 
+
+Peishen Yan 1 Yang Hua 2 Hao Wang 3 Jiaru Zhang 4 Xiaoyu Wu 5 Tao Song 1 Haibing Guan 1
+
+# Abstract 
+
+Federated fine-tuning of large language models (LLMs) with low-rank adaptation (LoRA) offers a communication-efficient and privacy-preserving solution for task-specific adaptation. Na ¨ıve aggre-gation of LoRA modules introduces noise due to mathematical incorrectness when averaging the downsampling and upsampling matrices indepen-dently. However, existing noise-free aggregation strategies inevitably compromise the structural expressiveness of LoRA, limiting its ability to re-tain client-specific adaptations by either improp-erly reconstructing the low-rank structure or ex-cluding partially trainable components. We iden-tify this problem as loss of training momentum ,where LoRA updates fail to accumulate effec-tively across rounds, resulting in slower conver-gence and suboptimal performance. To address this, we propose FedMomentum , a novel frame-work that enables structured and momentum-preserving LoRA aggregation via singular value decomposition (SVD). Specifically, after aggre-gating low-rank updates in a mathematically cor-rect manner, FedMomentum applies SVD to ex-tract the dominant components that capture the main update directions. These components are used to reconstruct the LoRA modules with the same rank, while residual components can be retained and later merged into the backbone to preserve semantic information and ensure robust-ness. Extensive experiments across multiple tasks demonstrate that FedMomentum consistently out-performs prior state-of-the-art methods in conver-gence speed and final accuracy. 
+
+> 1
+
+Shanghai Jiao Tong University 2Queen’s University Belfast 
+
+> 3
+
+Stevens Institute of Technology 4Purdue University 5Rice Univer-sity. Correspondence to: Tao Song <songt333@sjtu.edu.cn >.
+
+Preprint. March 10, 2026. 
+
+# 1. Introduction 
+
+Pre-trained large language models (LLMs) have demon-strated remarkable generalization to diverse tasks (Touvron et al., 2023; Achiam et al., 2023; Guo et al., 2025), and their adaptability enables strong performance on domain-specific tasks through task-specific fine-tuning (Brown et al., 2020; Chung et al., 2024; Schmirler et al., 2024; Yuan et al., 2024). However, high-quality public datasets are projected to be-come increasingly scarce in the near future (Ye et al., 2024). This scarcity is particularly severe in privacy-sensitive do-mains such as healthcare (Silva et al., 2019; Courtiol et al., 2019; Oldenhof et al., 2023) and finance (Liu et al., 2021; Lin et al., 2022), where data sharing is highly constrained due to legal and ethical concerns (Madiega, 2021). By exchanging only model parameters while keeping the data locally, federated fine-tuning inherits the privacy-preserving properties of federated learning (FL) and emerges as a promising solution for distributed LLM fine-tuning (Qin et al., 2024; Yu et al., 2023; Zhang et al., 2023b). However, full fine-tuning is computing- and memory-intensive and incurs significant communication de-lays in FL settings. Low-rank adaptation (LoRA) (Hu et al., 2022) offers a much more lightweight and communication-efficient alternative, and a growing number of recent studies have investigated its application in FL. Existing LoRA-based federated fine-tuning methods face a fundamental dilemma: mitigating aggregation noise while preserving the structural expressiveness of the LoRA mod-ules. On the one hand, directly applying vanilla parameter averaging (McMahan et al., 2017; Zhang et al., 2024), i.e. ,performing separate aggregations for the upsampling ma-trix A and the downsampling matrix B, inherently violates the additivity of model updates. This is because the LoRA structure approximates model updates via a low-rank com-position, which is distorted when A and B are aggregated independently, resulting in noisy updates. On the other hand, methods that aim to eliminate aggregation noise often compromise the structural expressiveness of LoRA module. Since the value of the LoRA parameters directly determines the gradient direction (Meng et al., 2024), improper merging of LoRA-induced weight updates into the backbone (Wang et al., 2024; Singhal et al., 2025), or freezing partial LoRA 1
+
+> arXiv:2603.08014v1 [cs.LG] 9 Mar 2026 Preserving LoRA Training Momentum in Federated Fine-Tuning
+
+parameters (Sun et al., 2024; Chen et al., 2025) result in information loss within the LoRA space, which leads to both directional drift and diminished step sizes, disrupting the optimization trajectory. These limitations are largely overlooked in existing studies, yet they slow convergence and degrade model performance. We refer to this as loss of training momentum in federated fine-tuning. To address this issue, we propose to utilize matrix decompo-sition and dimensionality reduction to reconstruct the LoRA structure and maintain the main direction after noise-free ag-gregation. Specifically, the aggregation results of the clients’ 
+
+delta weights (the product of local LoRA downsampling and upsampling matrices) can be decomposed by singular value decomposition (SVD) (Golub & Kahan, 1965) into different components. The top-r major components , which capture the majority of the transformation energy, form a new LoRA representation with the same rank as previous rounds. By reconstructing the LoRA module from the major compo-nents , this approach preserves training momentum in LoRA structure, thereby maintaining consistent optimization di-rections across rounds. Furthermore, to maintain residual semantic information beyond the top-r major components and avoid aggregation noise, we select the residual subspace by an energy criterion: we choose the smallest residual rank 
+
+s such that the cumulative energy reaches a desirable thresh-old τ . The selected residual is merged into the backbone at every round. The other negligible components , which contribute marginally to the overall representation, can be safely discarded. Building upon our SVD-based aggregation scheme, we pro-pose a novel federated fine-tuning framework, FedMomen-tum . In the initialization stage, the server distributes a shared backbone model and initialized LoRA modules to all clients. Then, in each communication round, each client trains the LoRA module on its own dataset and uploads the updated weights to the server. The server performs SVD-based ag-gregation, reconstructing new LoRA modules from the prin-cipal components, preserving the residual components, and sending both to the clients. The clients merge residuals into the backbone, and load the updated LoRA modules to pre-pare for the next round. This process continues iteratively until convergence. To sum up, our main contributions can be summarized as follows: • We are the first to identify and analyze the phenomenon of loss of training momentum during federated fine-tuning caused by inappropriate LoRA updating, which leads to suboptimal convergence. • We propose a new algorithm, FedMomentum , that per-forms LoRA fine-tuning in a federated setting by up-dating the low-rank matrices using a momentum-aware SVD-based scheme. This design explicitly preserves update directions across rounds, alleviating the mo-mentum loss problem. • We conduct extensive experiments across multiple tasks, demonstrating that our approach consistently outperforms existing federated fine-tuning baselines in terms of convergence speed and final performance. 
+
+# 2. Background & Motivation 
+
+2.1. LoRA in Federated Fine-tuning 
+
+Parameter-efficient fine-tuning (PEFT) has emerged as an effective approach to reduce the computational and memory overhead associated with fine-tuning large-scale pre-trained models (Ding et al., 2023; Han et al., 2024). One of the most popular methods, low-rank adaptation (LoRA) (Hu et al., 2022) freezes the backbone parameters of the original model, denoted as W ∈ Rd×k, and injects a pair of low-rank trainable matrices A ∈ Rr×k and B ∈ Rd×r , where the LoRA rank r ≪ min( d, k ). The model is then updated as follows: 
+
+W ′ = W + ∆ W = W + BA, (1) where ∆W captures the task-specific adaptation. This de-sign enables a significant reduction in trainable parameters while preserving model performance. As LLMs are widely deployed across multiple clients with private, heterogeneous, and often sensitive data, federated fine-tuning becomes a crucial paradigm to enable collab-orative adaptation while preserving user privacy. Similar to centralized environments, LoRA-based federated fine-tuning methods have been proposed to address resource limitations, which allow each client to parameter-efficiently fine-tune and communicate only these low-rank matrices to the server. Although recent methods improve communication efficiency by transmitting only LoRA parameters, they often struggle to jointly maintain aggregation correctness and training momentum . Na ¨ıve aggregation strategies introduce bias or noise due to the non-commutative nature of low-rank matrix multiplication. Meanwhile, improper handling of LoRA structures can hinder the optimization process and result in 
+
+loss of training momentum .As summarized in Table 1, most existing approaches fail to address both challenges simultaneously. FedIT (Zhang et al., 2024) performs separate aggregations for the low-rank upsampling matrix A and the downsampling matrix 
+
+B. However, this leads to a mathematical bias because P Bi × P Ai̸ = P Bi × Ai, deviating from the global LoRA fine-tuning objective. FLoRA (Wang et al., 2024) attempts to achieve noise-free aggregation by stacking the 2Preserving LoRA Training Momentum in Federated Fine-Tuning                             
+
+> Table 1. Taxonomy of representative federated LoRA fine-tuning methods. Only our method satisfies all three desired properties: communication efficiency, noise-free aggregation, and training momentum preservation. Method Communication Efficiency Aggregation Correctness Training Momentum FedIT (Zhang et al., 2024) ✓✗✗
+> FLoRA (Wang et al., 2024) ✓✓✗
+> FFA-LoRA (Sun et al., 2024) ✓✓✗
+> RoLoRA (Chen et al., 2025) ✓✓✗
+> FedEx-LoRA (Singhal et al., 2025) ✗✓✗
+> Ours ✓✓✓Vanilla Reinitialization Freezing
+> Loss
+> 0.6 0.7 0.8 0.9 1.0 Iteration 050 100
+> (a) Centralized Fine-tuning FLoRA FFA-LoRA Ours
+> Loss
+> 0.7 0.8 0.9 1.0 Iteration 050 100 (b) Federated Fine-tuning
+> Figure 1. Training loss curves of fine-tuning LLaMA2-7B on MetaMathQA with 10 clients under different LoRA update strate-gies. We compare various centralized fine-tuning and federated fine-tuning strategies under a unified setting: LoRA rank = 16, batch size = 16, local update steps = 10, and 100 iterations. The same experimental settings are adopted in Figure 1.
+
+local LoRA matrices and updating the local models with 
+
+BA . Essentially, FLoRA directly merges all ∆Wi = BiAi
+
+back into the backbone and then reinitializes the low-rank matrices in subsequent rounds. This process disregards the previously learned low-rank structures and consequently slows down convergence. FFA-LoRA (Sun et al., 2024) ag-gregates and updates only the matrix B. While this approach avoids aggregation noise, freezing A restricts the represen-tation space of the update, thereby affecting its performance. RoLoRA (Chen et al., 2025) alternates between optimizing the matrix B and the matrix A across communication rounds. While this avoids aggregation noise, the alternating freezing mechanism introduces oscillatory update directions across rounds, preventing consistent accumulation of training mo-mentum within the LoRA subspace. FedEx-LoRA (Singhal et al., 2025) applies FedAvg to aggregate LoRA matrices and correct the noise by adding a residual term to the back-bone, but it fails to preserve the principal directions of the weight updates within the LoRA modules. Moreover, since FedEx-LoRA transmits full-size residual weights instead of low-rank updates, it lacks communication efficiency. 
+
+2.2. Analyzing Loss of Training Momentum 
+
+Some previous studies have shown that the convergence speed is slow at the beginning after initialization of LoRA matrices (Meng et al., 2024). This slow convergence is due to the small or even zero initialization of the low-rank matrices A and B:
+
+∂L ∂A = B⊤
+
+ ∂L ∂Y 
+
+
+
+X⊤, ∂L ∂B =
+
+ ∂L ∂Y 
+
+
+
+(AX )⊤, (2) where L is the loss function, X is the input feature of the layer, and Y = W X + BAX is the output. This issue is further exacerbated in federated fine-tuning with LoRA structural compromises for noise-free aggre-gation. FLoRA (Wang et al., 2024) employs a merge-and-reinitialization strategy, where the LoRA modules are merged into the backbone and reinitialized each round. This strategy leads to information loss in LoRA representations, which causes the subsequent optimization direction and step size to deviate from the prior trajectory, resulting in slower convergence and lower final performance. Similarly, freez-ing of the initialized upsampling matrix in FFA-LoRA (Sun et al., 2024) also affects training for the same reason. To validate the theoretical observation, we conduct a series of pilot experiments in centralized and federated fine-tuning settings. In the centralized settings, we investigate three strategies: 1) vanilla training of the low-rank matrices, 2) merging the low-rank matrices back into the backbone and then reinitializing them before subsequent updates, and 3) freezing of initialized upsampling matrix in LoRA module. Our results show that the reinitialization strategy and the freezing strategy not only slow the convergence at the out-set but also eventually reach a sub-optimal performance, as illustrated in Figure 1(a). These results highlight the im-portance of preserving the structural expressiveness of the LoRA module and minimizing information loss to maintain training momentum during fine-tuning. Figure 1(b) illustrates that FLoRA and FFA-LoRA exhibit slower convergence and degraded final performance due to the loss of training momentum . In contrast, since our 
+
+FedMomentum maintains the principal update direction, it effectively preserves the training momentum and achieves lower final training loss with faster convergence. Finally, to further support our analysis, we visualize the training loss landscape and the corresponding optimization trajectories in parameter space. The results, presented in Appendix B, reveal consistent geometric patterns and lead 3Preserving LoRA Training Momentum in Federated Fine-Tuning Communication Round Singular Value Index           
+
+> Elbow
+> Normalized Singular Value
+> 10 −910 −610 −3Residual rank rnr rnr 050 100
+> Figure 2. (Left ) Normalized singular value spectrum for the first LoRA module of the first training round. The elbow point indicates the effective rank rof the matrix. (Right ) Residual rank statistics across all LoRA modules throughout training rounds. The solid line represents the average residual rank, while the shaded area reflects the range between the maximum and minimum values.
+
+to the same conclusions regarding the continuity and direc-tionality of federated optimization. 
+
+2.3. Empirical Insights of SVD-based Aggregation 
+
+In federated fine-tuning, each client independently adapts the global model by computing local low-rank updates, 
+
+∆Wi = BiAi. This ensures that each client’s individual update has a rank of at most r. When these local updates 
+
+∆Wi are aggregated at the server to form a global update 
+
+∆W = Pni=1 ∆Wi, the theoretical upper bound on the rank of ∆W is nr .However, in Figure 2, our empirical investigations re-veal that despite this theoretical maximum, the effective rank (Roy & Vetterli, 2007) of the aggregated ∆W still remains low. Specifically, when ∆W is decomposed using SVD, the number of major components is approximately r.While residual components with a rank of s are observed, s
+
+tends to continuously decrease as the federated fine-tuning progresses through rounds. This phenomenon is a strong indicator of LoRA’s convergence, as the variation in client-specific updates diminishes in later stages of training. The limited number of the effective components across dif-ferent LoRA modules after aggregation underscores that the fundamental low-rank structure of LoRA is largely pre-served, making it feasible to reconstruct new LoRA mod-ules effectively while retaining critical information. This observation motivates our approach to utilize the major com-ponents for maintaining the representation capacity and the training momentum. 
+
+# 3. Methodology 
+
+3.1. Objectives & Challenges 
+
+Our goal is to enable effective and efficient federated fine-tuning of LLMs by maintaining the training momentum and avoiding noisy aggregation. Specifically, we aim to achieve noise-free aggregation of low-rank updates while preserving the continuity of local adaptation through a novel SVD-based parameter updating mechanism. However, the objectives are met with several non-trivial challenges: 
+
+Inherent dilemma between noise-free aggregation and continuous adaptation : As demonstrated in previous work, lossless merging of low-rank updates often disrupts the continuity of training ( e.g. , due to reinitialization in LoRA), while methods that avoid reinitialization typically suffer from noisy or biased aggregation. 
+
+Information loss induced by truncated SVD : To maintain low-rank structures compatible with LoRA, retaining only the top-r singular components of the aggregated update dis-cards the residual subspace, resulting in noisy aggregation that may undermine model representation capacity. 
+
+Gradient imbalance due to the singular value distribu-tion : When incorporating SVD into the aggregation pro-cess, the highly skewed magnitude of singular values can introduce anisotropy in the update directions, potentially af-fecting convergence stability and optimization consistency. 
+
+Computational overhead of SVD : Performing exact sin-gular value decomposition (SVD) on large-scale model up-dates can be prohibitively expensive, especially in federated settings where communication and computation are con-strained. 
+
+3.2. SVD-based LoRA Aggregation 
+
+To address these challenges, we propose an SVD-based LoRA aggregation algorithm that enables the structured, noise-free, and efficient aggregation of low-rank updates. Given local updates ∆Wi = BiAi from all n clients, we first aggregate them directly: 
+
+∆W = X ∆Wi = X BiAi. (3) This aggregation respects the update additivity and avoids introducing noise through the separate averaging of Ai ∈
+
+Rr×k and Bi ∈ Rd×r . To continue training with low-rank structures, we decompose the aggregated high-dimensional 
+
+∆W into a low-rank approximation using truncated SVD, which allows us to reconstruct compatible LoRA matrices. Without loss of generality, we assume k = min( d, k ) and formulate the decomposition as: 
+
+∆W SVD 
+
+=⇒ U ΣV ⊤ =
+
+> k
+
+X
+
+> i=1
+
+σiuiv⊤ 
+
+> i
+
+, (4) where U = [ u1, . . . , u d] ∈ Rd×d, V = [ v1, . . . , v k] ∈
+
+Rk×k, and Σ = diag( σ1, . . . , σ k) ∈ Rd×k.Performing exact SVD on the aggregated update ∆W ∈
+
+Rd×k incurs a computational complexity of O(d3), which is 4Preserving LoRA Training Momentum in Federated Fine-Tuning ××⇒⇒ ×× ⇒⇒
+
+ΔWΔW =
+
+UrUr UsUs
+
+V⊤
+
+> r
+
+V⊤
+
+> r
+
+V⊤
+
+> s
+
+V⊤
+
+> s
+
+ΣrΣr
+
+ΣsΣs
+
+UU ×× ××ΣΣ V⊤
+
+V⊤
+
+B = UrΣ1/2
+
+> r
+
+B = UrΣ1/2
+
+> r
+
+A = Σ1/2 
+
+> r
+
+V⊤
+
+> r
+
+A = Σ1/2 
+
+> r
+
+V⊤
+
+> r
+
+UsΣsV⊤
+
+> s
+
+UsΣsV⊤
+
+> s
+
+≈ LoRA modules Residual term +
+
+BB
+
+AA
+
+ΔW = ΣΔWiΔW = ΣΔWi   
+
+> Major Component Residual Component Negligible Component
+> Figure 3. Overview of the SVD-based aggregation process.
+
+prohibitively expensive for large-scale models. To acceler-ate the decomposition of the aggregated update ∆W while maintaining comparable approximation quality, we adopt a customized randomized SVD (Halko et al., 2011) adapted to our federated low-rank setting. We first generate a ran-dom Gaussian matrix Ω ∈ Rk×c and compute Y = ∆ W Ω,where c is the target sketch size that controls the accuracy of the approximation. Based on the structure of our aggregated update ∆W = Pni=1 BiAi, where each BiAi is rank-r, the rank of ∆W is at most nr . Therefore, setting c = nr suf-fices to capture all significant components of ∆W without loss of information. We then obtain an approximate orthonormal basis Q ∈ Rd×c
+
+by performing QR decomposition (Francis, 1961) on Y , i.e. ,
+
+Y = QR .Next, we project ∆W onto the low-dimensional subspace spanned by Q and perform standard SVD on the resulting smaller matrix: 
+
+P = Q⊤∆W = eU ΣV ⊤. (5) Finally, we approximate the left singular vectors of ∆W via 
+
+U = Q eU .We truncate the decomposition to the top-r singular compo-nents to obtain a rank-r approximation: 
+
+B = Ur Σ1/2 
+
+> r
+
+, A = Σ 1/2 
+
+> r
+
+V ⊤ 
+
+> r
+
+, (6) where Ur = [ u1, . . . , u r ], Vr = [ v1, . . . , v r ], and Σr =diag( σ1, . . . , σ r ). This construction ensures that the prod-uct BA closely approximates the aggregated update ∆W ,enabling high-fidelity reconstruction of the low-rank ma-trices for subsequent training rounds. By minimizing in-formation loss within the LoRA module, it preserves struc-tural expressiveness and helps maintain training momentum. Moreover, rather than using an unbalanced reconstruction (e.g. , B = Ur Σr , A = V ⊤ 
+
+> r
+
+), each singular value is evenly split between B and A via Σ1/2 
+
+> r
+
+. The balanced allocation of singular values mitigates gradient imbalance in the follow-ing training iteration, which arises from the skewed singular spectrum and leads to instability or slow convergence in federated training. The lower-energy components, associated with the residual subspace, are defined as: 
+
+Wresidual = UsΣsV ⊤ 
+
+> s
+
+, (7) where s denotes the number of residual components, 
+
+Us = [ ur+1 , . . . , u r+s], Vs = [ vr+1 , . . . , v r+s], and Σs =diag( σr+1 , . . . , σ r+s). The number of residual components 
+
+s is selected to ensure that the cumulative energy of the retained components (both major and residual) reaches a predefined threshold, such as 99% of the total energy. The residual term can be tracked for robustness or error correc-tion and merged into each client’s local backbone to mitigate noise during LoRA reconstruction. The negligible components, which have minimal impact on the parameter space, can be discarded to reduce unnecessary computation and storage overhead. 
+
+3.3. FedMomentum : SVD-based Federated Fine-tuning 
+
+By employing the SVD-based aggregation algorithm, we propose FedMomentum , a four-stage federated fine-tuning framework that preserves LoRA training momentum with-out aggregation noise. 
+
+Stage 1. Initialization of LoRA. The server initializes the LoRA modules with a predefined rank and initialization strategy, and then distributes the backbone W and the ini-tialized LoRA modules to each client. As our focus is on aggregation rather than initialization, we adopt a default setting with a fixed rank and randomly initialized LoRA modules. 
+
+Stage 2. Local Fine-tuning. Each client trains the LoRA modules on its own datasets for l local steps. The updated weights of LoRA modules are then sent back to the server. 
+
+Stage 3. Aggregation and Reconstruction. As the last section describes, upon receiving the LoRA modules from all clients, the server aggregates the local model updates without noise and utilizes randomized SVD to decompose the global model update into major components , residual components , and negligible components . The server recon-structs new LoRA modules for the next iteration from the 
+
+major components . It then distributes the reconstructed LoRA modules and the corresponding residual components 
+
+to all clients. 5Preserving LoRA Training Momentum in Federated Fine-Tuning 
+
+Stage 4. Update Local Models. Each client merges the residual components into the backbone and loads the new LoRA modules for the new round of training. The federated fine-tuning process repeats stage 2 to stage 4 until convergence. 
+
+# 4. Experiments 
+
+In this section, we present comprehensive experiments to evaluate the effectiveness and efficiency of FedMomentum .We benchmark its performance against existing federated fine-tuning approaches across diverse LLM tasks, including mathematical reasoning, code generation, and common-sense reasoning. We also conduct detailed ablation studies to assess the contribution of each core component in our framework. Owing to space limitations, additional details and results are included in the supplementary materials. 
+
+4.1. Experiment Settings Datasets. We evaluate FedMomentum across ten tasks, span-ning three domains: 1. Math Reasoning. We employ MetaMathQA dataset (Yu et al., 2024) to fine-tune the base model for math reasoning, and evaluate on the test sets of GSM-8K (Cobbe et al., 2021) and MATH (Hendrycks et al., 2021). 2. Commonsense Reasoning. We fine-tune the base model on Commonsense170K dataset (Hu et al., 2023) and evaluate on 8 commonsense datasets, including BoolQ (Clark et al., 2019), PIQA (Bisk et al., 2020), SIQA (Sap et al., 2019), HellaSwag (Zellers et al., 2019), WinoGrande (Sakaguchi et al., 2020), ARC-e, ARC-c (Clark et al., 2018), and OBQA (Mihaylov et al., 2018). 3. Code Generation. We employ Code-Feedback dataset (Zheng et al., 2024) to fine-tune the base model for code generation, and evaluate by using the Hu-manEval (Chen et al., 2021) and MBPP (Austin et al., 2021) datasets. For each task, we sample 10 local datasets at random fol-lowing the non-IID setting as (Zhang et al., 2024), which uses Dirichlet distribution sampling ( Dk ∼ Dir (β)) and 
+
+β = 0 .5.
+
+Baseline. We compare FedMomentum with vanilla Fe-dAvg (FedIT) (Zhang et al., 2024) and three state-of-the-art baselines: FLoRA (Wang et al., 2024), FFA-LoRA (Sun et al., 2024), RoLoRA (Chen et al., 2025), and FedEx-LoRA (Singhal et al., 2025), to demonstrate its effectiveness and efficiency.                                                      
+
+> Table 2. Experiment results on math reasoning. The highest accu-racy for each task is highlighted in bold, and the second-best result is underlined. Avg indicates the average result of corresponding metrics. Method GSM8K MATH Avg. Pre-trained 13 .87 ±0.95 2.50 ±0.22 8.19 FedIT 10 .72 ±0.85 3.84 ±0.27 7.28 FLoRA 29 .06 ±1.25 3.86 ±0.27 16.53 FFA-LoRA 25 .40 ±1.20 4.18 ±0.28 14.91 RoLoRA 27 .29 ±1.23 4.42 ±0.29 15.86 FedEx-LoRA 26 .18 ±1.14 3.97 ±0.26 9.15
+> FedMomentum 34.22 ±1.31 4.44 ±0.29 19.99
+
+Setup. We utilize LLaMA2-7B (Touvron et al., 2023) for all tasks. Following (Li et al., 2025; Wang et al., 2025), we set the LoRA rank r = 32 and the scaling factor α = 64 .We use the default AdamW optimizer with a learning rate 
+
+lr = 3 × 10 −4.We conduct federated fine-tuning with 10 clients. In each communication round, every client performs a local train-ing consisting of 10 steps with a batch size of b = 16 . To account for the varying fine-tuning difficulty across tasks, as reflected by different convergence speeds of training loss, we adopt task-specific communication round settings. Specifically, we run 50 rounds for math reasoning, 20 rounds for commonsense reasoning, and 30 rounds for code gen-eration, ensuring sufficient convergence of training loss for each task. 
+
+4.2. Experiment Results Math Reasoning Task. As shown in Table 2, our pro-posed method FedMomentum achieves the best performance across all metrics in the math reasoning task, exceeding existing baselines in both the average score and individual accuracy. Particularly, in GSM8K, FedMomentum achieves 34.22% accuracy, representing a relative improvement of 18.0% over the second-best method FLoRA (29.06%), and a remarkable 219.3% improvement over FedIT (10.72%). Notably, FedIT performs even worse than the pre-trained model on GSM8K. This is due to the non-IID nature of client data, which amplifies aggregation noise under its sep-arate A/B aggregation scheme. In contrast, FedMomentum 
+
+aggregates BiAi without noise and uses SVD to reconstruct new LoRA modules, which preserves training momentum and contributes to its superior convergence and accuracy. Figure 4 shows that FedMomentum demonstrates an early and pronounced advantage in convergence speed, rapidly outperforming all baselines in training loss and maintaining this lead consistently across communication rounds. To better understand this convergence behavior, we analyze the singular value spectrum and the number of major and residual components obtained by decomposing the aggre-6Preserving LoRA Training Momentum in Federated Fine-Tuning 
+
+Table 3. Experiment results on eight commonsense reasoning tasks. Method BoolQ PIQA SIQA HellaSwag WinoGrande ARC-e ARC-c OBQA Avg. Pre-trained 80.34 79.54 50.72 78.37 73.72 79.76 49.32 45.20 67.12 FedIT 82.10 78.35 53.23 76.63 74.30 80.52 50.64 47.70 67.93 FLoRA 76.53 77.15 48.72 73.54 70.72 76.64 43.43 42.10 63.60 FFA-LoRA 82.88 78.67 51.85 76.30 74.27 81.00 49.79 45.20 67.49 RoLoRA 81.89 77.15 48.56 76.12 69.61 78.87 50.68 42.20 65.64 FedEx-LoRA 80.02 77.40 51.90 72.30 72.57 79.55 47.99 47.90 66.20 
+
+FedMomentum 82.77 79.03 54.48 77.54 75.81 82.16 51.37 49.00 69.02 FedIT FLoRA FFA-LoRA RoLoRA FedEx-LoRA      
+
+> FedMomentum
+> Training Loss
+> 0.2 0.3 0.4 Communication Round 010 20 30 40 50
+
+Figure 4. Training loss for math reasoning task. Singular Value     
+
+> 0
+> 0.05
+> 0.10
+> 0.15
+> Communication Round
+> 020 40
+> # of Components
+> Major
+> Residual
+> r
+> nr
+> Communication Round
+> 020 40
+
+Figure 5. Statistical analysis for the aggregated updates of FedMo-mentum .
+
+gated updates in FedMomentum . Figure 5 shows that, as training progresses, the number of major components con-verges to r and the number of residual components decreases to 0, suggesting that client updates are increasingly aligned within a lower-dimensional subspace. The moderate gap among the major singular values ensures that no direction dominates the low-rank reconstruction, helping to prevent energy collapse or imbalance in the reconstructed LoRA modules. As training progresses, this gap further narrows, suggesting increasingly balanced update magnitudes along the principal directions. These trends collectively indicate that client updates are aligning within a compact and stable subspace, facilitating convergence toward a shared global model. 
+
+Commonsense Reasoning Task. To further validate the generalization ability of FedMomentum , we conduct experi-ments on more challenging commonsense reasoning tasks, evaluated across eight standard benchmarks. As shown in Table 3, FedMomentum achieves the highest accuracy on 5 out of 8 datasets and ranks second on the remaining 3, with only marginal gaps from the top-performing methods. 
+
+Table 4. Experiment results on code generation. Method HumanEval MBPP Avg. Pre-trained 12.19 23.40 17.80 FedIT 15.24 24.00 19.62 FLoRA 13.41 23.00 18.21 FFA-LoRA 15.85 24.80 20.33 RoLoRA 15.24 23.40 19.32 FedEx-LoRA 16.46 24.00 20.23 
+
+FedMomentum 17.07 25.60 21.34 
+
+Table 5. Experiment results of ablation study on math reasoning tasks. Method GSM8K MATH Avg. Pre-trained 13 .87 ± 0.95 2.50 ± 0.22 8.19 
+
+FedMomentum 34.22 ± 1.31 4.44 ± 0.29 19.99 
+
+w/o balance 21 .61 ± 1.11 3.64 ± 0.29 12.63 
+
+w/o residual 32 .53 ± 1.29 3.50 ± 0.28 18.02 
+
+Moreover, FedMomentum achieves the highest average ac-curacy of 69.02%, outperforming the best baseline (FedIT, 67.93%) by 1.09 points, further demonstrating the robust-ness and generalizability of our approach across diverse commonsense reasoning benchmarks. 
+
+Code Generation Task. Table 4 shows that our method Fed-Momentum achieves the highest score on both HumanEval (17.07%) and MBPP (25.60%), which leads to a 4.96% rel-ative improvement over the second-best method in average code generation accuracy. FedIT and FLoRA struggle on both datasets with low accuracy. FedEx-LoRA, RoLoRA, and FFA-LoRA show competitive results on one task but fail to generalize well across tasks. In contrast, FedMomentum 
+
+retains the structural expressiveness of LoRA, resulting in better model quality. 
+
+4.3. Ablation Study 
+
+To validate the effectiveness of key components in our method, we conduct ablation studies on the MetaMathQA benchmark with LLaMA2-7B and report the results in Ta-ble 5. Specifically, we remove the balanced allocation of singular values (denoted as w/o balance) and the residual term (denoted as w/o residual) to isolate their individual contributions. 7Preserving LoRA Training Momentum in Federated Fine-Tuning                                                                   
+
+> Table 6. Results of ablation study on commonsense reasoning tasks. Method BoolQ PIQA SIQA HellaSwag WinoGrande ARC-e ARC-c OBQA Avg. Pre-trained 80.34 79.54 50.72 78.37 73.72 79.76 49.32 45.20 67.12
+> FedMomentum 82.77 79.03 54.48 77.54 75.81 82.16 51.37 49.00 69.02
+> w/o balance 82.13 78.56 53.15 76.54 73.88 80.37 49.74 46.90 67.67
+> w/o residual 81.71 77.91 52.64 76.28 74.78 80.93 49.36 48.40 67.75
+> Table 7. Results of ablation study on code generation. Method HumanEval MBPP Avg. Pre-trained 12.19 23.40 17.80
+> FedMomentum 17.07 25.60 21.34
+> w/o balance 14.63 23.80 19.22
+> w/o residual 16.46 24.80 20.63
+
+Without balancing the singular values between A and B (i.e. ,using unbalanced reconstruction B = Ur Σr , A = V ⊤ 
+
+> r
+
+), the average accuracy is reduced from 19.99% to 12.63%, with a notable degradation of 12.61 percentage points on GSM8K. This validates our hypothesis that gradient imbalance aris-ing from the skewed singular spectrum adversely affects convergence. The balanced decomposition ( i.e. , distributing √Σ to both A and B) mitigates this issue, ensuring better gradient flow and training stability during local updates. Removing the residual component leads to a performance drop, reducing the average accuracy from 19.99% to 18.02%. The observed performance drop confirms that the residual term, though diminishing over training (as shown in Fig-ure 5), captures update directions not recoverable by fixed-rank approximation alone. It thus provides a complementary signal that enhances the expressiveness of global updates, especially in the early stages when client updates span a higher-dimensional space. On the commonsense reasoning, Table 6 shows that re-moving the balanced allocation of singular values ( w/o bal-ance) leads to an average performance drop from 69.02% to 67.67%, while removing the residual component ( w/o 
+
+residual) results in a similar reduction to 67.75%. On the code generation, Table 7 shows that ablating the balanced allocation of singular values ( w/o balance) reduces the average pass @1 accuracy from 21.34% to 19.22%, while removing the residual term ( w/o residual) leads to a decline to 20.63%. These results suggest that both components contribute to stable improvements across diverse tasks. 
+
+# 5. Related Work 
+
+Parameter-efficient fine-tuning (PEFT) techniques such as Low-Rank Adaptation (LoRA) have been adapted to fed-erated learning (FL), aiming to reduce communication and computational costs. FedIT (Zhang et al., 2024) aggre-gates LoRA matrices A and B separately, but such indepen-dent averaging introduces aggregation noise, deviating from the true LoRA objective. FLoRA (Wang et al., 2024) ad-dresses this by merging the local low-rank updates directly into the backbone model, achieving noise-free aggregation. However, its round-wise reinitialization of LoRA modules discards learned structures and slows convergence. FFA-LoRA (Sun et al., 2024) freezes the A matrix and only updates and aggregates B, reducing noise but severely limit-ing the expressive capacity of local updates. RoLoRA (Chen et al., 2025) uses round-wise alternating updates of the LoRA factors A and B, which ensures noise-free aggrega-tion but can induce zig-zag optimization dynamics that hin-der training momentum accumulation across rounds. FedEx-LoRA (Singhal et al., 2025) adds a residual term to correct aggregation noise, but the new LoRA modules may still diverge from the original updating direction, weakening training dynamics. In contrast, our method retains both structural fidelity and training momentum by leveraging an SVD-based aggregation mechanism that reconstructs LoRA matrices from aggregated updates. 
+
+Computation-Efficient Federated Tuning. Another line of work focuses on improving the computational efficiency of federated fine-tuning. FwdLLM (Xu et al., 2024) pro-poses a forward-only tuning paradigm that bypasses back-propagation and saves both memory and computation. FedPFT (Peng et al., 2024) introduces progressive fine-tuning with early exit strategies to accelerate convergence. FedBiOT (Wu et al., 2024) exploits bidirectional knowledge transfer and lightweight optimization to reduce client bur-den. While these approaches improve efficiency, they do not specifically address the structural preservation of LoRA updates or aggregation consistency. 
+
+Resource-Aware Federated Adaptation. To cope with de-vice heterogeneity in FL, recent methods propose adaptive or flexible LoRA mechanisms. FlexLoRA (Bai et al., 2024) dynamically adjusts the LoRA rank per client, enabling fair and efficient training across heterogeneous devices. HET-LoRA (Cho et al., 2024) supports different LoRA struc-tures across clients while coordinating training via weighted aggregation. AFLoRA (Zhou et al., 2025) uses an adap-tive LoRA controller to select appropriate modules based on local resource budgets. FedRA (Su et al., 2024) incor-porates runtime profiling and resource-awareness into the aggregation process. These methods primarily focus on heterogeneous system conditions, while our approach em-phasizes aggregation correctness and training momentum under standard federated setups. 8Preserving LoRA Training Momentum in Federated Fine-Tuning 
+
+# 6. Conclusion 
+
+In this paper, we identify a previously overlooked challenge in federated fine-tuning: the loss of training momentum due to aggregation noise and loss of structural expressiveness of LoRA. This phenomenon severely hinders the convergence and model performance in federated settings. We propose 
+
+FedMomentum , a novel SVD-based aggregation algorithm that enables momentum-aware LoRA updating. By pre-serving the global update direction through low-rank matrix aggregation and decomposition, our method effectively mit-igates the momentum loss issue. Extensive experiments on diverse tasks and models demonstrate that FedMomentum 
+
+consistently achieves faster convergence and better accuracy compared to existing baselines. 
+
+# References 
+
+Achiam, J., Adler, S., Agarwal, S., Ahmad, L., Akkaya, I., Aleman, F. L., Almeida, D., Altenschmidt, J., Altman, S., Anadkat, S., et al. GPT-4 Technical Report. arXiv preprint arXiv:2303.08774 , 2023. Austin, J., Odena, A., Nye, M., Bosma, M., Michalewski, H., Dohan, D., Jiang, E., Cai, C., Terry, M., Le, Q., et al. Program synthesis with large language models. arXiv preprint arXiv:2108.07732 , 2021. Bai, J., Chen, D., Qian, B., Yao, L., and Li, Y. Federated Fine-tuning of Large Language Models under Heteroge-neous Tasks and Client Resources. In NeurIPS , 2024. Bisk, Y., Zellers, R., Gao, J., Choi, Y., et al. PIQA: reasoning about physical commonsense in natural language. In 
+
+AAAI , 2020. Brown, T., Mann, B., Ryder, N., Subbiah, M., Kaplan, J. D., Dhariwal, P., Neelakantan, A., Shyam, P., Sastry, G., Askell, A., et al. Language Models are Few-Shot Learners. In NeurIPS , 2020. Cao, Y. and Song, Z. Sorsa: Singular values and orthonor-mal regularized singular vectors adaptation of large lan-guage models. arXiv preprint arXiv:2409.00055 , 2024. Chen, M., Tworek, J., Jun, H., Yuan, Q., Pinto, H. P. D. O., Kaplan, J., Edwards, H., Burda, Y., Joseph, N., Brockman, G., et al. Evaluating Large Language Models Trained on Code. arXiv preprint arXiv:2107.03374 , 2021. Chen, S., Guo, Y., Ju, Y., Dalal, H., Zhu, Z., and Khisti, A. J. Robust Federated Finetuning of LLMs via Alternating Optimization of LoRA. In NeurIPS , 2025. Cho, Y. J., Liu, L., Xu, Z., Fahrezi, A., and Joshi, G. Hetero-geneous LoRA for Federated Fine-Tuning of On-Device Foundation Models. In EMNLP , 2024. Chung, H. W., Hou, L., Longpre, S., Zoph, B., Tay, Y., Fe-dus, W., Li, Y., Wang, X., Dehghani, M., Brahma, S., et al. Scaling Instruction-Finetuned Language Models. Journal of Machine Learning Research , 25(70):1–53, 2024. Clark, C., Lee, K., Chang, M., Kwiatkowski, T., Collins, M., and Toutanova, K. Boolq: Exploring the surprising difficulty of natural yes/no questions. In NAACL-HLT ,2019. Clark, P., Cowhey, I., Etzioni, O., Khot, T., Sabharwal, A., Schoenick, C., and Tafjord, O. Think you have Solved Question Answering? Try ARC, the AI2 Reasoning Chal-lenge. arXiv preprint arXiv:1803.05457 , 2018. Cobbe, K., Kosaraju, V., Bavarian, M., Chen, M., Jun, H., Kaiser, L., Plappert, M., Tworek, J., Hilton, J., Nakano, R., et al. Training Verifiers to Solve Math Word Problems. 
+
+arXiv preprint arXiv:2110.14168 , 2021. Courtiol, P., Maussion, C., Moarii, M., Pronier, E., Pilcer, S., Sefta, M., Manceron, P., Toldo, S., Zaslavskiy, M., Le Stang, N., et al. Deep Learning-Based Classification of Mesothelioma Improves Prediction of Patient Outcome. 
+
+Nature Medicine , 25(10):1519–1525, 2019. Ding, N., Qin, Y., Yang, G., Wei, F., Yang, Z., Su, Y., Hu, S., Chen, Y., Chan, C., Chen, W., Yi, J., Zhao, W., Wang, X., Liu, Z., Zheng, H., Chen, J., Liu, Y., Tang, J., Li, J., and Sun, M. Parameter-Efficient Fine-Tuning of Large-Scale Pre-Trained Language Models. Nat. Mac. Intell. , 5(3): 220–235, 2023. doi: 10.1038/S42256-023-00626-4. Fan, C., Lu, Z., Liu, S., Gu, C., Qu, X., Wei, W., and Cheng, Y. Make LoRA Great Again: Boosting LoRA with Adaptive Singular Values and Mixture-of-Experts Optimization Alignment. In ICML , 2025. Francis, J. G. The qr transformation a unitary analogue to the lr transformation—part 1. The Computer Journal , 4 (3):265–271, 1961. Golub, G. and Kahan, W. Calculating the Singular Values and Pseudo-Inverse of a Matrix. Journal of the Society for Industrial and Applied Mathematics, Series B: Numerical Analysis , 2(2):205–224, 1965. Guo, D., Yang, D., Zhang, H., Song, J., Zhang, R., Xu, R., Zhu, Q., Ma, S., Wang, P., Bi, X., et al. Deepseek-R1: Incentivizing Reasoning Capability in LLMs via Rein-forcement Learning. arXiv preprint arXiv:2501.12948 ,2025. Halko, N., Martinsson, P.-G., and Tropp, J. A. Finding Structure With Randomness: Probabilistic Algorithms for Constructing Approximate Matrix Decompositions. 
+
+SIAM review , 53(2):217–288, 2011. 9Preserving LoRA Training Momentum in Federated Fine-Tuning 
+
+Han, Z., Gao, C., Liu, J., Zhang, J., and Zhang, S. Q. Parameter-efficient fine-tuning for large models: A com-prehensive survey. Trans. Mach. Learn. Res. , 2024, 2024. Hendrycks, D., Burns, C., Kadavath, S., Arora, A., Basart, S., Tang, E., Song, D., and Steinhardt, J. Measuring Mathematical Problem Solving With the MATH Dataset. In NeurIPS , 2021. Hu, E. J., Shen, Y., Wallis, P., Allen-Zhu, Z., Li, Y., Wang, S., Wang, L., Chen, W., et al. LoRA: Low-Rank Adapta-tion of Large Language Models. ICLR , 2022. Hu, Z., Wang, L., Lan, Y., Xu, W., Lim, E., Bing, L., Xu, X., Poria, S., and Lee, R. K. LLM-Adapters: An Adapter Family for Parameter-Efficient Fine-Tuning of Large Lan-guage Models. In EMNLP , 2023. Jhunjhunwala, D., Raje, A., Ganesh, M. R., Mummadi, C. K., Dong, C., Zhou, J., Lin, W.-Y., Joshi, G., and Li, Z. Fedrpca: Enhancing federated lora aggregation using robust pca. arXiv preprint arXiv:2506.01194 , 2025. Jiang, S., Liao, Y., Zhang, Y., Wang, Y., and Wang, Y. Fine-tuning with reserved majority for noise reduction. In 
+
+ICLR , 2025. Lee, S., Park, S., Lee, D. B., Wagner, D., Seong, H., Bocklet, T., Lee, J., and Hwang, S. J. FedSVD: Adaptive Orthogo-nalization for Private Federated Learning with LoRA. In 
+
+NeurIPS , 2025. Levesque, H. J., Davis, E., and Morgenstern, L. The wino-grad schema challenge. In Proceedings of the Thirteenth International Conference on Principles of Knowledge Representation and Reasoning , 2012. Li, B., Zhang, L., Mokhtari, A., and He, N. On the crucial role of initialization for matrix factorization. In ICLR ,2025. Lin, B. Y., He, C., Ze, Z., Wang, H., Hua, Y., Dupuy, C., Gupta, R., Soltanolkotabi, M., Ren, X., and Avestimehr, S. FedNLP: Benchmarking Federated Learning Methods for Natural Language Processing Tasks. In NAACL , 2022. Liu, J., Liao, Y., Xu, H., and Xu, Y. Resource-efficient feder-ated fine-tuning large language models for heterogeneous data. arXiv preprint arXiv:2503.21213 , 2025. Liu, Y., Fan, T., Chen, T., Xu, Q., and Yang, Q. FATE: An Industrial Grade Platform for Collaborative Learn-ing With Data Protection. Journal of Machine Learning Research , 2021. Madiega, T. Artificial Intelligence Act. European Parlia-ment: European Parliamentary Research Service , 2021. McMahan, B., Moore, E., Ramage, D., Hampson, S., and y Arcas, B. A. Communication-Efficient Learning of Deep Networks From Decentralized Data. In AISTATS ,2017. Meng, F., Wang, Z., and Zhang, M. PiSSA: Principal Sin-gular Values and Singular Vectors Adaptation of Large Language Models. In NeurIPS , 2024. Mihaylov, T., Clark, P., Khot, T., and Sabharwal, A. Can a suit of armor conduct electricity? A new dataset for open book question answering. In EMNLP , 2018. Oldenhof, M., ´Acs, G., Pej ´o, B., Schuffenhauer, A., Holway, N., Sturm, N., Dieckmann, A., Fortmeier, O., Boniface, E., Mayer, C., et al. Industry-Scale Orchestrated Feder-ated Learning for Drug Discovery. In AAAI , 2023. Peng, Z., Fan, X., Chen, Y., Wang, Z., Pan, S., Wen, C., Zhang, R., and Wang, C. FedPFT: Federated Proxy Fine-Tuning of Foundation Models. In IJCAI , 2024. Qin, Z., Chen, D., Qian, B., Ding, B., Li, Y., and Deng, S. Federated Full-Parameter Tuning of Billion-Sized Language Models with Communication Cost under 18 Kilobytes. In ICML , 2024. Roy, O. and Vetterli, M. The Effective Rank: A Measure of Effective Dimensionality. In 2007 15th European signal processing conference , 2007. Sakaguchi, K., Bras, R. L., Bhagavatula, C., and Choi, Y. Winogrande: An adversarial winograd schema challenge at scale. In AAAI , 2020. Sap, M., Rashkin, H., Chen, D., Bras, R. L., and Choi, Y. SocialIQA: Commonsense Reasoning about Social Interactions. In EMNLP-IJCNLP , 2019. Schmirler, R., Heinzinger, M., and Rost, B. Fine-Tuning Protein Language Models Boosts Predictions Across Di-verse Tasks. Nature Communications , 15(1):7407, 2024. Silva, S., Gutman, B. A., Romero, E., Thompson, P. M., Altmann, A., and Lorenzi, M. Federated Learning in Distributed Medical Databases: Meta-analysis of Large-Scale Subcortical Brain Data. In IEEE International Symposium on Biomedical Imaging (ISBI) , 2019. Singhal, R., Ponkshe, K., and Vepakomma, P. FedEx-LoRA: Exact Aggregation for Federated and Efficient Fine-Tuning of Large Language Models. In ACL , 2025. Su, S., Li, B., and Xue, X. FedRA: A Random Allocation Strategy for Federated Tuning To Unleash the Power of Heterogeneous Clients. In ECCV , 2024. Sun, Y., Li, Z., Li, Y., and Ding, B. Improving LoRA in Privacy-preserving Federated Learning. In ICLR , 2024. 10 Preserving LoRA Training Momentum in Federated Fine-Tuning 
+
+Touvron, H., Martin, L., Stone, K., Albert, P., Almahairi, A., Babaei, Y., Bashlykov, N., Batra, S., Bhargava, P., Bhosale, S., et al. Llama 2: Open Foundation and Fine-Tuned Chat Models. arXiv preprint arXiv:2307.09288 ,2023. Wang, H., Li, Y., Wang, S., Chen, G., and Chen, Y. Milora: Harnessing minor singular components for parameter-efficient LLM finetuning. In NAACL , 2025. Wang, Z., Shen, Z., He, Y., Sun, G., Wang, H., Lyu, L., and Li, A. FLoRA: Federated Fine-Tuning Large Language Models With Heterogeneous Low-Rank Adaptations. In 
+
+NeurIPS , 2024. Wu, F., Li, Z., Li, Y., Ding, B., and Gao, J. FedBiot: LLM Local Fine-Tuning In Federated Learning Without Full Model. In SIGKDD , 2024. Wu, F., Hu, J., Min, G., and Wang, S. Adaptive rank alloca-tion for federated parameter-efficient fine-tuning of lan-guage models. arXiv preprint arXiv:2501.14406 , 2025. Xu, M., Cai, D., Wu, Y., Li, X., and Wang, S. FwdLLM: Ef-ficient Federated Finetuning of Large Language Models With Perturbed Inferences. In USENIX ATC , 2024. Yan, Y., Tang, S., Shu, Y., Shi, Z., and Yang, Q. FeDeRA: Efficient Fine-tuning of Language Models in Federated Learning Leveraging Weight Decomposition. In AAAI 2026 Workshop on ML4Wireless , 2026. Yang, Y., Li, X., Zhou, Z., Song, S. L., Wu, J., Nie, L., and Ghanem, B. CorDA: Context-Oriented Decomposition Adaptation of Large Language Models for Task-Aware Parameter-Efficient Fine-tuning. In NeurIPS , 2024. Ye, R., Wang, W., Chai, J., Li, D., Li, Z., Xu, Y., Du, Y., Wang, Y., and Chen, S. OpenFedLLM: Training Large Language Models on Decentralized Private Data via Federated Learning. In SIGKDD , 2024. Yu, L., Jiang, W., Shi, H., Yu, J., Liu, Z., Zhang, Y., Kwok, J. T., Li, Z., Weller, A., and Liu, W. MetaMath: Bootstrap Your Own Mathematical Questions for Large Language Models. In ICLR , 2024. Yu, S., Mu ˜noz, J. P., and Jannesari, A. Federated Foundation Models: Privacy-Preserving and Collaborative Learning for Large Models. In LREC-COLING , 2023. Yuan, J., Yang, C., Cai, D., Wang, S., Yuan, X., Zhang, Z., Li, X., Zhang, D., Mei, H., Jia, X., et al. Mobile Foundation Model as Firmware. In MobiCom , 2024. Zellers, R., Holtzman, A., Bisk, Y., Farhadi, A., and Choi, Y. Hellaswag: Can a machine really finish your sentence? In ACL , 2019. Zhang, J., Vahidian, S., Kuo, M., Li, C., Zhang, R., Yu, T., Wang, G., and Chen, Y. Towards Building the Fed-eratedGPT: Federated Instruction Tuning. In ICASSP ,2024. Zhang, Q., Chen, M., Bukharin, A., Karampatziakis, N., He, P., Cheng, Y., Chen, W., and Zhao, T. Adalora: Adaptive budget allocation for parameter-efficient fine-tuning. arXiv preprint arXiv:2303.10512 , 2023a. Zhang, Z., Yang, Y., Dai, Y., Wang, Q., Yu, Y., Qu, L., and Xu, Z. FedPETuning: When Federated Learning Meets the Parameter-Efficient Tuning Methods of Pre-Trained Language Models. In ACL , 2023b. Zheng, T., Zhang, G., Shen, T., Liu, X., Lin, B. Y., Fu, J., Chen, W., and Yue, X. OpenCodeInterpreter: Integrating Code Generation with Execution and Refinement. In ACL ,2024. Zhou, Y., Pang, X., and Wang, Z. AFLoRA: Adaptive Federated Fine-Tuning of Large Language Models with Resource-Aware Low-Rank Adaption. arXiv preprint arXiv:2505.24773 , 2025. 11 Preserving LoRA Training Momentum in Federated Fine-Tuning 
+
+# A. Additional Experiments and Setup Details 
+
+A.1. Datasets, Metrics, and Environments 
+
+A.1.1. D ATASET DETAILS .We fine-tune the model on a set of publicly available instruction datasets covering mathematical reasoning, commonsense reasoning, and code generation tasks. The details are as follows: • MetaMathQA (Yu et al., 2024): A large-scale math reasoning dataset of approximately 395k problems, constructed by augmenting the training datasets of GSM8K (Cobbe et al., 2021) and MATH (Hendrycks et al., 2021). It thus serves as a diverse and high-quality supervision dataset, specifically tailored for fine-tuning LLMs on mathematical reasoning tasks. • Commonsense170K (Hu et al., 2023): A commonsense reasoning dataset containing 170k true/false questions. It covers diverse types of commonsense knowledge, including physical reasoning, social interactions, intentions, causes and effects, and everyday event understanding. • Code-Feedback (Zheng et al., 2024): A code-centric dialogue dataset containing 66k multi-turn interactions between users and assistants. It covers diverse coding tasks such as writing, debugging, and refactoring code, and is designed to facilitate instruction tuning and feedback-driven refinement for code generation models. To comprehensively assess model performance across different domains, we consider benchmarks from three categories: math reasoning, commonsense reasoning, and code generation. Details of each dataset are provided below: • GSM8K (Cobbe et al., 2021): A benchmark for evaluating multi-step arithmetic reasoning, consisting of grade-school math word problems with solutions expressed in natural language. • MATH (Hendrycks et al., 2021): A challenging benchmark for evaluating advanced mathematical reasoning, consisting of high-school competition problems across diverse domains such as algebra, geometry, and calculus. • BoolQ (Clark et al., 2019): A binary question answering dataset derived from naturally occurring yes/no questions and Wikipedia passages. • PIQA (Bisk et al., 2020): A benchmark for physical commonsense reasoning that evaluates a model’s ability to choose the more plausible solution to everyday tasks. It focuses on physical interactions that challenge the understanding of intuitive, material-based problem solving. • SIQA (Sap et al., 2019): A multiple-choice benchmark for social commonsense reasoning, where models are required to infer the most appropriate response to questions about people’s actions and their social motivations or implications. • HellaSwag (Zellers et al., 2019): A challenging multiple-choice benchmark for sentence completion, designed to evaluate grounded commonsense inference. The task requires a nuanced understanding of context and everyday knowledge. • WinoGrande (Sakaguchi et al., 2020): A binary-choice benchmark for commonsense-based pronoun resolution, designed to improve scale and robustness over the original Winograd Schema Challenge (Levesque et al., 2012). • ARC-e and ARC-c (Clark et al., 2018): Benchmarks for scientific question answering in a multiple-choice format. ARC-e evaluates basic science knowledge and reasoning at the elementary level, while ARC-c contains more difficult questions requiring advanced commonsense and deductive reasoning. • OBQA (Mihaylov et al., 2018): A multiple-choice question answering benchmark that evaluates a model’s ability to integrate elementary-level science knowledge with open-domain commonsense reasoning. • HumanEval (Chen et al., 2021): A code generation benchmark evaluating whether models can produce Python functions that pass predefined test cases. • MBPP (Austin et al., 2021): A code generation dataset consisting of simple Python programming tasks with corre-sponding unit tests for evaluating correctness. 12 Preserving LoRA Training Momentum in Federated Fine-Tuning 
+
+A.1.2. M ETRICS .We report accuracy for all multiple-choice and QA datasets, including GSM8K, MATH, BoolQ, PIQA, SIQA, HellaSwag, WinoGrande, ARC, and OBQA. For code generation benchmarks (HumanEval and MBPP), we use pass@1 as the evaluation metric. 
+
+A.2. Other Details 
+
+A.2.1. E VALUATION SETTINGS 
+
+We repeat each experiment three times and show the averaged results. For evaluation, we employ two widely used task-specific frameworks: lm-evaluation-harness 1 for math reasoning and commonsense reasoning tasks, and bigcode-evaluation-harness 2 for code generation tasks. A.2.2. R ESIDUAL -E NERGY THRESHOLD 
+
+As shown in Figure 2, the tail singular values are over two orders of magnitude smaller than the leading ones. Their squared contribution is therefore < 0.01% of the total energy, meaning that the top components already capture essentially all useful information in the aggregated update. Also, considering that SVD-based methods typically regard > 99% cumulative energy as sufficient to preserve the matrix structure, we adopt a conservative threshold of 99 .99% to avoid introducing any approximation bias during aggregation. This ensures that all meaningful directions are retained, while only removing numerically negligible components. Formally, we compute E(t) =   
+
+> Ptj=1 σ2
+> j
+> Pnr j=1 σ2
+> j
+
+, and define reff = min {t : E(t) ≥ τ }, s = reff − r, and τ = 0 .9999 .
+
+Although a smaller threshold would further reduce communication, our priority is avoiding bias and ensuring stable training, and 99 .99% achieves this while keeping the residual rank very small in practice. A.2.3. N ON -IID S ETTINGS 
+
+Our non-IID data construction follows the standard practice used in prior federated NLP methods (Zhang et al., 2024; Wang et al., 2024). For datasets without labels ( e.g. , GSM8K, and HumanEval), we treat the entire dataset as a single pseudo-category. We then apply a Dirichlet( α)-based partition over sample indices: for each client i, a sampling proportion 
+
+pi is drawn from a Dirichlet distribution with concentration parameter α. This yields uneven sample allocations across clients, where smaller α induces more extreme non-IID splits. Although not label-based, this procedure preserves the standard FL evaluation practice for text datasets without explicit class annotations. 
+
+A.3. Supplementary Experiment Results 
+
+A.3.1. C OMPUTATIONAL OVERHEAD .To demonstrate the efficiency of FedMomentum , we conduct experiments on a math reasoning task under default settings. Table 8 presents the average per-round runtime of LoRA aggregation and local model updating across different methods. Compared to prior approaches, our proposed method FedMomentum achieves a competitive aggregation time (0.60s) while maintaining a low local updating cost (0.03s). Although the aggregation time is marginally higher than baseline methods such as FedIT and FLoRA, the difference is negligible in practice. Meanwhile, FedMomentum demonstrates significantly faster convergence and better final performance, as shown in the main body of the paper. To further assess the practicality of our design, we also report the runtime when replacing our randomized SVD with exact SVD computation. The aggregation time in this setting exceeds 1000 seconds per round, rendering it infeasible for real-world deployments. These results highlight the efficiency advantage of randomized SVD over exact SVD, reducing aggregation time by several orders of magnitude while maintaining effective LoRA aggregation. 
+
+> 1https://github.com/EleutherAI/lm-evaluation-harness
+> 2https://github.com/bigcode-project/bigcode-evaluation-harness
+
+13 Preserving LoRA Training Momentum in Federated Fine-Tuning                      
+
+> Table 8. Average runtime (in seconds) of different methods. Method Aggregation Time (s) Updating Time (s) FedIT 0.10 0.02 FLoRA 0.05 0.03 FFA-LoRA 0.06 0.02 RoLoRA 0.09 0.03 FedEx-LoRA 0.15 0.03
+> FedMomentum 0.60 0.03
+> w/ exact SVD >1000 0.03 FedIT FLoRA FFA-LoRA RoLoRA FedEx-LoRA
+> FedMomentum
+> Accuracy
+> 010 20 30 40 rank=16 rank=32 rank=64 rank=1 rank=2
+> Figure 6. Comparison of different methods under different LoRA ranks on the math reasoning task.
+
+A.3.2. I MPACT OF DIFFERENT RANKS .To evaluate the generalization of different methods under varying LoRA capacities, we compare their performance on the math reasoning task at ranks 16, 32, and 64. We use MetaMathQA for fine-tuning and GSM8K for evaluation. Figure 6 shows that FedMomentum consistently outperforms all baselines across different ranks, demonstrating strong robustness to the choice of LoRA rank. In particular, it maintains high accuracy even under low-rank settings ( e.g. , 32.75% at rank 16), and continues to improve with larger ranks, showing its scalability and effectiveness. To evaluate extremely low-rank settings, we also conduct additional experiments on the math reasoning task at ranks 1 and 2. As Figure 6 shown, all methods exhibit significantly degraded performance under such extremely constrained ranks (compared to rank 16/32/64), indicating that these ranks severely limit the representational capacity needed for reasoning tasks. Nevertheless, FedMomentum remains remarkably stable in this regime: With rank-1, FedMomentum achieves the best performance among all methods; with rank-2, FedMomentum remains close to the top-performing baseline. These results show that although extremely low ranks reduce the overall effectiveness of federated fine-tuning, FedMomentum 
+
+degrades more gracefully and maintains a competitive advantage even in this challenging setting. 
+
+# B. Visualization and Quantification of Optimization Trajectories 
+
+To probe optimization continuity beyond final accuracy, we analyze the training trajectories of different federated aggregation methods in parameter space. Specifically, we visualize a two-dimensional loss landscape in the PCA plane of the fully-connected layer weight increments ∆W , where the centralized fine-tuned solution is treated as the reference optimum. To enable a direct geometric comparison, we perform PCA jointly on the ∆W updates from all methods and all rounds, and project each trajectory onto the resulting two-dimensional subspace. The loss contour is evaluated on this plane and clipped to [0 , 1] to better resolve variations in the low-loss region near the optimum. In Figure 7, FedMomentum follows a smooth descent path that is well aligned with the dominant direction toward the centralized optimum, exhibiting a faster loss decrease and approaching the optimal point more rapidly within the same number of rounds. In contrast, baseline methods exhibit characteristic deviations: FFA-LoRA moves along a direction that clearly departs from the optimum and drifts farther away; FLoRA progresses with very small projected steps but appears in a high-loss area on the 2D slice, suggesting substantial off-plane components that are not captured by the visualization 14 Preserving LoRA Training Momentum in Federated Fine-Tuning optimal point  
+
+> initial point
+
+Figure 7. Loss landscape and optimization trajectories under different federated aggregation methods 
+
+plane; RoLoRA performs better than FLoRA and FFA-LoRA but remains noticeably distant from the optimum. FedAvg and FedEx-LoRA do advance toward the optimum direction, yet their trajectories deviate from the principal descent direction and converge more slowly than FedMomentum , resulting in slower loss reduction and less progress toward the optimal point. Notably, a projected point falling in a high-loss region of the 2D slice does not necessarily imply poor performance in the full space, since components orthogonal to the visualization plane may be omitted. This effect is most visible for methods such as FLoRA whose updates are not concentrated within the dominant descent subspace defined by the PCA plane. 
+
+# C. Communication Overhead Analysis 
+
+Let pLoRA = P 
+
+> ℓ∈L
+
+r(dℓ + kℓ) denote the total number of LoRA parameters across all instrumented layers l (with per-layer shapes Wℓ ∈ Rdℓ×kℓ and rank r), and let pfull = P 
+
+> ℓ∈L
+
+dℓkℓ denote the total backbone parameter size. We also denote the number of clients by n.Under this notation, the per-round, per-client communication costs (uplink + downlink) of the baselines can be summarized as follows: 
+
+FedIT: Each client uploads its local LoRA parameters ( Aℓ, B ℓ), and receives the aggregated global LoRA. This gives 
+
+pFedIT = pLoRA 
+
+| {z } 
+
+> uplink
+
++ pLoRA 
+
+| {z } 
+
+> downlink
+
+⇒ (1 + 1) pLoRA .
+
+FLoRA: Each client still uploads its own LoRA parameters, but the server stacks all clients’ low-rank modules to form an effective rank-nr adapter and broadcasts the stacked LoRA back to all clients. Therefore, the downlink to each client is n times larger than in FedIT, pFLoRA = pLoRA 
+
+| {z } 
+
+> uplink
+
++ n · pLoRA 
+
+| {z }
+
+> downlink
+
+= (1 + n) · pLoRA .
+
+FFA-LoRA: FFA-LoRA freezes all Aℓ and only communicates Bℓ ∈ Rdℓ×r . In terms of order, this reduces the LoRA payload by roughly a factor of two when P 
+
+> ℓ
+
+dℓ ≈ P 
+
+> ℓ
+
+kℓ, leading to pFFA-LoRA ≈ 12 pLoRA 
+
+| {z } 
+
+> uplink
+
++ 12 pLoRA 
+
+| {z } 
+
+> downlink
+
+= pLoRA .
+
+FedEx-LoRA: FedEx-LoRA performs FedAvg on the LoRA parameters (as in FedIT) and communicates a full-size residual per layer to correct aggregation noise. Thus, pFedEx-LoRA = pLoRA 
+
+| {z } 
+
+> uplink
+
++ pLoRA 
+
+| {z } 
+
+> downlink (LoRA part)
+
++ pfull 
+
+|{z} 
+
+> downlink (dense residual)
+
+= 2 · pLoRA + pfull .
+
+where the additional pfull term dominates for large LLMs, making FedEx-LoRA no longer communication-efficient. 
+
+FedMomentum : Each client uploads its local LoRA parameters once per round (same as FedIT), i.e. , pLoRA . On the downlink, the server sends back a low-rank reconstruction consisting of the major r components (forming the new LoRA) 15 Preserving LoRA Training Momentum in Federated Fine-Tuning 
+
+and an additional residual subspace of rank s (still in low-rank form, not full dense). This corresponds to an effective rank 
+
+r + s adapter, so the downlink size is r+sr · · pLoRA .For comparison with FLoRA’s rank-nr stacking, it is convenient to write λ = r+snr . Since the total rank after aggregation is upper-bounded by nr , we have 0 ≤ s ≤ (n − 1) r, which implies λ = r+snr ∈  1 
+
+> n
+
+, 1 .
+
+Then, the per-round, per-client communication cost of FedMomentum can be written as pFedMomentum = pLoRA 
+
+| {z } 
+
+> uplink
+
++ λn · pLoRA 
+
+| {z }
+
+> downlink
+
+=(1 + λn ) · pLoRA . In other words: • When s = 0 (no residual subspace), λ = 1 /n and FedMomentum degenerates to the FedIT communication level: 
+
+(1 + λn ) · pLoRA = (1 + 1) · pLoRA ;
+
+• When s = ( n − 1) r (maximal residual), λ = 1 and the downlink matches FLoRA’s stacked rank-nr adapter: (1 + λn ) ·
+
+pLoRA = (1 + n) · pLoRA . Therefore, ours achieves lower communication cost than FLoRA while delivering consistently better convergence, and in some cases its overhead is comparable to FedIT, making it a more communication-efficient and effective approach for federated LoRA fine-tuning. 
+
+# D. Relationship to SVD-based LoRA and Federated Fine-Tuning Methods 
+
+D.1. Taxonomy of SVD Usage in LoRA-based Fine-Tuning 
+
+SVD has been adopted in several recent works related to LoRA-based fine-tuning and federated learning. However, existing approaches employ SVD for fundamentally different purposes. To avoid confusion, we categorize prior methods in Table 9 according to where and why SVD is used, and clarify how FedMomentum differs conceptually. 
+
+D.2. Why FedMomentum Is Not an “SVD Trick” 
+
+While SVD is a shared mathematical tool, the contribution of FedMomentum does not lie in applying SVD itself. Instead, our work makes a distinct conceptual contribution by identifying and resolving a previously overlooked optimization issue in federated LoRA fine-tuning. Specifically, we identify that na ¨ıvely aggregating LoRA updates across clients introduces aggregation noise due to math-ematical incorrectness, and existing improved aggregation algorithms destroy the intrinsic BA structural expressiveness of LoRA modules, leading to inconsistent and ineffective model update across training rounds. This structural mismatch manifests as a loss of training momentum, resulting in slower convergence even under noise-free aggregation. Prior SVD-based methods do not analyze or address this phenomenon. Methods such as SORSA (Cao & Song, 2024), CorDA (Yang et al., 2024), GOAT (Fan et al., 2025), NoRM (Jiang et al., 2025) and PiSSA (Meng et al., 2024) apply SVD for initialization or adapter design in centralized settings. Federated methods such as FeDeRA (Yan et al., 2026), FlexLoRA (Bai et al., 2024), HierFedLoRA (Liu et al., 2025), AFLoRA (Zhou et al., 2025), and FedARA (Wu et al., 2025) employ SVD to resolve rank or resource heterogeneity, but do not aim to preserve the continuity of optimization trajectories. In FedMomentum , SVD is used solely as a reconstruction tool to recover an aligned low-rank subspace from aggregated updates. The novelty lies in the structure-preserving aggregation principle : by reconstructing LoRA modules that remain consistent across rounds, FedMomentum preserves optimization momentum and achieves faster convergence. Importantly, this also differentiates FedMomentum from prior federated SVD-based approaches at the aggregation stage. While methods such as FlexLoRA use SVD as a round-wise projection to reconcile heterogeneous client rank budgets, 
+
+FedMomentum treats the rank-r LoRA subspace as a persistent optimization state and explicitly enforces its cross-round consistency . Moreover, robust aggregation variants ( e.g. , FedSVD/FedRPCA) employ decomposition mainly for stabiliza-tion —orthogonalizing or separating updates to suppress noise—rather than preserving the structural consistency of BA 
+
+updates or the continuity of optimization trajectories. In contrast, FedMomentum reconstructs a fixed-rank BA structure each round and isolates the remaining non-aligned components via residual merging into the backbone, preventing them from perturbing the low-rank state; this design directly targets the previously overlooked momentum loss caused by structural mismatch in federated LoRA aggregation. 16 Preserving LoRA Training Momentum in Federated Fine-Tuning 
+
+D.3. Summary 
+
+In summary, although SVD has appeared in several LoRA and federated fine-tuning methods, FedMomentum is the first to explicitly identify and address the loss of training momentum caused by structural destruction in federated LoRA aggregation. Our method is complementary to prior SVD-based approaches and targets a distinct, previously unexplored optimization issue. 
+
+# E. Privacy Discussion 
+
+Our method does not introduce additional privacy leakage compared with existing baselines. FedMomentum only applies SVD to the aggregated update ∆W = Pni=1 BiAi, which is the similar quantity that all baselines (FedIT, FLoRA, and FedEx-LoRA) already share or broadcast. No client-specific update is ever transmitted. SVD does not reveal more information than the matrix itself. Any party receiving the aggregated update in baseline methods can already run SVD locally. Thus, sending the SVD factors (or residuals derived from them) does not expose more information than existing approaches. Residual components are also derived from the same aggregated update and contain no per-client identifiable structure. Therefore, FedMomentum maintains the same privacy level as existing federated LoRA methods and does not increase the risk of client information leakage. 17 Preserving LoRA Training Momentum in Federated Fine-Tuning 
+
+> Table 9.  Taxonomy of SVD-/decomposition-based LoRA and federated fine-tuning methods.  FedMomentum  uniquely focuses on preserving the structural consistency of LoRA updates across communication rounds, which enables momentum preservation during federated optimization.
+> Category  Representative Works  Where Decomposition Is Applied  FL Aggregation  Momentum-aware Centralized LoRA optimization
+> PiSSA (Meng et al., 2024) SORSA (Cao & Song, 2024) NoRM (Jiang et al., 2025) CorDA (Yang et al., 2024) GOAT (Fan et al., 2025) AdaLoRA (Zhang et al., 2023a) Decomposition applied to centralized LoRA pa-rameterization, including adapter initialization, structure-aware conditioning/regularization, and adaptive rank or budget allocation during training.
+> ✗ ✗
+> Federated LoRA initializationn  FeDeRA (Yan et al., 2026)  Decomposition of backbone weights and then use for federated fine-tuning  ✗ ✗
+> Federated rank adaptation
+> FlexLoRA (Bai et al., 2024) HierFedLoRA (Liu et al., 2025) AFLoRA (Zhou et al., 2025) FedARA (Wu et al., 2025) Decomposition used to reconcile heterogeneous LoRA ranks in FL, enabling aggregation and broad-cast under client/resource heterogeneity.
+> ✓ ✗
+> Robust / orthogonal aggregation
+> FedSVD (Lee et al., 2025) FedRPCA (Jhunjhunwala et al., 2025) Decomposition applied at the aggregation stage to orthogonalize or separate aggregated updates, aiming to suppress noise and improve robustness of federated LoRA aggregation.
+> ✓ ✗
+> Momentum-preserving aggregation  FedMomentum  (ours) Decomposition is used to reconstruct a consis-tent low-rank update structure across communi-cation rounds, explicitly preserving cross-round update directions and training momentum.
+> ✓ ✓
+
+18

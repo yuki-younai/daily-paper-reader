@@ -1,0 +1,1345 @@
+Title: AutoAdapt: An Automated Domain Adaptation Framework for LLMs
+
+URL Source: https://arxiv.org/pdf/2603.08181v1
+
+Published Time: Tue, 10 Mar 2026 02:11:35 GMT
+
+Number of Pages: 46
+
+Markdown Content:
+# AutoAdapt: An Automated Domain Adaptation Framework for Large Language Models 
+
+Sidharth Sinha 1 Anson Bastos 1 Xuchao Zhang 2 Akshay Nambi 3 Chetan Bansal 2 Saravan Rajmohan 2
+
+## Abstract 
+
+Large language models (LLMs) excel in open domains but struggle in specialized settings with limited data and evolving knowledge. Existing do-main adaptation practices rely heavily on manual trial-and-error processes, incur significant hyper-parameter complexity, and are highly sensitive to data and user preferences, all under the high cost of LLM training. Moreover, the interactions and transferability of hyperparameter choices across models/domains remain poorly understood, mak-ing adaptation gains uncertain even with substan-tial effort. To solve these challenges, we present 
+
+AutoAdapt , a novel end-to-end automated frame-work for efficient and reliable LLM domain adap-tation. AutoAdapt leverages curated knowledge bases from literature and open-source resources to reduce expert intervention. To narrow the search space, we design a novel multi-agent debating system in which proposal and critic agents iter-atively interact to align user intent and incorpo-rate data signals and best practices into the plan-ning process. To optimize hyperparameters under tight budgets, we propose AutoRefine , a novel LLM-based surrogate that replaces costly black-box search. Across 10 tasks, AutoAdapt achieves a 25% average relative accuracy improvement over state-of-the-art Automated Machine Learn-ing baselines with minimal overhead. 
+
+## 1. Introduction 
+
+Large Language Models (LLMs) have rapidly advanced the state of the art in natural language processing, enabling impressive performance across a wide spectrum of tasks and domains. However, despite their broad pre-training, 
+
+> 1
+
+Microsoft, M365 Research, India 2Microsoft, M365 Re-search, Redmond 3Microsoft Research, India. Correspondence to: Anson Bastos <ansonbastos@microsoft.com >, Xuchao Zhang <xuchaozhang@microsoft.com >, Akshay Nambi <Ak-shay.Nambi@microsoft.com >.
+
+Preprint. March 10, 2026. 
+
+LLMs often fall short when applied to specialized domains where data is scarce, proprietary, or subject to privacy con-straints. Further, in scenarios where data evolves with time, pretrained LLMs would not have the updated knowledge. In such settings, domain adaptation of LLMs is imperative by resorting to techniques like in-context prompting (Dong et al., 2024) using retrieval from current data (RAG) (Lewis et al., 2020) or finetuning the models (SFT) (Wang et al., 2025) on new data for optimal performance. The current process of adapting LLMs to a specific task is largely man-ual and remains limited to a set of best practices, assuming a one-template-fits-all approach across tasks and models. Further, effective fine tuning relies on expert knowledge be-cause small choices in data, objectives, and training settings can strongly affect the performance. Domain adaptation for LLMs involves a series of intricate steps: curating domain-specific datasets, selecting appro-priate model architectures, configuring prompting or fine-tuning strategies, and iteratively optimizing hyperparame-ters for optimal performance. Each decision point, rang-ing from model selection, context engineering, training technique (e.g., supervised fine-tuning (SFT), parameter-efficient adaptation (PeFT) e.g. LoRA/Prefix Tuning, pref-erence alignment e.g. DPO) to the choice of learning rates, batch sizes, and regularization techniques, can significantly impact the final model’s quality, stability and cost. The challenge of exploring the vast search space is compounded in LLMs due to the high time and cost of finetuning these large models. The combinatorial explosion of possible con-figurations, coupled with the high time and resource utility, means that even experienced teams must engage in extensive trial-and-error, often spending weeks or months to achieve robust, high-quality results. Recent research (Guo et al., 2024; Trirat et al., 2025; Zhang et al., 2024; 2023) has explored automating general Machine Learning (ML) pipelines using agent-based frameworks of-fering partial solutions for model selection and hyperparam-eter tuning, albeit in the general ML domain. However, the following challenges exist : 1) Existing methods either rely on the pretraining knowledge or in-context learning ability of LLMs, which we show is insufficient for the task of LLM adaptation. Further, retrieval based methods (Guo et al., 1
+
+> arXiv:2603.08181v1 [cs.LG] 9 Mar 2026
+
+AutoAdapt: An Automated Domain Adaptation Framework for LLMs Input: User prompt with task description, requirements and constraints                  
+
+> Auto Adapt
+> User
+> We require a model which has been trained to answer medical -domain questions. The
+> model should maintain a high accuracy. Please ensure that the total number of model
+> parameters does not exceed 10 billion. Furthermore, the model should be deployed on
+> an A100 GPU with latency of ...
+> Adapted
+> LLM
+> Data Analysis Retrieval & Planning Optimiza tion Adaptation (e.g. SFT)
+> Output: Deployable LLM model for the given task and target platform
+> Accuracy :>90%
+> AutoAdapt
+> Pipeline
+> Latency: <10ms
+> Input Output
+
+Figure 1. AutoAdapt takes as input the user instruction and dataset and delivers the domain adapted LLM based on user constraint 
+
+2024; Trirat et al., 2025) lack a structured knowledge base of LLM use cases, limiting their usage to only classical ML methods. 2) These approaches typically rely on exhaustive or heuristic search strategies, which are computationally expensive and ill-suited to the scale and complexity of LLM adaptation. 3) Existing methods rely on the LLM agents to generate code. However, agents may have limited and outdated pretraining context on LLM adaptation. This re-sults in low success rate for end-to-end runs as we show in our experiments. 4) LLM adaptation pipelines often require multiple stages such as pretraining, followed by finetuning, alignment, in-context prompting using RAG techniques and so on. Existing methods fail in planning such a multi-stage pipeline due to a lack of a structured and well defined hier-archical plan. 5) LLMs incur an exorbitant cost and latency for training and thus standard Hyperparameter Optimiza-tion (HPO) techniques employed in existing methods (Trirat et al., 2025) will hardly scale to LLM adaptation. 6) Most agents do not consider the data characteristics and explicit adherence to user preferences during the planning stage or merely loop on failing execution which degrades efficiency. To address these challenges, we introduce AutoAdapt , an automated domain adaptation framework that proposes to solve the adaptation problem as a multi-agent system grounded in a knowledge-driven hierarchical workflow. We further use Gaussian processes (Beckers, 2021) for proba-bilistic function estimation, modeling uncertainty over the adaptation objective function. Figure 1 shows the user flow of AutoAdapt , where the user inputs the task, data, and con-straints and the system outputs the domain adapted LLM. 
+
+AutoAdapt leverages a structured directed acyclic graph, called “Adaptation Configuration Graph” (ACG), that in-corporates the LLM adaptation workflow knowledge. This graph contains hierarchical decision nodes (e.g. RAG vs 
+
+SFT , SFT using LoRA or Prefix Tuning etc.) and parameter nodes (e.g. learning rate, epochs, batch size to explore for SFT ). The framework is com-posed of a system of proposal and critic agents to generate, debate, verify and refine executable pipelines. We ground the multi-agent system by integrating best practices from thousands of open-source models and datasets, as well as user-specified requirements and data characteristics. We further perform online retrieval from web sources and liter-ature. Thus, AutoAdapt dramatically reduces the need for manual intervention and expert oversight. This produces an adaptation pipeline with narrowed search spaces (e.g. 
+
+1e−4 ≤ learning rate ≤ 1e−6) to optimize. The framework further incorporates a feedback-driven optimiza-tion loop, called AutoRefine , to optimize parameters (e.g. ex-act SFT parameters like learning rate = 2 e−5 from the narrowed search space). AutoRefine efficiently explores the hyperparameter space using LLM-based oracle that fac-tors performance from prior runs. However naive usage of LLMs to predict performance (surrogate modeling) (Liu et al., 2025) in the multi-dimensional LLM hyperparameter space, is prone to hallucination. We propose to solve this by grounding the LLM surrogate with function estimation techniques. Through extensive empirical evaluation across diverse do-mains, including mathematical and general reasoning, medi-cal question answering, legal analysis, programming, agent tool calling, e-commerce, and real world cloud incident diagnosis, we demonstrate that AutoAdapt consistently out-performs existing AutoML baselines, delivering significant accuracy gains with minimal additional computational over-head (w.r.t. default choices). By automating the end-to-end LLM adaptation process , AutoAdapt makes robust, domain-specific LLMs accessible to a broader range of users and organizations, bridging the gap between cutting-edge re-search and practical real-world applications . In summary: • We propose a novel method for end-to-end LLM domain adaptation guided by a structured adaptation workflow ensuring a high success rate in executing the pipeline. To the best of our knowledge, we are the first to propose an automated domain adaptation framework for LLMs. • We curate a knowledge base for LLM domain adaptation from open source implementations, datasets, models, and best practices to ground the recommendations. • We address the exponential search space in LLM adap-tation, by designing a novel multi-agent framework that traverses the adaptation graph incorporating the user con-straints, data signals, and best practices, to recommend adaptation pipelines and hyperparameter ranges. • We formulate a first-of-its-kind probabilistic function es-timation based technique in conjunction with LLMs to efficiently perform refinement of the parameter choices and ranges for the selected pipeline. • We conduct extensive experiments on datasets spanning various benchmark and real world datasets across multiple domains to demonstrate the efficacy of our method in adapting LLMs to the specialized tasks. 2AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+## 2. Related Works 
+
+There exists a plethora of works in literature on automated machine learning. Here, we focus on agentic solutions to automate this process. In agentic literature, prior works such as (Zhang et al., 2023; Shen et al., 2023; Hong et al., 2024; Liu et al., 2025) focus on specific aspects of the ML training pipeline such as data preparation, analysis or HPO etc. MLCopilot (Zhang et al., 2024) was one of the first agentic systems tackling general ML pipelines, using an offline stage to build knowledge from experience and an online retrieval stage. Similarly DS-Agent (Guo et al., 2024) proposes to use LLM agents along with case based reasoning (CBR) to come up with generic data science pipelines for a task. AutoML-Agent (Trirat et al., 2025) employs a multi-agent LLM framework using retrieved knowledge bases to automate generic ML training pipelines. These methods are not tailored to LLMs and fall short in reliably planning and executing complex, multi-stage LLM adaptation workflows. Unlike prior methods that typically support only single-stage training pipelines, AutoAdapt provides a comprehensive framework for full domain adaptation pipelines, including multi-stage processes such as in-context prompting (e.g. RAG), supervised fine-tuning (SFT), alignment (DPO) and so on. AutoAdapt aims to reliably and efficiently generate user-aligned executable LLM adaptation plans, overcoming the limitations of existing AutoML systems. Please refer the Appendix B for further details. 
+
+## 3. Problem Formulation 
+
+We formulate domain adaptation of large language mod-els (LLMs) as a multi–stage optimization problem. Let 
+
+D = {(xi, y i)}Ni=1 denote the user–provided dataset for a downstream task, and let c represent the user context (e.g., hardware constraints, latency requirements, or user prefer-ences such as PEFT vs. full fine–tuning). An adapted model is constructed through a sequence of T transformation stages (e.g., continual pretraining, supervised fine–tuning, prefer-ence optimization, inference–time augmentation). Each stage t is parameterized by a configuration ht ∈ Ht.The final model produced by the pipeline is denoted as 
+
+fθ (h1, . . . , h T ). AutoAdapt differs from existing AutoML techniques in this aspect of planning each component of the pipeline sequentially following the hierarchy of the adap-tation graph. Our goal is to find a feasible configuration sequence (h1, . . . , h T ) that minimizes expected task loss: 
+
+min   
+
+> h1,...,h T∈H (c)
+
+E(x,y )∼D
+
+L fθ (h1, . . . , h T )( x), y  ,
+
+where the feasible set H(c) encodes context -dependent constraints such as GPU memory, training budget, or user-specified preferences. 
+
+Prior -Guided Sequential Configuration Space: Each stage t has a set of hyperparameters, ht = {ht, 1, . . . , h t,n t },
+
+and rather than selecting all hyperparameters jointly, we construct them sequentially. Let h<t = ( h1, . . . , h t−1)
+
+denote configurations from previous stages, and ht,<i =(ht, 1, . . . , h t,i −1) denote earlier choices within stage t. De-fine a prior-guided feasible region for stage t as 
+
+Pt(c, h <t ) = {ht : ht,i ∈ P t,i (c, h <t , h t,<i ), i = 1 , . . . , n t} ,
+
+where each sub - policy Pt,i incorporates domain knowledge (e.g., best -practice hyperparameter ranges), conditional de-pendencies (e.g., selecting LoRA activates rank , α, dropout ), and context constraints. The multi–stage adaptation prob-lem thus becomes: 
+
+min 
+
+> h1,...,h T
+
+E(x,y )∼D
+
+L fθ (h1, . . . , h T )( x), y  
+
+s.t. ht ∈ P t(c, h <t ), ∀t
+
+Proposition 3.1. Let H(c) be the feasible configuration space and P(c) = P1 × · · · × P T the prior -guided sub-space. Denote the expected task loss as LE(h), the op-timal loss over the full space is L∗H = min h∈H (c) LE(h)
+
+and the optimal loss over the prior - guided space is L∗P =min h∈P (c) LE(h). Considering LE(h) is Lipschitz continu-ous in hyperparameters, the prior -guided subspace satisfies the generalized ε-covering bound: 
+
+L∗P ≤ L∗H + Lε, 
+
+where L is the Lipschitz constant and ε is the distance between the optimal parameters in H(c) and P(c).
+
+The above result is straightforward to verify after continu-ous relaxation (Boyd & Vandenberghe, 2004) of the discrete space. It implies that restricting search to the prior -guided subspace incurs at most a controlled additive suboptimal-ity while yielding dramatically improved tractability. For the optimization over the constrained search space we pro-pose to use LLMs together with function estimation (using Gaussian process) techniques. More details on Gaussian processes can be found in Appendix A and Beckers 2021. Note, the above formulation is intended solely for clarity of exposition and the proposed method does not depend on the stated assumptions. 
+
+## 4. Method 
+
+This section details the components of our method. Figure 2 gives an overview of AutoAdapt . The user provides the task description, data and constraints. AutoAdapt then runs to find the optimal adaptation pipeline through the follow-ing workflow: (i) The Adaptation Configuration Graph (ACG) is executed to decompose the decision making in a structured workflow. (ii) A multi -agent debate pipeline 
+
+3AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+Table 1. Comparison between AutoAdapt and existing LLM-based frameworks.                                                                                      
+
+> Framework Key Functionality Planning Verification Efficient Optimization Effective LLM Adaptation Training-Free Search With Retrieval
+> AutoML-GPT (Zhang et al., 2023) ××××✓×
+> Prompt2Model (Viswanathan et al., 2023) ×××××✓
+> HuggingGPT (Shen et al., 2023) ✓×××✓✓
+> CAAFE (Hollmann et al., 2023) ×✓××××
+> MLCopilot (Zhang et al., 2024) ××××✓×
+> AgentHPO (Liu et al., 2025) ✓✓××××
+> Data Interpreter (Hong et al., 2024) ✓✓××××
+> DS-Agent (Guo et al., 2024) ✓✓×××✓
+> SELA (Chi et al., 2024) ✓✓××××
+> Agent K (Grosnit et al., 2025) ✓✓×××✓
+> AutoMMLab (Yang et al., 2025) ×✓××××
+> AutoMLAgent (Trirat et al., 2025) ✓✓××✓✓
+> AutoAdapt (Ours) ✓✓✓✓✓✓
+
+Input: user prompt with task description, 
+
+requirements,  and constraints  
+
+> (1)  User task
+> information
+> User Agent
+> ACG
+> User
+> User Preference
+> Store
+> Critiques
+> (2)  Multi -Agent
+> Debate
+> Best Practice KB
+> Proposal Agents
+> Critic Agents
+> Proposals
+> Datacard
+> Best
+> Practices
+> Modelcard
+> Offline
+> Offline
+> (3)  AutoRefine
+> Recommended
+> Pipelines
+
+Function Estimation 
+
+Acquisition 
+
+LLM surrogate 
+
+Hypothesis Eval 
+
+> Task, Data,
+> Pipeline
+> Warm Start
+
+Plan  Execution 
+
+Code  Execution 
+
+Debugging 
+
+Template  Code 
+
+User Constraint 
+
+Verification 
+
+> Final model satisfies constraints
+
+Output: 
+
+Deployable 
+
+LLM model 
+
+Figure 2. Framework Overview: AutoAdapt processes user data and task definitions, integrates best practices, generates an executable training pipeline, and refines an intermediate model to produce a deliverable model for users. 
+
+is run at every node of the ACG to propose an executable adaptation plan with narrowed hyperparameter ranges. The multi-agent system is grounded in best practices from lit-erature (processed in a KB or queried real time from web search, huggingface, github etc.) (iii) On obtaining the adap-tation pipeline from the multi-agent system, AutoRefine 
+
+is run to obtain the exact parameter set. AutoRefine is a feedback - driven optimization loop that combines LLM sur-rogate reasoning with probabilistic function estimation to efficiently and effectively select hyperparameters. (iv) Once the optimization is complete, the pipeline is executed to produce the adapted LLM for the user task. 
+
+4.1. Best Practices Knowledge Base 
+
+The multi-agentic system needs to be grounded in the real world LLM usage ecosystem. For this we curate the best-pratices corpus from public LLM ecosystems captur-ing model choices, training pipelines, and hyperparame-ters at scale. The sources include Hugging Face mod-el/data cards and tags (e.g., sft, dpo, domain tags like medical), PwC leaderboards and notebooks (github, un-sloth) and practitioner guides on web. This corpus helps in the hierarchical decision of strategy selection (e.g., RAG 
+
+vs SFT , LoRA vs. Prefix Tuning ), model choice (e.g. Llama-3.2-3B-Instruct vs Qwen2.5-3B )and hyperparameter ranges (e.g., learning rate ,
+
+batch size etc.). We extract knowledge from ∼ 100 K model and data cards available from the sources. We prompt an LLM to extract features such as model family, size, training pipeline and parameters if available. Similarly for the datasets we extract the dataset size, domain, best performing models among other details. These structured extractions (training tech-nique, dataset size, hyperparameters, evaluation metrics, 4AutoAdapt: An Automated Domain Adaptation Framework for LLMs  
+
+> Figure 3. Hierarchical Configuration Determination Using a Do-main Adaptation Configuration Graph (ACG)
+
+source links) form the schema of the KB. 
+
+Extraction pipeline The system applies prompt -driven parsers over model/data cards and notebooks to obtain de-tails like training technique, model/dataset size, hyperparam-eters, evaluation, model source etc. The entries are indexed in a vector store by task description, domain and dataset descriptors. The KB is then queried given an incoming task (e.g. medical QA), returning top -k matched datasets/models and their reported training configurations to initialize the planning. Please refer § G for details. 
+
+4.2. Adaptation Configuration Graph (ACG) 
+
+The ACG formalizes adaptation planning as a directed acyclic graph. The nodes are of two types: selection nodes for discrete strategy/technique (e.g. RAG vs SFT ) choices and parameter nodes for hyperparameters within the selected technique (e.g. learning rate in SFT ). 
+
+Construction: We construct the ACG manually based on best practices. The start selection node selects between 
+
+RAG , SFT and Alignment . Along SFT , the decision path includes PEFT and within PEFT the choices include 
+
+{LoRA, DoRA, Prefix Tuning} . The selection nodes for Alignment can be invoked post SFT or without 
+
+SFT (using a pretrained model). The choices inside 
+
+Alignment include {DPO, RLHF} . The Parameter nodes, present at the leaf of a traversed path, represent the decision for the continuous/categorical parameter ranges for e.g. parameters for SFT include epochs, learning rate, LoRA rank/alpha/dropout, batch size, gradient accumulation, quantization etc. Edges encode dependencies e.g. choosing LoRA in PEFT selection node activates the dependent Parameter node to decide the search space for 
+
+{lora_r, lora_alpha, lora_dropout} .
+
+Hierarchical Decision over the ACG: Figure 3 shows a sample ACG workflow. The planner (multi-agent debate system outlined next) starts at high - level decision nodes (e.g., RAG , SFT and Alignment ) and traverses until leaf nodes (complete executable plan). At each node, the planner retrieves information from the best - practice KB and aggre-gates them with user constraints (compute/time/budget) to decide the pipeline. This structured approach constrains search making the adaptation efficient and ensures reliable execution. The traversed path need not adhere to a linear chain graph but could also involve multiple paths e.g. SFT 
+
+followed by Alignment or RAG as decided by the system. 
+
+4.3. Multi-Agent Debate Planner 
+
+In order to make the decision at the nodes of the ACG, we design a multi-agent pipeline. The selection nodes of the ACG could also be treated as hyperparameters and evaluated. However this increases the search space which becomes infeasible for the case of LLMs. Thus we need an efficient planning system akin to expert humans selecting techniques from knowledge or literature. The multi - agent system consists of proposal and critic agents that debate in turns to come up with the final decision on the technique, model and parameter ranges. Below we briefly describe the agents (with details in Appendix E) 
+
+Proposal Agents: Proposal agents are responsible for con-structing and iteratively refining candidate domain adapta-tion pipelines. These agents are (i) best practice agent : con-solidates empirical knowledge from prior training pipelines, model cards, and published benchmarks, and (ii) knowledge retrieval agent : dynamically retrieves evidence from recent literature, technical reports, and online resources. (iii) re-search agent : utilizes the research information retrieved from arxiv, KBs etc. to propose techniques. These agents initialize the search process in regions of the configuration space that historically yield strong performance while re-maining responsive to emerging techniques. 
+
+Critic Agents: Critic agents verify the proposed configu-rations against user, data and resource constraints. (i) The 
+
+user agent enforces user - specified requirements, such as compute budgets, training preferences, methodological re-strictions, and domain - specific constraints. In parallel, (ii) the data agent performs data -centric critique by analyzing statistics of the target dataset, including scale, token dis-tributions, domain characteristics etc., and mapping these signals to concrete constraints on adaptation choices. After each round of debate, an aggregator agent aggregates the proposals and critiques. The proposal agents further revise the proposals based on the critiques and unsatisfied constraints. In this manner, each ACG node undergoes 
+
+proposal −→ critique −→ revision iterations. The loop termi-nates when all active constraints are satisfied and the plan is deemed executable (with runnable code). The AutoRefine module is then invoked to decide the exact parameter values. 5AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+4.4. AutoRefine 
+
+This module decides the optimal hyperparameter set using an LLM surrogate method. Prior works (Zhou et al., 2025) have shown that transformers (and thus LLMs) have lim-itations in time series forecasting. This issue is bound to be amplified in the multivariate forecasting by works us-ing LLMs as surrogates (Liu et al., 2024) to predict results. Thus we propose a principled approach grounded in func-tion estimation theory to guide the surrogate modeling from prior knowledge of historic runs. We use Gaussian Process (GP) model for function estimation. Algorithm 1 provides a pseudo-code for AutoRefine. We start by sampling a coreset (Jubran et al., 2019) of the data for efficient execution. We then perform few ( ∼ 3) execu-tion runs on the selected pipeline (e.g. SFT ) by invoking an LLM to sample initial parameters from the narrowed search space (lines 2-5). Inspired by (Requeima et al., 2024), we prompt the LLM to predict the results along each parameter dimension from the evaluated points (lines 9-12). We reason that predicting the trend along each parameter axis will help reduce hallucinations compared to directly estimating the results on the higher dimensional space. These historic and predicted results are used to train a GP model to obtain a function estimation of the remaining points in the search space (line 13). Note the GP model requires hundreds of data points to learn the function and it is not possible to finetune/evaluate LLMs for many iterations. Hence, we ob-tain the parameter-axis wise trends of the results to augment data. Once the model of the results over the search space is obtained we need an acquisition function that would max-imize the result of the acquired hyperparameter set. For acquisition, we find the optimal point of function using LBFGS (Liu & Nocedal, 1989) (after continuous relaxation of the categorical variables), starting from each of the his-toric evaluated samples (lines 14-18). Post discretization, the LLM is prompted in-context with these optimal points to choose the next parameter set to evaluate on (lines 19-21), balancing exploration and exploitation. Thus the LLM surrogate is guided by the optimal hyperparameter as per the estimated function that is grounded in results from prior runs, reducing hallucinations. We allow a maximum of B
+
+(loops starting line 2,7) function evaluations (e.g. finetun-ing followed by testing on validation set) on the selected parameters. Following theoretical result analyzes the regret (difference of result on selected parameter from true opti-mal) bounds of AutoRefine (cf. Appendix C for details). The regret grows sub-linearly with the iterations and the constants are improved by the LLM augmentation factor. 
+
+Lemma 4.1. Pick δ ∈ (0 , 1) . Then with probability at least 1 − δ, the cumulative regret of the algorithm in 1 is bounded as RTa = O
+
+r  
+
+> TFa
+
+log 2
+
+ TFa
+
+
+
+. Further, to guarantee the average regret rT ≤ ε for some ε > 0, we 
+
+Algorithm 1 Overall Procedure of AutoRefine 
+
+Input: Pipeline P, Parameter space Θ, Coreset C ⊆ Data ,LLM L, GP kernel κ (RBF), Budget B, Augmentation Factor Fa
+
+Output: Best configuration θ⋆ ∈ Θ 
+
+> 1:
+
+M = ∅ 
+
+> 2:
+
+for k in K do ▷ Warm start with K < B runs  
+
+> 3:
+
+θ(k) ← L (M, P) ▷ Sample from parameter space  
+
+> 4:
+
+ˆyk ← Eval( P, C, θ (k)) ▷ Evaluate pipeline and ob-serve outcomes  
+
+> 5:
+
+M ← M ∪ (θk, ˆyk) 
+
+> 6:
+
+end for  
+
+> 7:
+
+while !Converged or niters = B − K do  
+
+> 8:
+
+ML ← M 
+
+> 9:
+
+for j in dim (θ) do ▷ Univariate LLM forecasting along each parameter, keeping others fixed  
+
+> 10:
+
+{(θ(s) 
+
+> j
+
+, ˜y(s) 
+
+> j
+
+)} ←L(M, P, parameter=j , s= ⌈ Fa 
+
+> dim (θ)
+
+⌉) 
+
+> 11:
+
+ML ← M L ∪ { (θ(s) 
+
+> j
+
+, ˜y(s) 
+
+> j
+
+)} 
+
+> 12:
+
+end for  
+
+> 13:
+
+S(θ), μ (θ), σ (θ) ← GP( ML, κ ) ▷ Fit GP surrogate and obtain UCB score, mean, uncertainty over Θ 
+
+> 14:
+
+Mopt ← ∅ 
+
+> 15:
+
+for t ∈ |M| do ▷ Optimize the estimated density from each evaluated point  
+
+> 16:
+
+(θt
+
+> opt
+
+, y t) ← LBFGS (S(θ), θ t) 
+
+> 17:
+
+Mopt ← Mopt ∪ (θt
+
+> opt
+
+, y t) 
+
+> 18:
+
+end for  
+
+> 19:
+
+θs ← L (M, P, Mopt , θ ) ▷ Acquisition function to sample new set of parameters for evaluation  
+
+> 20:
+
+Evaluate ˆys ← Eval( P, C, θ s) 
+
+> 21:
+
+M ← M ∪ { (θs, ˆys)} 
+
+> 22:
+
+end while  
+
+> 23:
+
+return θ⋆ ← arg max (θ,y )∈M y
+
+have Ta = Ω ln 2(1 /ε )
+
+> Faε2
+
+!
+
+. Here Ta, T is the number of actual function evaluations and total iterations (actual evals + LLM predictions) of the algorithm respectively, Fa is the LLM surrogate augmentation factor 
+
+## 5. Experiments 
+
+We design our experiments to evaluate the effectiveness of AutoAdapt and aim to answer the following research questions (RQ): RQ1: Can AutoAdapt effectively recom-mend adaptation pipelines across real world and benchmark datasets? RQ2: What is the importance of each compo-nent of AutoAdapt ? RQ3: How do the results converge on scaling the iterations? RQ4: What is the effectiveness of AutoRefine module compared to Bayesian Optimization? 
+
+RQ5: How efficient is AutoAdapt ?6AutoAdapt: An Automated Domain Adaptation Framework for LLMs        
+
+> Figure 4. Success Rate (SR), Normalized Performance Score (NPS), Cumulative Score (CS) comparing AutoAdapt with baseline methods across datasets. Higher score indicates better results. AutoAdapt outperforms SoTA baselines across datasets. Detailed results are in §I.
+
+Datasets We conduct experiments on the following bench-mark datasets (details in § F): MATH (Hendrycks et al., 2021), MedQA (Jin et al., 2020), CaseHold (Zheng et al., 2021), ARC (Clark et al., 2018), MBPP+ (Liu et al., 2023), 
+
+Ecomm (Trirat et al., 2025), Entail (Trirat et al., 2025), 
+
+When2Call (Ross et al., 2025). In order to test the adapta-tion to real world setting, we also evaluate on proprietary datasets containing pre-engineering level math questions (PEM ) and root cause analysis of cloud incidents ( RCA ). 
+
+Metrics: We report the accuracy for task-specific bench-marks and compute overhead in GPU hours and estimated cost ($ value). Additionally, we study convergence stability and the number of iterations to reach optimal configurations. 
+
+Evaluation Protocol: AutoAdapt was run with its full pipeline: ACG based hierarchical decision making, Best practice KB, multi-agent debate planner, and AutoRefine. Baselines were executed using their recommended work-flows and default hyperparameter tuning strategies. Where baselines fail to directly produce executable pipelines, we perform minimal corrective edits to ensure executability for each error, run and repeat till success. We report success rate (SR) as the reciprocal of the count of these iterations. All experiments were repeated three times to ensure consis-tency and the average is reported. Baselines: We compare 
+
+AutoAdapt against the following SoTA Agentic approaches: 1) MLCopilot (Zhang et al., 2024): 2) DS-Agent (Guo et al. (2024), ICML’24) 3) AutoMLAgent (Trirat et al. (2025), ICML’25) 
+
+Implementation Details We implement AutoAdapt as an end-to-end pipeline integrated with the Hugging Face model hub. Due to resource constraints, we perform adaptation on models less than 15B parameters from the following family: Qwen, Llama, Phi, Mistral. All runs were executed on a sin-gle 4x A100 GPU with mixed precision enabled (bf16) to en-sure reproducibility and resource efficiency. In AutoRefine, the Gaussian process (GP) model for function estimation was trained using the GPyTorch framework (Gardner et al., 2021) for maximum of 50 iterations to avoid overfitting and to enhance efficiency. Inspired by (Trirat et al., 2025), we report success rate (SR), Normalized Performance score (NPS) and a Comprehensive score (CS) averaging SR and NPS, for methods over k(=3) runs. NPS is the task-specific accuracy for our datasets. To select a coreset (by default 10%) of the data for finetuning/evaluation in AutoRefine we make use of (Guo et al., 2022). Note finetuning/evaluation using the final pipeline is done on the entire train/test set. All baselines and AutoAdapt were constrained by identi-cal underlying LLM (GPT-4.1-mini), resource budgets and evaluated under the same conditions to ensure fairness. 
+
+## 6. Results 
+
+Main Results (RQ1) Figure 4 shows the SR, NPS and CPS metrics in the template-free (TF) setting where methods are allowed to choose any technique, model etc. for solving the task. We report the average scores from 3 indepen-dent runs for all evaluation metrics. AutoAdapt consistently achieves the highest performance across nearly all datasets and metrics. Table 2 shows the template-aware (TA) re-sults with the model, technique (SFT) and epochs fixed to ensure comparison across methods for hyperparameter se-lection. We observe that AutoAdapt outperforms the generic AutoML methods by a large margin. These results demon-strate that AutoAdapt ’s structured planning, prior - guided configuration, and iterative refinement enable more reliable and consistently superior domain adaptation compared to existing automated baselines, making it effective for LLM adaptation to downstream tasks. Further we show the results of AutoAdapt with the constraints of choosing RAG and alignment (DPO) pipelines on the PEM dataset. We see from figure 6a that compared to the baseline of human tuned or HF defaults our method performs significantly better, in-dicating AutoAdapt ’s effectiveness in optimizing the LLM adaptation pipeline irrespective of underlying technique. 7AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+Table 2. Performance comparison across datasets and methods in the template aware (TA) setting. AutoAdapt is better than the baselines even when model and technique (SFT) is fixed.                                                                                                                              
+
+> Dataset AutoAdapt AutoMLAgent MLCopilot HF Defaults DS-Agent
+> UC Berkeley MATH 27 .8±3.526 .8±2.427 .2±2.326 .2±0.06 30 .0±3.7
+> MedQA 61 .27 ±1.158 .84 ±1.357 .50 ±1.258 .13 ±0.04 59 .86 ±1.0
+> CaseHold 89 .22 ±0.984 .72 ±1.182 .63 ±1.086 .21 ±0.08 87 .28 ±0.9
+> PW 67 .69 ±1.364 .53 ±1.463 .71 ±1.565 .78 ±0.02 63 .40 ±1.6
+> RCA 2.30 ±0.76 2.23 ±0.81 2.18 ±0.77 2.23 ±0.81 2.25 ±0.66
+> ARC 83 .79 ±1.277 .39 ±1.177 .56 ±1.078 .24 ±0.03 77 .47 ±1.4
+> MBPP+ 68 .3±0.868 .2±0.767 .5±0.968 .0±0.07 66 .9±0.8
+> When2Call 54 .5±0.945 .4±1.248 .1±1.146 .9±0.05 50 .0±0.7
+
+(a) Variations of AutoAdapt . (b) Varying # rounds/trials. 
+
+Figure 5. (a) Ablation and (b) hyperparameter study varying num-ber of multi-agent debate rounds and AutoRefine trials. 
+
+(a) (b) Figure 6. (a) RAG, DPO Results (b) Accuracy (bars) and wall-clock time (lines) by coreset sizes for HPO and AutoRefine. 
+
+Ablation Study (RQ2) Figure 5a summarizes the incremen-tal impact of AutoAdapt’s principal components on task accuracy, on the MedQA dataset. Specifically, we start with the base LLM, then add the ACG planning, best practices, multi-agent pipeline, AutoRefine (w/o and with GP). We note that on addition of every component, the results im-prove indicating the importance of the modules. 
+
+Hyperparameter Study (RQ3) Figure 5b examines the sensitivity of AutoAdapt to two parameters, namely num-ber of AutoRefine trials and multi - agent debate rounds, on the MedQA dataset. We observe a sharp gain for AutoRe-fine when increasing trials from 1 to 2, followed by further increase at 5 trials and then a plateau This indicates the ef-fectiveness of autorefine in efficiently converging to the op-timal set of parameters in few trials. In parallel, multi -agent rounds show steady, monotonic improvements suggesting that additional proposal–critique cycles systematically re-duce planning bias and improve configuration quality. This is suggestive that a modest budget of 5-10 AutoRefine trials and 2 debate rounds is sufficient to yield optimal results. 
+
+Effectiveness of AutoRefine (RQ4) Figure 6b compares AutoRefine with a standard Hyperparameter Optimiza-
+
+(a) Cost breakdown (time and money) in multi-agent planning 
+
+(b) Time Overhead (c) Cost Overhead 
+
+Figure 7. Top figure shows cost breakdown for MedQA across different agents in the MultiAgent planning phase. Bottom figures show the minimal time/money overhead and performance gains. 
+
+tion (HPO) baseline across increasing coreset fractions (0.01 →1.0), reporting both accuracy and wall -clock time. HPO was performed using the Optuna framework (Akiba et al., 2019) with auto sampler , till desired accuracy was achieved or maximum budget was attained. AutoRefine consistently achieves higher or comparable accuracy at all fractions, with a stable performance while being efficient. In practice, these results support using small coresets with AutoRefine to capture most of the achievable accuracy at a fraction of the cost of standard HPO. 
+
+Time and Cost Analysis (RQ5) Figure 7 quantifies the monetary and time cost incurred by AutoAdapt. In panel (a), the stacked breakdown shows the most fraction of time and LLM cost of the system are concentrated in the Au-toRefine phase. The reasoning is that AutoRefine runs over multiple iterations as compared to planning in order to find the optimal configuration. Panels (b) and (c) report the time and monetary overheads at the task level. Averaged across datasets, AutoAdapt ’s performance gains ( > 7% ) outpace its incremental time/cost ( ∼ 15 mins / $4), confirming a favor-able trade-off, validating the system’s efficacy for real -world LLM domain adaptation. 
+
+## 7. Conclusion 
+
+In this work, we introduce AutoAdapt , an automated frame-work for domain adaptation of large language models. Au-toAdapt ensures reliable planning using a structured work-flow graph. The proposed multi-agent pipeline grounded in best practices KB narrows the search space. Further, AutoRefine performs efficient optimization of the pipeline hyperparameters using a novel LLM guided algorithm grounded in probabilistic function estimation. Through extensive experiments across diverse domains, we show that 
+
+AutoAdapt consistently outperforms SoTA AutoML base-lines. AutoAdapt takes the first step towards end to end automation of LLM adaptation to real world scenarios. 8AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+## Impact Statement 
+
+AutoAdapt aims to lower the technical and resource barriers to domain adaptation of large language models by automat-ing pipeline design, configuration selection, and refinement. By enabling efficient customization using smaller datasets and constrained budgets, AutoAdapt can reduce redundant experimentation, lower computational cost, and democra-tize access to high - quality domain -specific models for re-searchers and practitioners with limited resources. This can benefit applications in areas such as healthcare, education, legal analysis, and scientific research, where domain exper-tise exists but large -scale machine learning infrastructure may not. At the same time, AutoAdapt inherits the risks associated with adapting LLMs to sensitive domains, including the potential amplification of dataset biases or inappropriate behaviors if user - provided data is flawed or unrepresentative. While AutoAdapt does not generate new data on its own in current state, its automation could accelerate deployment of domain -adapted models without sufficient human review. To mitigate these risks, AutoAdapt is explicitly designed to surface configuration decisions, maintain modularity across stages, and enable human oversight through interpretable planning stages. We view AutoAdapt as a decision - support system rather than a replacement for responsible model building evaluation. Overall, AutoAdapt contributes to more efficient and trans-parent LLM adaptation workflows, with the potential to re-duce environmental impact through compute savings while emphasizing the importance of careful downstream evalua-tion and governance in real-world deployments. 
+
+## References 
+
+Akiba, T., Sano, S., Yanase, T., Ohta, T., and Koyama, M. Optuna: A next-generation hyperparameter optimization framework, 2019. URL https://arxiv.org/abs/ 1907.10902 .Austin, J., Odena, A., Nye, M., Bosma, M., Michalewski, H., Dohan, D., Jiang, E., Cai, C., Terry, M., Le, Q., and Sutton, C. Program synthesis with large language mod-els, 2021. URL https://arxiv.org/abs/2108. 07732 .Beckers, T. An introduction to gaussian process mod-els, 2021. URL https://arxiv.org/abs/2102. 05497 .Boyd, S. and Vandenberghe, L. Convex Optimization . Cam-bridge University Press, Cambridge, UK, 2004. ISBN 978-0521833783. Chi, Y., Lin, Y., Hong, S., Pan, D., Fei, Y., Mei, G., Liu, B., Pang, T., Kwok, J., Zhang, C., et al. SELA: Tree-search enhanced LLM agents for automated machine learning. 
+
+arXiv preprint arXiv:2410.17238 , 2024. Clark, P., Cowhey, I., Etzioni, O., Khot, T., Sabharwal, A., Schoenick, C., and Tafjord, O. Think you have solved question answering? try arc, the ai2 reasoning challenge. 
+
+arXiv:1803.05457v1 , 2018. Cohen, S., Nutt, W., and Sagic, Y. Deciding equiv-alances among conjunctive aggregate queries. Journal of the ACM , 54(2), April 2007. doi: 10.1145/1219092. 1219093. URL http://doi.acm.org/10.1145/ 1219092.1219093 .Dong, Q., Li, L., Dai, D., Zheng, C., Ma, J., Li, R., Xia, H., Xu, J., Wu, Z., Chang, B., Sun, X., Li, L., and Sui, Z. A survey on in-context learning. In Al-Onaizan, Y., Bansal, M., and Chen, Y.-N. (eds.), Proceedings of the 2024 Con-ference on Empirical Methods in Natural Language Pro-cessing , pp. 1107–1128, Miami, Florida, USA, November 2024. Association for Computational Linguistics. doi: 10.18653/v1/2024.emnlp-main.64. URL https:// aclanthology.org/2024.emnlp-main.64/ .Frazier, P. I. A tutorial on bayesian optimization, 2018. URL 
+
+https://arxiv.org/abs/1807.02811 .Gardner, J. R., Pleiss, G., Bindel, D., Weinberger, K. Q., and Wilson, A. G. Gpytorch: Blackbox matrix-matrix gaussian process inference with gpu acceleration, 2021. URL https://arxiv.org/abs/1809.11165 .Grosnit, A., Maraval, A., N, R. S., Zhao, Z., Doran, J., Paolo, G., Thomas, A., Gonzalez, J., Kumar, A., Khandelwal, K., Benechehab, A., Cherkaoui, H., El-Hili, Y. A., Shao, K., Hao, J., Yao, J., K ´egl, B., Bou-Ammar, H., and Wang, J. Kolb-based experiential learning for generalist agents with human-level kaggle data science performance, 2025. URL https://arxiv.org/abs/2411.03562 .Guo, C., Zhao, B., and Bai, Y. Deepcore: A comprehensive library for coreset selection in deep learning, 2022. URL 
+
+https://arxiv.org/abs/2204.08499 .Guo, S., Deng, C., Wen, Y., Chen, H., Chang, Y., and Wang, J. DS-Agent: Automated data science by empowering large language models with case-based reasoning. In 
+
+ICML , 2024. Hendrycks, D., Burns, C., Kadavath, S., Arora, A., Basart, S., Tang, E., Song, D., and Steinhardt, J. Measuring math-ematical problem solving with the math dataset. NeurIPS ,2021. Hollmann, N., M ¨uller, S., and Hutter, F. Large language models for automated data science: Introducing CAAFE for context-aware automated feature engineering. In 
+
+NeurIPS , volume 36, pp. 44753–44775, 2023. 9AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+Hong, S., Lin, Y., Liu, B., Wu, B., Li, D., Chen, J., Zhang, J., Wang, J., Zhang, L., Zhuge, M., et al. Data Inter-preter: An LLM agent for data science. arXiv preprint arXiv:2402.18679 , 2024. Iwazaki, S. Improved regret bounds for gaussian process upper confidence bound in bayesian optimization, 2025. URL https://arxiv.org/abs/2506.01393 .Jin, D., Pan, E., Oufattole, N., Weng, W.-H., Fang, H., and Szolovits, P. What disease does this patient have? alarge-scale open domain question answering dataset from medical exams. arXiv preprint arXiv:2009.13081 , 2020. Jubran, I., Maalouf, A., and Feldman, D. Introduction to coresets: Accurate coresets, 2019. URL https:// arxiv.org/abs/1910.08707 .Lewis, P., Perez, E., Piktus, A., Petroni, F., Karpukhin, V., Goyal, N., K ¨uttler, H., Lewis, M., Yih, W.-t., Rockt ¨aschel, T., Riedel, S., and Kiela, D. Retrieval-augmented genera-tion for knowledge-intensive nlp tasks. In Larochelle, H., Ranzato, M., Hadsell, R., Balcan, M., and Lin, H. (eds.), 
+
+Advances in Neural Information Processing Systems ,volume 33, pp. 9459–9474. Curran Associates, Inc., 2020. URL https://proceedings.neurips. cc/paper_files/paper/2020/file/ 6b493230205f780e1bc26945df7481e5-Paper. pdf .Liu, D. C. and Nocedal, J. On the limited memory bfgs method for large scale optimization. Mathematical Pro-gramming , 45:503–528, 1989. URL https://api. semanticscholar.org/CorpusID:5681609 .Liu, J., Xia, C. S., Wang, Y., and Zhang, L. Is your code generated by chatGPT really correct? rigorous evaluation of large language models for code generation. In Thirty-seventh Conference on Neural Information Processing Systems , 2023. URL https://openreview.net/ forum?id=1qvx610Cu7 .Liu, S., Gao, C., and Li, Y. AgentHPO: Large language model agent for hyper-parameter optimization. In The Second Conference on Parsimony and Learning (Proceed-ings Track) , 2025. Liu, T., Astorga, N., Seedat, N., and van der Schaar, M. Large language models to enhance bayesian optimization. In The Twelfth International Conference on Learning Representations , 2024. URL https://openreview. net/forum?id=OOxotBmGol .Requeima, J., Bronskill, J., Choi, D., Turner, R. E., and Du-venaud, D. Llm processes: Numerical predictive distribu-tions conditioned on natural language. In Globerson, A., Mackey, L., Belgrave, D., Fan, A., Paquet, U., Tomczak, J., and Zhang, C. (eds.), Advances in Neural Information Processing Systems , volume 37, pp. 109609–109671. Cur-ran Associates, Inc., 2024. doi: 10.52202/079017-3479. Ross, H., Mahabaleshwarkar, A. S., and Suhara, Y. When2Call: When (not) to call tools. In Proceedings of the 2025 Conference of the Nations of the Americas Chapter of the Association for Computational Linguis-tics: Human Language Technologies (Volume 1: Long Pa-pers) , pp. 3391–3409, Albuquerque, New Mexico, April 2025. Association for Computational Linguistics. ISBN 979-8-89176-189-6. URL https://aclanthology. org/2025.naacl-long.174/ .Shen, Y., Song, K., Tan, X., Li, D., Lu, W., and Zhuang, Y. HuggingGPT: Solving AI tasks with ChatGPT and its friends in Hugging Face. In NeurIPS , volume 36, pp. 38154–38180, 2023. Srinivas, N., Krause, A., Kakade, S., and Seeger, M. Gaus-sian process optimization in the bandit setting: No regret and experimental design. In Proceedings of the Interna-tional Conference on Machine Learning (ICML) , 2010. Sutton, R. S. and Barto, A. G. Reinforcement learning: An introduction . MIT press, 2nd edition, 2018. Trirat, P., Jeong, W., and Hwang, S. J. AutoML-agent: A multi-agent LLM framework for full-pipeline autoML. In Forty-second International Conference on Machine Learning , 2025. URL https://openreview.net/ forum?id=p1UBWkOvZm .Viswanathan, V., Zhao, C., Bertsch, A., Wu, T., and Neu-big, G. Prompt2model: Generating deployable models from natural language instructions. In EMNLP: System Demonstrations , pp. 413–421, 2023. Wang, L., Chen, S., Jiang, L., Pan, S., Cai, R., Yang, S., and Yang, F. Parameter-efficient fine-tuning in large models: A survey of methodologies, 2025. URL https: //arxiv.org/abs/2410.19878 .Yang, Z., Zeng, W., Jin, S., Qian, C., Luo, P., and Liu, W. Autommlab: Automatically generating deployable models from language instructions for computer vi-sion tasks, 2024. URL https://arxiv.org/abs/ 2402.15351 .Yang, Z., Zeng, W., Jin, S., Qian, C., Luo, P., and Liu, W. AutoMMLab: Automatically generating deployable models from language instructions for computer vision tasks. In AAAI , pp. 22056–22064, 2025. Zhang, L., Zhang, Y., Ren, K., Li, D., and Yang, Y. MLCopi-lot: Unleashing the power of large language models in solving machine learning tasks. In The 18th Conference of the European Chapter of the Association for Computa-tional Linguistics , 2024. 10 AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+Zhang, S., Gong, C., Wu, L., Liu, X., and Zhou, M. AutoML-GPT: Automatic machine learning with GPT. 
+
+arXiv preprint arXiv:2305.02499 , 2023. Zheng, L., Guha, N., Anderson, B. R., Henderson, P., and Ho, D. E. When does pretraining help? assess-ing self-supervised learning for law and the casehold dataset, 2021. URL https://arxiv.org/abs/ 2104.08671 .Zhou, Y., Wang, Y., Goel, S., and Zhang, A. R. Why do transformers fail to forecast time series in-context?, 2025. URL https://arxiv.org/abs/2510.09776 .11 AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+## Appendix 
+
+The appendix of this paper is organized as follows. First, we introduce key preliminaries and notation in Appendix A. Next, we utilize this notation and present theoretical bounds for the AutoRefine algorithm in Appendix C. We then describe our multi-agent system in detail, including the prompts used for individual agents, in Appendix E. After that, we detail the datasets used in our study in Appendix F, followed by our study on best practices in Appendix G to validate the relevance of the recommendations. Subsequently, we provide the detailed experimental setup in Appendix H and the detailed numerical results in Appendix I. We also include a case study of AutoAdapt’s planning stage, highlighting how each agent contributes to the plan, in Appendix J. Finally, we present a detailed description of the manual iterations performed for each baseline for the MedQA dataset for the sake of transparency in Appendix K. 
+
+## A. Preliminaries 
+
+Multi-agent frameworks have emerged as a powerful paradigm for complex decision-making tasks, enabling distributed reasoning through specialized agents that collaborate via a plethora of communication workflows. In the context of automated machine learning and domain adaptation, these frameworks allow decomposition of pipeline design into modular decisions, improving scalability and adaptability compared to monolithic approaches. 
+
+A.1. Bayesian Optimisation 
+
+Bayesian optimization (BO) (Frazier, 2018) is a sequential model-based approach for optimizing expensive black-box functions. It assumes an unknown objective function f (x) and models it using a probabilistic surrogate, typically a Gaussian Process (GP) (Beckers, 2021). The GP defines a prior over functions and updates it with observed data Dt = {(xi, y i)}ti=1 .The posterior predictive distribution at a new point x∗ is: 
+
+μ(x∗) = k(x∗, X )⊤K−1y,σ2(x∗) = k(x∗, x∗) − k(x∗, X )⊤K−1k(X, x∗)
+
+where K is the kernel matrix with entries k(xi, xj ).The next query point is chosen by maximizing an acquisition function α(x), which balances exploration and exploitation. Common choices include: 1) Expected Improvement (EI): αEI (x) = E[max(0 , f (x) − f +)] = ( μ(x) − f +)Φ( z) + 
+
+σ(x)ϕ(z) where z = μ(x)−f + 
+
+> σ(x)
+
+, f + is the best observed value, and Φ, ϕ are the CDF and PDF of the standard normal distri-bution. 2) Upper Confidence Bound (UCB): αUCB (x) = μ(x) + κσ (x) where κ > 0 controls the exploration–exploitation trade-off. 
+
+## B. Related Works 
+
+Recent advances in LLM-powered AutoML frameworks can be broadly categorized into static and dynamic systems. Static recommendation approaches, such as AutoMMLab (Yang et al., 2024) , select from a set of pre-prepared models and produce executable plans with limited adaptability to user-specific requirements. Dynamic systems, such as MLCopilot (Zhang et al., 2024), DS-Agent (Guo et al., 2024) and AutoML-Agent (Trirat et al., 2025), generate training plans and code , offering better alignment with user tasks but often struggling with reliability and the complexity for long, multi-stage adaptation pipelines. 
+
+Existing AutoML agents : AutoGPT (Zhang et al., 2023) and HuggingGPT (Shen et al., 2023) connect LLMs with external tools and models to solve generic AI tasks. Agents such as (Guo et al., 2024; Hong et al., 2024; Liu et al., 2025) focus on specific aspects of the ML training pipeline such as data preparation, analysis or HPO and do not consider the end to end pipeline for LLM adaptation. MLCopilot (Zhang et al., 2024) uses a two-stage process: an offline stage to build a knowledge pool from historical data and experience, and an online stage to retrieve demonstrations and generate solutions based on new task descriptions. DS-Agent proposes to use LLM agents along with case based reasoning (CBR) to come up with generic data science pipelines for a task. AutoML-Agent (Trirat et al., 2025) is the closest work related to our method. It employs a multi-agent LLM framework using retrieved knowledge bases to automate generic ML training pipelines. However, the method is not tailored to adaptation of LLMs which may not require finetuning (RAG, prompt optimization 12 AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+etc.) or go beyond finetuning (multi-stage RLHF, instruction tuning etc.). These methods fall short in reliably planning and executing complex, multi-stage LLM adaptation workflows. Different from the above works, AutoAdapt introduces a hybrid recommendation approach that combines the reliability of static planning (using ACG) with the adaptability of dynamic systems (multi-agent system guided by best practices KB). Unlike prior methods that typically support only single-stage fine-tuning, AutoAdapt provides a comprehensive framework for full domain adaptation pipelines, including multi-stage processes such as in-context prompting (eg. RAG), supervised fine-tuning (SFT), alignment (DPO) and so on. AutoAdapt aims to reliably and efficiently generate executable, robust, and user-aligned LLM adaptation plans, overcoming the limitations of existing AutoML systems. 
+
+## C. Theoretical Bounds on the Autorefine algorithm 
+
+This section details the cumulative regret of AutoRefine algorithm. 
+
+Setting. Let Θ be a compact hyperparameter domain equipped with a continuous–categorical relaxation, and let bΘ ⊂ Θ be the finite discretization used by the acquisition optimizer (e.g., multi-start LBFGS followed by discretization). Assume the black-box objective f : Θ → R is a sample from a zero-mean Gaussian process with a squared-exponential (SE/RBF) kernel 
+
+kSE (x, x ′) = σ2 
+
+> f
+
+exp 
+
+
+
+− ∥x − x′∥2
+
+2ℓ2
+
+
+
+,
+
+and that observations are noisy: yt = f (θt) + εt, where εt are σ-sub-Gaussian (independent). The AutoRefine posterior  μt, σ t
+
+ is fit on the dataset Dt that combines ground-truth evaluations {(θi, y i)}ti=1 and LLM-derived trend pseudo-observations {(˜θj , ˜yj )}mt
+
+> j=1
+
+, which are treated as unbiased, high-variance measurements of f (conditional on the GP), i.e., 
+
+˜yj = f (˜θj ) + ˜ εj , ˜εj is ˜σ-sub-Gaussian with ˜σ ≫ σ, 
+
+and thus incorporated with inflated noise variance so they do not over-confidently shrink σt(·). At round t, AutoRefine algorithm selects 
+
+θt ∈ arg max  
+
+> θ∈bΘ
+
+μt−1(θ) + pβt σt−1(θ),
+
+with a confidence schedule βt defined as (Iwazaki, 2025). 
+
+βt = 2 ln 
+
+ 2t2π2
+
+3δ
+
+
+
++ 2 d ln t2dbr 
+
+s
+
+ln 
+
+ 4da δ
+
+!
+
+(1) where a, b are constants defined in lemma 1 of (Iwazaki, 2025), d is the dimension of the domain and r is the length of the domain. Please refer (Iwazaki, 2025) for details. One subtle technical point to note is that in line 19 of Algorithm 1, the acquisition is done by an LLM that is prompted in-context using the optimal point from the GP-UCB algorithm. We prompt the LLM to decide between exploiting the optmized GP-UCB hyperparameters and exploring novel ones in the search space. As the algorithm progresses, there would be fewer novel points to explore and the algorithm would rely more on the GP-UCB optimized point. Thus this acquisition is equivalent to the epsilon-greedy policy with decay (Sutton & Barto, 2018), which asymptotically reduces to the GP-UCB acquisition itself. We need the LLM sampler as the acquisition as otherwise optimizing the function manifold may result in the sampler collapsing to the same optimal point (or one in the vicinity). The LLM sampler acts as a guardrail to prevent such trivial sampling using its domain knowledge. Let the cumulative regret be RT := PTt=1 
+
+ f (θ⋆) − f (θt), where θ⋆ ∈ arg max θ∈Θ f (θ).In this part of the proof, we bound the cumulative regret RT over time T . Here, the time T represents the number of iterations over which the points in the domain (parameter space) are queried to obtain the function value (results). Note we use an LLM as a surrogate model to obtain intermediate results and do not perform evaluations by fitting the network over the sampled parameters and evaluating each iteration. The complexity of an LLM call is negligible compared to actually finetuning an LLM over the sampled parameters and evaluating to obtain the results at that point. As such we only consider the ”actual function evaluations‘ for the complexity. Define Fa to be the augmentation factor i.e. the fraction of the number of data points queried (by actual function evaluation and LLM surrogate) to the number of actual model evaluation. We make use of the below result from (Srinivas et al., 2010) (provides bounds on the function value w.r.t. UCB): 13 AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+Lemma C.1 (Confidence bounds (Srinivas et al., 2010)) . With probability 1 − δ (δ ∈ (0 , 1) ), For any t ∈ N+, the function value at the queried point xt satisfies 
+
+μ(xt; Xt−1, y t−1) − β1/2 
+
+> t
+
+σ(xt; Xt−1) ≤ f (xt).
+
+Furthermore, for any t ∈ N+, any function value f (x) on Xt satisfies 
+
+f (x) ≤ μ(x; Xt−1, y t−1) + β1/2 
+
+> t
+
+σ(x; Xt−1).
+
+Using the above result we bound the regret for Autorefine as below: 
+
+Claim I. For the SE/RBF kernel, the cumulative regret of the Autorefine algorithm (1), with probability at least 1 − δ (for any δ ∈ (0 , 1) ) is, 
+
+RTa = O
+
+s
+
+TFa
+
+ln 2
+
+ TFa
+
+!
+
+,
+
+Proof. The proof follows the GP–UCB template (Iwazaki, 2025) with two ingredients: (i) high-probability confidence envelopes over the posterior; and (ii) summability of posterior uncertainties at the points chosen by UCB. 
+
+(1) Confidence Bound: By standard sub-Gaussian concentration and union bounds on the finite set bΘ with the above βt, we have w.h.p. (probability ≥ 1 − δ) for all t and all θ ∈ bΘ (c.f. lemma 1 in (Srinivas et al., 2010) and C.1): 
+
+f (θ) − μt−1(θ) ≤ pβt σt−1(θ). (2) 
+
+f (θ) − μt−1(θ) ≥ − pβt σt−1(θ). (3) The inclusion of unbiased pseudo-observations with inflated noise variance preserves the validity of (2) and (3) , as they are treated as additional high-variance measurements; such points only affect constants in the posterior covariance and thus in 
+
+σt−1(·).
+
+(2) Instantaneous regret under UCB: Let ∆t := f (θ⋆) − f (θt), where f is the actual evaluation (with possible finetuning using the parameters) of the network using selected parameters and the given data points. Since the acquisition function ( arg max θ∈Θ f (θ)) at time t selected θt, we have 
+
+μt−1(θt) + pβtσt−1(θt) ≥ μt−1(θ⋆) + pβtσt−1(θ⋆)
+
+≥ μt−1(θ⋆) − pβtσt−1(θ⋆)
+
+∴ pβtσt−1(θt) ≥ μt−1(θ⋆) − pβtσt−1(θ⋆)
+
+− μt−1(θ)
+
+∴ f (θ⋆) − μt−1(θ) ≤ pβtσt−1(θt)
+
+, {...From UCB eq. }
+
+f (θ⋆) − (μt−1(θ) − pβtσt−1(θt)) ≤ 2pβtσt−1(θt)
+
+f (θ⋆) − f (θ) ≤ 2pβtσt−1(θt)
+
+, {...From LCB eq. }
+
+Thus from above analysis we have 
+
+∆t ≤ 2pβt σt−1(θt). (4) 14 AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+(3) Summation and improved SE bound. Since we are only interested in the regret at every iteration where the function is actually evaluated at the query point and the GP updated, we discard the iterations with LLM surrogate queries. Summing (4) over t = 1 , . . . , TFa gives 
+
+RTa ≤ 2
+
+> TFa
+
+X
+
+> t=1
+
+pβt σt−1(θt)
+
+For the SE/RBF kernel, a refined analysis of the realized input sequence under UCB shows that the cumulative uncertainty weighted by √βt grows as O(√T ln 2 T ) (c.f. (Iwazaki, 2025)). This yields 
+
+RTa = O
+
+s
+
+TFa
+
+ln 2
+
+ TFa
+
+!
+
+(5) with high probability. 
+
+Effect of pseudo-observations. If we consider the LLM pseudo observations in the regret, the bound comes out to be the following (same as in (Iwazaki, 2025)) 
+
+RT = O
+
+p 
+
+T ln 2 T
+
+
+
+(6) Because pseudo-observations are incorporated as unbiased high-variance points, they do not invalidate (3), (2); they only alter constants in the posterior computation and hence in the final constant multiplying √T ln 2 T . Therefore the rate is unchanged, concluding the proof of Part I bounding the regret from above. For the part II on the lower bound for the number of iterations, consider the simple regret after T rounds to be 
+
+rT := f (θ⋆) − max  
+
+> 1≤t≤T
+
+f (θt),
+
+where θ⋆ is the global maximiser of f . From equation 6 we obtain the average simple regret (over T iterations) as 
+
+rT = ˜O
+
+s
+
+ln 2 TT
+
+!
+
+.
+
+Claim II. To guarantee rT ≤ ε for some ε > 0, the number of actual function evaluation iterations Ta must satisfy 
+
+Ta = Ω ln 2(1 /ε )
+
+Faε2
+
+!
+
+.
+
+Proof. From the regret rate, 
+
+rT ≤ c
+
+s
+
+ln 2 TT
+
+for some constant c > 0. To enforce rT ≤ ε, we require 
+
+c
+
+s
+
+ln 2 TT ≤ ε =⇒
+
+s
+
+ln 2 TT ≤ εc .
+
+Squaring both sides gives 
+
+ln 2 TT ≤ ε2
+
+c2 =⇒ T ≥ c2 ln 2 Tε2 .
+
+15 AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+This is an implicit inequality because T appears inside ln 2 T . For large T , ln T grows slowly compared to T , so we approximate ln T ≈ ln(1 /ε ) (since T will scale like 1/ε 2 in lower bound). Substituting yields 
+
+T = Ω ln 2(1 /ε )
+
+ε2
+
+!
+
+FaTa = Ω ln 2(1 /ε )
+
+ε2
+
+!
+
+Ta = Ω ln 2(1 /ε )
+
+Faε2
+
+!
+
+which establishes the lower bound up to polylogarithmic factors. 
+
+Remark C.2 (On LLM guidance and constants) . If trend points are slightly misspecified with bounded bias b(θ) but are re-centered (or modeled with hyperparameters that absorb the bias), the confidence envelopes remain valid up to a constant slack, which is absorbed into the choice of βt; the asymptotic √T ln 2 T rate is preserved while constants improve when LLM guidance focuses the search in informative regions. If a fixed bias B > 0 were injected without correction, an additional linear term O(BT ) would appear from ∆t ≤ 2√βtσt−1(θt) + 2 B; thus, bias calibration or high-variance downweighting is essential to maintain sublinear regret. 
+
+Remark C.3 (On iteration complexity) . The iteration complexity grows quadratically with 1/ε and only polylogarithmically with the domain size (via ln 2(1 /ε )). For example, to achieve ε = 0 .05 (for e.g. within 5% of the optimal accuracy) with augmentation factor Fa = 100 , we need 
+
+Tmin ≈ O 
+
+ ln 2(20) 100 × (0 .05) 2
+
+
+
+≈ O 
+
+ (3) 2
+
+0.25 
+
+
+
+≈ O (10) iterations. Note, our algorithm does not change the asymptotic complexity compared to the GP-UCB algorithm but only changes the constant factors in the complexity. However, the gains are practically significant as our algorithm only needs few tens of iterations vs perhaps thousands to converge to the optimal point, which is desirable considering the costly training of LLMs. 
+
+## D. Adaptation Configuration Graph 
+
+In this section, we describe in detail the design of the ACG utilized to run the multi agent planning pipeline. Figure 8 illustrates the Adaptation Configuration Graph (ACG) used in our framework to structure and constrain the space of large language model (LLM) domain adaptation workflows. The ACG is a directed acyclic graph that explicitly encodes high -level adaptation strategies, their dependencies, and the corresponding parameterized training configurations, enabling systematic and reliable planning of multi-stage adaptation pipelines. At the highest level, the ACG branches from a root adapt node into alternative adaptation strategies, including retrieval -augmented generation (RAG), supervised fine -tuning (SFT), and preference - based alignment (DPO). Each strategy node captures a semantically distinct mode of adaptation and is connected via requires edges to the concrete configuration blocks needed to instantiate that strategy. This design allows the planner to reason explicitly over which adaptation tech-niques are applicable under given data, resource, and user constraints, rather than treating the pipeline as an unstructured sequence of hyperparameters. For RAG, the graph specifies the required retrieval configuration, including the embedding model, retriever parameters (e.g., top -k), and the base model used for generation. This separation allows retrieval - specific choices to be optimized independently of downstream training decisions. For SFT and DPO, the ACG links the corresponding strategy nodes to detailed training configurations that define the base model, optimization hyperparameters (learning rate, batch size, gradient accumulation), logging and evaluation intervals, and training duration. By explicitly modeling these configurations as graph nodes, the ACG exposes the hierarchical structure of LLM adaptation decisions. 16 AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+Figure 8. Adaptation Configuration Graph (ACG) for the LLM adaptation pipeline with example parameter values at each parameter node. 
+
+The graph further captures parameter - efficient fine - tuning (PEFT) as an intermediate abstraction. Both SFT and DPO may route through a PEFT node, which in turn branches into concrete techniques such as LoRA and prefix tuning. Each PEFT variant is associated with its own parameter block, specifying method - specific hyperparameters (e.g., LoRA rank and scaling factors, prefix length) as well as shared efficiency settings such as quantization type. This explicit factoring enables the planner to reuse shared structure while still exploring method-specific configurations. Overall, the ACG serves two key purposes. First, it narrows the effective search space by enforcing valid structural dependencies between adaptation stages and parameters, thereby preventing ill - formed or non - executable pipelines. Second, it provides a transparent and interpretable representation of the adaptation workflow, which can be traversed and refined by downstream optimization components. By grounding pipeline construction in the ACG, our framework achieves reliable execution while retaining flexibility to support diverse adaptation strategies and training regimes. 
+
+## E. Multi Agent System 
+
+In this section we detail the agents used in the multi-agent pipeline and the corresponding prompts. All agents use OpenAI’s GPT-4.1-mini as the underlying model. Below are the agents used in the system: 
+
+E.1. Proposal Agents Best Practice Agent consolidates empirical insights from prior training pipelines, model cards, and benchmark results. It provides principled priors over adaptation strategies, hyperparameter ranges, and architectural choices, enabling the system to initialize planning in a region of the configuration space that historically yields strong performance. 
+
+Best Practice Agent Recommendation Prompt                                                                                                                                                                         
+
+> You are an expert in machine learning. We are working in amulti-agent framework for finding the best LLM model/ config for auser dataset/task. An orchestrating agent would ask certain questions from you. In order to provide the response you need to read through the historic message content and the current ask from the orchestrator. You will be given user task, the orchestrating LLM ask and also the historic message content. Please provide the answer to the orchestrator request adhering to the user request in the history in order to solve the broader user task. Following are the historic messages: {chat_history} Following is the user task: {task_description} Following is the Orchestrator ask: {orchestrator_ask} Below is the context from the retrieved database of the datasets/tasks and models best practices based on the user query: {best_practice} ### Last round of proposal from the solver agents {last_round_proposals} ### Last round of critique from the critique agents {last_round_critique} We need to get back to the user with aconcrete recommendation and areasoning. Please answer with reason the following Orchestrator ask keeping the history and best practices in context: {orchestrator_ask}
+
+17 AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+Research Agent processed the literature, technical reports, and model documentation (for eg. gathered by the retrieval agent) to identify emerging techniques or underexplored alternatives. This ensures that the system incorporates innovations beyond those reflected in curated best-practice corpora. 
+
+Research Agent Prompt 
+
+### Task Description {task_description} ### Retrieved Knowledge {retrieved_knowledge} ### Last round of proposal from the solver agents {last_round_proposals} ### Last round of critique from the critique agents {last_round_critique} ### Instruction for ResearchAgent You are a research agent with deep domain knowledge in machine learning training pipelines. \You can reason using both the retrieved knowledge and your own LLM capabilities. Provide a concise and structured response that includes: 1. Justification of the recommended approach using both the retrieved knowledge and logical inference. 2. A final recommendation with key configuration or design suggestions. 
+
+Knowledge Retriever Agent dynamically retrieves and aggregates knowledge from multiple web sources (arXiv papers, Hugging Face model/data cards, and web search relevant to a user’s task. It queries these sources, then summarizes the collected information into actionable insights using an LLM. This agent helps provide up-to-date, real-world context about state-of-the-art models, techniques, and best practices to support downstream decision-making in the multi-agent framework. 
+
+Web Search Query Generation Prompt 
+
+You are tasked with generating web search queries based on finetuning LLM for the given user problem. Give me a specific query for web search focusing on the LLM model, configuration pipeline and technique that should be used for finetuning the LLM model for the specified user task and requiement. Please give me a single sentence within 10 words. The answer should not exceed 10 words. The user’s requirements are summarized as follows: {user_requirement_summary} 
+
+arXiv Summary Prompt 
+
+I searched the arXiv papers using the keywords: {task_kw} and {domain_kw}. Here is the result: ===================== {context} ===================== Please summarize the given pieces of arXiv papers into a single paragraph of useful knowledge and insights. We aim to use your summary to address the following user’s requirements. # User’s Requirements {user_requirement_summary} 
+
+Hugging Face Model Cards Summary Prompt 
+
+I searched the huggingface model cards using the task domain: {user_requirements["domain"]}. Here is the result: ===================== {all_model_card_details} ===================== Please summarize the given pieces of huggingface model cards into a single paragraph of useful knowledge and insights. We aim to use your summary to address the following user’s requirements. # User’s Requirements {user_requirement_summary} 
+
+18 AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+Hugging Face Data Cards Summary Prompt 
+
+I searched the huggingface data cards using the task domain: {user_requirements["domain"]}. Here is the result: ===================== {all_data_card_details} ===================== Please summarize the given pieces of huggingface data cards into a single paragraph of useful knowledge and insights. We aim to use your summary to address the following user’s requirements. # User’s Requirements {user_requirement_summary} 
+
+Final Knowledge Aggregation Prompt 
+
+Please extract and summarize the following group of contents collected from different online sources into a chunk of insightful knowledge. Please format your answer as a list of suggestions. I will use them to address the user’s requirements in machine learning tasks. # Source: Web search {search_summary} ===================== # Source: arXiv Papers {arxiv_summary} ===================== # Source: Huggingface model cards {hf_model_card_summary} ===================== # Source: Huggingface data cards {hf_data_card_summary} ===================== The user’s requirements are summarized as follows. {user_requirement_summary} 
+
+E.2. Critic Agents User Preference Agent encodes user -specified constraints such as compute budgets, training preferences, method restrictions, and domain - specific requirements and enforces them throughout the adaptation process. It operationalizes user intent by filtering infeasible configurations and steering the system toward personalized solutions. 
+
+User Preference Agent Prompt 
+
+You are a strict reviewer for AI training proposals. A user has provided their preferences: {user_preferences} Below are proposals from other agents: {proposals} Your job is to: - Identify where each proposal violates user preferences (if any) - Recommend the most aligned proposal (if any) Output a structured review in markdown with per-agent critique. Note that the user preferences describe the global training pipeline and may not be directly relevant to the current proposal. If you determine that the preferences do not apply to this specific node, you may state that no critique is needed. 
+
+Data Agent analyzes the statistics of the provided dataset, including size, token distributions, domain characteristics, entropy measures, label properties etc. It transforms these signals into actionable quantitative summaries of the dataset. This agent also critiques the proposal based on data constraints. 19 AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+Data Agent Prompt                                                              
+
+> You are astrict reviewer for AI training proposals. The user has provided the following information: {data_statistics} Below are proposals from other agents: {proposals} Your job is to: -Identify where each proposal violates user data assumptions, such as distribution mismatch, inappropriate model choice, incorrect input formatting, or unrealistic training configurations. -Recommend the most aligned proposal (if any) Output astructured review in markdown with: 1. Per-agent critique 2. Final recommendation
+
+E.3. Aggregator Agent Aggregator Agent integrates outputs from all upstream agents into a unified context representation. It resolves conflicts, nor-malizes heterogeneous signals, and constructs the information state consumed by the multi -agent planner. This aggregation step ensures coherent and consistent decision-making across the system. 
+
+Aggregator Agent Prompt                                                                                                    
+
+> ### Proposals from the Solver Agents {proposals} ### Critiques from the Critique Agents {critiques} ### Instructions for Aggregator Agent You are an expert agent with deep domain knowledge in machine learning training pipelines. Your role is to aggregate the proposals from solver agents using your own reasoning capabilities. No external or retrieved knowledge is provided. Always prioritize preferences or constraints specified by the data agent or user above all other considerations. Provide aconcise and structured response that includes: 1. Justification for the recommended approach based on logical reasoning and synthesis of the given proposals. 2. Afinal recommendation with key configuration or design suggestions aligned with user or data agent preferences.
+
+## F. Datasets 
+
+We conduct experiments on diverse domains to demonstrate the generalizability of AutoAdapt . The domains are as follows: 1) Mathematical Reasoning 2) Medical Question Answering 3) Legal 4) Root Cause Analysis of Cloud Incidents (Proprietary Dataset) 5) Natural Language 6) Ecommerce 7) Programming 8) Generic reasoning Specifically we select the following benchmark and real world datasets: (1) MATH (Hendrycks et al., 2021) dataset by UC Berkeley focused on mathematical reasoning, covering algebra, calculus, and advanced problem-solving. (2) MedQA (Jin et al., 2020) is a medical question answering dataset requiring domain-specific knowledge and reasoning. (3) CaseHold (Zheng et al., 2021) is a legal reasoning dataset for predicting case outcomes, testing adaptation to specialized legal language (4) PEM is a customer dataset containing pre-engineering level math questions and answers. (5) RCA is a proprietary dataset containing the root cause analysis of cloud incidents in a large scale cloud service provider. (6) ARC (Clark et al., 2018) consists of multiple-choice science questions spanning elementary to middle-school curricula, designed to assess commonsense reasoning and knowledge integration across diverse scientific domains. (7) MBPP (Austin et al., 2021) is a code generation benchmark composed of python problems 20 AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+(8) Ecomm (Trirat et al., 2025) is a task of classification of e-commerce products into relevant categories. (9) Entail (Trirat et al., 2025) is a task of natural language inference given premise and hypothesis. (10) When2Call (Ross et al., 2025) is designed to deduce tool invocation ability. 
+
+## G. Best-Practices Knowledge Base 
+
+In this section we explain the construction of the best practices KB and provide studies on the best practices retrieved and the consistency and relevance of the recommendations provided using these. 
+
+G.1. KB Construction 
+
+To ground the adaptation planning process in empirical evidence and widely adopted practices, we construct a Best -Practices Knowledge Base (KB) that aggregates and structures information from diverse public sources on large language model (LLM) training, adaptation, and evaluation. The primary goal of the KB is to expose reliable priors over model choices, adaptation strategies, and hyperparameter configurations, which can be leveraged by the multi - agent planner to generate executable and effective adaptation pipelines. 
+
+Knowledge Sources We curate the KB from multiple complementary sources that reflect both community standards and state -of - the - art empirical results. Specifically, we collect information offline from: (i) model cards and dataset cards hosted on Hugging Face, which provide structured descriptions of training regimes, datasets, parameter choices, evaluation metrics, and reported performance; (ii) fine -tuning code repositories and notebooks from platforms such as GitHub and Unsloth, which expose concrete implementation details and hyperparameter settings used in practice; and (iii) leaderboards and evaluation summaries from Papers with Code, which link datasets to top - performing models and report comparative metrics. These sources provide complementary perspectives, ranging from high-level summaries to low-level configuration details. 
+
+Knowledge Extraction and Structuring Raw information from the above sources is heterogeneous and largely unstructured. To address this, we employ an LLM -based extraction pipeline to convert documents and code into structured representa-tions. For each model or dataset entry, we extract salient attributes such as dataset domain, size, task type, input–output characteristics, model family, parameter count, training pipeline (e.g., SFT, PEFT, DPO), and reported hyperparameter ranges. In the case of code repositories, we further extract explicit parameter instantiations (e.g., learning rate, batch size, number of epochs, PEFT - specific settings) from training scripts and notebooks. All extracted items are normalized and stored as structured records. We manually validate a handful of the extracted data, however due to the scale of the data manual verification of the entire KB is left to future works. 
+
+Example Model Card derived during the offline KB construction phase                         
+
+> {"base_model": "unsloth/Llama-3.2-3B-Instruct", "training_technique": "sft", "training_datasets": {"mlabonne/FineTome-100k": 100000 }, "dataset_structure": "text", "instruct": 1, "task": [], "evaluation": {}, "quantization": 1, "peft": 1, "lr": 0.0002, "epochs": null, "batch_size": 2, "gradient_accumulation_steps": 4, "optimizer": "adamw_8bit", "scheduler": "linear", "weight_decay": 0.01, "mixed_precision": "fp16", "quantization_method": null, "lora_r": 16, "lora_alpha": 16, "lora_dropout": 0, "target_modules": ["q_proj", "k_proj",
+
+21 AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+Figure 9. Best practices retrieval pipeline from KB.     
+
+> "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj" ], "dpo_beta": null, "training_hardware": null, "library": ["unsloth", "datasets", "transformers", "trl", "peft" ], "domain": "general"}
+
+Indexing and Retrieval Each record in the KB is indexed using a combination of semantic descriptors (task type, domain, dataset characteristics) and model attributes (architecture family, training method, parameter scale). At planning time, the user task description and dataset metadata are used to query the KB and retrieve a set of relevant model–dataset–configuration tuples. This retrieval step provides the multi -agent system with concrete empirical precedents drawn from similar tasks and domains, serving as an evidence-based starting point for decision making. 
+
+Leveraging Best Practices for Adaptation Planning The KB is directly consumed by the Best -Practice Agent during the planning stage. Given a candidate adaptation decision (e.g., selecting PEFT over full fine - tuning), the agent uses retrieved KB entries to justify choices and to propose bounded hyperparameter ranges rather than arbitrary or overly broad search spaces. For example, learning rate ranges, batch size options, or training epoch counts are derived from configurations that have been demonstrated to work on comparable tasks and model scales. These KB -derived ranges are subsequently refined during the AutoRefine stage based on user data and observed performance. Figure ?? shows the retrieval schema by best practice agent from the KB. 
+
+Scope and Limitations The KB is not intended to be exhaustive. Instead, it functions as a practical, curated prior over adaptation decisions for the domains and tasks considered in our experiments. We additionally support dynamic, query - time retrieval to incorporate recent or task -specific information beyond the offline corpus when needed. This design strikes a balance between coverage, accuracy, and computational efficiency. Overall, the Best - Practices Knowledge Base enables 
+
+AutoAdapt to ground its recommendations in established empirical evidence in LLM adaptation, reducing reliance on ad -hoc heuristics or unconstrained exploration, while maintaining flexibility to adapt to user-specific data and requirements. 22 AutoAdapt: An Automated Domain Adaptation Framework for LLMs      
+
+> (a) Dispersion index by dataset. (b) Relevance scores by dataset.
+> Figure 10. (Left) Boxplot showing the dispersion index metric for each dataset. We observe a median score around 0.5, indicating a balance between consistency and diversity in the recommendations. (Right) Boxplot showing relevance scores of the retrieved best practices. We observe consistently high relevance across datasets.
+
+G.2. Dispersion Index of Recommended Parameter Ranges 
+
+To quantify the diversity of hyperparameter range recommendations produced by our multi-agent framework, we introduce the Dispersion Index (DI) . The DI captures the degree of variability across a set of configurations by jointly considering categorical and numeric dimensions. Unlike pairwise similarity measures that focus on individual comparisons, our metric summarizes the overall spread of the recommendation set, providing a single interpretable score. Formally, let C = {c1, c 2, . . . , c N } denote the set of recommended configurations. Each configuration comprises categorical parameters (e.g., activation functions, optimizer choices) and numeric parameters (e.g., learning rate, batch size). For any pair (ci, c j ), we compute: Sim (ci, c j ) = α · J(ci, c j ) + (1 − α) · IoU (ci, c j ), (7) where J(·, ·) is the Jaccard similarity over categorical tokens, IoU (·, ·) is the weighted average Intersection-over-Union across numeric ranges, and α ∈ [0 , 1] balances the contributions of categorical and numeric components. The Dispersion Index is then defined as: DI = 2
+
+N (N − 1) 
+
+X
+
+> i<j
+
+ 1 − Sim (ci, c j ). (8) Intuitively, DI approaches zero when all configurations are nearly identical and increases as recommendations become more diverse. By incorporating both discrete and continuous dimensions, DI provides a holistic measure of variability that is particularly suited for mixed-type hyperparameter spaces. This metric enables us to assess whether the optimizer explores the search space broadly or converges to a narrow region, which is critical for evaluating exploration–exploitation trade-offs in automated tuning. Figure 10a reports the distribution of dissimilarity scores across three datasets: PEM, RCA, and MedQA. We observe that the median dispersion for PEM and RCA lies around 0.45, while MedQA exhibits a higher median near 0.55 with a broader inter-quartile range. Overall, the dispersion values cluster around 0.5, indicating a balance between consistency and variability in the recommended hyperparameter configurations. This suggests that our optimization strategy avoids excessive convergence to a single configuration while maintaining sufficient overlap to ensure stability. Notably, MedQA shows greater variability, reflecting the increased complexity and heterogeneity of this task, whereas PEM and RCA remain comparatively more consistent. 
+
+G.3. Recommendation Relevance 
+
+In order to study the relevance of the best practice sources used for recommendations, we perform a human annotation. Specifically we employ two human experts to review the best practice sources retrieved as well as the task and final 23 AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+recommendations. The annotators then score each retrieved source in a binary manner i.e. 0 if it is not relevant to the task and 1 if it is relevant. We then average these scores across all sources for a given task and run. We experiment on the three datasets: PEM, RCA, MedQA and run the best practice agent 10 times per dataset. The results are reported in figure 10b, where we see a high relevance across all datasets confirming that the retrieved sources are indeed relevant to the task. In order to eliminate the human bias, we compute the Cohen’s Kappa score ((Cohen et al., 2007)) and find a high inter rater agreement ( > 0.9) between the annotators. 
+
+G.4. Example Recommendations 
+
+Figure 11 summarizes an example hyperparameter range recommended by our multi-agent pipeline for the MedQA dataset. The configuration includes both categorical and numeric range parameters, reflecting flexibility in batch size, accumulation steps, and learning rate, while maintaining structural flags such as gradient checkpointing. The proposed hyperparameter search space is designed to achieve an optimal balance between computational efficiency and model performance. By constraining the search to a compact yet expressive set of configurations, we enable systematic exploration while mitigating the risk of combinatorial explosion. 
+
+Model Selection. Fixing the backbone to meta-llama/Llama-3.2-3B-Instruct ensures architectural consistency and leverages a strong instruction-tuned foundation, thereby reducing variance attributable to model choice. 
+
+Categorical Parameters. The discrete sets for per device train batch size ({2, 4, 8, 12 }) and 
+
+gradient accumulation steps ({4, 8, 16 }) provide flexibility in effective batch size scaling. These choices are informed by practical hardware constraints, ensuring that each candidate configuration is feasible for typical GPU memory budgets. 
+
+Continuous Parameters. The learning rate interval [10 −5, 5 × 10 −4] captures the regime most relevant for fine-tuning large language models: sufficiently small to prevent catastrophic forgetting yet broad enough to accommodate task-specific convergence behaviour. Similarly, the epoch range of [3 , 10] offers adaptability across datasets of varying complexity while avoiding overfitting. 
+
+Efficiency and Robustness. By prioritising high-impact parameters and fixing structural flags such as 
+
+gradient checkpointing , the search space remains tractable without sacrificing diversity. This design acceler-ates convergence, reduces computational overhead, and supports reproducibility across heterogeneous tasks. In summary, the recommended parameter ranges exemplify an efficient search space that balances exploration and exploita-tion, enabling robust performance gains under realistic resource constraints. 
+
+G.5. Example Best Practice Retrievals 
+
+To ensure robust and efficient fine-tuning of large language models for medical question answering (MedQA), we consoli-dated a set of authoritative resources from Hugging Face and related repositories. These resources provide guidance on model configuration, parameter-efficient fine-tuning (PEFT), and domain-specific adaptation strategies. 24 AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+{"model_name_or_path": "meta-llama/Llama-3.2-3B-Instruct", "per_device_train_batch_size": { "type": "categorical", "choices": [2, 4, 8, 12] }, "gradient_accumulation_steps": { "type": "categorical", "choices": [4, 8, 16] }, "gradient_checkpointing": true, "learning_rate": {"type": "float", "low": 1e-05, "high": 0.0005 }, "num_train_epochs": {"type": "int", "low": 3, "high": 10 }} 
+
+> Figure 11. Example hyperparameter range recommended by the multi-agent pipeline. Numeric parameters are expressed as intervals, while categorical parameters include discrete choices.
+
+Example of Retrieved Best-Practice Resources 
+
+• Meta Llama 3 HF Repo: https://huggingface.co/meta-llama/Llama-3.2-3B 
+
+• Hugging Face PEFT for LoRA Adapters: https://github.com/huggingface/peft 
+
+• PEFT Finetuning Guide: https://huggingface.co/docs/peft/index 
+
+• Hugging Face Finetuning Guide: https://huggingface.co/docs/transformers/main/en/ main_classes/trainer 
+
+• Hugging Face Llama 3 Finetuning Guide: https://huggingface.co/docs/transformers/ model_doc/llama3 
+
+• QLoRA: Efficient Finetuning: https://github.com/artidoro/qlora 
+
+• Medical QA Datasets: https://huggingface.co/datasets?search=medical+qa 
+
+Relevance for MedQA Task. These resources collectively address the critical aspects of domain adaptation for medical question answering. The Llama 3 configuration and Hugging Face finetuning guides provide foundational instructions for model initialization and training workflows. PEFT and LoRA-based methods enable parameter-efficient adaptation, reducing memory footprint while preserving performance. QLoRA introduces quantization-aware optimization, further improving efficiency without compromising accuracy. Domain-specific insights from the Medical LLMs overview and curated medical QA datasets ensure that the fine-tuned models capture clinical reasoning patterns and terminology. Note we ensure that the target dataset link is not present in the retrieved resources to prevent data leakage. Together, these best practices form a comprehensive toolkit for achieving high-quality, resource-efficient adaptation in downstream applications. 25 AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+## H. Experimental Setup 
+
+In this section, we highlight the detailed experimental setup and justify its completeness in proving the efficiency of 
+
+AutoAdapt over existing LLM-based AutoML based methods. To make the comparison fair across all baselines, all agents are implemented using the same model as AutoAdapt (i.e OpenAI’s GPT-4.1-mini). In order to prevent data leakage, we remove entries of the exact benchmark dataset being evaluated, if present in KB. More concretely, experiments are conducted within the following two setups: • Template Free (TF) Setting : Within this setup, we evaluate each method’s proficiency at generating an end-to-end pipeline under no explicit constraints, except for a simple prompt describing user requirements with respect to domain, accuracy and inference speed - mimcing the requirements of a user with no domain knowledge of LLMs. This gives the candidates full autonomy over the choice of model, adaptation technique and parameters. The prompt is kept consistent across all baselines. However, despite a 100% success rate demonstrated by AutoAdapt , other methods fail to produce final code templates that execute without any errors. To quantify the ability of the baselines to produce executable code, we manually fix errors in the code templates produced by baseline methods, and report the Success Rate of each method as: Success Rate (SR) = 11+ number of iterations . The prompt format is as follows: 
+
+Input Prompt for Template Free Setting                                                  
+
+> We require amodel which has been trained to answer {task_domain} questions. The model should maintain an accuracy of over 90%. Please ensure that the total number of model parameters does not exceed 10 billion. Futhuremore, the model should be deployed on aGPU and process at least 200 words per minute.
+
+• Template Aware (TA) Setting : This setup is meant to offer a fairer comparison between the baselines. In this setup, we augment the other baselines with the following AutoAdapt resources - (a) Adaptation Configuration Graph (ACG), (b) best practices knowledge base (KB), and (c) respective templates for SFT, DPO and RAG. This ensures a default success rate of 100% and judges the baselines purely on their ability to make an informed decision regarding the parameter choices. Since performance on Natural Language benchmarks is highly contingent on the base model and duration of training, we fix the model across a task along with the number of epochs set to 1. The prompt format is as follows: 
+
+Input Prompt for Template Aware Setting                                                                                                                 
+
+> You are an expert system tasked with choosing the most suited adaptation technique and respective hyperparameters for agiven question answering task to be solved by adapting aLarge Language Model. The base model and number of training epochs is fixed. Your goal is to select the best configuration and technique for training a{task_domain} question answering model by refering to the following: ###TASK: Train amodel specialized for answering {user_domain} questions. Accuracy must be greater than 90%. Deployment must be on GPU. Inference speed must be greater than 200 words per minute. ###DECISION GRAPH: {ACG} ###CONTEXT: {Best Practices Knowledge Base} ###PARAMETERS: base_model ={fixed_base_model} learning_rate ="<FILL_ME>" num_train_epochs =1lora ="<FILL_ME>" lora_r ="<FILL_ME>" lora_alpha ="<FILL_ME>" lora_dropout ="<FILL_ME>" per_device_training_batch_size ="<FILL_ME>" gradient_accumulation_steps ="<FILL_ME>" quantization ="<FILL_ME>" ###SFT TEMPLATE: {sft_template} ###DPO TEMPLATE: {dpo_template}
+
+26 AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+###RAG TEMPLATE: {rag_template} 
+
+We utilize the proposed method for each dataset to evaluate the trained models. However, for datasets that lack a well-defined method of evaluation, we adopt an LLM-based equivalence matching with the correct labels to evaluate the models. The evaluation method and metric for each dataset is summarized in the following table, followed by the prompt formats: 
+
+Table 3. Evaluation setup 
+
+Dataset Method of Evaluation Metric 
+
+UC Berkeley MATH OpenAI/simple evals Accuracy MedQA LLM-based equivalence matching (P1) Accuracy CaseHold LLM-based equivalence matching (P1) Accuracy PEM LLM-based answer extraction (P3) + equivalence matching (P1) Accuracy RCA LLM-as-a-Judge (P2) Average Score ARC LLM-based equivalence matching (P1) Accuracy MBPP+ Evalplus (Liu et al., 2023) Accuracy When2Call LLM-based equivalence matching (P1) Accuracy E-commerce Direct Comparison Accuracy Textual Entailment Direct Comparison Accuracy 
+
+Prompt Format for LLM-based equivalence matching (P1) 
+
+System Prompt ----------------------------------------Given a reasoning domain problem, the correct answer, and the student’s answer, determine if the student’s answer is correct. You do not need to solve the problem; simply compare the student’s answer with the correct answer and return ’yes’ if they match and ’no’ if they do not. The correct_answer and student_answer need not exactly match, even if they mean the same thing then return ’yes’. Also if either the option or the answer match between the two, then return ’yes’. User Prompt ----------------------------------------Problem: {problem} Correct Answer: {correct_answer} Student Answer: {student_answer} 
+
+Prompt Format for LLM-as-a-Judge evaluation for RCA (P2) 
+
+System Prompt ----------------------------------------## Task Description - You are an LLM response evaluator and scorer that assesses how well a generated string matches a reference string. - The reference strings you will be provided with are from an on-call software engineer responsible for maintaining a cloud data center. - You will also be provided with a context string that the engineer used to write the response string to help with scoring. - You should assign a score from 1 to 5 based on how comprehensively the generated string covers the information in the reference string. - Use the following scoring criteria: 5: The generated string perfectly captures all the key information in the reference string, including details and nuances. 4: The generated string covers most of the information in the reference string accurately but may miss some minor details. 3: The generated string partially covers the information in the reference string but lacks depth or accuracy in some areas. 
+
+27 AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+2: The generated string contains only a few relevant points from the reference string and misses significant details. 1: The generated string is largely unrelated to the reference string or contains mostly incorrect information. You should also provide a brief explanation or justification for your score. Example User Prompt ----------------------------------------Reference String: The history of artificial intelligence dates back to ancient civilizations such as Greece and China, with notable advancements in the 20th century leading to modern AI technologies. Generated String: Artificial intelligence has evolved significantly over time, especially in the 20th century, thanks to advancements in technology. Example System Scoring ----------------------------------------Assigned Score: 4Justification: The generated string accurately covers the evolution of AI and mentions key advancements in the 20th century, but it lacks specific references to ancient civilizations like Greece and China. Final User Prompt ----------------------------------------Context: {context} Reference String: {gt_answer} Generated String: {generated_text} 
+
+Prompt Format for LLM-based answer extraction for PEM dataset (P3) 
+
+System Prompt ----------------------------------------Extract the final answer from the given solution User Prompt ----------------------------------------You are an answer extraction system. Your task is to process a dataset of science and mathematics problems and extract final answers. Follow these precise instructions: 1. Iterate through each entry in the dataset. 2. For each entry: a. Search for a final numerical value, equation, or multiple choice option. b. If a "Text Solution" section exists, prioritize finding the answer there. c. Ignore any URLs or video links. d. If sentences such as "statement i is correct/incorrect" are present then count this as an answer. Return: statement i is correct/incorrect. e. If multiple answers are present then return all answers. f. For math answers, return final expression if answer is not explicilty mentioned. 3. Output format: - If a final answer is found: Return "Answer: answer" - If no clear final answer is present: Return "No Answer" 4. Formatting rules: - Preserve exact notation and units of extracted answers. - Do not include explanations or workings. 5. Edge cases: - For incomplete or cut-off entries, still attempt to extract an answer if possible. - If an entry only contains hints without a clear final answer, return "No Answer". 6. Example usage: 
+
+28 AutoAdapt: An Automated Domain Adaptation Framework for LLMs                                                                                                                                                                         
+
+> -Example 1: text =Text Solution: Let the velocities at the ends Aand Bbe v_1 and v_2 Using, equation of continuity 6v_1 =10v_2
+> ⇒v_1 =5/3 v_2 Now, using Bernoullis equation: P_1 +1/2 ρv_1ˆ2 =P_2 +1/2 ρv_2ˆ2 P_1 -P_2 =1/2 ρ(16/9 v_2ˆ2) 0.05 ρg=1/2 ρ(16/9 v_2ˆ2) Hence, v_2 =0.75 m/s =75 cm/s Hence, the total flow rate =Av=75 ×10 −1cm 3/s =7.5 cc/s Answer =7.5 cc/s -Example 2: text =Hint: -Determine the value of one main scale division (MSD) by taking the reciprocal of the number of divisions per cm on the main scale. -Calculate the value of one vernier scale division (VSD) by dividing the value of (n-1) main scale divisions by n, since nVSD coincide with (n-1) MSD. -The least count (LC) of the vernier calipers can be found by subtracting the value of one MSD from one VSD. Video Solution: https://www.youtube.com/embed/NTrY16gq84w Answer =No Answer Execute this process systematically for each entry, focusing solely on answer extraction. text ={solution}
+
+## I. Detailed Results 
+
+In this section, we present in detail the specific technique employed by baselines and AutoAdapt , and the corresponding hyperparameters choice under the 2 experimental setups. 
+
+I.1. Template Aware Results 
+
+Table 4. Performance comparison across datasets and methods in the template aware (TA) setting. 
+
+Dataset Base Model AutoAdapt AutoMLAgent MLCopilot HF Defaults DS-Agent 
+
+UC Berkeley MATH Phi-4-mini-Instruct 27 .8 ± 3.5 26 .8 ± 2.4 27 .2 ± 2.3 26 .2 ± 0.06 30 .0 ± 3.7
+
+MedQA Phi-4-mini-Instruct 61 .27 ± 1.1 58 .84 ± 1.3 57 .50 ± 1.2 58 .13 ± 0.04 59 .86 ± 1.0
+
+CaseHold Llama3.2-3B 89 .22 ± 0.9 84 .72 ± 1.1 82 .63 ± 1.0 86 .21 ± 0.08 87 .28 ± 0.9
+
+PEM Qwen2.5-Math-7B-Instruct 67 .69 ± 1.3 64 .53 ± 1.4 63 .71 ± 1.5 65 .78 ± 0.02 63 .40 ± 1.6
+
+RCA Phi-4 2.30 ± 0.76 2.23 ± 0.81 2.18 ± 0.77 2.23 ± 0.81 2.25 ± 0.66 
+
+ARC Llama3.1-8B-Instruct 83 .79 ± 1.2 77 .39 ± 1.1 77 .56 ± 1.0 78 .24 ± 0.03 77 .47 ± 1.4
+
+MBPP+ Qwen2.5-7B-Instruct 68 .3 ± 0.8 68 .2 ± 0.7 67 .5 ± 0.9 68 .0 ± 0.07 66 .9 ± 0.8
+
+When2Call Phi-4-mini-Instruct 54 .5 ± 0.9 45 .4 ± 1.2 48 .1 ± 1.1 46 .9 ± 0.05 50 .0 ± 0.7
+
+I.2. Template Free Results 
+
+The raw results from the template free (TF) setup are presented below: We further normalize the accuracies and average scores from 0 to 1, and report it as NPS (Normalized Performance Scores). We report the Cumulative Score defined as: Cumulative Score = 12 (NPS + SR ). The detailed results used to construct the radar plots in Figure 4 are as follows: 
+
+## J. Case Study: Multi-Agent Debate Planning 
+
+This section presents in detail how the multi-agent debate planning proceeds for the ’MedQA’ dataset. It highlights the individual contribution of the proposal and critic agents, and the mechanism behind the final choice of the adaptation 29 AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+Table 5. Performance comparison across datasets and methods in the template free (TF) setting 
+
+Dataset AutoAdapt AutoMLAgent MLCopilot DS-Agent 
+
+UC Berkeley MATH 17.00 ± 3.1 8.60 ± 2.7 0.60 ± 0.1 0.00 ± 0.00 
+
+MedQA 63 .55 ± 2.1 46 .97 ± 1.8 38 .10 ± 1.2 74.63 ± 2.1
+
+CaseHold 92.53 ± 1.4 85 .90 ± 1.2 3.10 ± 0.8 3.16 ± 0.8
+
+PEM 65.14 ± 2.3 28 .03 ± 1.9 0.00 ± 0.00 0.00 ± 0.00 
+
+RCA 2.30 ± 0.76 1.44 ± 0.64 1.13 ± 0.53 1.23 ± 0.72 
+
+ARC 90.87 ± 2.2 76 .71 ± 1.5 28 .84 ± 1.2 14 .85 ± 0.9
+
+MBPP+ 68.00 ± 1.5 39 .90 ± 1.2 0.00 ± 0.00 0.00 ± 0.00 
+
+Entail 82.1 ± 1.4 80 .5 ± 1.7 24 .3 ± 2.2 50 .0 ± 1.9
+
+Ecom 94 .2 ± 1.7 97 .4 ± 1.1 99.1 ± 0.3 0.00 ± 0.00 
+
+When2Call 58.52 ± 1.3 50 .66 ± 1.2 52 .30 ± 0.9 0.00 ± 0.00 
+
+Table 6. SR and NPS across datasets and baselines 
+
+Dataset SR (1/(1 + iterations )) NPS AutoAdapt AutoMLAgent MLCopilot DS-Agent AutoAdapt AutoMLAgent MLCopilot DS-Agent 
+
+UC Berkeley MATH 1.00 0.11 0.17 1.00 0.17 0.09 0.01 0.00 MedQA 1.00 0.11 0.14 1.00 0.64 0.47 0.38 0.75 CaseHold 1.00 0.11 0.20 0.25 0.93 0.86 0.03 0.03 PEM 1.00 0.11 0.17 0.25 0.65 0.28 0.00 0.00 RCA 1.00 0.11 0.17 1.00 0.46 0.29 0.23 0.25 ARC 1.00 0.11 0.17 0.33 0.91 0.77 0.29 0.15 MBPP+ 1.00 0.11 0.17 0.25 0.68 0.40 0.00 0.50 Entail 1.00 1.00 1.00 0.70 0.82 0.80 0.24 0.50 Ecom 1.00 1.00 0.50 0.00 0.94 0.97 0.98 0.00 When2Call 1.00 0.11 0.17 0.53 0.59 0.51 0.52 0.53 
+
+technique and the hyperparameter ranges. 
+
+Agent: BestPracticeAgent — Node Selection: adapt 
+
+Based on the user task and the contextual best practices, the goal is to select exactly one candidate node from [’sft’, ’rag’, ’dpo’] as the next phase in domain adaptation for the given user dataset/task. **Reasoning:** 1. **User Task and Candidates:** - The user requires selecting one node (strategy) among: - **sft (Supervised Fine-Tuning)** - **rag (Retrieval-Augmented Generation)** - **dpo (Direct Preference Optimization)** 2. **Context and Best Practices:** - The best practices indicate multiple use cases with models trained primarily using **sft** across a variety of medical datasets and multimodal tasks (notably sequence classification, image description, symptom analysis). - Several base models like ‘gpt-4-vision-preview‘, ‘microsoft/deberta-v3-small‘, and ‘unsloth/Qwen2-VL-7B-Instruct-bnb-4bit‘ employ **supervised fine-tuning**. - Parameter-efficient fine-tuning techniques like LoRA and quantization approaches (4-bit, nf4, int4) are frequently paired with SFT, indicating it is well-established and compatible with efficient training pipelines. - Federated learning and instruction tuning appear as promising advanced training techniques but are not reflected in candidate choices. - There is no strong evidence or examples supporting the application or effectiveness of RAG or DPO in the provided best practice data for this particular medical/multimodal domain adaptation scenario. - DPO is mentioned but without concrete training or evaluation results, unlike SFT, which is consistently used and documented. - RAG typically demands additional infrastructure for retrieval components and was not part of the documented successful model adaptations or dataset discussions. 3. **Summary:** - Considering that supervised fine-tuning (SFT) is the proven and predominant choice in the referenced best practices. - It matches the user datasets/tasks aligned with medical and multimodal domains. 
+
+30 AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+Table 7. Cumulative Score (CS) across datasets and baselines 
+
+Dataset AutoAdapt AutoMLAgent MLCopilot DS-Agent 
+
+UC Berkeley MATH 0.58 0.10 0.09 0.50 MedQA 0.82 0.29 0.26 0.87 
+
+CaseHold 0.96 0.49 0.12 0.14 PEM 0.83 0.20 0.08 0.12 RCA 0.73 0.20 0.20 0.62 ARC 0.95 0.44 0.23 0.24 MBPP+ 0.84 0.26 0.08 0.38 Entail 0.91 0.90 0.62 0.60 Ecom 0.97 0.99 0.74 0.00 When2Call 0.79 0.31 0.34 0.53 
+
+- It supports effective parameter-efficient fine-tuning approaches enabling domain adaptation under constrained compute resources. **Concrete Recommendation:** - **Select: "sft" (Supervised Fine-Tuning)** ---**Final Answer:** Select **"sft"** as the adaptation strategy node for the user’s domain adaptation phase. **References:** https://github.com/deepmind/mathematics_dataset https://github.com/Starscream-11813/Variational-Mathematical-Reasoning/ https://github.com/arkilpatel/SVAMP https://github.com/TNI-playground/TNI-FlowerTune-LLM-Leaderboard-GeneralNLP https://github.com/logikon-ai/cot-eval https://github.com/dustalov/llmfao 
+
+Agent: ResearchAgent — Node Selection: sft 
+
+Among the candidates ’sft’ (Supervised Fine-Tuning), ’rag’ (Retrieval-Augmented Generation), and ’dpo’ (Direct Preference Optimization), ’sft’ is the most standard and straightforward adaptation strategy for domain adaptation. It involves fine-tuning the model parameters using supervised data from the target domain, which typically yields direct improvements in performance on that domain. ’rag’ requires additional retrieval mechanisms and data infrastructure, which may complicate the adaptation pipeline and is more suited when external knowledge retrieval is essential. ’dpo’, focusing on preference optimization, is more suited for aligning model outputs with human preferences but might not directly improve domain-specific performance as reliably as ’sft’. Thus, selecting ’sft’ ensures an effective and simple adaptation strategy aligned with standard practices. next_nodes=[’sft’] 
+
+Agent: UserPreferenceAgent — Review of sft Proposals 
+
+# Proposal Review for User Preference Alignment ## Context The user preference specifies selecting exactly one candidate node from among ’sft’, ’rag’, and ’dpo’ as the next phase in domain adaptation for the user dataset/task. The user expects adherence to best practices and justifications aligned with domain adaptation strategies. ---## Agent: BestPracticeAgent ### Analysis: - The proposal explicitly addresses the user’s task of choosing one candidate node from the specified set. - The reasoning heavily references best practices documented for medical/multimodal domain adaptation. - Emphasizes sft (Supervised Fine-Tuning) as the predominant, stable, well-documented, and efficient approach. - Notes lack of strong evidence or successful precedents for rag or dpo in the given context. - Considers infrastructure complexity, compatibility with parameter-efficient fine-tuning, and domain applicability. - Provides concrete recommendation: select "sft". 
+
+31 AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+- References numerous relevant sources and practical examples supporting the choice. ### Alignment with User Preferences: - Fully aligned; directly tackles the user-specified candidate nodes and recommends one node. - Justification rationale is detailed and supported by best practice examples. - No observable violation of user preference. ### Conclusion: - No violations. - Proposal well-aligned and comprehensive. ---## Agent: ResearchAgent ### Analysis: - Provides a clear justification for choosing ’sft’ over ’rag’ and ’dpo’. - Highlights sft as the standard and straightforward approach with direct domain performance benefits. - Notes drawbacks and increased complexity for rag due to retrieval mechanisms. - Notes dpo is better suited for preference alignment than domain adaptation. - Recommends sft as the effective and simple solution according to standard practice. ### Alignment with User Preferences: - Addresses exactly the user preference scenario. - No contradiction or omission regarding user instruction. - Justification is concise but sufficiently informative. - No evidence of deviation from user requirements. ### Conclusion: - No violations. - Proposal is concise and appropriately aligned. ---# Summary and Recommendation | Agent | Violations? | Notes ||------------------|-------------|-------| | BestPracticeAgent| None | Detailed, well-supported, aligns perfectly with user preferences. || ResearchAgent | None | Concise and aligned, covers necessary points. |Recommendation: Both proposals are aligned and recommend selecting "sft". Given higher detail in BestPracticeAgent, recommend accepting BestPracticeAgent’s proposal. 
+
+Agent: DataAgent — Review of sft Proposals 
+
+# Review of AI Training Adaptation Proposals ## 1. Per-Agent Critique ### BestPracticeAgent - Strengths: - Correctly identifies the three candidate strategies: SFT, RAG, and DPO. - Detailed reasoning anchored in best practices for medical domain and multimodal tasks. - Notes SFT is most frequently used and stable approach in similar datasets and tasks. - Recognizes RAG demands additional infrastructure not evidently supported given the dataset/task. - Points out lack of solid evidence for DPO in this medical adaptation scenario. - Concrete recommendation aligns with user’s data profile and task: SFT well-suited for single-choice, structured I/O and moderate-length samples. - No violations observed. ### ResearchAgent - Strengths: - Concise and accurate rationale favoring SFT. - Correctly emphasizes straightforwardness and direct domain adaptation advantages of SFT. - Correctly identifies RAG introduces complexity unsuited to this dataset/task. - Points out DPO is more about user preference alignment than domain performance. - Limitations: - Shorter and less detailed compared to BestPracticeAgent; lacks dataset specifics/medical context. - No violations observed. ## 2. Final Recommendation Both proposals identify "sft" as best strategy node. BestPracticeAgent is preferred due to thoroughness. # Final Answer Select "sft" (Supervised Fine-Tuning) as the domain adaptation strategy node. Preferred Proposal: BestPracticeAgent 
+
+32 AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+Agent: BestPracticeAgent — Final Recommendation: sft 
+
+Based on the user task to select exactly one adaptation strategy node from [’sft’, ’rag’, ’dpo’] for the given dataset/task, and considering the comprehensive contextual best practices and prior agent evaluations, the recommended choice is: ### Final Recommendation: Select: "sft" (Supervised Fine-Tuning) ### Reasoning: - Proven Effectiveness: SFT is predominant and successful in medical/multimodal datasets. - Compatibility with Efficient Techniques: Works well with LoRA and quantization (4-bit, int4, nf4). - Simplicity and Stability: Avoids retrieval infrastructure required by RAG. - Limited Support for Alternatives: DPO targets preference alignment; RAG adds complexity; both lack demonstrated best-practice support here. - Alignment with User Instructions: Select exactly one node; SFT is validated and strategically sound. Please proceed with Supervised Fine-Tuning (sft) as the next phase of domain adaptation. References: https://github.com/deepmind/mathematics_dataset https://github.com/Starscream-11813/Variational-Mathematical-Reasoning/ https://github.com/arkilpatel/SVAMP https://github.com/TNI-playground/TNI-FlowerTune-LLM-Leaderboard-GeneralNLP https://github.com/logikon-ai/cot-eval https://github.com/dustalov/llmfao 
+
+Agent: ResearchAgent — Reiteration: sft 
+
+Among the candidate adaptation strategies ’sft’ (Supervised Fine-Tuning), ’rag’ (Retrieval-Augmented Generation), and ’dpo’ (Direct Preference Optimization), supervised fine-tuning (sft) stands out as the most reliable and straightforward method for domain adaptation. It directly adjusts model parameters based on labeled data from the target domain, ensuring improved domain-specific performance. RAG requires additional components and infrastructure for knowledge retrieval, which may complicate adaptation and is less documented for the current domain scenario. DPO focuses on aligning model outputs with user preferences rather than explicit domain adaptation, making it less suitable here. Given the lack of contrary retrieved knowledge, and standard best practices, selecting ’sft’ optimally balances effectiveness, simplicity, and alignment with domain adaptation goals. next_nodes=[’sft’] 
+
+Agent: UserPreferenceAgent — Review of sft Proposals (Round 2) 
+
+# Proposal Review with Respect to User Preferences ## Summary of User Preferences User requires selection of exactly one node from [’sft’,’rag’,’dpo’]. ## Agent Proposals Review ### BestPracticeAgent - Selects exactly one node: "sft". - Strong domain/task justification; practical and stable training benefits. - Violations: None. ### ResearchAgent - Selects exactly one node: "sft". - Clear domain adaptation justification; concise. - Violations: None. ## Recommendation Both fulfill requirement; BestPracticeAgent is more detailed and thus recommended. 
+
+Agent: DataAgent (Critique) — Review of sft Proposals (Round 2) 
+
+# Proposal Review for Adaptation Strategy Selection ## 1. Per-Agent Critique ### BestPracticeAgent 
+
+33 AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+- Appropriate for medical QA dataset: well-formed examples, short outputs (˜9 tokens), variable inputs. - Avoids unnecessary RAG infrastructure; dismisses DPO for lack of advantage in this domain. - Recommends LoRA/quantization; aligns with format and token-length distribution. - Summary: sound, conservative, domain-aligned. ### ResearchAgent - Also selects "sft"; agrees on straightforward supervised approach. - Less detailed but consistent; no violations. ## 2. Final Recommendation Both select "sft"; BestPracticeAgent is stronger due to detail and practical considerations. Proceed with SFT (sft). 
+
+Agent: BestPracticeAgent — Node Selection: peft 
+
+Given the user task to decide on selecting candidates for the next phase of domain adaptation with a focus on fine-tuned model-based adaptation, and considering that the only candidate available is "peft" (Parameter-Efficient Fine-Tuning), the recommendation is: Recommendation: Select the candidate "peft" for the next phase. Reasoning: 1. Alignment with best practices: strong endorsement of LoRA/FlexLoRA for efficient adaptation. 2. Model examples/configurations incorporate PEFT parameters (lora_r, lora_alpha, lora_dropout). 3. Resource efficiency for constrained hardware/VRAM. 4. Consistency with user instruction: only one candidate and no conflicting info. Summary: Selecting "peft" leverages state-of-the-art resource-efficient fine-tuning techniques for domain adaptation. References: https://github.com/Starscream-11813/Variational-Mathematical-Reasoning/ https://github.com/deepmind/mathematics_dataset https://github.com/arkilpatel/SVAMP https://github.com/TNI-playground/TNI-FlowerTune-LLM-Leaderboard-GeneralNLP https://github.com/rungalileo/agent-leaderboard https://github.com/logikon-ai/cot-eval 
+
+Agent: ResearchAgent — Node Selection: peft 
+
+Given that there is only one candidate node ’peft’ and the task involves configuration settings for a fine-tuned model-based adaptation approach, selecting ’peft’ (Parameter-Efficient Fine-Tuning) is appropriate. PEFT methods are effective for domain adaptation as they allow fine-tuning with fewer parameters and resources while retaining model performance. Since no other candidates are available, selecting ’peft’ aligns well with the instruction and the goal of the adaptation process. next_nodes=[’peft’] 
+
+Agent: UserPreferenceAgent (Critique) — Review of peft Proposals 
+
+# Proposal Review for Training Candidate Selection ## Agent Proposal Critiques ### BestPracticeAgent - Recommends selecting "peft" citing best practices, resource efficiency, practical viability, and no conflicting info. - Compliance: aligned with user context and task. - Issues: none identified. ### ResearchAgent - Selects "peft" as sole candidate; emphasizes efficiency. - Compliance: aligned; less detailed but no violation. ## Recommendation Most aligned: BestPracticeAgent (more comprehensive rationale and references). 
+
+34 AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+Agent: DataAgent (Critique) — Review of peft Proposals 
+
+## Review of Proposals Based on Provided User Data and Task Assumptions ### User Data Summary - Medical multiple-choice QA; 10,178 samples; inputs avg ˜235 tokens, max 938; outputs avg ˜8.7 tokens. ## 1. Per-Agent Critique ### BestPracticeAgent Strengths: - Identifies "peft" as sole candidate; emphasizes LoRA/FlexLoRA and efficiency. Potential issues: - Initially generic; should address short outputs and variable input lengths; confirm classification format and evaluation. ### ResearchAgent Strengths: - Correct default choice given sole candidate. Potential issues: - Too high-level; lacks task/data-specific considerations. ## 2. Final Recommendation Select PEFT; prefer BestPracticeAgent with augmentation advice: - Ensure setup supports classification outputs/MCQ. - Account for variable input lengths; set appropriate loss/metrics; QC and validation. 
+
+Agent: BestPracticeAgent — Final Recommendation: peft 
+
+Recommendation: Select "peft" (Parameter-Efficient Fine-Tuning) for the next phase of domain adaptation. Reasoning: 1. Candidate exclusivity: only node is peft; fits fine-tuned adaptation. 2. Best-practice support: LoRA/FlexLoRA widely adopted; examples include deberta and Qwen2-VL variants. 3. Resource efficiency: suits variable-length inputs (up to ˜938 tokens) and short outputs (˜8.7 tokens) for classification/MCQ. 4. Dataset/task consistency: PEFT can adapt heads, handle token variability, and pair with proper loss/metrics. 5. No conflicting constraints. Augmentation advice: - Confirm PEFT supports short classification outputs and MCQ format. - Normalize inputs; consider domain tokenization. - Use classification-appropriate loss (cross-entropy) and metrics (accuracy/F1). - Monitor domain shift/catastrophic forgetting. References: https://github.com/Starscream-11813/Variational-Mathematical-Reasoning/ https://github.com/deepmind/mathematics_dataset https://github.com/arkilpatel/SVAMP https://github.com/TNI-playground/TNI-FlowerTune-LLM-Leaderboard-GeneralNLP https://github.com/rungalileo/agent-leaderboard https://github.com/logikon-ai/cot-eval 
+
+Agent: ResearchAgent — Reiteration: peft 
+
+The candidate ’peft’ stands for Parameter-Efficient Fine-Tuning, which is well-aligned with the task of fine-tuned model-based adaptation, especially in scenarios requiring resource efficiency. Given that ’peft’ is the sole candidate and no conflicting information advises against its use, selecting it is logical. PEFT methods enable effective adaptation of large models with fewer parameters, reducing computational resources while maintaining performance. The prior best practice analysis shows strong support for PEFT techniques such as LoRA and FlexLoRA. Therefore, selecting ’peft’ optimally advances the adaptation process based on current best practices and the task requirements. next_nodes=[’peft’] 
+
+Agent: UserPreferenceAgent (Critique) — Review of peft Proposals (Round 2) 
+
+# Review of AI Training Proposals with Respect to User Preferences 
+
+35 AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+## Proposal Critiques ### BestPracticeAgent - Aligns with implicit preference to select sole candidate peft. - Comprehensive reasoning; accounts for dataset nuances and implementation. - No violations. ### ResearchAgent - Concise; selects peft; no conflicts. - No violations. ## Summary Recommendation Both conform; BestPracticeAgent recommended due to actionable detail and references. 
+
+Agent: DataAgent (Critique) — Review of peft Proposals (Round 2) 
+
+# Training Proposal Review ## 1. Per-agent Critique ### BestPracticeAgent - Acknowledges dataset stats (variable input length, short outputs). - Recommends loss/metrics and monitoring; aligns with data realities. - No violations. ### ResearchAgent - Correct but less detailed; still consistent with data characteristics. - No violations. ## 2. Final Recommendation Accept BestPracticeAgent proposal as most aligned and thorough choice for next phase using PEFT. 
+
+Agent: BestPracticeAgent — Node: sft train (Parameters & Reasoning) 
+
+{"parameters": {"model_name_or_path": "unsloth/Qwen2-VL-7B-Instruct-bnb-4bit", "learning_rate": {"type": "float", "low": 1e-5, "high": 3e-4}, "num_train_epochs": {"type": "int", "low": 2, "high": 5}, "per_device_train_batch_size": {"type": "categorical", "choices": [4, 8, 12]}, "gradient_accumulation_steps": {"type": "categorical", "choices": [4, 8, 12]}, "weight_decay": {"type": "float", "low": 0.0, "high": 0.05}, "optimizer": {"type": "categorical", "choices": ["adamw_8bit", "adamw_torch_fused", "AdamW"]}, "scheduler": {"type": "categorical", "choices": ["linear", "cosine", "constant"]}, "mixed_precision": {"type": "categorical", "choices": ["fp16", "bf16"]}, "quantization": {"type": "categorical", "choices": [1]}, "quantization_method": {"type": "categorical", "choices": ["int4"]}, "peft": {"type": "categorical", "choices": [1]}, "lora_r": {"type": "categorical", "choices": [8, 16, 32]}, "lora_alpha": {"type": "categorical", "choices": [16, 32, 64]}, "lora_dropout": {"type": "categorical", "choices": [0, 0.05, 0.1]}, "target_modules": {"type": "categorical", "choices": ["q_proj", "dense", "dense_h_to_4h", "out_proj", "o_proj "]}, "gradient_checkpointing": true, "packing": true, "logging_steps": 25, "eval_steps": 100 }}--- Reasoning (abridged): - Model: unsloth/Qwen2-VL-7B-Instruct-bnb-4bit (<10B params), balances capacity and throughput. - Strategy: SFT with PEFT (LoRA) + int4 quantization + mixed precision for efficiency. - Search space: LR 1e-5..3e-4, epochs 2..5, batch/accum choices for memory/stability, WD 0..0.05. - Optimizers/schedulers: AdamW variants; linear/cosine/constant. - Memory: gradient checkpointing + packing; logging/eval steps set. References: https://github.com/Starscream-11813/Variational-Mathematical-Reasoning/ https://github.com/deepmind/mathematics_dataset https://math-qa.github.io/math-QA/ https://github.com/dsdanielpark/open-llm-leaderboard-report https://github.com/CPM-AI/Kor_Finance-leaderboard 
+
+36 AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+https://github.com/AI-Ceping/LLM-Ceping 
+
+Agent: ResearchAgent — Node: sft train (Justification & Parameter Range) 
+
+Given the user requirements of maintaining accuracy over 90% for college-level medical multiple-choice questions and the constraint of model parameters under 10 billion, the best candidate from the available model card data is ’unsloth/Qwen2-VL-7B-Instruct-bnb-4bit’. This model has approximately 7 billion parameters, fitting the size constraint and has been trained with supervised fine-tuning (SFT) on medical datasets analogously, which implies good domain relevance and task alignment. It also uses PEFT with LoRA, mixed precision and quantization suitable for efficient GPU deployment, aiding the processing speed requirement (at least 200 words per minute). The hyperparameter tuning ranges suggested reflect typical best practices in SFT with LoRA setups..." parameter_range=’{"model_name_or_path":{"type":"categorical","choices":["unsloth/Qwen2-VL-7B-Instruct-bnb-4bit "]}, "learning_rate":{"type":"float","low":1e-6,"high":1e-3}, "num_train_epochs":{"type":"int","low":2,"high":3}, "per_device_train_batch_size":{"type":"categorical","choices":[2,4,8]}, "gradient_accumulation_steps":{"type":"categorical","choices":[1,4,8]}, "lora_r":{"type":"categorical","choices":[8,16,32]}, "lora_alpha":{"type":"categorical","choices":[16,32]}, "lora_dropout":{"type":"categorical","choices":[0,0.05,0.1]}, "weight_decay":{"type":"float","low":0.0,"high":0.1}, "optimizer":{"type":"categorical","choices":["adamw_8bit","adamw_hf"]}, "scheduler":{"type":"categorical","choices":["linear","cosine"]}, "quantization":{"type":"categorical","choices":[1]}, "mixed_precision":{"type":"categorical","choices":["fp16"]}} 
+
+Agent: UserPreferenceAgent (Critique) — Review of sft train Proposals 
+
+# AI Training Proposal Review ## BestPracticeAgent Strengths: bounded LR (1e-5..3e-4), epochs (2..5), balanced batch/accum, WD<=0.05, fp16/bf16, int4, LoRA, checkpointing+packing. Issues: none apparent. ## ResearchAgent Strengths: compliant model; broader LR range. Issues: LR upper bound 1e-3 risky; epochs only 2..3; smaller batch/accum may hurt throughput; fp16-only; missing checkpointing/packing. Recommendation: BestPracticeAgent is most aligned and robust. 
+
+Agent: DataAgent (Critique) — Review of sft train Proposals 
+
+# Review of AI Training Proposals ## BestPracticeAgent - Model fits <10B; supports input lengths via packing + gradient checkpointing. - SFT + LoRA + int4 + mixed precision; reasonable bounded hyperparameter ranges. - No violations; minor note: int4 fixed (aggressive but aligned with inference). ## ResearchAgent - Model aligns, but LR range too broad (up to 1e-3) risks instability/overfit; fewer training optimizations specified. - More risk than BestPracticeAgent for this dataset (˜10K samples). Final Recommendation: proceed with BestPracticeAgent configuration. 
+
+Agent: BestPracticeAgent — Node: sft train (Final Repeated Configuration) 
+
+{"parameters": {"model_name_or_path": "unsloth/Qwen2-VL-7B-Instruct-bnb-4bit", "learning_rate": {"type": "float", "low": 1e-5, "high": 3e-4}, "num_train_epochs": {"type": "int", "low": 2, "high": 5}, "per_device_train_batch_size": {"type": "categorical", "choices": [4, 8, 12]}, 
+
+37 AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+"gradient_accumulation_steps": {"type": "categorical", "choices": [4, 8, 12]}, "weight_decay": {"type": "float", "low": 0.0, "high": 0.05}, "optimizer": {"type": "categorical", "choices": ["adamw_8bit", "adamw_torch_fused", "AdamW"]}, "scheduler": {"type": "categorical", "choices": ["linear", "cosine", "constant"]}, "mixed_precision": {"type": "categorical", "choices": ["fp16", "bf16"]}, "quantization": {"type": "categorical", "choices": [1]}, "quantization_method": {"type": "categorical", "choices": ["int4"]}, "peft": {"type": "categorical", "choices": [1]}, "lora_r": {"type": "categorical", "choices": [8, 16, 32]}, "lora_alpha": {"type": "categorical", "choices": [16, 32, 64]}, "lora_dropout": {"type": "categorical", "choices": [0, 0.05, 0.1]}, "target_modules": {"type": "categorical", "choices": ["q_proj", "dense", "dense_h_to_4h", "out_proj", "o_proj "]}, "gradient_checkpointing": true, "packing": true, "logging_steps": 25, "eval_steps": 100 }}
+
+Agent: ResearchAgent — Node: sft train (Repetition with Matching Range) 
+
+The recommended base LLM is ’unsloth/Qwen2-VL-7B-Instruct-bnb-4bit’... The hyperparameter ranges are selected... learning rate 1e-5 to 3e-4; epochs 2 to 5; batch sizes and gradient accumulation 4,8,12; weight decay up to 0.05; AdamW variants; schedulers linear/cosine/constant; mixed precision fp16/bf16; int4 quantization; LoRA ranges; gradient checkpointing and packing..." parameter_range=’{"model_name_or_path":{"type":"categorical","choices":["unsloth/Qwen2-VL-7B-Instruct-bnb-4bit "]}, "learning_rate":{"type":"float","low":1e-5,"high":3e-4}, "num_train_epochs":{"type":"int","low":2,"high":5}, "per_device_train_batch_size":{"type":"categorical","choices":[4,8,12]}, "gradient_accumulation_steps":{"type":"categorical","choices":[4,8,12]}, "weight_decay":{"type":"float","low":0.0,"high":0.05}, "optimizer":{"type":"categorical","choices":["adamw_8bit","adamw_torch_fused","AdamW"]}, "scheduler":{"type":"categorical","choices":["linear","cosine","constant"]}, "mixed_precision":{"type":"categorical","choices":["fp16","bf16"]}, "quantization":{"type":"categorical","choices":[1]}, "quantization_method":{"type":"categorical","choices":["int4"]}, "peft":{"type":"categorical","choices":[1]}, "lora_r":{"type":"categorical","choices":[8,16,32]}, "lora_alpha":{"type":"categorical","choices":[16,32,64]}, "lora_dropout":{"type":"categorical","choices":[0,0.05,0.1]}, "target_modules":{"type":"categorical","choices":["q_proj","dense","dense_h_to_4h","out_proj","o_proj"]}, "gradient_checkpointing":true,"packing":true,"logging_steps":25,"eval_steps":100} 
+
+Agent: UserPreferenceAgent (Critique) — Final Review of Training Proposals 
+
+# Training Proposals Review Both proposals are effectively equivalent in model choice and hyperparameter space and do not violate user preferences. Recommended: BestPracticeAgent (slightly more detailed and referenced). 
+
+Agent: DataAgent (Critique) — Review of AI Training Proposals 
+
+# Review of AI Training Proposals ## 1. Per-Agent Critique ### BestPracticeAgent **Strengths:** - Proposes a model (**unsloth/Qwen2-VL-7B-Instruct-bnb-4bit**) with 7B parameters, which fits the user’s max of ˜7B parameters. - The model is suitable for the task of medical multiple-choice QA based on the user data (input length avg ˜235 tokens, relatively long and complex inputs). - Uses input *packing* and *gradient checkpointing* to handle longer inputs and optimize memory, which aligns well with the large input token length (average ˜235 tokens, max up to 938). - Incorporates parameter-efficient fine-tuning (PEFT) via LoRA - very appropriate for the medium-sized dataset (10,178 samples) to avoid overfitting and reduce compute. 
+
+38 AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+- Quantization (int4) and mixed precision (fp16 or bf16) are tuned for efficient training and inference, which fits the likely GPU deployment stated. - The hyperparameter spaces for learning rate, training epochs, batch sizes, and weight decay appear sensible for this dataset size and task complexity. - Scheduler choices are standard and diverse to enable effective learning rate adjustment. - Target modules for LoRA and LoRA-specific parameters (r, alpha, dropout) are well-detailed and offer flexible tuning. - Logging and evaluation steps are practical given dataset and expected training times. **No apparent violation** of user data assumptions or unrealistic training configurations. ### ResearchAgent **Strengths:** - Largely overlaps with BestPracticeAgent in choice of model, hyperparameter ranges, and training techniques. - Explains reasoning for model choice in the context of dataset size, user requirement (<10B parameters), and throughput (˜200 words per minute). - Appropriately uses SFT + PEFT (LoRA) along with int4 quantization and mixed precision for efficient medical fine-tuning. - Hyperparameter ranges and choices align well with common practice, dataset scale, and example input lengths. - Considers gradient checkpointing, packing, and standard training configuration parameters. **Essentially identical in recommendation and compatible with user data and task requirements.** No violation or mismatch seen. ---## 2. Final Recommendation Both proposals are essentially the same solution with very minor differences in presentation and reasoning style. They both: - Select an appropriate model size (<10B parameters). - Account for the input sequence length characteristics. - Use best practices (LoRA, mixed precision, int4 quantization) aligned with dataset size and domain. - Propose a realistic hyperparameter search space for efficient fine-tuning without overfitting. - Include memory and speed optimizations (packing, gradient checkpointing). - Target medical multiple-choice QA format as required. **Therefore, the recommended proposal is the one from *BestPracticeAgent*.** ---# Summary | Proposal | Violation of User Assumptions? | Suitability Summary | Recommendation ||-------------------|--------------------------------|----------------------------------------------|----------------| | BestPracticeAgent | None | Excellent fit, aligns fully with data & task | **Recommended** || ResearchAgent | None | Similar to BestPracticeAgent; redundant | Not recommended separately | ---# Additional Notes - Both proposals support >200 words/min inference speed implicitly by model choice and quantization; no conflict with user requirement. - No over- or under-sized batch sizes, epochs, or learning rates that conflict with dataset scale. - Handling of long input sequences is properly addressed. ---# Final verdict: Select **BestPracticeAgent** proposal for fine-tuning the medical multiple-choice QA model under the given constraints. 
+
+Agent: BestPracticeAgent — PET Method Selection: lora 
+
+Considering the user task requires selecting exactly one Parameter Efficient Tuning (PET) method node from the candidates [’lora’, ’prefix_tuning’], and referencing the best practices and model usage data from the retrieved context, the recommended choice is: **Recommendation: Select "lora"** 
+
+39 AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+### Reasoning: 1. **Best Practice Alignment**: - The best practice dataset explicitly mentions "LoRA" and "FlexLoRA" as parameter-efficient fine-tuning methods used successfully with large pretrained models (e.g., Gemma2-9b, Mistral-7B) in scenarios involving federated learning and instruction tuning. - There is no mention of "prefix_tuning" in the retrieved best practices, indicating LoRA is more established and better supported in these contexts. 2. **Empirical Evidence from Selected Models**: - Several selected models in the domain adaptation and fine-tuning context (e.g., microsoft/deberta-v3-small) use LoRA with specific hyperparameters (e.g., lora_r=16, lora_alpha=32, lora_dropout=0.05), demonstrating effective application and integration with established training pipelines. - Other models either do not use PEFT or do not mention prefix tuning, underscoring LoRA’s practical adoption 3. **Computational Efficiency & Flexibility**: - LoRA optimizes model adaptation by injecting low-rank adaptation layers, enabling efficient tuning with relatively low VRAM consumption and minimal computational overhead, which aligns well with the stated goal of minimal computational cost in PET methods. - Quantization strategies combined with LoRA have shown promising results in memory-optimized training setups. 4. **Community and Library Support**: - LoRA is widely supported in popular libraries (e.g., transformers, PEFT), making it easier to integrate and troubleshoot in a variety of experimental setups. ### Conclusion: Given the explicit inclusion of LoRA in successful parameter-efficient tuning scenarios, its demonstrated effectiveness in the given datasets and models, and the lack of concrete best practices for prefix tuning in this context, "lora" is the most suitable and justified choice for the next node in the domain adaptation process. ---**Final selection:** ‘lora‘ **References:** https://github.com/Starscream-11813/Variational-Mathematical-Reasoning/ https://github.com/deepmind/mathematics_dataset https://github.com/sroy9/mawps https://github.com/TNI-playground/TNI-FlowerTune-LLM-Leaderboard-GeneralNLP https://github.com/rungalileo/agent-leaderboard https://github.com/logikon-ai/cot-eval 
+
+Agent: ResearchAgent — PET Method Selection: lora 
+
+Both LoRA and prefix tuning are popular Parameter Efficient Tuning (PET) methods that allow for adapting large pre-trained models with reduced computational demands. LoRA injects low-rank adaptation matrices into existing model weights, enabling efficient fine-tuning with fewer trainable parameters and minimal changes to the original model architecture. Prefix tuning, on the other hand, prepends trainable tokens to the input sequence and freezes the backbone model, also achieving parameter efficiency but sometimes at the cost of lower expressiveness. Given the need to balance computational cost, adaptation quality, and ease of implementation, LoRA is generally considered more effective due to its ability to adapt model weights directly while maintaining parameter efficiency. Hence, selecting ’lora’ as the next candidate for domain adaptation is the recommended approach. next_nodes=[’lora’] 
+
+Agent: UserPreferenceAgent (Critique) — Review of PET Method Proposals 
+
+# Review of Proposals Against User Preferences Context: The current decision is selecting exactly one PET method node from [’lora’, ’prefix_tuning’]. ## Proposal Critiques ### BestPracticeAgent - Recommends ‘lora‘ citing strong best practice evidence, empirical model support, computational efficiency, and community/library support. - Notes lack of ‘prefix_tuning‘ evidence in retrieved best practices. - No user preference violations detected; reasoning is thorough and reproducible. ### ResearchAgent 
+
+40 AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+- Selects ‘lora‘ via high-level comparison; argues LoRA is more expressive and easier to implement while remaining parameter-efficient. - No user preference violations detected; slightly less detailed than BestPracticeAgent. ## Overall Recommendation Both proposals align and pick ‘lora‘. BestPracticeAgent is recommended due to more comprehensive evidence and detail. # Summary | Agent | User Preference Violation | Notes | Recommendation ||------------------|---------------------------|--------------------------------------------------|----------------| | BestPracticeAgent| None | Detailed, well-supported, clear rationale | **Recommended** || ResearchAgent | None | Accurate but less detailed comparative analysis | Acceptable alternative | 
+
+Agent: DataAgent (Critique) — Review of PET Method Proposals 
+
+# Review of Parameter Efficient Tuning (PET) Method Proposals ## 1. Per-agent Critique ### BestPracticeAgent - Alignment with data assumptions: - Dataset: avg input ˜236 tokens (p95 ˜376), short outputs (˜9 tokens), classification/choice task. - LoRA’s lightweight adaptation aligns well; references real model fine-tuning use cases. - No detected violations regarding distribution, formatting, or realism. ### ResearchAgent - Alignment with data assumptions: - Conceptually sound justification for LoRA; no contradictions with dataset stats or training realism. - No evidence of violation. ## 2. Final Recommendation Both recommend ‘lora‘; BestPracticeAgent slightly stronger due to detail, references, and concrete examples. Final selected PET method: ‘lora‘ 
+
+Agent: BestPracticeAgent — Final Selection: lora 
+
+Based on the provided user task, the retrieved best practice information, and the detailed analyses and critiques from the solver agents, the clear and well-supported recommendation is: Select the Parameter Efficient Tuning (PET) method node: ‘lora‘ Reasoning: 1. Strong best practice evidence: LoRA/FlexLoRA widely used with large pretrained models; robust in federated learning and instruction tuning. 2. Empirical support: multiple models use LoRA with optimized hyperparameters; prefix tuning absent in evidence. 3. Efficiency and dataset alignment: LoRA provides compute/memory savings aligned with token-length and classification-type task. 4. Ecosystem support: broad support in key libraries enables easier adoption and debugging. Conclusion: select ‘lora‘. References: https://github.com/Starscream-11813/Variational-Mathematical-Reasoning/ https://github.com/deepmind/mathematics_dataset https://github.com/sroy9/mawps https://github.com/TNI-playground/TNI-FlowerTune-LLM-Leaderboard-GeneralNLP https://github.com/rungalileo/agent-leaderboard https://github.com/logikon-ai/cot-eval 
+
+Agent: ResearchAgent — Reiteration: lora 
+
+LoRA is widely recognized as an effective Parameter Efficient Tuning (PET) method that enables model adaptation by injecting low-rank adaptation matrices into existing model weights. This approach maintains parameter efficiency while directly adapting model weights, offering a balance between computational cost and adaptation quality. Compared to prefix tuning, LoRA has broader community support, concrete best practice applications on various pretrained models, and proven empirical success in domain adaptation tasks. Given these factors and the task requirement to select exactly one PET method node, ’lora’ stands out as the most 
+
+41 AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+suitable candidate for efficient domain adaptation. next_nodes=[’lora’] 
+
+Agent: UserPreferenceAgent (Critique) — Training Node Selection: lora 
+
+# Proposal Review for Training Node Selection ## BestPracticeAgent - Recommends ‘lora‘ with detailed best-practice evidence, empirical support, efficiency alignment with dataset, and ecosystem support. - No preference violations; thorough and well-supported. ## ResearchAgent - Recommends ‘lora‘ with concise justification on efficiency, adaptation quality, and broader support. - No preference violations; consistent and valid. ## Overall Recommendation Both recommend ‘lora‘; BestPracticeAgent preferred for completeness. | Agent | Violation of User Preferences? | Recommendation ||-----------------|---------------------------------|----------------| | BestPracticeAgent | None | **Recommended** || ResearchAgent | None | Acceptable but secondary |
+
+Agent: DataAgent (Critique) — Review of PET Node Selection: lora 
+
+# Review of AI Training Proposals Against User Data ## 1. Per-Agent Critique ### BestPracticeAgent - Adheres to user data: considers token lengths, clean data, domain medical QA classification. - LoRA aligns with ˜10k samples and efficiency goals; absence of prefix tuning evidence supports LoRA selection. - No violations: no distribution mismatch; formatting matches instruction+question+options; realistic training approach. ### ResearchAgent - Also supports LoRA; emphasizes efficiency and quality balance; community support vs prefix tuning. - No violations: aligns with dataset size and output style; directly supports domain adaptation. ## 2. Final Recommendation Both recommend ‘lora‘; BestPracticeAgent preferred for comprehensive reasoning and ecosystem support. Final recommended PET method node: ‘lora‘ 
+
+Agent: BestPracticeAgent — Node: lora (Hyperparameter Search Space) 
+
+Here is the recommended hyperparameter search space for tuning the model (Qwen/Qwen2.5-7B-Instruct), along with the reasoning: User constraints: - Medical MCQ QA; accuracy >90%; <=10B params; GPU inference ˜200 words/min. - Base model: Qwen2.5-7B-Instruct. - SFT with LoRA; gradient checkpointing; packing true. Recommended Hyperparameter Search Space: {"parameters": {"learning_rate": {"type": "float", "low": 1e-5, "high": 3e-4}, "per_device_train_batch_size": {"type": "categorical", "choices": [4, 8, 12]}, "gradient_accumulation_steps": {"type": "categorical", "choices": [4, 8, 12]}, "num_train_epochs": {"type": "int", "low": 2, "high": 5}, "lora_r": {"type": "categorical", "choices": [8, 16]}, "lora_alpha": {"type": "categorical", "choices": [16, 32]}, "lora_dropout": {"type": "float", "low": 0.05, "high": 0.1}, "quantization": {"type": "categorical", "choices": [0, 1]}, "quantization_method": {"type": "categorical", "choices": ["nf4", "int4"]}, "weight_decay": {"type": "float", "low": 0.0, "high": 0.01}, 
+
+42 AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+"optimizer": {"type": "categorical", "choices": ["adamw_8bit", "adamw_torch_fused", "adamw_hf"]}, "scheduler": {"type": "categorical", "choices": ["constant", "cosine", "linear"]}, "mixed_precision": {"type": "categorical", "choices": ["bf16", "fp16"]} }}Reasoning (high level): - LR 1e-5..3e-4 for stable medical QA tuning. - Batch/accum 4/8/12 for memory+throughput. - Epochs 2..5 for convergence without overfit. - LoRA r/alpha/dropout bounded for efficiency and regularization. - Quantization (nf4/int4) for GPU efficiency with quality flexibility. - Low weight decay to prevent over-regularization. - AdamW variants and schedulers provide stable optimization. - bf16/fp16 accelerate GPU training; bf16 preferred for stability. References: https://github.com/Starscream-11813/Variational-Mathematical-Reasoning/ https://github.com/deepmind/mathematics_dataset https://math-qa.github.io/math-QA/ https://github.com/dsdanielpark/open-llm-leaderboard-report https://github.com/CPM-AI/Kor_Finance-leaderboard https://github.com/AI-Ceping/LLM-Ceping 
+
+Agent: ResearchAgent — Node: lora (Justification & Parameter Range) 
+
+Given the user task and base LLM selected, below are the parameter ranges parameter_range= {"learning_rate":{"type":"float","low":1e-5,"high":3e-4}, "num_train_epochs":{"type":"int","low":2,"high":5}, "per_device_train_batch_size":{"type":"categorical","choices":[4,8,12]}, "gradient_accumulation_steps":{"type":"categorical","choices":[4,8,12]}, "lora_r":{"type":"categorical","choices":[8,16,32]}, "lora_alpha":{"type":"categorical","choices":[32,64]}, "lora_dropout":{"type":"float","low":0.0,"high":0.1}, "quantization":{"type":"categorical","choices":[0,1]}, "quantization_method":{"type":"categorical","choices":["int4"]}, "weight_decay":{"type":"float","low":0.0,"high":0.1}, "optimizer":{"type":"categorical","choices":["adamw_8bit","adamw_torch"]}, "scheduler":{"type":"categorical","choices":["linear","cosine"]}, "mixed_precision":{"type":"categorical","choices":["bf16"]}, "target_modules":{"type":"categorical","choices":["q_proj","k_proj","v_proj","o_proj","dense","dense_h_to_4h"]}} 
+
+Agent: UserPreferenceAgent (Critique) — Review of LoRA Hyperparameter Proposals 
+
+# Training Proposal Review ## Proposal 1: BestPracticeAgent - Balanced hyperparameter space aligned with constraints (<=10B, >90% accuracy, GPU speed). - Conservative LoRA (r: 8/16; alpha: 16/32; dropout: 0.05-0.1). - Quantization includes nf4 and int4; sched includes constant; multiple optimizers; bf16+fp16. - No violations detected. ## Proposal 2: ResearchAgent - Mostly aligned but more aggressive: - LoRA r includes 32; alpha up to 64; dropout includes 0; weight decay up to 0.1. - Quantization method only int4; fewer scheduler/optimizer choices; bf16-only. - Concerns: efficiency/overfit risk; narrower quantization/scheduler flexibility. ## Final Recommendation Approve BestPracticeAgent proposal as most aligned and stable; ResearchAgent should narrow LoRA/WD/dropout and broaden options if considered. 
+
+Agent: DataAgent (Critique) — Review of AI Training Proposals for Medical MCQ Task 
+
+# Review of AI Training Proposals for User Medical MCQ Task ## 1. Per-Agent Critique ### BestPracticeAgent 
+
+43 AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+Strengths: - Aligns with constraints (<=10B, GPU). - Qwen2.5-7B-Instruct base model fits limit. - Reasonable hyperparameter ranges; includes quantization (nf4/int4) and mixed precision. - Uses efficient techniques (gradient checkpointing, packing, LoRA, quantization). Potential issues: - LoRA ranks limited to 8/16; weight decay capped at 0.01; target modules not specified; int4 may degrade reasoning vs nf4 (but both offered). ### ResearchAgent Strengths: - Includes target modules for LoRA; allows higher LoRA capacity (r up to 32, alpha up to 64). Potential issues: - Quantization only int4; weight decay up to 0.1 may underfit; fewer optimizer choices; more complex to tune. ## 2. Final Recommendation Recommend BestPracticeAgent proposal for stability and accuracy; nf4 fallback improves safety for medical reasoning quality. 
+
+Agent: BestPracticeAgent — Node: lora (Final Concrete Search Space) 
+
+Based on the comprehensive analysis of the user’s medical MCQ answering task, the following concrete hyperparameter search space is recommended: {"parameters": {"learning_rate": {"type": "float", "low": 1e-5, "high": 3e-4}, "per_device_train_batch_size": {"type": "categorical", "choices": [4, 8, 12]}, "gradient_accumulation_steps": {"type": "categorical", "choices": [4, 8, 12]}, "num_train_epochs": {"type": "int", "low": 2, "high": 5}, "lora_r": {"type": "categorical", "choices": [8, 16]}, "lora_alpha": {"type": "categorical", "choices": [16, 32]}, "lora_dropout": {"type": "float", "low": 0.05, "high": 0.1}, "quantization": {"type": "categorical", "choices": [0, 1]}, "quantization_method": {"type": "categorical", "choices": ["nf4", "int4"]}, "weight_decay": {"type": "float", "low": 0.0, "high": 0.01}, "optimizer": {"type": "categorical", "choices": ["adamw_8bit", "adamw_torch_fused", "adamw_hf"]}, "scheduler": {"type": "categorical", "choices": ["constant", "cosine", "linear"]}, "mixed_precision": {"type": "categorical", "choices": ["bf16", "fp16"]} }}Reasoning summary: - Stable LR range; batch/accum for throughput; epochs for convergence; conservative LoRA; flexible quantization; low WD; robust optimizers/schedulers; bf16/fp16. References: https://github.com/Starscream-11813/Variational-Mathematical-Reasoning/ https://github.com/deepmind/mathematics_dataset https://math-qa.github.io/math-QA/ https://github.com/dsdanielpark/open-llm-leaderboard-report https://github.com/CPM-AI/Kor_Finance-leaderboard https://github.com/AI-Ceping/LLM-Ceping 
+
+Agent: ResearchAgent — Node: lora (Final Matching Parameter Range) 
+
+Given the task of fine-tuning Qwen2.5-7B-Instruct for college-level medical multiple-choice questions with astrict accuracy target (>90%) and constraints on model size (<=10B parameters) and deployment efficiency ( GPU at >=200 words/min), the hyperparameter search space must balance effective domain adaptation with computational efficiency and stability... parameter_range= {"learning_rate":{"type":"float","low":1e-5,"high":3e-4}, "per_device_train_batch_size":{"type":"categorical","choices":[4,8,12]}, "gradient_accumulation_steps":{"type":"categorical","choices":[4,8,12]}, "num_train_epochs":{"type":"int","low":2,"high":5},"lora_r":{"type":"categorical","choices":[8,16]}, "lora_alpha":{"type":"categorical","choices":[16,32]}, "lora_dropout":{"type":"float","low":0.05,"high":0.1}, "quantization":{"type":"categorical","choices":[0,1]}, "quantization_method":{"type":"categorical","choices":["nf4","int4"]}, "weight_decay":{"type":"float","low":0.0,"high":0.01}, "optimizer":{"type":"categorical","choices":["adamw_8bit","adamw_torch_fused","adamw_hf"]}, "scheduler":{"type":"categorical","choices":["constant","cosine","linear"]}, 
+
+44 AutoAdapt: An Automated Domain Adaptation Framework for LLMs 
+
+"mixed_precision":{"type":"categorical","choices":["bf16","fp16"]}} 
+
+Agent: UserPreferenceAgent (Critique) — Final Review of Hyperparameter Proposals 
+
+# Review of Training Proposals Against User Preferences ## BestPracticeAgent - Fully aligned with task constraints and deployment goals. - Explicitly mentions pipeline enhancements (gradient checkpointing, packing). - No violations detected; preferred for completeness. ## ResearchAgent - Hyperparameter space matches BestPracticeAgent; no violations in ranges. - Slightly less comprehensive: omits explicit mention of checkpointing/packing. ## Final Recommendation BestPracticeAgent recommended as most aligned and complete; ResearchAgent acceptable but secondary. 
+
+Agent: DataAgent (Critique) — Final Review of Hyperparameter Proposals 
+
+# Review of AI Training Proposals ## 1. Per-agent Critique ### BestPracticeAgent - Search space aligns with fine-tuning Qwen2.5-7B-Instruct on ˜10k medical MCQ samples. - LR, batch/accum balance memory and throughput; LoRA params regularize; quantization and mixed precision support GPU deployment. - Includes scheduler/optimizer flexibility; notes gradient checkpointing and packing. - No concerns; realistic. ### ResearchAgent - Reasoning supports same constraints; similar ranges. - More abstract/less concrete; duplicates BestPracticeAgent without extra improvements. - No contradictions or violations. ## 2. Final Recommendation Both valid; BestPracticeAgent preferred for concrete JSON space and completeness. 
+
+## K. Success Rate Analysis 
+
+In this section, we provide a sample of manual iterations performed to fix the code templates outputted for the MedQA 
+
+dataset by the baselines, for transparency. Note, success rate (SR) defined as SR = 11+ number of iterations depends on the number of iterations required to obtain a runnable pipeline and is intended to capture engineering reliability, not model quality. Without these corrective steps the baseline models completely fail to execute and the raw success rate would be 0% for all baselines. 45 AutoAdapt: An Automated Domain Adaptation Framework for LLMs  
+
+> Table 8. Manual Corrections Required Across Iterations for Each Baseline
+
+Baseline Manual Fixes Across Iterations MLCopilot It 1: Incorrect argument name: evaluation strategy →
+
+eval strategy .
+
+It 2 : Precision changed from fp16 to bf16 .
+
+It 3 : Gradient check-pointing error. 
+
+It 4 : Tokenizer padding added. 
+
+It 5 : compute metrics function updated. 
+
+It 6 : Evaluation metric modified. 
+
+AutoML-Agent It 1 : LoraConfig imported from peft , not trl .
+
+It 2 : Model name corrected. 
+
+It 3 : LoRA-trained model merged and unloaded before saving. 
+
+It 4 : AutoModelForCausalLM used instead of Seq2SeqLM .
+
+It 5 : lora alpha used instead of alpha .
+
+It 6 : SFTTrainer. init () received unexpected argument tokenizer .Removed passing the tokenizer to SFTTrainer. 
+
+It 7 : PeftModel loading corrected. 
+
+It 8 : TrainingArgs incorrectly constructed and passed. 
+
+DS-Agent It 1 : Incorrect parameter max seq length passed to SFTTrainer. 
+
+It 2 : Model name incomplete. 
+
+It 3 : peft config incorrectly passed directly to SFTConfig instead of loading PEFT model. 46
