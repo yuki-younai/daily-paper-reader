@@ -1,0 +1,744 @@
+Title: Improving Search Agent with One Line of Code
+
+URL Source: https://arxiv.org/pdf/2603.10069v1
+
+Published Time: Thu, 12 Mar 2026 00:03:26 GMT
+
+Number of Pages: 17
+
+Markdown Content:
+Preprint. Under review. 
+
+# Improving Search Agent with One Line of Code 
+
+Jian Li 1,2* †, Dongsheng Chen 2, Zhenhua Xu 2, Yizhang Jin 2, Jiafu Wu 2,Chengjie Wang 2, Xiaotong Yuan 1†, Yabiao Wang 2* 
+
+> 1
+
+Nanjing University, 2Tencent YoutuLab,  
+
+> ∗
+
+Project leader. † Corresponding author. 
+
+Abstract 
+
+Tool-based Agentic Reinforcement Learning (TARL) has emerged as a promising paradigm for training search agents to interact with external tools for multi-turn information-seeking process autonomously . How-ever, we identify a critical training instability that leads to catastrophic model collapse: Importance Sampling Distribution Drift (ISDD). In Group Relative Policy Optimization (GRPO), a widely adopted TARL algorithm, ISDD manifests as a precipitous decline in the importance sampling ratios, which nullifies gradient updates and triggers irreversible training failure. To address this, we propose Search Agent Policy Optimization ( SAPO ), which stabilizes training via a conditional token-level KL constraint. Unlike hard clipping, which ignores distributional divergence, SAPO selectively penalizes the KL divergence between the current and old policies. Cru-cially, this penalty is applied only to positive tokens with low probabilities where the policy has shifted excessively, thereby preventing distribution drift while preserving gradient flow. Remarkably, SAPO requires only one-line code modification to standard GRPO, ensuring immediate deploy-ability. Extensive experiments across seven QA benchmarks demonstrate that SAPO achieves +10.6% absolute improvement (+31.5% relative) over Search-R1, yielding consistent gains across varying model scales (1.5B–14B) and families (Qwen, LLaMA). 
+
+1 Introduction 
+
+Recent studies Li et al. (2025a); Guo et al. (2024) have introduced search agents capable of interpreting user intent, planning strategies, executing multi-turn actions, and accumulating retrieved evidence for answer generation. Representative methods, such as Search-R1 Jin et al. (2025), employ Group Relative Policy Optimization (GRPO) Kaelbling et al. (1996); Shao et al. (2024) with rule-based rewards to train agents to interact with a search tool over large corpora. Consequently, GRPO has emerged as a prevalent post-training algorithm for Tool-based Agentic Reinforcement Learning (TARL), inspiring numerous follow-up works Mei et al. (2025); Shi et al. (2025a); Qian & Liu (2025); Zhang et al. (2025b). Despite promising results, existing TARL frameworks face a critical limitation: standard GRPO introduces Importance Sampling Distribution Drift (ISDD) when the policy shifts outside the trust region. While several group-based optimization methods (Yu et al., 2025a; Zeng et al., 2025; He et al., 2025; Chen et al., 2025a; An et al., 2025; Wang et al., 2025a; Zhang et al., 2025a) have adopted PPO clip Schulman et al. (2017) to restrict the deviation between current and old policies. ISDD remains a persistent phenomenon in search agent training, particularly as response lengths or search turns increase. In GRPO, all tokens within a response share an identical advantage value. leading to two primary issues: (1) Numerical Inaccuracy : The advantage value may not reflect the true contribution of individual tokens, as different steps contribute unequally to the final answer; and (2) Misleading Updates : A response with a correct final answer may contain incorrect intermediate steps (and vice versa). Conflicts arise when the old policy assigns high probability to intermediate correct tokens, but the current policy suppresses them due to negative advantage, leading to vanishing importance sampling weights. 1
+
+> arXiv:2603.10069v1 [cs.LG] 10 Mar 2026
+
+Preprint. Under review. 0 20 40 60 80 100 120 140 160 180 200 220 240                                     
+
+> Training Step
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> Importance Sampling
+> (a) Importance Sampling Ratio
+> SAPO
+> GRPO
+> 020 40 60 80 100 120 140 160 180 200 220 240
+> Training Step
+> 0.00
+> 0.05
+> 0.10
+> 0.15
+> 0.20
+> 0.25
+> Clip Fraction
+> (b) PG Clip Fraction
+> SAPO
+> GRPO
+> 020 40 60 80 100 120 140 160 180 200 220 240
+> Training Step
+> 0
+> 1
+> 2
+> 3
+> 4
+> Entropy Loss
+> (c) Entropy Loss
+> SAPO
+> GRPO
+> 020 40 60 80 100 120 140 160 180 200 220 240
+> Training Step
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> Mean Reward
+> (d) Mean Reward
+> SAPO
+> GRPO
+> Training Metrics Analysis
+
+Figure 1: Comparison of training dynamics between SAPO and GRPO regarding (a) Impor-tance Sampling Ratio, (b) Clip Ratio, (c) Entropy, and (d) Reward. Figure.1 depicts the training dynamics of Search-R1 using GRPO, tracking the Importance Sampling (IS) ratios, clip ratio, entropy, and reward. While the IS ratios remain near 1 during the initial phase, they subsequently drop sharply, indicating a growing divergence between the current and old policies. Consequently, the clip ratio exhibits a pronounced spike in the latter stages. Similarly, policy entropy rises substantially at the beginning, suggesting the presence of low-probability positive tokens or high-probability negative tokens. Given the convergence of the IS ratios toward zero, we identify the suppression of positive tokens (low-probability positive actions) as the primary driver of ISDD. While the outcome-based reward initially improves, it deteriorates as the IS ratios destabilize and entropy collapses, indicating that late-stage instability compromises final performance. These empirical results demonstrate that despite the use of hard clipping, catastrophic and irreversible model collapse persists. The primary motivation behind IS and clipping is to correct for distribution shifts and ensure stability. However, for the positive tokens, if the probability under the current policy drops significantly below that of the old policy, the update is effectively suppressed by excessively low importance weights. This yields a weak update signal, preventing the model from recovering valid actions. This observation prompts the following research question: 
+
+How can we mitigate optimization conflicts using appropriate constraints when the current policy diverges significantly from the old policy on positive tokens. 
+
+To enhance training stability, we propose Search Agent Policy Optimization (SAPO), a simple yet theoretically grounded modification of GRPO. Following PPO KL Schulman et al. (2017), SAPO introduces a conditional KL penalty term to enforce a token-level constraint on the distributional divergence between the current and old policies. To optimize constraint efficiency, SAPO employs an asymmetric mechanism that selectively penalizes conflicting positive tokens and preserves informative gradients from positive tokens. Consequently, SAPO functions as a soft trust region constraint: instead of hard-clipping, we softly penalize large IS ratios, allowing adaptive step sizes while maintaining distributional proximity. We summarize our contributions as follows. • We propose SAPO, a policy optimization method designed to stabilize post-training for autonomous multi-turn search agents tackling complex, real-world questions. • We introduce a conditional KL penalty term that enforces a token-level constraint on the distributional divergence, specifically targeting low-probability positive tokens. • We demonstrate the effectiveness and generalizability of SAPO across diverse search agents, achieving improvement performance on seven challenging QA benchmarks. 
+
+2 Preliminaries 
+
+2.1 Proximal Policy Optimization 
+
+Proximal Policy Optimization (PPO) Schulman et al. (2017) is one of the most prominent policy gradient methods in reinforcement learning (RL) Kaelbling et al. (1996). PPO facili-2Preprint. Under review. tates stable training by utilizing IS for off-policy updates while constraining the deviation between the current and old policies. The standard unclipped PPO objective is defined as: 
+
+JPG (θ) = Eq∼D , o∼πθold (·| q) [rt(θ)At] , where rt(θ) = πθ (ot | q, o<t)
+
+πθold (ot | q, o<t) (1) Here, πθold and πθ denote the old policy and the current policy, respectively, while At
+
+represents the advantage function. q denotes a query sampled from the data distribution D,and o represents a response generated by the old policy. Direct optimization of this objective can lead to excessive deviation in the IS ratios rt(θ), resulting in training instability. To mitigate this, PPO introduces a clipped surrogate objective that imposes a local trust region: 
+
+JPPO (θ) = Eq∼D , o∼πθold (·| q) [min (rt(θ)At, clip (rt(θ), 1 − ϵ, 1 + ϵ) At)] (2) Here, ϵ is a hyperparameter defining the clipping bounds. This mechanism limits the incentive for the policy to update when the IS ratio deviates significantly, thereby enhancing stability. However, it zeros out the gradient for clipped tokens, potentially allowing the policy to drift beyond the intended trust region without correction. 
+
+2.2 Group Relative Policy Optimization 
+
+Group Relative Policy Optimization (GRPO) Guo et al. (2025) eliminates the need for a value function critic by employing group-based advantage estimation. Following Search-R1 Jin et al. (2025), External retrieval tokens are masked during search agent training. Consequently, the GRPO objective is optimized exclusively over the agent-generated tokens: 
+
+JGRPO (θ) = Eq∼D ,{oi }Gi=1 ∼πθold (·| q)
+
+> "
+> 1
+> G
+> G
+
+## ∑
+
+> i=1
+> 1
+
+|oi | 
+
+> |oi|
+
+## ∑
+
+> t=1
+> min
+> 
+> ri,t
+
+(θ) ˆAi,t, clip  ri,t(θ), 1 − ϵ, 1 + ϵ ˆAi,t
+
+> #
+> (3)
+
+where the IS ratio ri,t(θ) and the advantage ˆAi,t are defined as: 
+
+ri,t(θ) = πθ (oi,t | q, oi,<t)
+
+πθold (oi,t | q, oi,<t) , ˆAi,t = ˆAi = Ri − mean ({Rj}Gj=1)
+
+std ({Rj}Gj=1)) (4) Here, the advantage is computed by normalizing the sequence-level reward Ri against the group statistics. Notably, GRPO assigns the same advantage value to all tokens. 
+
+3 Approach 
+
+3.1 Search Agent Formulation 
+
+Let q denote the user question, a the generated answer, and πθ the Large Language Model(LLM). We formulate the standard question-answering task as a = πθ (· | q).RAG systems enhance this process by retrieving knowledge k from an external corpus D
+
+using a retriever R(·), subsequently generating an answer conditioned on both q and k. We formulate RAG as a = πθ (q | k), k = R(q, D).However, this static workflow is often insufficient for complex search tasks that necessitate iterative reasoning and adaptive retrieval. Recent advancements in search agents enable a more dynamic paradigm where retrieval is interleaved with reasoning. 
+
+a = πθ
+
+
+
+q | { zi, ki}Ti=1
+
+
+
+, ki = R(sq i | D ), sq i ∈ zi (5) 3Preprint. Under review. Here, the policy output o comprises intermediate reasoning steps z and the final answer a.
+
+sq i denotes a search query generated within the reasoning step zi to retrieve intermediate knowledge ki. The sequence {zi, ki} represents the interleaved trajectory of reasoning and retrieval knowledge. T is the number of search actions. 
+
+3.2 Importance Sampling Distribution Drift 
+
+In search agents, optimal strategies are inherently sparse, as only a limited subset of queries yields effective results. Consequently, When the policy πθ rapidly diverges from the explo-ration path of πθold , it may assign negligible probabilities to the sampled actions, causing 
+
+πθ (ot) to be orders of magnitude smaller than πθold (ot), driving rt(θ) → 0. 
+
+Definition 1 (ISDD) . Building upon the IS ratios defined in Eq. 4, we define Importance Sampling Distribution Drift (ISDD) as the event where: 
+
+P
+
+> T
+
+# ∏
+
+> t=1
+
+rt(θ) < ϵ
+
+!
+
+> ϕ (6) for small ϵ > 0 and a probability threshold ϕ. This condition indicates that a significant proportion of trajectories suffer from vanishing cumulative importance weights. 
+
+Why ISDD Causes Collapse. In GRPO, the policy gradient is weighted by IS ratios: 
+
+∇θ JGRPO (θ) = Eq∼D ,{oi }Gi=1∼πθold (·| q)
+
+"
+
+1
+
+G
+
+> G
+
+# ∑
+
+> i=1
+
+1
+
+|oi| 
+
+> |oi|
+
+# ∑
+
+> t=1
+
+ˆAi,tri,t(θ)∇θ log πθ (oi,t|q, oi,<t)
+
+#
+
+(7) When ISDD occurs ( rt → 0), the gradients vanish regardless of the advantage values, freez-ing the policy update. Consequently, even high-reward trajectories contribute negligible gradients, hindering the model’s ability to learn from successful explorations. 
+
+Proposition 1 (ISDD Amplification in Interleaved Multi-Step Interactions) . Let the IS ratios rt follow a log-normal distribution log rt ∼ N (μ, σ2), with the drift parameter λ = μ + σ2/ 2. Due to the low-entropy and bottleneck nature of tool selection, action tokens ai exhibit significantly higher sensitivity to policy shifts than reasoning tokens z i, implying λk ≪ λa < 0.The expected cumulative importance weight for the trajectory decomposes as follows: 
+
+E
+
+" L
+
+# ∏
+
+> t=1
+
+rt
+
+#
+
+= E
+
+"
+
+# ∏
+
+> t∈Z
+
+rt
+
+#
+
+· E
+
+"
+
+# ∏
+
+> t∈A
+
+rt
+
+#
+
+= exp (Lzλz)
+
+| {z }
+
+> Reasoning Drift
+
+· exp (Laλa)
+
+| {z }
+
+> Interaction Drift
+
+(8) 
+
+where L denote the total number of tokens. ISDD is more severe in agent tasks than in QA tasks because the Interaction Drift term decays exponentially with the volume of actions La, driven by the highly negative drift parameter λa.
+
+3.3 Search Agent Policy Optimization 
+
+To alleviate ISDD and enhance training stability, SAPO introduces an auxiliary penalty term. This term enforces a constraint on the distributional divergence between the current and old policies. The SAPO token-level objective is formulated as: 
+
+JSAPO (θ) = Eq∼D ,{oi }Gi=1∼πθold (·| q)
+
+"
+
+1
+
+G
+
+> G
+
+# ∑
+
+> i=1
+
+1
+
+|oi| 
+
+> |oi|
+
+# ∑
+
+> t=1
+
+min 
+
+
+
+ri,t(θ) ˆAi,t, clip (ri,t(θ), 1 − ϵ, 1 + ϵ) ˆAi,t
+
+
+
++γKL [πθ ∥ πold ]
+
+| {z }
+
+> Drift Penalty
+
+# (9) 4Preprint. Under review. where γ denotes the penalty coefficient. Unlike the KL penalty in standard RL, which typically regulates divergence against a fixed reference model, SAPO penalizes deviations from the dynamic old policy to prevent the vanishing gradient problem. We approximate the KL divergence using the log-ratio: KL [πθ ∥ πold ] = log πθ (oi,t | q, oi,<t)
+
+πθold (oi,t | q, oi,<t) = log ri,t(θ) (10) Standard KL penalties may indiscriminately hinder policy exploration. To address this, we propose a conditional KL penalty that activates only when the probability ratio drops significantly for samples with positive advantages. The conditional term is defined as: KL cond [πθ ∥ πold ] = I(ri,t(θ) < τ, ˆ Ai,t > 0) log ri,t(θ) (11) Here, I(·) is the indicator function and τ is the threshold to identify drifting tokens. The penalty term has three crucial properties: 1. Conditional : Only applied when At > 0 (positive advantage) 2. Threshold-gated : Only triggered when rt < τ (excessive shift) 3. Logarithmic : log rt grows slowly, allowing gradual exploration 
+
+3.4 Gradient Analysis 
+
+We derive the gradient of the SAPO auxiliary term as follows: 
+
+∇θ JSAPO KL (θ) = ∇θ I(ri,t(θ) < τ, ˆ Ai,t > 0) log ri,t(θ)= I( ˆAi,t > 0)∇θ
+
+I(ri,t(θ) < τ) log ri,t(θ)
+
+= I( ˆAi,t > 0)[ I(ri,t(θ) < τ)∇θ log ri,t(θ) + ∇θ I(ri,t(θ) < τ) log ri,t(θ)] = [ I(ri,t(θ) < τ, ˆ Ai,t > 0) − δ(ri,t(θ) − τ)ri,t(θ) log ri,t(θ)] ∇θ log πθ (oi,t|q, oi,<t)
+
+(12) 
+
+Consequently, the total gradient of the SAPO objective is: 
+
+∇θ JSAPO (θ) = Eq∼D ,{oi }Gi=1 ∼πθold (·| q)
+
+"
+
+1
+
+G
+
+> G
+
+## ∑
+
+> i=1
+
+1
+
+|oi | 
+
+> |oi|
+
+## ∑
+
+> t=1
+
+( ˆAi,tri,t(θ)+γ[I(ri,t(θ) < τ, ˆ Ai,t > 0) − δ(ri,t(θ) − τ)ri,t(θ) log ri,t(θ)] 
+
+| {z }
+
+> Drift Penalty Gradient Coefficient
+
+)∇θ log πθ (oi,t|q, oi,<t)
+
+#
+
+.(13) 
+
+where δ(·) denotes the Dirac delta function, arising from the differentiation of I(·).
+
+4 Experiments 
+
+4.1 Experiment Settings Datasets. We evaluate our method on seven diverse QA benchmarks, categorized into single-hop or multi-hop retrieval tasks. The single-hop datasets include Natural Questions (NQ) Kwiatkowski et al. (2019), TriviaQA Joshi et al. (2017), and PopQA Mallen et al. (2022). The multi-hop datasets comprise HotpotQA Yang et al. (2018), 2WikiMultihopQA Ho et al. (2020), Musique Trivedi et al. (2022b), and Bamboogle Press et al. (2022). We employ Exact Match (EM) accuracy as the evaluation metric across all datasets. Following Search-R1 Jin et al. (2025), SAPO is trained on acomposite dataset consisting of NQ and HotpotQA. 5Preprint. Under review. Table 1: Accuracy comparison of SAPO-3B against baseline methods using Qwen2.5-3B Qwen et al. (2025) across multiple QA benchmarks. Bold indicates best results, and underline denotes second best results.                                                                                                                                                                                                                                        
+
+> Single-Hop QA Multi-Hop QA Avg. Methods NQ TriviaQA PopQA Avg. HotpotQA 2Wiki Musique Bamboogle Avg.
+> w/o Retrieval
+> Direct Generation 0.106 0.288 0.108 0.167 0.149 0.244 0.020 0.024 0.109 0.134 SFT 0.249 0.292 0.104 0.215 0.186 0.248 0.044 0.112 0.148 0.176 R1-Instruct Guo et al. (2025) 0.210 0.449 0.171 0.277 0.208 0.275 0.060 0.192 0.184 0.224 R1-Base Guo et al. (2025) 0.226 0.455 0.173 0.285 0.201 0.268 0.055 0.224 0.187 0.229
+> Workflow w/ Retrieval
+> Naive RAG Lewis et al. (2020) 0.348 0.544 0.387 0.426 0.255 0.226 0.047 0.080 0.152 0.270 IRCoT Trivedi et al. (2022a) 0.111 0.312 0.200 0.208 0.164 0.171 0.067 0.240 0.161 0.181
+> Agent w/ Retrieval
+> Search-o1 Li et al. (2025c) 0.238 0.472 0.262 0.324 0.221 0.218 0.054 0.320 0.203 0.255 Search-R1-Instruct Jin et al. (2025) 0.397 0.565 0.391 0.451 0.331 0.310 0.124 0.232 0.249 0.336 Search-R1-Base Jin et al. (2025) 0.421 0.583 0.413 0.472 0.297 0.274 0.066 0.128 0.191 0.312 ReSearch-Instruct Chen et al. (2025b) 0.365 0.571 0.395 0.444 0.351 0.272 0.095 0.266 0.246 0.331 ReSearch-Base Chen et al. (2025b) 0.427 0.597 0.430 0.485 0.305 0.272 0.074 0.128 0.195 0.319 ZeroSearch-Base Sun et al. (2025) 0.430 0.616 0.414 0.487 0.338 0.346 0.130 0.139 0.238 0.345 StepSearch-Base Wang et al. (2025b) ––––0.329 0.339 0.181 0.328 0.294 –EXSEARCH-Base Shi et al. (2025b) 0.368 –––0.422 0.372 0.138 –––
+> O2-Searcher Mei et al. (2025) 0.444 0.597 0.429 0.490 0.388 0.374 0.160 0.344 0.317 0.391 AutoRefine-Instruct Shi et al. (2025a) 0.436 0.597 0.447 0.493 0.404 0.380 0.169 0.336 0.322 0.396 AutoRefine-Base Shi et al. (2025a) 0.467 0.620 0.450 0.512 0.405 0.393 0.157 0.344 0.325 0.405 InForage Qian & Liu (2025) 0.421 0.597 0.452 0.490 0.409 0.428 0.172 0.360 0.342 0.405 CriticSearch Zhang et al. (2025b) ––––0.414 0.409 0.180 0.368 0.343 –SE-Search Li et al. (2026) 0.475 0.624 0.423 0.507 0.450 0.361 0.183 0.424 0.355 0.420
+> SAPO-3B-Base (Ours) 0.474 0.630 0.449 0.517 0.449 0.412 0.196 0.424 0.370 0.433
+> SAPO-3B-Instruct (Ours) 0.469 0.629 0.457 0.518 0.456 0.448 0.203 0.432 0.396 0.442
+
+Baselines. We compare SAPO against three categories of methods: (1) Retrieval-free meth-ods : direct LLM generation, Supervised Fine-Tuning (SFT), and R1-style training Guo et al. (2025) without retrieval; (2) Retrieval-enhanced workflows : Naive RAG, which retrieves documents based solely on the input question, and IRCoT Trivedi et al. (2022a), which interleaves retrieval with Chain-of-Thought; (3) Retrieval-augmented agents : recent agentic methods including Search-o1 Li et al. (2025c), Search-R1 Jin et al. (2025), ReSearch Chen et al. (2025b), ZeroSearch Sun et al. (2025), StepSearch Wang et al. (2025b), EXSEARCHShi et al. (2025b), O2-Searcher Mei et al. (2025), InForage Qian & Liu (2025), CriticSearch Zhang et al. (2025b), AutoRefine Shi et al. (2025a) and SE-Search Li et al. (2026). 
+
+Implementation Details. We utilize the external corpus Karpukhin et al. (2020) used by Search-R1, with E5-base-v2 Wang et al. (2022) serving as the retrieval engine. Unless otherwise specified, the retriever returns the top-3 documents per query and the maximum number of search turns is set to Tmax = 5. We employ the Qwen2.5 series Qwen et al. (2025) as the backbone language model. In the RL phase, we employ a simple rule-based reward function. Specifically, this is an outcome-oriented reward calculated using the F1-score between the predicted and ground-truth answers. the KL penalty coefficient is set to γ = 0.1. The IS ratios threshold is set to τ = 1.0. 
+
+4.2 Main Performance 
+
+Table 1 presents the main experimental results comparing SAPO against baseline methods. The Avg. column reports the average accuracy. All methods utilize the same retriever, knowledge corpus, training data, and LLM backbone (Qwen2.5-3B). 
+
+SAPO outperforms other methods. SAPO surpasses Search-R1 and state-of-the-art methods (i.e. , AutoRefine and CriticSearch) across all seven benchmarks. Our method achieves an average EM accuracy of 0.442, demonstrating that the proposed SAPO post-training strategy substantially enhances the search agent’s capabilities. Specifically, SAPO yields a significant absolute improvement of 10.6 points (a relative gain of 31.5%) over the Search-R1 baseline. 6Preprint. Under review.                                                                   
+
+> Method Single-Hop QA Multi-Hop QA Avg.
+> NQ TriviaQA PopQA HotpotQA 2Wiki Musique Bamboogle Search-R1-GRPO 0.402 0.662 0.436 0.374 0.376 0.134 0.333 0.388 +KL 0.425 0.625 0.443 0.428 0.371 0.175 0.342 0.398
+> (+0.023) (-0.037) (+0.007) (+0.054) (-0.005) (+0.041) (+0.009) (+0.010)
+> +KL r0.439 0.660 0.456 0.457 0.369 0.169 0.369 0.417
+> (+0.014) (+0.035) (+0.013) (+0.029) (-0.002) (-0.006) (+0.027) (+0.019)
+> +KL ra (SAPO) 0.442 0.673 0.474 0.433 0.415 0.181 0.382 0.429
+> (+0.003) (+0.013) (+0.018) (-0.024) (+0.046) (+0.012) (+0.013) (+0.012)
+
+Table 2: Ablation results on different KL terms in SAPO . The values in parentheses denote the absolute performance change compared to the previous row. 
+
+SAPO demonstrates particularly strong gains on multi-hop QA benchmarks. Performance improvements are most pronounced on complex, multi-hop QA tasks. For instance, com-pared to the CriticSearch, SAPO improves performance on HotpotQA by 4.2 percentage points (a 10.1% relative improvement) and on Bamboogle by 6.4 percentage points (a 17.4% relative improvement). Furthermore, across all multi-hop benchmarks, SAPO achieves an average increase of 5.3 percentage points (a 15.45% relative improvement). compared to Search-R1, SAPO achieves a substantial increase of 14.7 percentage points (a 24.9% relative improvement) across the four multi-hop QA benchmarks. These gains are attributed to the training stability provided by our proposed auxiliary KL penalty term. 
+
+4.3 Ablation Studies 
+
+We conduct ablation study to evaluate the impact of SAPO’s key components. To ensure a fair comparison, all models are trained for the same 300 steps, sampling 5 rollout re-sponses. The baseline, Search-R1, utilizes Qwen2.5-3B-Instruct as the language model and the F1 score as the outcome-based reward. Table 2 details the accuracy across seven bench-marks and quantifies the contribution of each component. We compare four configurations: (1) GRPO : The baseline GRPO algorithm as employed in Search-R1. (2) GRPO w/ KL : GRPO augmented with an unconditional KL penalty term. (3) GRPO w/ KL r : GRPO with a KL penalty conditioned solely on the IS ratio. (4) GRPO w/ KL ra (SAPO) : The complete SAPO configuration, where the KL penalty is conditioned on both the IS ratios and the advantage. 
+
+Impact of Selective KL Penalties. Table.2 details the performance progression, starting with the Search - R1 - GRPO baseline, which achieves an average accuracy of 0.388. Incorporat-ing a simple unconditional KL term yields a significant performance on Musique (+30.6%) and HotpotQA (+14.4%). This results in a modest increase in average accuracy to 0.398. The ratio-conditioned variant ( KL r ) further improves stability, raising the average to 0.417 and notably improving the HotpotQA score to 0.457. Finally, the full SAPO configuration (KL ra ) achieves the best overall balance, securing the highest scores on six out of seven benchmarks with an average of 0.429, an absolute increase of 0.041 over the baseline (about 10.6% relative). These findings validate that the conditional KL penalty in SAPO effectively balances exploration and constraint, leading to consistent aggregate improvements. 
+
+4.4 Detailed Analysis Hyperparameter Sensitivity Analysis. We analyze the sensitivity of the IS threshold t
+
+within our SAPO method. The validation EM scores in Figure 2(a) indicate that t = 1.0 consistently yields the best performance throughout the training process. Specifically, at step 280, the model achieves an EM score of 0.442. In contrast, t = 1.2 results in a final score of 0.434, while t = 0.6 and t = 0.8 lead to inferior results of 0.418 and 0.425, respectively. Notably, the performance divergence among different threshold values widens as training progresses, suggesting that the selection of t becomes increasingly critical in later stages. These results confirm that t = 1.0 strikes an optimal balance between exploration and exploitation, thereby being adopted as the default setting for all subsequent experiments. 7Preprint. Under review. 0 20 40 60 80 100 120 140 160 180 200 220 240 260 280 300       
+
+> Training Steps
+> 0.34
+> 0.36
+> 0.38
+> 0.40
+> 0.42
+> 0.44
+> EM Score
+> (a) Hyperparameter Sensitivity Analysis
+> t=0.6
+> t=0.8
+> t=1.0
+> t=1.2
+> 1.5B 3B 7B 14B
+> Model Size (Billion Parameters)
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> EM Score
+> (b) EM Scaling Laws Across Multiple Datasets
+> NQ
+> TriviaQA
+> PopQA
+> HotpotQA
+> 2wiki
+> Musique
+> Bamboogle
+> MEAN (Average)
+> 1.5B 3B 7B 14B
+> Model Size (Billion Parameters)
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> F1 Score
+> (c) F1 Scaling Laws Across Multiple Datasets
+> NQ
+> TriviaQA
+> PopQA
+> HotpotQA
+> 2wiki
+> Musique
+> Bamboogle
+> MEAN (Average)
+> Experimental Analysis: Hyperparameter Sensitivity and Scaling Laws
+
+Figure 2: (a) Hyperparameter sensitivity analysis. (b,c) Scaling trends of Qwen2.5-Instruct with SAPO across different model sizes (1.5B to 14B). We report both EM and F1 scores. 
+
+Method Single-Hop QA Multi-Hop QA Avg. 
+
+NQ TriviaQA PopQA HotpotQA 2Wiki Musique Bamboogle 
+
+Backbone: LLaMA-3.2-3B-Base 
+
+Search-R1-GRPO 0.394 0.596 0.437 0.280 0.264 0.056 0.105 0.305 Search-R1-SAPO 0.471 0.630 0.452 0.355 0.301 0.102 0.248 0.366 
+
+Backbone: LLaMA-3.2-3B-Instruct 
+
+Search-R1-GRPO 0.357 0.578 0.378 0.314 0.233 0.090 0.306 0.322 Search-R1-SAPO 0.475 0.634 0.446 0.444 0.386 0.187 0.384 0.422 
+
+Table 3: Generalization results on LLaMA-3.2-3B (Base and Instruct). SAPO consistently outperforms the GRPO baseline across both model variants. 
+
+Scaling with Model Size. We investigate the scalability of SAPO by evaluating its per-formance across backbone models of varying sizes, specifically the Qwen2.5-Instruct series ranging from 1.5B to 14B parameters. Figure. 2 reports the EM and F1 scores. We observe a strong positive correlation between model size and performance, aligning with established scaling laws Kaplan et al. (2020). As the parameter count increases, SAPO demonstrates a monotonic improvement in average accuracy. Notably, scaling from 1.5B to 14B results in a substantial performance leap, raising the average EM from 0.400 to 0.495 and the F1 score from 0.484 to 0.586. This confirms that SAPO effectively leverages the enhanced reasoning capabilities inherent in LLM. 
+
+Robustness across Model Families. To assess the generalizability of SAPO across different architectures, we extend our evaluation to the LLaMA-3.2Touvron et al. (2023) series, testing both the Base and Instruct versions of the 3B model. As detailed in Table 3, SAPO consis-tently outperforms the GRPO baseline across both variants. On LLaMA-3.2-3B-Base, SAPO improves the average accuracy from 0.305 to 0.366, proving its capacity to align base pre-trained models effectively. The gains are even more pronounced on LLaMA-3.2-3B-Instruct, where SAPO boosts average accuracy by 10.0 percentage points (from 0.322 to 0.422). These results indicate that SAPO is a model-agnostic framework capable of enhancing search capabilities regardless of the underlying model family or its prior alignment stage. 
+
+5 Conclusion 
+
+Tool-based agentic reinforcement learning, such as GRPO, introduces Importance Sampling Distribution Drift (ISDD). This drift often causes the importance sampling ratio to decline sharply, leading to training instabilities that manifest as catastrophic and irreversible model collapse. In this paper, we propose SAPO ( Search Agent Policy Optimization) to enhance the training stability of search agents. We analyze the phenomena of increasing clipping rates and decreasing rewards, attributing these effects to ISDD. To mitigate this, SAPO intro-duces a penalty term that enforces a token-level conditonal constraint on the distributional divergence between the current and old policies. Extensive experiments on single-hop 8Preprint. Under review. and multi-hop QA benchmarks demonstrate that SAPO significantly outperforms existing methods, improving absolute performance by 10.6 points over the Search-R1 baseline. 
+
+References 
+
+Chenxin An, Zhihui Xie, Xiaonan Li, Lei Li, Jun Zhang, Shansan Gong, Ming Zhong, Jingjing Xu, Xipeng Qiu, Mingxuan Wang, and Lingpeng Kong. Polaris: A post-training recipe for scaling reinforcement learning on advanced reasoning models, 2025. URL 
+
+https://hkunlp.github.io/blog/2025/Polaris .Aili Chen, Aonian Li, Bangwei Gong, Binyang Jiang, Bo Fei, Bo Yang, Boji Shan, Changqing Yu, Chao Wang, Cheng Zhu, et al. Minimax-m1: Scaling test-time compute efficiently with lightning attention. arXiv preprint arXiv:2506.13585, 2025a. Mingyang Chen, Linzhuang Sun, Tianpeng Li, Haoze Sun, Yijie Zhou, Chenzheng Zhu, Haofen Wang, Jeff Z Pan, Wen Zhang, Huajun Chen, et al. Learning to reason with search for llms via reinforcement learning. arXiv preprint arXiv:2503.19470, 2025b. Wenlong Deng, Yushu Li, Boying Gong, Yi Ren, Christos Thrampoulidis, and Xiaoxiao Li. On grpo collapse in search-r1: The lazy likelihood-displacement death spiral. arXiv preprint arXiv:2512.04220, 2025a. Wenlong Deng, Yi Ren, Muchen Li, Danica J Sutherland, Xiaoxiao Li, and Christos Thram-poulidis. On the effect of negative gradient in group relative deep reinforcement opti-mization. arXiv preprint arXiv:2505.18830, 2025b. Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song, Ruoyu Zhang, Runxin Xu, Qihao Zhu, Shirong Ma, Peiyi Wang, Xiao Bi, et al. Deepseek-r1: Incentivizing reasoning capability in llms via reinforcement learning. arXiv preprint arXiv:2501.12948, 2025. Taicheng Guo, Xiuying Chen, Yaqi Wang, Ruidi Chang, Shichao Pei, Nitesh V Chawla, Olaf Wiest, and Xiangliang Zhang. Large language model based multi-agents: A survey of progress and challenges. arXiv preprint arXiv:2402.01680, 2024. Jujie He, Jiacai Liu, Chris Yuhao Liu, Rui Yan, Chaojie Wang, Peng Cheng, Xiaoyu Zhang, Fuxiang Zhang, Jiacheng Xu, Wei Shen, et al. Skywork open reasoner 1 technical report. arXiv preprint arXiv:2505.22312, 2025. Xanh Ho, Anh-Khoa Duong Nguyen, Saku Sugawara, and Akiko Aizawa. Constructing a multi-hop qa dataset for comprehensive evaluation of reasoning steps. arXiv preprint arXiv:2011.01060, 2020. Bowen Jin, Hansi Zeng, Zhenrui Yue, Jinsung Yoon, Sercan Arik, Dong Wang, Hamed Zamani, and Jiawei Han. Search-r1: Training llms to reason and leverage search engines with reinforcement learning. arXiv preprint arXiv:2503.09516, 2025. Mandar Joshi, Eunsol Choi, Daniel S Weld, and Luke Zettlemoyer. Triviaqa: A large scale distantly supervised challenge dataset for reading comprehension. arXiv preprint arXiv:1705.03551, 2017. Leslie Pack Kaelbling, Michael L Littman, and Andrew W Moore. Reinforcement learning: A survey. Journal of artificial intelligence research, 4:237–285, 1996. Jared Kaplan, Sam McCandlish, Tom Henighan, Tom B Brown, Benjamin Chess, Rewon Child, Scott Gray, Alec Radford, Jeffrey Wu, and Dario Amodei. Scaling laws for neural language models. arXiv preprint arXiv:2001.08361, 2020. Vladimir Karpukhin, Barlas Oguz, Sewon Min, Patrick SH Lewis, Ledell Wu, Sergey Edunov, Danqi Chen, and Wen-tau Yih. Dense passage retrieval for open-domain question answer-ing. In EMNLP (1), pp. 6769–6781, 2020. Mei Kobayashi and Koichi Takeda. Information retrieval on the web. ACM computing surveys (CSUR), 32(2):144–173, 2000. 9Preprint. Under review. Tom Kwiatkowski, Jennimaria Palomaki, Olivia Redfield, Michael Collins, Ankur Parikh, Chris Alberti, Danielle Epstein, Illia Polosukhin, Jacob Devlin, Kenton Lee, et al. Natural questions: a benchmark for question answering research. Transactions of the Association for Computational Linguistics, 7:453–466, 2019. Patrick Lewis, Ethan Perez, Aleksandra Piktus, Fabio Petroni, Vladimir Karpukhin, Naman Goyal, Heinrich K ¨uttler, Mike Lewis, Wen-tau Yih, Tim Rockt ¨aschel, et al. Retrieval-augmented generation for knowledge-intensive nlp tasks. Advances in neural information processing systems, 33:9459–9474, 2020. Jian Li, Xiaoxi Li, Yan Zheng, Yizhang Jin, Shuo Wang, Jiafu Wu, Yabiao Wang, Chengjie Wang, and Xiaotong Yuan. 2025a. Jian Li, Yizhang Jin, Dongqi Liu, Hang Ding, Jiafu Wu, Dongsheng Chen, Yunhang Shen, Yulei Qin, Ying Tai, Chengjie Wang, Xiaotong Yuan, and Yabiao Wang. Se-search: Self-evolving search agent via memory and dense reward, 2026. URL https://arxiv.org/ abs/2603.03293 .Kuan Li, Zhongwang Zhang, Huifeng Yin, Liwen Zhang, Litu Ou, Jialong Wu, Wenbiao Yin, Baixuan Li, Zhengwei Tao, Xinyu Wang, et al. Websailor: Navigating super-human reasoning for web agent. arXiv preprint arXiv:2507.02592, 2025b. Xiaoxi Li, Guanting Dong, Jiajie Jin, Yuyao Zhang, Yujia Zhou, Yutao Zhu, Peitian Zhang, and Zhicheng Dou. Search-o1: Agentic search-enhanced large reasoning models. arXiv preprint arXiv:2501.05366, 2025c. Xiaoxi Li, Jiajie Jin, Guanting Dong, Hongjin Qian, Yongkang Wu, Ji-Rong Wen, Yutao Zhu, and Zhicheng Dou. Webthinker: Empowering large reasoning models with deep research capability. arXiv preprint arXiv:2504.21776, 2025d. Alex Mallen, Akari Asai, Victor Zhong, Rajarshi Das, Daniel Khashabi, and Hannaneh Hajishirzi. When not to trust language models: Investigating effectiveness of parametric and non-parametric memories. arXiv preprint arXiv:2212.10511, 2022. Jianbiao Mei, Tao Hu, Daocheng Fu, Licheng Wen, Xuemeng Yang, Rong Wu, Pinlong Cai, Xinyu Cai, Xing Gao, Yu Yang, et al. o2-searcher: A searching-based agent model for open-domain open-ended question answering. arXiv preprint arXiv:2505.16582, 2025. Ofir Press, Muru Zhang, Sewon Min, Ludwig Schmidt, Noah A Smith, and Mike Lewis. Measuring and narrowing the compositionality gap in language models. arXiv preprint arXiv:2210.03350, 2022. Hongjin Qian and Zheng Liu. Scent of knowledge: Optimizing search-enhanced reasoning with information foraging. arXiv preprint arXiv:2505.09316, 2025. Qwen, :, An Yang, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo Zheng, Bowen Yu, Chengyuan Li, Dayiheng Liu, Fei Huang, Haoran Wei, Huan Lin, Jian Yang, Jianhong Tu, Jianwei Zhang, Jianxin Yang, Jiaxi Yang, Jingren Zhou, Junyang Lin, Kai Dang, Keming Lu, Keqin Bao, Kexin Yang, Le Yu, Mei Li, Mingfeng Xue, Pei Zhang, Qin Zhu, Rui Men, Runji Lin, Tianhao Li, Tianyi Tang, Tingyu Xia, Xingzhang Ren, Xuancheng Ren, Yang Fan, Yang Su, Yichang Zhang, Yu Wan, Yuqiong Liu, Zeyu Cui, Zhenru Zhang, and Zihan Qiu. Qwen2.5 technical report, 2025. URL https://arxiv.org/abs/2412.15115 .Rafael Rafailov, Archit Sharma, Eric Mitchell, Christopher D Manning, Stefano Ermon, and Chelsea Finn. Direct preference optimization: Your language model is secretly a reward model. Advances in neural information processing systems, 36:53728–53741, 2023. John Schulman, Filip Wolski, Prafulla Dhariwal, Alec Radford, and Oleg Klimov. Proximal policy optimization algorithms. arXiv preprint arXiv:1707.06347, 2017. Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, YK Li, Yang Wu, et al. Deepseekmath: Pushing the limits of mathe-matical reasoning in open language models. arXiv preprint arXiv:2402.03300, 2024. 10 Preprint. Under review. Guangming Sheng, Chi Zhang, Zilingfeng Ye, Xibin Wu, Wang Zhang, Ru Zhang, Yanghua Peng, Haibin Lin, and Chuan Wu. Hybridflow: A flexible and efficient rlhf framework. In Proceedings of the Twentieth European Conference on Computer Systems, pp. 1279– 1297, 2025. Yaorui Shi, Shihan Li, Chang Wu, Zhiyuan Liu, Junfeng Fang, Hengxing Cai, An Zhang, and Xiang Wang. Search and refine during think: Autonomous retrieval-augmented reasoning of llms. arXiv e-prints, pp. arXiv–2505, 2025a. Zhengliang Shi, Lingyong Yan, Dawei Yin, Suzan Verberne, Maarten de Rijke, and Zhaochun Ren. Iterative self-incentivization empowers large language models as agentic searchers. arXiv preprint arXiv:2505.20128, 2025b. Hao Sun, Zile Qiao, Jiayan Guo, Xuanbo Fan, Yingyan Hou, Yong Jiang, Pengjun Xie, Yan Zhang, Fei Huang, and Jingren Zhou. Zerosearch: Incentivize the search capability of llms without searching. arXiv preprint arXiv:2505.04588, 2025. Hugo Touvron, Thibaut Lavril, Gautier Izacard, Xavier Martinet, Marie-Anne Lachaux, Timoth ´ee Lacroix, Baptiste Rozi `ere, Naman Goyal, Eric Hambro, Faisal Azhar, et al. Llama: Open and efficient foundation language models. arXiv preprint arXiv:2302.13971, 2023. Harsh Trivedi, Niranjan Balasubramanian, Tushar Khot, and Ashish Sabharwal. Interleaving retrieval with chain-of-thought reasoning for knowledge-intensive multi-step questions. arXiv preprint arXiv:2212.10509, 2022a. Harsh Trivedi, Niranjan Balasubramanian, Tushar Khot, and Ashish Sabharwal. Musique: Multihop questions via single-hop question composition. Transactions of the Association for Computational Linguistics, 10:539–554, 2022b. Jiakang Wang, Runze Liu, Fuzheng Zhang, Xiu Li, and Guorui Zhou. Stabilizing knowledge, promoting reasoning: Dual-token constraints for rlvr. arXiv preprint arXiv:2507.15778, 2025a. Liang Wang, Nan Yang, Xiaolong Huang, Binxing Jiao, Linjun Yang, Daxin Jiang, Rangan Majumder, and Furu Wei. Text embeddings by weakly-supervised contrastive pre-training. arXiv preprint arXiv:2212.03533, 2022. Xiaoxuan Wang, Han Zhang, Haixin Wang, Yidan Shi, Ruoyan Li, Kaiqiao Han, Chenyi Tong, Haoran Deng, Renliang Sun, Alexander Taylor, et al. Arlarena: A unified framework for stable agentic reinforcement learning. arXiv preprint arXiv:2602.21534, 2026. Ziliang Wang, Xuhui Zheng, Kang An, Cijun Ouyang, Jialu Cai, Yuhang Wang, and Yichao Wu. Stepsearch: Igniting llms search ability via step-wise proximal policy optimization. arXiv preprint arXiv:2505.15107, 2025b. Jialong Wu, Baixuan Li, Runnan Fang, Wenbiao Yin, Liwen Zhang, Zhengwei Tao, Dingchu Zhang, Zekun Xi, Gang Fu, Yong Jiang, et al. Webdancer: Towards autonomous informa-tion seeking agency. arXiv preprint arXiv:2505.22648, 2025. Zhilin Yang, Peng Qi, Saizheng Zhang, Yoshua Bengio, William W Cohen, Ruslan Salakhutdi-nov, and Christopher D Manning. Hotpotqa: A dataset for diverse, explainable multi-hop question answering. arXiv preprint arXiv:1809.09600, 2018. Qiying Yu, Zheng Zhang, Ruofei Zhu, Yufeng Yuan, Xiaochen Zuo, Yu Yue, Weinan Dai, Tiantian Fan, Gaohong Liu, Lingjun Liu, et al. Dapo: An open-source llm reinforcement learning system at scale. arXiv preprint arXiv:2503.14476, 2025a. Qiying Yu, Zheng Zhang, Ruofei Zhu, Yufeng Yuan, Xiaochen Zuo, Yu Yue, Weinan Dai, Tiantian Fan, Gaohong Liu, Lingjun Liu, et al. Dapo: An open-source llm reinforcement learning system at scale. arXiv preprint arXiv:2503.14476, 2025b. 11 Preprint. Under review. Weihao Zeng, Yuzhen Huang, Qian Liu, Wei Liu, Keqing He, Zejun Ma, and Junxian He. Simplerl-zoo: Investigating and taming zero reinforcement learning for open base models in the wild. arXiv preprint arXiv:2503.18892, 2025. Kaiyan Zhang, Yuxin Zuo, Bingxiang He, Youbang Sun, Runze Liu, Che Jiang, Yuchen Fan, Kai Tian, Guoli Jia, Pengfei Li, Yu Fu, Xingtai Lv, Yuchen Zhang, Sihang Zeng, Shang Qu, Haozhan Li, Shijie Wang, Yuru Wang, Xinwei Long, Fangfu Liu, Xiang Xu, Jiaze Ma, Xuekai Zhu, Ermo Hua, Yihao Liu, Zonglin Li, Huayu Chen, Xiaoye Qu, Yafu Li, Weize Chen, Zhenzhao Yuan, Junqi Gao, Dong Li, Zhiyuan Ma, Ganqu Cui, Zhiyuan Liu, Biqing Qi, Ning Ding, and Bowen Zhou. A survey of reinforcement learning for large reasoning models. arXiv preprint arXiv:2509.08827, 2025a. Yaocheng Zhang, Haohuan Huang, Zijun Song, Yuanheng Zhu, Qichao Zhang, Zijie Zhao, and Dongbin Zhao. Criticsearch: Fine-grained credit assignment for search agents via a retrospective critic. arXiv preprint arXiv:2511.12159, 2025b. Wayne Xin Zhao, Kun Zhou, Junyi Li, Tianyi Tang, Xiaolei Wang, Yupeng Hou, Yingqian Min, Beichen Zhang, Junjie Zhang, Zican Dong, et al. A survey of large language models. arXiv preprint arXiv:2303.18223, 1(2), 2023. Chujie Zheng, Shixuan Liu, Mingze Li, Xiong-Hui Chen, Bowen Yu, Chang Gao, Kai Dang, Yuqiong Liu, Rui Men, An Yang, et al. Group sequence policy optimization. arXiv preprint arXiv:2507.18071, 2025. 12 Preprint. Under review. 
+
+A Appendix 
+
+A.1 Related Works Retrieval-Augmented Generation Large Language Models (LLMs) Zhao et al. (2023) have demonstrated remarkable capabilities in natural language understanding, reasoning, and information synthesis. However, they lack inherent access to real-time external knowledge and remain susceptible to hallucinations and factual errors. Retrieval-Augmented Gen-eration (RAG) Lewis et al. (2020) addresses these limitations by integrating LLMs with retrieval engines, conditioning generation on retrieved external passages to mitigate inaccu-racies. Despite their utility, static RAG pipelines typically employ a “retrieve-then-generate” paradigm, which restricts the LLM’s autonomy in determining when and what to search. This rigidity limits their adaptability in complex, real-world applications where iterative information seeking is required. 
+
+Search Agents While traditional search engines (e.g., Google, Bing) facilitate efficient access to ranked web pages, they often struggle to capture nuanced user intent in complex queries Kobayashi & Takeda (2000). Search agents Li et al. (2025a; 2026) represent an evolution beyond static RAG by invoking search tools within a multi-step reasoning process, allowing for autonomous query refinement and iterative retrieval. Systems such as Search-o1 Li et al. (2025c), WebThinker Li et al. (2025d), and WebDancer Wu et al. (2025) exemplify this capability. Concurrently, research has focused on training strategies to optimize search behaviors, including Search-R1 Jin et al. (2025), ReSearch Chen et al. (2025b), AutoRefine Shi et al. (2025a), SE-Search Li et al. (2026) and WebSailor Li et al. (2025b). However, a pervasive limitation among these methods is post-training instability, which frequently manifests as catastrophic model collapse or irreversible performance degradation. To mitigate this, we propose Search Agent Policy Optimization (SAPO), a method designed to enhance training stability through constrained policy updates. 
+
+Tool-based Agentic Reinforcement Learning Reinforcement Learning (RL) provides a robust framework for aligning LLM behaviors with human intent. Prominent approaches include Proximal Policy Optimization (PPO) Schulman et al. (2017), Direct Preference Opti-mization (DPO) Rafailov et al. (2023), and Group Relative Policy Optimization (GRPO) Shao et al. (2024). GRPO is particularly notable for its use of group-based normalization, which eliminates the need for a separate value network. Extensions such as Dynamic Sampling Policy Optimization (DAPO) Yu et al. (2025b) and Group Sequence Policy Optimization (GSPO) Zheng et al. (2025) have further refined this paradigm. Other group-based optimiza-tion methods include those detailed in Zeng et al. (2025); He et al. (2025); Chen et al. (2025a); An et al. (2025); Wang et al. (2025a); Zhang et al. (2025a). Nevertheless, applying RL to tool-augmented agentic environments remains highly unstable due to the interactive, multi-turn nature of the tasks Wang et al. (2026); Deng et al. (2025a;b). Addressing this challenge, our work introduces a sample-based penalty term to enforce a token-level constraint between the updated and reference policies, thereby stabilizing the training of search agents. 
+
+A.2 Training and Evaluation Datasets 
+
+Consistent with Search-R1 and other RL-based search agents, we construct our training dataset by aggregating NQ Kwiatkowski et al. (2019) and HotpotQA Yang et al. (2018), yielding a total of 169,615 samples. For evaluation, we construct a comprehensive benchmark of 51,713 samples, incorporating the test sets of four datasets (NQ Kwiatkowski et al. (2019), TriviaQA Joshi et al. (2017), PopQA Mallen et al. (2022), Bamboogle Press et al. (2022)) and the development sets of three multi-hop datasets (HotpotQA Yang et al. (2018), 2WikiMultihopQA Ho et al. (2020), and Musique Trivedi et al. (2022b)). 
+
+A.3 Search Agent Prompt 
+
+Figure 3 illustrates the prompt template used for the SAPO search agent. The template instructs the assistant to perform multi-turn search-driven reasoning by alternating be-13 Preprint. Under review.                
+
+> You are a helpful assistant excel at answering questions with multi-turn search engine calling. To answer questions, you must first reason through the available information using <think >
+> and </think >. If you identify missing knowledge, you may issue a search request using
+> <search >query </search >at any time. The retrieval system will provide you with the three most relevant documents enclosed in <documents >and </documents >. You may send multi-ple search requests if needed. Once you have sufficient information, provide a concise final answer using <answer >and </answer >. For example, <answer >Donald Trump </answer >.Question: {question }
+
+Figure 3: Prompt template for SAPO. tween internal thought processes in <think> </think> and query generation in <search> </search> . Retrieved results are returned as up to three documents within <documents> </documents> . The design permits multiple search calls and directs the agent to consolidate evidence into a concise final response enclosed by <answer> </answer> .
+
+A.4 SAPO Hyperparameters 
+
+We implement our method using the VeRL framework Sheng et al. (2025). As detailed in Table 4, we maintain consistency with Search-R1 and SE-Search regarding data, actor, and rollout configurations.Specifically for SAPO, the KL penalty coefficient is set to γ = 0.1, and the IS ratios threshold is set to τ = 1.0. Table 4: Hyperparameters used in SAPO.             
+
+> Module Hyper-parameter Value
+> Data Max documents length 512 Max response length 2048 Total training steps 420 Retriever top-k 3
+> Actor Training batch size 256 Micro batch size 64 Learning rate 1
+
+× 10 −6               
+
+> KL coefficient β0.001 Clip ratio ϵ0.2
+> Rollout Max search actions 5Group size G10 Temperature 1.0 Top-p 0.95
+> KL term KL penalty coeff γ0.1 IS ratios threshold τ1.0
+
+A.5 Generalization and Scalability 
+
+We investigate the scalability of SAPO by evaluating its performance across backbone models of varying capacities, specifically the Qwen2.5-Instruct series ranging from 1.5B to 14B parameters. To isolate the impact of model scale, we keep the retriever, knowledge corpus, and evaluation protocols constant. Table 5 reports the Exact Match (EM) and F1 scores. The results exhibit a clear positive correlation between model size and performance, aligning with established scaling laws Kaplan et al. (2020). 
+
+A.6 Implementation Simplicity 
+
+We augment the standard GRPO surrogate objective with a concise penalty term to enforce token-level constraints on distributional shifts between the current and old policies. As shown in Figure A.6, the core contribution of SAPO is encapsulated in the kl term loss 
+
+14 Preprint. Under review. 
+
+Size Metric Single-Hop QA Multi-Hop QA Avg. 
+
+NQ TriviaQA PopQA HotpotQA 2Wiki Musique Bamboogle 1.5B EM 0.440 0.591 0.432 0.413 0.381 0.160 0.384 0.400 F1 0.528 0.671 0.480 0.532 0.445 0.247 0.487 0.484 3B EM 0.469 0.629 0.457 0.456 0.448 0.203 0.432 0.442 F1 0.562 0.708 0.504 0.581 0.517 0.299 0.553 0.533 7B EM 0.473 0.658 0.480 0.471 0.439 0.231 0.480 0.462 F1 0.572 0.741 0.527 0.603 0.518 0.335 0.587 0.554 14B EM 0.510 0.695 0.485 0.494 0.477 0.255 0.548 0.495 
+
+F1 0.602 0.770 0.527 0.621 0.549 0.353 0.680 0.586 
+
+Table 5: Scaling trends of Qwen2.5-Instruct with SAPO across different model sizes (1.5B to 14B). We report both EM and F1 scores. The best results are marked in bold. expression. This term yields a scalar, token-level divergence penalty that is added to the global loss to directly limit per-token policy drift. By operating at the token granularity and requiring only a single line of code, this modification provides a lightweight and interpretable regularizer that complements the existing PPO clipping mechanism while enabling finer control over distributional changes during policy updates.  
+
+> 1
+
+def compute_policy_loss(old_log_prob, log_prob, advantages, eos_mask, cliprange):  
+
+> 2
+
+negative_approx_kl = log_prob - old_log_prob  
+
+> 3
+
+ratio = torch.exp(negative_approx_kl)  
+
+> 4
+
+ppo_kl = verl_F.masked_mean(-negative_approx_kl, eos_mask)  
+
+> 56
+
+pg_losses = -advantages * ratio  
+
+> 7
+
+pg_losses2 = -advantages * torch.clamp(ratio, 1.0 - cliprange, 1.0 + cliprange)  
+
+> 89
+
+kl_term_loss = -verl_F.masked_mean(  
+
+> 10
+
+torch.log(ratio).masked_fill(ratio > t, 0)[advantages[:, 0] >= 0],  
+
+> 11
+
+eos_mask[advantages[:, 0] >= 0]  
+
+> 12
+
+) 
+
+> 13 14
+
+pg_loss = verl_F.masked_mean(torch. max (pg_losses, pg_losses2), eos_mask)  
+
+> 15
+
+pg_clipfrac = verl_F.masked_mean(torch.gt(pg_losses2, pg_losses). float (), eos_mask)  
+
+> 16
+
+return pg_loss + w * kl_term_loss, pg_clipfrac, ppo_kl 
+
+A.7 Additional Experiments Results 
+
+To provide a comprehensive characterization of SAPO’s training stability, Figure 4 illustrates the SAPO EM evolution of four backbones(Qwen2.5-7B-Instruct; Llama-3.2-3B-Instruct; Qwen2.5-1.5B-Instruct; Qwen2.5-3B-Instruct) across seven benchmarks: Natural Questions (NQ), TriviaQA, PopQA, Bamboogle, HotpotQA, 2Wiki, and Musique. 
+
+A.8 Case Studies 
+
+Table 6 and 7 present full trajectories generated by the 3B and 14B models using SAPO, based on two randomly selected examples from 2WikiMultihopQA and Musique. These qualitative results demonstrate the agent’s capacity for autonomous reasoning and iterative query refinement. 15 Preprint. Under review. 20 60 100 140 180 220 260 300                                                     
+
+> Step
+> 0.30
+> 0.35
+> 0.40
+> 0.45
+> 0.50
+> EM
+> (a) NQ
+> 20 60 100 140 180 220 260 300
+> Step
+> 0.50
+> 0.55
+> 0.60
+> 0.65
+> 0.70
+> EM
+> (b) TriviaQA
+> 20 60 100 140 180 220 260 300
+> Step
+> 0.35
+> 0.40
+> 0.45
+> 0.50
+> EM
+> (c) PopQA
+> 20 60 100 140 180 220 260 300
+> Step
+> 0.20
+> 0.25
+> 0.30
+> 0.35
+> 0.40
+> 0.45
+> 0.50
+> EM
+> (d) HotpotQA
+> 20 60 100 140 180 220 260 300
+> Step
+> 0.10
+> 0.15
+> 0.20
+> 0.25
+> 0.30
+> 0.35
+> 0.40
+> 0.45
+> EM
+> (e) 2Wiki
+> 20 60 100 140 180 220 260 300
+> Step
+> 0.050
+> 0.075
+> 0.100
+> 0.125
+> 0.150
+> 0.175
+> 0.200
+> 0.225
+> EM
+> (f) Musique
+> 20 60 100 140 180 220 260 300
+> Step
+> 0.20
+> 0.25
+> 0.30
+> 0.35
+> 0.40
+> 0.45
+> 0.50
+> EM
+> (g) Bamboogle
+> 20 60 100 140 180 220 260 300
+> Step
+> 0.25
+> 0.30
+> 0.35
+> 0.40
+> 0.45
+> EM
+> (h) Mean
+> EM Trends over Training Steps on Seven Benchmarks
+> Qwen2.5-7B-Instruct Llama-3.2-3B-Instruct Qwen2.5-1.5B-Instruct Qwen2.5-3B-Instruct
+
+Figure 4: Evolution of EM accuracy over training steps for SAPO across seven benchmarks. Table 6: Case Studies illustrating SAPO trajectories from the 2wikimultihopqa benchmark. Key evidence is extracted from the original searched documents. 
+
+Question: Which film has the director who died earlier, Deuces Wild or Cavalcade Of The West? 
+
+Ground Truth: [”Cavalcade of the West”, ”Cavalcade Of The West”] 
+
+Model Output: Qwen2.5-3B-Instruct-SAPO 
+
+To determine which film has the director who died earlier between ”Deuces Wild” and ”Cavalcade Of The West”, I need to gather information about the directors of these films and their death dates. Let’s start by searching for this information. 
+
+<search> Director of Deuces Wild </search> <documents> Doc 1 (Title: ”Deuces Wild”): Deuces Wild is a 2002 American crime drama film directed by Scott Kalvert ... 
+
+Doc 3 (Title: ”Scott Kalvert”): Scott Kalvert (August 15, 1964 – March 5, 2014 ) was an American film director, known mainly for his 1995 film ”The Basketball Diaries”... and 2002’s ”Deuces Wild”. 
+
+</documents> <search> Director of Cavalcade Of The West </search> <documents> Doc 1 (Title: ”Cavalcade of the West”): Cavalcade of the West is a 1936 American Western film directed by Harry L. Fraser ... 
+
+Doc 3 (Title: ”Cavalcade of the West”): ...Cavalcade of the West is a 1936 American Western film directed by Harry L. Fraser. </documents> <search> Harry L. Fraser </search> <documents> Doc 1 (Title: ”Harry W. Fraser”): Harry W. Fraser (7 June 1884 – 13 May 1950 ) was an American labor leader... 
+
+Doc 3 (Title: ”Harry W. Fraser”): Fraser was president of the Order of Railway Conductors of America from 1941 to 1950. ... Fraser was born on June 7, 1884 and died on May 13, 1950 .
+
+</documents> <search> Scott Kalvert </search> <documents> Doc 1 (Title: ”Scott Kalvert”): Scott Kalvert (August 15, 1964 – March 5, 2014 ) was an American film director... 
+
+Doc 2 (Title: ”Scott Kalvert”): ...on March 5, 2014 from an apparent suicide. </documents> 
+
+Based on the information provided, Scott Kalvert died on March 5, 2014, while Harry L. Fraser died on May 13, 1950. Therefore, the director who died earlier is Harry L. Fraser, and the film ”Cavalcade Of The West” was directed by him. 
+
+<answer> Cavalcade Of The West </answer> 
+
+16 Preprint. Under review. Table 7: Case Study illustrating SAPO from the Musique benchmark. Key evidence is extracted from the original searched documents. 
+
+Question: Who is the president of the newly declared independent country that is part of the Commission of Truth and Friendship with the country that Tony Gunawan is from? 
+
+Ground Truth: [”Francisco Guterres”] 
+
+Model Output: Qwen2.5-14B-Instruct-SAPO 
+
+<think> To answer this question, I need to identify the country that Tony Gunawan is from, find out if it has a Commission of Truth and Friendship with any newly declared independent country, and then find out who the president of that newly declared independent country is. </think> <search> Tony Gunawan country of origin </search> <documents> Doc 1 (Title: ”Tony Gunawan”): Tony Gunawan (, born 9 April 1975) is a Chinese descended, Indonesian born badminton player... Gunawan is a former Olympic gold medalist and world champion for Indonesia... 
+
+Doc 2 (Title: ”Tony Gunawan”): ...Tony played for Indonesia from 1992–2001... 
+
+Doc 3 (Title: ”Tony Gunawan”): ...He was a member of the world champion 2000 Indonesia Thomas Cup team... </documents> <think> From the documents, it is clear that Tony Gunawan is from Indonesia. Now I need to find out if Indonesia has a Commission of Truth and Friendship with any newly declared independent country. </think> <search> Commission of Truth and Friendship Indonesia </search> <documents> Doc 1 (Title: ”Indonesia–Timor Leste Commission of Truth and Friendship”): The Indonesia–Timor Leste Commission on Truth and Friendship was a truth commission established jointly by the governments of Indonesia and East Timor in August 2005... 
+
+Doc 2 (Title: ”Indonesia–Timor Leste Commission of Truth and Friendship”): ...investigate acts of violence that occurred around the independence referendum held in East Timor in 1999... 
+
+</documents> <think> From the documents, it is clear that Indonesia has a Commission of Truth and Friendship with East Timor. Now I need to find out if East Timor is a newly declared independent country and who its president is. </think> <search> East Timor president </search> <documents> Doc 1 (Title: ”Francisco Guterres”): Francisco Guterres, popularly known as L ´u-Olo... is an East Timorese politician who has been President of East Timor since 2017 ... 
+
+Doc 3 (Title: ”Jos´ e Ramos-Horta”): ...Jos ´e Manuel Ramos-Horta... was the President of East Timor from 20 May 2007 to 20 May 2012... </documents> <think> From the documents, it is clear that Francisco Guterres is the current president of East Timor. However, I need to confirm if East Timor is a newly declared independent country. </think> <search> East Timor independence </search> <documents> Doc 3 (Title: ”East Timor”): ...East Timor became the first new sovereign state of the 21st century on 20 May 2002... </documents> <think> From the documents, it is clear that East Timor gained independence in 2002, which makes it a newly declared independent country. Therefore, the president of the newly declared independent country that is part of the Commission of Truth and Friendship with Indonesia is Francisco Guterres. </think> <answer> Francisco Guterres </answer> 
+
+17

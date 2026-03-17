@@ -1,0 +1,763 @@
+Title: FlowPortrait: Reinforcement Learning for Audio-Driven Portrait Video Generation
+
+URL Source: https://arxiv.org/pdf/2603.00159v1
+
+Published Time: Tue, 03 Mar 2026 01:10:23 GMT
+
+Number of Pages: 21
+
+Markdown Content:
+# FlowPortrait: Reinforcement Learning for Audio-Driven Portrait Video Generation 
+
+# Weiting Tan ♠♡∗ ,†, Andy T. Liu ♠,†, Ming Tu ♠, Xinghua Qu ♠,
+
+# Philipp Koehn ♡, Lu Lu ♠
+
+> ♠
+
+ByteDance Seed , ♡Johns Hopkins University 
+
+> ∗
+
+Work done at ByteDance Seed , †Corresponding authors 
+
+# Abstract 
+
+Generating realistic talking-head videos remains challenging due to persistent issues such as imperfect lip synchronization, unnatural motion, and evaluation metrics that correlate poorly with human perception. We propose FlowPortrait , a reinforcement-learning framework for audio-driven portrait animation built on a multimodal backbone for autoregressive audio-to-video generation. FlowPortrait introduces a human-aligned evaluation system based on Multimodal Large Language Models (MLLMs) to assess lip-sync accuracy, expressiveness, and motion quality. These signals are combined with perceptual and temporal consistency regularizers to form a stable composite reward, which is used to post-train the generator via Group Relative Policy Optimization (GRPO). Extensive experiments, including both automatic evaluations and human preference studies, demonstrate that FlowPortrait consistently produces higher-quality talking-head videos, highlighting the effectiveness of reinforcement learning for portrait animation.  
+
+> Date:
+
+March 3, 2026  
+
+> Correspondence:
+
+Weiting Tan at wtan12@jhu.edu , Andy T. Liu at tingwei.liu@bytedance.com 
+
+# 1 Introduction 
+
+Portrait animation—generating realistic, expressive talking-head videos from a single image and an audio clip—has advanced rapidly, driven by applications in virtual avatars, video conferencing, and digital entertain-ment. Earlier approaches relied on explicit facial landmarks [ 1 , 2], whereas recent systems increasingly adopt end-to-end diffusion frameworks. Architectures such as U-Net [ 3] and Diffusion Transformers (DiT) [ 4, DiT], together with improvements in contextual modeling, emotion conditioning, and motion-decoupled control modules [5–7], have enhanced visual fidelity and expressiveness. Despite this progress, two major challenges remain. First, most prior portrait animation models rely on training DiT-style backbones from scratch and conditioning them on audio features, which limits their ability to exploit rich cross-modal priors. In contrast, recent advances in Multimodal Large Language Models (MLLMs) and video-generation backbones [ 8–12 ] have demonstrated the effectiveness of large-scale pretraining for multimodal reasoning and generation. Motivated by these developments, we propose FlowPortrait , an audio-driven portrait animation framework built on BAGEL [ 8], a unified MLLM based on the Autoregressive Rectified Flow ( AR-Flow ) architecture. By casting audio-to-video generation as an autoregressive process 
+
+> This work is for research purposes only and is not integrated into any ByteDance products.
+
+1
+
+> arXiv:2603.00159v1 [cs.CV] 25 Feb 2026
+
+MLLM ( Pol i cy M odel )       
+
+> Noised Latent
+> c
+> T Sampling Step
+> MLLM-based Reward
+> Perceptual Reward
+> Consistency Reward
+> FlowGRPO
+> Objective
+> Encoded Audio Encoded First Frame
+> sN
+> predicted velocity
+> St ep t
+> v?(zt, t, c )
+> SDE/ ODE
+> zt-1
+> Rollout
+> (G=4)
+> Lip-sync
+> Expressiveness
+> Motion
+> R1Final
+> Reward
+> Functions
+> s0
+> Reward
+> Calculation
+> GRPO wit h mul t i-agent Rewar d Sy st em
+> R2Final R3Final R4Final
+> Normalization & Weighted Sum
+> Group-Based Advantage Estimation
+> Policy
+> Optimization
+
+Figure 1 Overview of FlowPortrait . We build upon a pretrained MLLM to enable audio-to-video generation for portrait animation. Using an improved Flow-GRPO objective, we post-train the AR-Flow generator with a composite reward that integrates MLLM-based evaluations with perceptual and temporal consistency terms, leading to consistent improvements in generation quality. 
+
+within a pretrained multimodal model, FlowPortrait effectively transfers large-scale cross-modal knowledge to portrait animation while naturally supporting future extensions such as multi-hop audio–video generation. Second, evaluation metrics remain a major bottleneck. Widely used measures such as PSNR and SSIM empha-size pixel-level correspondence and fail to capture perceptual factors central to portrait animation, including lip-sync accuracy, emotional expressiveness, and motion naturalness. While FVD [ 13 ] and SyncNet-based scores [ 14 , LSE-C/D] address some of these dimensions, they remain imperfect proxies for human judgment and often overlook fine-grained semantic or temporal artifacts. To address this gap, FlowPortrait introduces an MLLM-based evaluation framework that decomposes assessment into three specialized agents—lip-sync, expressiveness, and motion—whose aggregated judgments provide a more human-aligned and diagnostically informative evaluation signal. Finally, FlowPortrait unifies modeling and evaluation through reinforcement learning. Using an improved Flow-GRPO objective [ 15 – 17 ], we post-train the AR-Flow generator directly against a composite reward that combines MLLM-based evaluations with perceptual and temporal consistency rewards. This design mitigates reward hacking and enables stable, long-horizon improvements in generation quality. In summary, our contributions are: 
+
+• FlowPortrait , a speech-driven portrait animation framework built on a pretrained AR-Flow -based MLLM, enabling autoregressive audio-to-video generation with strong multimodal priors. 
+
+• A MLLM-based evaluation framework that separately scores lip-sync, expressiveness, and motion smooth-ness, yielding a more human-aligned and interpretable assessment of portrait animation quality. 
+
+• A reinforcement learning pipeline based on Flow-GRPO using a composite reward system, allowing FlowPortrait to be post-trained for improved quality and temporal coherence. 
+
+# 2 Automatic Evaluation for Portrait Annimation 
+
+2.1 Existing Evaluation Metrics 
+
+Recent portrait animation methods [ 5–7 ] predominantly rely on hand-crafted evaluation rubrics derived from low-level image or video features. For instance, FID [ 18 ] and FVD [ 13 ] measures distributional discrepancies between real and generated image/video representations, while LSE-C/D [ 14 ] assesses lip-synchronization accuracy using a pre-trained lip-sync model. Other commonly adopted metrics include pixel-level similarity measures such as PSNR (Peak Signal-to-Noise-Ratio) and SSIM (Structural Similarity Index Measure). More recently, [ 19 ] proposes a composite evaluation framework that combines multiple criteria related to visual 2quality, naturalness, and synchronization. Despite their popularity, these metrics have been shown to correlate poorly with human perceptual judgments, particularly for generative tasks involving complex motion, semantics, and realism. Pixel-based measures such as PSNR and SSIM are known to favor low-level fidelity while failing to reflect semantic similarity as perceived by humans [ 20 , 21 ]. Although FVD exhibits stronger alignment with human judgment than frame-level metrics, it remains sensitive to feature representations, sample size, and distributional assumptions, and often fails to capture fine-grained temporal artifacts and motion naturalness [ 22 , 23 ]. Moreover, these metrics require access to paired ground-truth videos, which is frequently unavailable in real-world portrait animation scenarios, further limiting their practical reliability. 
+
+2.2 Automatic Evaluation via Multimodal LLMs 
+
+Due to the limitations of rubric-based evaluation metrics, we explore an alternative evaluation framework based on multimodal large language models (MLLMs) for portrait animation assessment. We investigate two complementary paradigms: score-based evaluation and comparison-based evaluation .In score-based evaluation , an MLLM assigns a numerical score in the range [1 , 5] to each video. For any video pair, the final preference is determined by comparing their predicted scores. In comparison-based evaluation , the model is directly prompted to compare two videos and select the better one. To mitigate positional bias [24], we randomize the order of the two videos in each prompt. We adopt Gemini-2.5-Pro as the backbone for all evaluation systems 1, motivated by its strong video understanding and multimodal reasoning capabilities. In preliminary experiments, we also evaluated Qwen3-Omni but found its outputs to be highly saturated, with scores almost always concentrated at 4 or 5. As a result, it failed to meaningfully differentiate the quality of outputs from different generators (e.g., Sonic and EchoMimics yielding nearly identical dataset-level scores despite clear perceptual differences in human evaluations). Consequently, all reported results are based on Gemini-2.5-Pro . We explore the following variations for each evaluation paradigm, with their detailed prompt templates provided in section C. We consider three score-based variants that differ in whether evaluation is performed holistically or decomposed across aspects, and whether judgments are produced by a single or multiple MLLMs. 
+
+• SAS-SA (Single-Aspect, Single-Agent): A single MLLM provides one holistic score in [1 , 5] following the human annotation rubric. 
+
+• MAS-SA (Multi-Aspect, Single-Agent): A single MLLM predicts separate scores for lip-sync, expressiveness, and motion, which are then averaged to form the final score. 
+
+• MAS-MA (Multi-Aspect, Multi-Agent): Each aspect is evaluated by a dedicated MLLM (all instantiated with Gemini-2.5-Pro ), and their outputs are aggregated into the final judgment. Similarly, for comparison-based evaluator, we consider following variants: 
+
+• Direct-Comp : Performs a holistic, forced-choice comparison between two videos using a single MLLM. 
+
+• ICL-Comp : Enhances the comparison prompt with three in-context examples—one per evaluation aspect—to guide more structured reasoning within a single MLLM. 
+
+• MA-Comp (Multi-Agent Comparison): Decomposes evaluation across aspects, where three specialized MLLMs independently assess lip-sync, expressiveness, and motion, and a fourth MLLM aggregates their decisions into a final preference. 
+
+2.3 Automatic Evaluation’s Alignment with Human Judgment 
+
+To evaluate our proposed evaluation systems, we first collect human judgment data from an in-house talking-head video dataset. We randomly sample 940 portrait videos that are at least 5 seconds long and have high resolution (with a detected head region of at least 512 × 512 ; see section B for details on preprocessing) to form our test split. For each sample, we generate portrait animations from the input audio and the first  
+
+> 1Gemini-2.5-Pro is used solely for evaluation purposes and is not involved in any training process.
+
+3ground-truth frame using three open-sourced methods: Sonic [ 5], Memo [ 6], and Echomimic [ 7]. Together with the ground-truth video, this results in four versions per sample. We ask three human annotators to score and rank these videos according to lip-sync quality, facial expressiveness, and motion smoothness, following the detailed guidelines in section A. After collecting both scores and rankings, we construct a pairwise dataset to measure the alignment between human judgments and automatic evaluation metrics. Specifically, for each sample, we form all possible pairs among the four videos (  42
+
+ = 6 pairs) and retain only those pairs for which all three annotators unanimously agree on the preferred video. The agreed-upon video is labeled as the winner. This process yields 4,501 human-labeled preference pairs, corresponding to 80.7% of all possible pairs. We then apply the evaluation systems described in section 2.2 to predict the preferred video for each pair and compute accuracy as the percentage of pairs for which the predicted winner matches the human consensus.                                               
+
+> Base Model Method Acc Acc nt Cov. (%) Feature / Pixel Models
+> Inception-V3 [25] FID 27.5 ––SyncNet [14] LSE-C 53.4 ––SyncNet LSE-D 51.6 ––Pixel-based SSIM 61.2 ––
+> Comparison Models
+> Direct-Comp 64.3 ––Gemini 2.5 ICL-Comp 64.3 ––
+> MA-Comp 66.6 ----Score Models
+> SAS-SA 58.3 67.2 46.8 Gemini 2.5 MAS-SA 59.7 65.0 64.9
+> MAS-MA 65.6 69.3 81.1 Table 1 Evaluation against human preferences. For score-based meth-ods, Acc assigns half credit to ties. Cov. is the proportion of non-tied predictions, and Acc nt is accuracy among non-tied samples.
+
+We choose FID, FVD, LSE-C, LSE-D, and SSIM as representative traditional metrics for comparison. For FID, we use Inception-V3 [ 25 ] to extract frame-level features, average them across frames to obtain video-level representations. We compute the FVD metric using a 3D ResNet-18 [ 26 ] pretrained on Kinetics-400 [ 27 ] with standard Kinetics normal-ization, treating video-level features as a Gaussian distribution and reporting the Fréchet distance to the ground-truth distribution. For LSE-C and LSE-D, we follow the official implementation [14 ] to compute lip-sync confidence and distance scores. SSIM is computed at the frame level with Scikit-Image’s im-plementation 2 and averaged across all frames. As shown in table 1, prior metrics LSE-C and LSE-D achieve only 53.4% and 51.6% accuracy, respectively, indicating weak alignment with human preferences on portrait animation quality. Similarly, using SSIM and FID also yields poor alignment. This observation is consistent with prior findings that such metrics correlate poorly with human perception [ 19 ]. Among MLLM-based approaches, multi-agent systems (MA-Comp and MAS-MA) achieve the strongest performance, suggesting that decomposing evaluation across specialized agents for different aspects leads to more accurate judgments. Overall, comparison-based and score-based methods obtain comparable accuracy. We therefore adopt MAS-MA as our default evaluation method throughout the paper, as it is more cost-effective (comparison-based methods require encoding two videos per prompt) and better suited for RL post-training scenarios, where each sampled video can be scored directly. Moreover, table 2 reports the scores assigned to different video generators by traditional automatic metrics, MLLM-based evaluators, and human annotators. We observe that MLLM-based evaluators (SAS-SA, MAS-SA, and MAS-MA) exhibit substantially better alignment with human judgments, consistently producing the ranking Original > Sonic > Memo > Echomimics. In contrast, conventional metrics such as SSIM, LSE-C and LSE-D fail to accurately reflect this ordering. These results further highlight the effectiveness of MLLM-based evaluation systems in capturing human-perceived video quality. 4Model Evaluation System FVD ↓ FID ↓ LSE-D ↓ LSE-C ↑ SSIM ↑ SAS-SA ↑ MAS-SA ↑ MAS-MA ↑ Human ↑
+
+Original – – – – – 3.32 3.76 3.93 4.77 Sonic 62.25 44.14 12.05 2.91 0.633 2.94 3.43 3.58 3.56 Memo 74.94 41.12 13.65 0.92 0.668 2.72 3.31 3.37 3.21 Echomimics 97.06 60.15 13.18 1.51 0.573 2.55 3.16 3.26 2.54 
+
+Table 2 Scores assigned to different generation models by automated metrics, MLLM-based evaluators, and human annotators. Arrows indicate whether higher ( ↑) or lower ( ↓) values are better. Vertical separators partition evaluation systems into (i) automated metrics, (ii) MLLM-based evaluators, and (iii) human judgments. 0.0% 5.0% 10.0% 15.0% 20.0% 25.0% 30.0% 35.0% 
+
+> Error rate (%)
+> echo_vs_memo
+> memo_vs_sonic
+> echo_vs_sonic
+> orig_vs_sonic
+> memo_vs_orig
+> echo_vs_orig
+> Compared Generator Type
+> n=211
+> n=155
+> n=195
+> n=192
+> n=158
+> n=130
+> Error rate by compared generator type
+
+Figure 2 Error rates of different generator types. Each bar represents the error rate for a specific generator type, with annotations indicating the number of error cases. 
+
+2.4 Deep Dive into Multi-Aspect, Multi-Agent Evaluation 
+
+Having established the effectiveness of MAS–MA, we further analyze its per-aspect behavior and score distributions. We first examine the error rate of MAS–MA in figure 2. Most disagreements with human judgments occur when comparing generators of similar quality, such as Echomimics vs. Memo and Memo vs. Sonic . As shown in table 2, both humans and MAS–MA rank the generators consistently as Original > Sonic > Memo >
+
+Echomimics , confirming that the system is reliable when the quality gap is sufficiently large. We next compare the score distributions of humans and MAS–MA in figure 3. MAS–MA produces less calibrated distributions compared to human ratings: lip-sync and expressiveness scores tend toward a binary pattern (very high or very low), while motion smoothness scores cluster in the mid-range with occasional extreme lows. These discrepancies highlight remaining gaps between automatic and human evaluation. Achieving more human-like score distributions will likely require larger, higher-quality annotated datasets for reward modeling—a direction we leave for future work. 
+
+# 3 Training Methodology 
+
+FlowPortrait is trained using a two-stage pipeline for speech-driven portrait animation. In the first stage, we fine-tune our MLLM backbone–BAGEL–to generate video frames conditioned on speech. In the second stage, we perform post-training with a reinforcement learning framework, Flow-GRPO [ 15 ], to further improve generation quality using our proposed reward system. 
+
+3.1 Autoregressive Rectified Flow Model 
+
+Given an input audio clip x and a reference image i, our goal is to generate a sequence of video frames 
+
+v = {v1, · · · , vT } that are temporally coherent and synchronized with the audio to create a portrait animation.   
+
+> 2Available at https://scikit-image.org/
+
+5orig sonic memo echo        
+
+> 1
+> 2
+> 3
+> 4
+> 5
+> Score
+> metric = lipsync
+> orig sonic memo echo
+> metric = expressiveness
+> orig sonic memo echo
+> metric = motion
+> Video Generator
+> Source
+> human
+> model Figure 3
+
+Score distribution histograms for the three evaluation aspects: lip-sync quality, facial expressiveness, and motion smoothness. Each histogram illustrates the frequency of scores assigned by Human (blue) and MAS-MA evaluation system (orange) across the range of possible scores (1 to 5). 
+
+First, we encode the ground-truth video frames v into a latent sequence z0 = {z10 , · · · , zL 
+
+> 0
+
+} using a pre-trained VAE encoder [ 28 ]. The latent sequence length L = T /R is shorter than the frame count T due to the VAE’s temporal reduction factor R.We adopt the Rectified Flow [ 29 ] framework for generation. This model defines a linear interpolation between the true data sample z0 (the latent sequence) and a noise sample z1 ∼ N (0 , I) of the same shape. The noised latent zt at continuous time t ∈ [0 , 1] is defined as: 
+
+zt = (1 − t)z0 + tz1 (1) Our model follows the Mixture of Transformers (MoT) structure [ 30 ] from BAGEL [ 8]. Conditional information 
+
+c, which includes audio features and reference image ViT tokens, is processed by an "understanding expert" transformer. A separate "generation expert" transformer, vθ , is trained to predict the velocity field vθ (zt, t, c)
+
+given the noised latent zt, timestep t, and conditions c. The model is trained by minimizing the conditional Flow Matching loss: 
+
+L(θ) = Et, z0,z1,c
+
+∥(z1 − z0) − vθ (zt, t, c)∥2 (2) This objective trains vθ to learn the constant target velocity z1 − z0 required to move from noise z1 to data 
+
+z0. During generation (the reverse process from t = 1 to t = 0 ), the trained velocity model vθ can be used to predict the data ( ˆz0) and noise ( ˆz1) components from any intermediate state zt:
+
+ˆz0(zt, t, c) = zt − t · vθ (zt, t, c) (3) 
+
+ˆz1(zt, t, c) = zt + (1 − t) · vθ (zt, t, c) (4) To control information flow, a specific attention mask is applied: 
+
+• Within blocks: Full self-attention is used within the audio, image, and video latent blocks, respectively. 
+
+• Across blocks: A causal-style mask is applied. The audio block attends only to itself. The reference image block attends to audio and image tokens. The video latent block (the generation expert) attends to all inputs: audio, image, and its own latents. 
+
+3.2 Reinforcement Learning with Flow-GRPO 
+
+To further enhance video generation quality, we incorporate reinforcement learning using Flow-GRPO [ 15 , 16 ]. This allows the model to optimize directly for our customized reward function rather than merely imitating ground-truth videos through supervised learning. We begin by formulating the generative process as a Markov Decision Process (MDP) discretized into N steps (from t = N down to 0). At each step t, the policy 
+
+πθ (zt−1 | st), parameterized by vθ , predicts the next latent zt−1 based on the state st ≜ (c, t, zt), starting from an initial noise state sN ∼ N (0 , I). A sparse reward R(z0, c) is assigned only at the final step, scoring the generated video according to our evaluation system. 6Group-Based Advantage Estimation Given this MDP formulation, we adopt GRPO [ 31 ] to estimate policy advantages using group-relative normalization. For each condition c, we sample a group of G trajectories 
+
+{ziN , . . . , zi
+
+> 0
+
+}Gi=1 using the old policy πθold . The advantage of trajectory i is computed as 
+
+ˆAi = R(zi
+
+> 0
+
+, c) − mean ({R(zj
+
+> 0
+
+, c)}Gj=1 )
+
+std ({R(zj
+
+> 0
+
+, c)}Gj=1 ) . (5)  
+
+> Flow-GRPO Objective
+
+Flow-GRPO extends GRPO to Flow-based generative models, optimizing the objective: 
+
+JFlow-GRPO (θ) = Ec∼C ,{ziN ... 0}Gi=1 ∼πθold (·| c)
+
+h
+
+f (R, ˆA, θ, ε, β )
+
+i
+
+(6) where f is defined as: 
+
+f (·) = 1
+
+G
+
+> G
+
+X
+
+> i=1
+
+1
+
+N
+
+> N
+
+X
+
+> t=1
+
+h
+
+min 
+
+
+
+rit(θ) ˆAi, clip (rit(θ), 1 − ε, 1 + ε) ˆAi
+
+
+
+− βD KL (πθ (·| sit)|| πθold (·| sit)) 
+
+i
+
+(7) and the importance sampling ratio rit(θ) is defined as: 
+
+rit(θ) = pθ (zit−1|zit , c)
+
+pθold (zit−1|zit , c) (8)  
+
+> Stochastic Sampling for Exploration
+
+Standard Rectified-Flow samplers are deterministic ODEs and therefore lack the stochasticity required for RL exploration. Following prior work [ 32 , 33 ], we introduce stochastic transitions using Coefficients-Preserving Sampling (CPS) [17]. The latent update from t to t − ∆t is 
+
+zt−∆t =  (1 − (t − ∆t)) ˆ z0 + ( t − ∆t) cos   ηπ 
+
+> 2
+
+ ˆz1
+
+| {z }
+
+> deterministic mean
+
++ ( t − ∆t) sin   ηπ 
+
+> 2
+
+ ϵ
+
+| {z }
+
+> stochastic noise
+
+, (9) where ˆz0 and ˆz1 are model predictions, ϵ ∼ N (0 , I), and η ∈ [0 , 1] controls noise strength. This sampler defines the transition distribution and yields the log-probability needed for the importance ratio computation: 
+
+log pθ (zit−1 | zit , c) ∝ − zit−1 − μθ (zit , t, c) 2 , (10) where μθ is the deterministic mean in (Eq. 9). Note that for the sampling stage, we did not inject stochasticity in all steps using CPS sampling; instead, we only applied it within a small window of steps, while keeping the rest deterministic, following the Mix-GRPO approach [34]. 
+
+3.3 Reward System Design 
+
+The design of the reward function is the key to the post-training stage. Following our multi-agent evaluation system (detailed in section 2.2), the reward function R(·) evaluates the generated video ˆv (decoded from 
+
+z0) based on three aspects: lip-sync quality, expressiveness, and motion quality. Each aspect is scored by a MLLM-based evaluation model. For each generated video sample, the final reward is an equally weighted sum of these scores: 
+
+RMLLM = 13 (Rlip-sync (ˆ v) + Rexpressiveness (ˆ v) + Rmotion (ˆ v)) (11) However, using only MLLM-based evaluators leads to a reward hacking phenomenon: the model learns to exploit weaknesses in the evaluators without improving true video fidelity. Empirically, we observe two major artifacts—jittering and color drift—which MLLMs fail to penalize. To mitigate these issues, we introduce two additional reward components: a frame-level perceptual quality reward based on LPIPS [ 21 ] , and a motion-smoothness reward based on optical flow consistency using RAFT [35].  
+
+> LPIPS-Based Frame Quality Reward.
+
+To measure perceptual deviations between generated frames ˆvt
+
+and reference frames v∗ 
+
+> t
+
+, we adopt LPIPS [ 21 ]. For each image pair, a pretrained network F extracts 7channel-normalized features ˆy l, ˆy l 
+
+> 0
+
+∈ RHl×Wl×Cl across L layers. LPIPS computes a spatially averaged, channel-weighted distance: 
+
+d(ˆ vt, v∗ 
+
+> t
+
+) = X
+
+> l
+
+1
+
+HlWl
+
+X
+
+> h,w
+
+wl ⊙  ˆy lhw − ˆy l
+
+> 0,hw
+
+ 22 (12) where wl ∈ RCl is a learned perceptual weight and ⊙ denotes channelwise multiplication. The frame-quality reward is then defined as the negative temporal average: 
+
+Rperceptual = − 1
+
+T
+
+> T
+
+X
+
+> t=1
+
+d(ˆ vt, v∗ 
+
+> t
+
+) (13) This term penalizes perceptual drift, texture degradation, and color inconsistency, complementing MLLM-based semantic signals with a robust low-level fidelity constraint.  
+
+> Optical-Flow Smoothness Reward.
+
+To penalize temporal jitter, we compute optical flow between consecutive frames using RAFT [ 35 ]. Let ut ∈ R2×H×W denote the flow field between ( ˆvt, ˆvt+1 ). For t = 1 , . . . , T − 2, we compute the temporal flow change 
+
+∆ut = ut+1 − ut (14) Following our implementation, we normalize the acceleration by the flow magnitude to obtain a scale-invariant jitter measure: 
+
+jt = ∥∆ut∥2
+
+∥ut∥2 + ε (15) where norms are computed per pixel and averaged spatially. The final consistency reward is defined as the negative temporal average of jitter: 
+
+Rconsistency = − 1
+
+T − 2 
+
+> T−2
+
+X
+
+> t=1
+
+jt (16) such that higher reward corresponds to smoother, more temporally consistent motion.  
+
+> Final Reward Composition
+
+Because the semantic, perceptual, and motion-smoothness rewards operate on different scales, we first normalize each reward by subtracting its mean and dividing by its standard deviation within the batch. Let eRMLLM , eRperceptual , and eRconsistency denote the normalized rewards. The final reward is then computed as a weighted combination: 
+
+Rfinal = eRMLLM + λ1 eRperceptual + λ2 eRconsistency , (17) where λ1 and λ2 control the relative importance of perceptual fidelity and motion smoothness. In our experiments, we set λ1 = 0 .2 and λ2 = 0 .2, which provides a stable balance between semantic correctness, visual quality, and temporal consistency. 
+
+# 4 Experiments 
+
+4.1 Setup  
+
+> SFT Stage
+
+We adopt a two-stage training pipeline that begins with supervised fine-tuning (SFT) and is later refined with reinforcement learning. In the SFT stage, we initialize our model from BAGEL [ 8] and train it on a diverse collection of high-quality talking-head video datasets, including several public and internal talking-head video corpora. We perform strict filtering to ensure video quality and speaker consistency, and crop each clip to a 1:1 head-centered region (see section B for details). All videos are standardized to 24 FPS and a maximum spatial resolution of 384 px to match our portrait-animation setup. For video encoding, we employ the pretrained Wan-VAE [ 28 ] with a patch size of 2, temporal downsampling of 4, and spatial downsampling of 8. Under these settings, a 24 FPS, 384-resolution video produces 
+
+(24 /4) ×
+
+ 384 8 · 2
+
+2
+
+= 3456 tokens per second .
+
+8In-domain Test Set Out-domain Test Set Generator Lip-sync Expressive Motion Avg Lip-sync Expressive Motion Avg                                                  
+
+> Original 4.03 4.33 3.43 3.93 4.74 4.42 2.93 4.03
+> Previous Generators
+> Echo 3.37 3.72 2.67 3.26 4.12 3.97 2.44 3.51 Memo 3.53 3.88 2.70 3.37 4.45 4.10 2.66 3.74 Sonic 3.73 4.07 2.93 3.58 4.45 4.15 2.63 3.74
+> Our Generators
+> SFT 3.74 4.07 3.16 3.66 4.47 4.12 2.89 3.83
+> RL 4.42 4.41 3.59 4.14 4.50 4.17 3.07 3.91 Table 3 MLLM-based evaluation of different video generators on in-domain and out-domain test sets.
+
+We train the model with a maximum sequence length of 89,600 tokens (approximately 25 seconds of video) for 300k steps, using AdamW [ 36 ] with a learning rate of 5 × 10 −5 and β1 = 0 .9, β2 = 0 .95 . During inference, videos are decoded using 25 sampling steps with classifier-free guidance [37] and a guidance scale of 1.0.  
+
+> RL Post-training Stage
+
+Building on the strong SFT foundation, we further enhance video quality through reinforcement learning using our Flow-GRPO algorithm. All RL updates are performed on an internal talking-head dataset for 400 optimization steps. During training-time sampling, we follow the CPS procedure described in section 3, decoding each video in 15 steps. Rather than applying stochastic updates at every step, we select a small window of size W (varied in ablations) in which stochastic updates are applied; the remaining steps are deterministic, and classifier-free guidance is disabled throughout RL sampling. We optimize using AdamW with a learning rate of 1 × 10 −5 and β1 = 0 .9, β2 = 0 .95 , and a batch of 128 generated videos per update. For group-based advantage estimation, each input audio prompt is used to sample G = 4 candidate videos, and we apply a clipping threshold of ε = 0 .001 to stabilize optimization. At inference time, decoding follows the same procedure as in the SFT stage to ensure consistent comparison. 
+
+4.2 Main Results 
+
+We compare our SFT and RL post-trained models against strong prior baselines, including Echo [ 7], Memo [ 6 ], and Sonic [ 5]. Model quality is evaluated using our MLLM-based automatic assessment framework (MAS-MA) on an in-domain and an out-domain test set. To ensure that our evaluation is not confounded by potential reward hacking introduced during RL post-training, we additionally conduct a human preference study following the same protocol as our automatic evaluation (section 2.3). Three independent annotators score each model along lip-sync accuracy, expressiveness, and motion smoothness, and we report the average scores across annotators.                      
+
+> Generator Lip-sync Expressive Motion Avg
+> Orig 4.78 4.76 4.68 4.74 Sonic 3.59 3.47 3.21 3.42 SFT 3.87 3.75 3.55 3.72
+> RL 4.16 4.07 3.85 4.03 Table 4 Human annotation results comparing different gen-erators, showing that RL post-training substantially improves generation quality and alignment with human preferences.
+
+The automatic evaluation results are summa-rized in table 3. Our SFT model already outper-forms all prior methods on both the in-domain and out-domain test sets, demonstrating the ad-vantage of initializing portrait animation from a strong MLLM backbone. Building on this baseline, the RL post-trained model further im-proves performance and achieves the best scores across all evaluation aspects on both test sets. However, because the RL training objective in-corporates MLLM-based rewards that overlap with our automatic evaluation, the RL model may benefit from reward hacking effects, which we analyze in section 4.3. We therefore rely on human evaluation as an additional validation of the RL post-training strategy, with results reported in table 4. As 9Figure 4 Cherrypicked failure cases from our SFT model, including blurred textures and hallucinated artifacts. RL post-training effectively mitigates these issues. The black masks are used to anonymize identities. 
+
+shown, the SFT model is consistently preferred over Sonic in terms of lip-sync, expressiveness, and motion smoothness, though it still trails the original videos. After RL post-training, performance improves across all three dimensions, substantially narrowing the gap to the original videos. Taken together, both automatic and human evaluations demonstrate consistent gains from our training strategies. In figure 4, we show qualitative comparisons between our SFT and RL models, where post-training helps mitigate motion blurring and hallucinated artifacts. More qualitative results are provided in Appendix D. 
+
+4.3 Analysis and Ablation Studies 
+
+In previous section, we show the effectiveness of our SFT and RL stages. Here, we provide ablation studies that explored RL post-training design choices and lead to our final reward system design. We explored three settings through ablation studies: (1) noise level η in the stochastic update (Eq. 9), (2) window size for SDE updates, and (3) reward type and the results are summarized in table 5. 
+
+Noise Level η for Sampling As shown in table 5 (Ablation 1), a moderate noise level of η = 0 .5 during the stochastic update step yields the best performance, providing the largest improvement over the SFT baseline. The reward curves in figure 5 further illustrate this trend: high noise ( η = 1 .0) leads to unstable updates, whereas lower noise ( η = 0 .5) produces steadily increasing rewards. Qualitatively, models trained with high noise frequently exhibit artifacts such as jittering and temporal color drift (see figure 8 in the Appendix for examples), while those trained with lower noise show fewer such issues. 0 100 200 300          
+
+> step
+> 3.8
+> 4.0
+> 4.2
+> Score
+> Average Score
+> 0100 200 300
+> step
+> 4.0
+> 4.2
+> 4.4
+> 4.6
+> Score
+> Lipsync Score
+> 0100 200 300
+> step
+> 4.6
+> 4.7
+> 4.8
+> 4.9
+> Score
+> Expressive Score
+> 0100 200 300
+> step
+> 2.75
+> 3.00
+> 3.25
+> 3.50
+> Score
+> Motion Score
+> Noise Level
+> 0.5
+> 0.8
+> 1.0
+> Training Step
+
+Figure 5 Comparison of reward curve during post-training for various noise levels during sampling stage. 
+
+Window Size W for Injecting Stochasticity. In Ablation 2 of table 5, we vary the window size W for stochastic updates while keeping all other factors fixed. Comparing W ∈ { 1, 3, 5}, we find that W = 1 
+
+consistently performs best, aligning with prior observations [ 38 ] that injecting noise at a single step yields more stable optimization. Although the quantitative differences are moderate, qualitative inspection shows that larger windows introduce noticeable temporal jitter and unstable motion. Interestingly, these artifacts often accompany higher motion scores under the MLLM-based evaluator, indicating that the model is exploiting MLLM-based reward system. These findings reveal that MLLM-based reward alone is insufficient to prevent degenerate behaviors, and that stabilizing temporal dynamics requires complementary supervision that is sensitive to low-level artifacts such as jitter. 10 Setting W Noise Lip-sync Expressive Motion Avg SFT Baseline N/A N/A 3.74 4.07 3.16 3.66 
+
+RL Baseline ( RMLLM ) 1 0.5 4.40 4.40 3.50 4.10 Ablation 1: Noise Level 
+
+Noise = 0.8 1 0.8 4.29 (-0.11) 4.33 (-0.07) 3.48 (-0.02) 4.03 (-0.07) Noise = 1.0 1 1.0 4.12 (-0.28) 4.29 (-0.11) 3.41 (-0.09) 3.94 (-0.16) 
+
+Ablation 2: Window Size 
+
+W = 3 3 0.5 4.22 (-0.18) 4.24 (-0.16) 3.48 (-0.02) 3.98 (-0.12) W = 5 5 0.5 4.19 (-0.21) 4.28 (-0.12) 3.45 (-0.05) 3.97 (-0.13) 
+
+Ablation 3: Reward Type 
+
+Rlip-sync 1 0.5 4.36 (-0.04) 4.10 (-0.30) 3.01 (-0.49) 3.83 (-0.27) 
+
+Rexpressiveness 1 0.5 3.96 (-0.44) 4.33 (-0.07) 2.76 (-0.74) 3.68 (-0.42) 
+
+Rmotion 1 0.5 4.13 (-0.27) 4.17 (-0.23) 3.48 (-0.02) 3.92 (-0.18) 
+
+Rperceptual + Rconsistency 1 0.5 4.14 (-0.26) 3.69 (-0.71) 2.06 (-1.44) 3.30 (-0.80) 
+
+RMLLM + Rperceptual + Rconsistency 1 0.5 4.42 (+0.02) 4.41 (+0.01) 3.59 (+0.09) 4.14 (+0.04) Table 5 All ablations report score differences relative to the RL baseline. We found that small window size, small noise, and adding perceptual+consistency rewards with MLLM’s three aspect rewards produce the best results. 
+
+Reward Type. Ablation 3 of table 5 further examines how different reward compositions affect behavior. Optimizing a single aspect reward (Lip-sync, Expressiveness, or Motion) improves that specific metric but degrades the others, leading to characteristic failure modes. Models trained without motion-aware supervision tend to exhibit severe jitter or exaggerated movements, again signaling metric-driven reward hacking. To counteract these behaviors, we augment the MLLM-based reward with two additional components: a perceptual term and an optical-flow jitter penalty that explicitly discourages unstable motion. This combined reward yields modest improvements in MLLM evaluation metrics but, more importantly, produces qualitatively more natural and stable videos, with no observable jittering or color drift (examples in Appendix D) and supported by human evaluation in section 4.2. Moreover, as shown in figure 6, training without these additional terms causes LPIPS and Optical Flow Consistency scores to deteriorate, confirming that the model overfits to 
+
+RMLLM and begins exploiting its blind spots. 0 80 160 240 320 400 
+
+Training step 
+
+> 0.48
+> 0.42
+> 0.36
+> 0.30
+> Rperceptual
+
+LPIPS Reward ( is better)          
+
+> RMLLM +Rperceptual +Rconsistency
+> RMLLM
+> 080 160 240 320 400
+
+Training step 
+
+> 1.5
+> 1.2
+> 0.9
+> Rconsistency
+
+Optical-Flow Reward ( is better) 
+
+Figure 6 Comparing training-time metrics— Rperceptual and Rconsistency —reveals a clear gap between using only the MLLM-based reward and augmenting it with perceptual and consistency terms. Without these additional rewards, both metrics deteriorate sharply, aligning with the jittering and color drift observed in our qualitative results. 
+
+Finally, using only the perceptual and consistency components—without the MLLM reward—induces a 11 different form of reward hacking: the model collapses toward nearly static outputs that maximize temporal smoothness but perform poorly on all other aspects, yielding a substantially lower average score (3.3 versus 4.10 for the SFT baseline). These observations underscore the importance of combining high-level MLLM judgments with low-level perceptual and flow-based constraints to achieve stable, robust, and human-aligned improvements in generation quality.  
+
+> Summary
+
+Our findings indicate that the optimal configuration is moderate noise, a minimal stochastic window, and a combined multi-aspect reward. To further mitigate reward hacking in the MLLM-based objective, we add perceptual and consistency rewards, which effectively regularize training and produce more natural, artifact-free videos. We adopt this setup in our main RL post-training experiments shown in section 4.2. 
+
+# 5 Related Work 
+
+5.1 Evaluation Metrics for Portrait Animation 
+
+Prior work [ 5 –7] typically evaluates avatar generation using distributional metrics such as FID [ 18 ] and FVD [13 ], SyncNet-based LSE-C/D [ 14 ] for lip-sync accuracy, and pixel-level measures including PSNR and SSIM. While widely adopted, these metrics often correlate poorly with human perception, as they emphasize low-level visual similarity and fail to reflect higher-level attributes such as expressiveness and motion naturalness. More recently, [ 19 ] proposed a multi-aspect evaluation framework for portrait animation that decomposes quality into three dimensions—Quality, Naturalness, and Synchronization—and introduces corresponding automatic metrics. In contrast, [ 39 ] evaluate avatar generation using higher-level criteria such as lip-sync, expressiveness, instruction controllability, and identity preservation, but rely exclusively on human Good/Same/Bad (GSB) judgments rather than automatic evaluation. Similarly, [ 40 ] assess naturalness, synchronization, and consistency using human ratings on a 1–100 scale with 20 annotators. Our human annotation protocol is partially inspired by these contemporaneous efforts; however, to the best of our knowledge, we are the first to employ an MLLM-based system for both evaluation and reinforcement-based post-training of portrait animation models. 
+
+5.2 Reinforcement Learning for Video Generation 
+
+Reinforcement learning (RL) has recently gained traction in image and video generation [ 15 , 16 , 34 , 38 , 41 ], enabling models to directly optimize complex, task-specific reward objectives. Advances on the algorithmic side—such as improved sampling schemes and more stable optimization strategies—have further enhanced training efficiency and robustness [ 16 , 17 ]. Despite this progress, most prior work relies on reward signals derived from HPS [ 42 ] or CLIP-Score [ 43 ], both of which are vulnerable to reward hacking during post-training. Recent efforts, such as GRPO-Guard [ 44 ], propose to address this issue by regulating clipping to prevent over-optimization. Developing fine-grained, reliable, and robust reward systems for video generation remains an open research challenge. 
+
+# 6 Conclusion 
+
+We present FlowPortrait , a reinforcement-learning–enhanced framework for high-quality portrait animation using an AR-Flow backbone. By combining a multimodal pretrained model with a composite reward system—integrating MLLM-based multi-aspect evaluations with pixel-level perceptual terms and an optical-flow jitter penalty—we achieve substantial improvements in lip-sync accuracy, facial expressiveness, and motion naturalness. Our results highlight the importance of fine-grained, human-aligned reward design for advancing realistic audio-driven portrait animation. 
+
+# References  
+
+> [1] Yue Gao, Yuan Zhou, Jinglu Wang, Xiao Li, Xiang Ming, and Yan Lu. High-fidelity and freely controllable talking head video generation, 2023.
+
+12 [2] Bowen Zhang, Chenyang Qi, Pan Zhang, Bo Zhang, HsiangTao Wu, Dong Chen, Qifeng Chen, Yong Wang, and Fang Wen. Metaportrait: Identity-preserving talking head generation with fast personalized adaptation, 2023. [3] Olaf Ronneberger, Philipp Fischer, and Thomas Brox. U-net: Convolutional networks for biomedical image segmentation, 2015. [4] William Peebles and Saining Xie. Scalable diffusion models with transformers, 2023. [5] Xiaozhong Ji, Xiaobin Hu, Zhihong Xu, Junwei Zhu, Chuming Lin, Qingdong He, Jiangning Zhang, Donghao Luo, Yi Chen, Qin Lin, Qinglin Lu, and Chengjie Wang. Sonic: Shifting focus to global audio perception in portrait animation, 2025. [6] Longtao Zheng, Yifan Zhang, Hanzhong Guo, Jiachun Pan, Zhenxiong Tan, Jiahao Lu, Chuanxin Tang, Bo An, and Shuicheng Yan. Memo: Memory-guided diffusion for expressive talking video generation, 2024. [7] Zhiyuan Chen, Jiajiong Cao, Zhiquan Chen, Yuming Li, and Chenguang Ma. Echomimic: Lifelike audio-driven portrait animations through editable landmark conditions, 2024. [8] Chaorui Deng, Deyao Zhu, Kunchang Li, Chenhui Gou, Feng Li, Zeyu Wang, Shu Zhong, Weihao Yu, Xiaonan Nie, Ziang Song, Guang Shi, and Haoqi Fan. Emerging properties in unified multimodal pretraining, 2025. [9] Andreas Blattmann, Tim Dockhorn, Sumith Kulal, Daniel Mendelevitch, Maciej Kilian, Dominik Lorenz, Yam Levi, Zion English, Vikram Voleti, Adam Letts, Varun Jampani, and Robin Rombach. Stable video diffusion: Scaling latent video diffusion models to large datasets, 2023. [10] Yiyang Ma, Xingchao Liu, Xiaokang Chen, Wen Liu, Chengyue Wu, Zhiyu Wu, Zizheng Pan, Zhenda Xie, Haowei Zhang, Xingkai yu, Liang Zhao, Yisong Wang, Jiaying Liu, and Chong Ruan. Janusflow: Harmonizing autoregression and rectified flow for unified multimodal understanding and generation, 2025. [11] Yi Wang, Kunchang Li, Yizhuo Li, Yinan He, Bingkun Huang, Zhiyu Zhao, Hongjie Zhang, Jilan Xu, Yi Liu, Zun Wang, Sen Xing, Guo Chen, Junting Pan, Jiashuo Yu, Yali Wang, Limin Wang, and Yu Qiao. Internvideo: General video foundation models via generative and discriminative learning, 2022. [12] Zhuoyi Yang, Jiayan Teng, Wendi Zheng, Ming Ding, Shiyu Huang, Jiazheng Xu, Yuanming Yang, Wenyi Hong, Xiaohan Zhang, Guanyu Feng, Da Yin, Yuxuan Zhang, Weihan Wang, Yean Cheng, Bin Xu, Xiaotao Gu, Yuxiao Dong, and Jie Tang. Cogvideox: Text-to-video diffusion models with an expert transformer, 2025. [13] Thomas Unterthiner, Sjoerd van Steenkiste, Karol Kurach, Raphael Marinier, Marcin Michalski, and Sylvain Gelly. Towards accurate generative models of video: A new metric and challenges, 2019. [14] K R Prajwal, Rudrabha Mukhopadhyay, Vinay P. Namboodiri, and C.V. Jawahar. A lip sync expert is all you need for speech to lip generation in the wild. In Proceedings of the 28th ACM International Conference on Multimedia, MM ’20, pages 484–492. ACM, October 2020. [15] Jie Liu, Gongye Liu, Jiajun Liang, Yangguang Li, Jiaheng Liu, Xintao Wang, Pengfei Wan, Di Zhang, and Wanli Ouyang. Flow-grpo: Training flow matching models via online rl, 2025. [16] Xiaoxuan He, Siming Fu, Yuke Zhao, Wanli Li, Jian Yang, Dacheng Yin, Fengyun Rao, and Bo Zhang. Tempflow-grpo: When timing matters for grpo in flow models, 2025. [17] Feng Wang and Zihao Yu. Coefficients-preserving sampling for reinforcement learning with flow matching, 2025. [18] Martin Heusel, Hubert Ramsauer, Thomas Unterthiner, Bernhard Nessler, and Sepp Hochreiter. Gans trained by a two time-scale update rule converge to a local nash equilibrium. In Advances in Neural Information Processing Systems, 2017. [19] Nabyl Quignon, Baptiste Chopin, Yaohui Wang, and Antitza Dantcheva. Theval. evaluation framework for talking head video generation, 2025. [20] Zhou Wang, Alan C. Bovik, Hamid R. Sheikh, and Eero P. Simoncelli. Image quality assessment: From error visibility to structural similarity. IEEE Transactions on Image Processing, 2004. [21] Richard Zhang, Phillip Isola, Alexei A. Efros, Eli Shechtman, and Oliver Wang. The unreasonable effectiveness of deep features as a perceptual metric, 2018. [22] Thomas Unterthiner, Sjoerd van Steenkiste, Karol Kurach, Raphael Marinier, Marcin Michalski, and Sylvain Gelly. Towards accurate generative models of video: A new metric & challenges, 2019. 
+
+13 [23] Yochai Blau and Tomer Michaeli. The perception-distortion tradeoff. In 2018 IEEE/CVF Conference on Computer Vision and Pattern Recognition. IEEE, 2018. [24] Lin Shi, Chiyu Ma, Wenhua Liang, Xingjian Diao, Weicheng Ma, and Soroush Vosoughi. Judging the judges: A systematic study of position bias in llm-as-a-judge, 2025. [25] Christian Szegedy, Vincent Vanhoucke, Sergey Ioffe, Jonathon Shlens, and Zbigniew Wojna. Rethinking the inception architecture for computer vision, 2015. [26] Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian Sun. Deep residual learning for image recognition, 2015. [27] Will Kay, Joao Carreira, Karen Simonyan, Brian Zhang, Chloe Hillier, Sudheendra Vijayanarasimhan, Fabio Viola, Tim Green, Trevor Back, Paul Natsev, Mustafa Suleyman, and Andrew Zisserman. The kinetics human action video dataset, 2017. [28] Team Wan, Ang Wang, Baole Ai, Bin Wen, Chaojie Mao, Chen-Wei Xie, Di Chen, Feiwu Yu, Haiming Zhao, Jianxiao Yang, Jianyuan Zeng, Jiayu Wang, Jingfeng Zhang, Jingren Zhou, Jinkai Wang, Jixuan Chen, Kai Zhu, Kang Zhao, Keyu Yan, Lianghua Huang, Mengyang Feng, Ningyi Zhang, Pandeng Li, Pingyu Wu, Ruihang Chu, Ruili Feng, Shiwei Zhang, Siyang Sun, Tao Fang, Tianxing Wang, Tianyi Gui, Tingyu Weng, Tong Shen, Wei Lin, Wei Wang, Wei Wang, Wenmeng Zhou, Wente Wang, Wenting Shen, Wenyuan Yu, Xianzhong Shi, Xiaoming Huang, Xin Xu, Yan Kou, Yangyu Lv, Yifei Li, Yijing Liu, Yiming Wang, Yingya Zhang, Yitong Huang, Yong Li, You Wu, Yu Liu, Yulin Pan, Yun Zheng, Yuntao Hong, Yupeng Shi, Yutong Feng, Zeyinzi Jiang, Zhen Han, Zhi-Fan Wu, and Ziyu Liu. Wan: Open and advanced large-scale video generative models, 2025. [29] Xingchao Liu, Chengyue Gong, and Qiang Liu. Flow straight and fast: Learning to generate and transfer data with rectified flow, 2022. [30] Weixin Liang, Lili Yu, Liang Luo, Srinivasan Iyer, Ning Dong, Chunting Zhou, Gargi Ghosh, Mike Lewis, Wen tau Yih, Luke Zettlemoyer, and Xi Victoria Lin. Mixture-of-transformers: A sparse and scalable architecture for multi-modal foundation models, 2025. [31] Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, Y. K. Li, Y. Wu, and Daya Guo. Deepseekmath: Pushing the limits of mathematical reasoning in open language models, 2024. [32] Dimitra Maoutsa, Sebastian Reich, and Manfred Opper. Interacting particle solutions of fokker–planck equations through gradient–log–density estimation. Entropy, 22(8):802, July 2020. [33] Yang Song, Jascha Sohl-Dickstein, Diederik P. Kingma, Abhishek Kumar, Stefano Ermon, and Ben Poole. Score-based generative modeling through stochastic differential equations, 2021. [34] Junzhe Li, Yutao Cui, Tao Huang, Yinping Ma, Chun Fan, Miles Yang, and Zhao Zhong. Mixgrpo: Unlocking flow-based grpo efficiency with mixed ode-sde, 2025. [35] Zachary Teed and Jia Deng. Raft: Recurrent all-pairs field transforms for optical flow, 2020. [36] Ilya Loshchilov and Frank Hutter. Decoupled weight decay regularization, 2019. [37] Jonathan Ho and Tim Salimans. Classifier-free diffusion guidance, 2022. [38] Meituan LongCat Team, Xunliang Cai, Qilong Huang, Zhuoliang Kang, Hongyu Li, Shijun Liang, Liya Ma, Siyu Ren, Xiaoming Wei, Rixu Xie, and Tong Zhang. Longcat-video technical report, 2025. [39] Yikang Ding, Jiwen Liu, Wenyuan Zhang, Zekun Wang, Wentao Hu, Liyuan Cui, Mingming Lao, Yingchao Shao, Hui Liu, Xiaohan Li, Ming Chen, Xiaoqiang Liu, Yu-Shen Liu, and Pengfei Wan. Kling-avatar: Grounding multimodal instructions for cascaded long-duration avatar animation synthesis, 2025. [40] Yubo Huang, Hailong Guo, Fangtai Wu, Shifeng Zhang, Shijie Huang, Qijun Gan, Lin Liu, Sirui Zhao, Enhong Chen, Jiaming Liu, and Steven Hoi. Live avatar: Streaming real-time audio-driven avatar generation with infinite length, 2025. [41] Jiuhai Chen, Le Xue, Zhiyang Xu, Xichen Pan, Shusheng Yang, Can Qin, An Yan, Honglu Zhou, Zeyuan Chen, Lifu Huang, Tianyi Zhou, Junnan Li, Silvio Savarese, Caiming Xiong, and Ran Xu. Blip3o-next: Next frontier of native image generation, 2025. [42] Xiaoshi Wu, Yiming Hao, Keqiang Sun, Yixiong Chen, Feng Zhu, Rui Zhao, and Hongsheng Li. Human preference score v2: A solid benchmark for evaluating human preferences of text-to-image synthesis, 2023. 
+
+14 [43] Jack Hessel, Ari Holtzman, Maxwell Forbes, Ronan Le Bras, and Yejin Choi. Clipscore: A reference-free evaluation metric for image captioning, 2022. [44] Jing Wang, Jiajun Liang, Jie Liu, Henglin Liu, Gongye Liu, Jun Zheng, Wanyuan Pang, Ao Ma, Zhenyu Xie, Xintao Wang, Meng Wang, Pengfei Wan, and Xiaodan Liang. Grpo-guard: Mitigating implicit over-optimization in flow matching via regulated clipping, 2025. [45] Junhua Liao, Haihan Duan, Kanghui Feng, Wanbing Zhao, Yanbing Yang, and Liangyin Chen. A light weight model for active speaker detection. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), pages 22932–22941, June 2023. [46] Jiankang Deng, Jia Guo, Niannan Xue, and Stefanos Zafeiriou. Arcface: Additive angular margin loss for deep face recognition. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), June 2019. 
+
+15 Appendix 
+
+# A Human Annotation 
+
+After collecting videos from different generators, we recruit three human annotators to evaluate each clip along three dimensions: lip-sync quality, facial expressiveness, and motion smoothness (naturalness). Annotators are provided with detailed scoring rubrics (shown in table 6, table 7, and table 8) and are instructed to watch each video in its entirety before assigning a score from 1 (worst) to 5 (best) for each aspect. In addition to aspect-level scoring, annotators are asked to provide an overall ranking of the videos within each set. For example, given an original video (A) and generated videos from Sonic [ 5] (B), Memo [ 6] (C), and Echomimics [ 7] (D), annotators rank the four videos from best to worst (e.g., C > A ≥ B = D). Ties and partial orderings are allowed to account for videos of comparable quality. To compute the agreement between automatic evaluation methods and human judgments (section 2.3), we retain only video pairs for which all three annotators agree on the relative ordering. Pairs with disagreement (e.g., two annotators prefer A over B while one prefers B over A) are excluded. This filtering results in approximately 80% of all annotated pairs being used for match-rate computation. 
+
+Score Guideline Detailed Criteria (Precision, Timing, & Naturalness) 
+
+5 Excellent Precision: Mouth shapes perfectly match all spoken phonemes. Timing: Lip move-ments are perfectly synchronized with the audio, with no noticeable delay or lead. 
+
+Naturalness: Movements are fluid and human-like, with no warping or visual artifacts. 4 Good Precision: Mouth shapes are correct for the vast majority of sounds, with only subtle inaccuracies. Timing: Synchronization is excellent, with only an almost imperceptible lag or lead. Naturalness: Movements look natural but may lack fine-grained nuances. 3 Fair Precision: Mouth shapes are generally correct but imprecise or simplified. Timing: 
+
+A slight but consistent delay or lead is noticeable. Naturalness: Movements appear somewhat robotic or overly smooth; minor blurring artifacts may be present. 2 Poor Precision: Mouth shapes are frequently incorrect. Timing: Audio–visual synchro-nization is clearly off and distracting. Naturalness: Movements are jerky or exhibit unnatural “flapping,” with obvious warping. 1 Bad Precision: Lip movements have little to no correlation with speech. Timing: Audio and lip movements are severely out of sync. Naturalness: Mouth motion is highly distorted, nonsensical, or completely static. 
+
+Table 6 Human evaluation rubric for lip-sync quality (1–5). 
+
+Score Guideline Detailed Criteria (Emotional Match & Realism) 
+
+5 Excellent Emotional Match: Facial expressions perfectly reflect the emotional tone of the audio. 
+
+Realism: Includes natural micro-expressions and appears fully human and genuine. 4 Good Emotional Match: Expressions largely match the audio’s emotion, with minor incon-sistencies. Realism: Looks realistic but may feel slightly acted or less nuanced. 3 Fair Emotional Match: Emotion is generally appropriate but muted, delayed, or under-specified. Realism: The face appears mildly uncanny or artificial. 2 Poor Emotional Match: Expression mismatches the audio emotion or remains stuck in a neutral state. Realism: Expressions look highly unnatural and artificial. 1 Bad Emotional Match: Expression is completely incorrect, nonsensical, or emotionless. 
+
+Realism: Face resembles a static mask or mannequin. 
+
+Table 7 Human evaluation rubric for facial expressiveness (1–5). 
+
+16 Score Guideline Detailed Criteria (Head Movement, Subtle Motion & Consistency)                                    
+
+> 5Excellent Head Movement: Smooth, fluid, and purposeful. Subtle Motion: Natural blinks, head tilts, and minor posture shifts are present. Consistency: Motion is coherent and human-like throughout. 4Good Head Movement: Smooth and stable, but somewhat simple or repetitive. Subtle Motion: Blinking appears natural; other subtle motions may be limited. Consistency:
+> Motion remains plausible with no major artifacts. 3Fair Head Movement: Slightly stiff, jerky, or floaty. Subtle Motion: Blinking is unnatural in cadence or absent for periods. Consistency: Occasional robotic or locked head poses occur. 2Poor Head Movement: Robotic, jittery, or laggy. Subtle Motion: No natural blinks or fine motions are observed. Consistency: Motion is highly unnatural and distracting. 1Bad Head Movement: Head is completely static. Subtle Motion: No blinking or facial motion at all. Consistency: The lack of motion is constant and clearly artificial.
+> Table 8 Human evaluation rubric for video smoothness and motion quality (1–5).
+
+# B Preprocessing Pipeline 
+
+To construct training data for portrait animation, we apply a multi-stage preprocessing pipeline designed to ensure high-quality and well-aligned audio-visual content: 
+
+• Speech-Based Filtering : We first perform automatic speech recognition (ASR) and speaker diarization on all videos using in-house models. Clips containing more than 10% overlapping speech from multiple speakers are removed, as such cases often exhibit audio-visual misalignment. We also discard clips identified as non-English based on their transcriptions. 
+
+• Visual-Based Filtering : We apply light-ASD [ 45 ] for active speaker detection and remove frames whose final active-speaker confidence is below 0.5. For datasets that provide face-direction annotations, we further filter out clips that are not labeled as having either a frontal or side face orientation. 
+
+• Face Detection and Cropping : We detect faces in each frame using the buffalo_sc [ 46 ] from InsightFace. If no face is detected for more than one second (corresponding to 24 consecutive frames at 24 FPS), the video is split into separate sub-clips. For each detected face, we crop a square (1:1 aspect ratio) region centered on the face and enlarge the bounding box by a factor of 1.5. For example, an original bounding box of size (224 , 168) is first converted to (224 , 224) and then expanded to (336 , 336) . In cases where the enlarged box exceeds frame boundaries, we adjust its size or position to ensure a valid crop. 
+
+# C Evaluation Prompts 
+
+To automatically evaluate generated portrait animation, we design separate prompts that explicitly control model behavior by restricting attention to a single evaluation aspect at a time. The detailed prompts for assessing lip-sync quality, facial expressiveness, and motion smoothness are presented in table 9, table 10, and table 11, respectively. 
+
+# D Qualitative Examples 
+
+We provide additional qualitative examples to complement the quantitative results presented in the main paper. Identities are anonymized with black masks. figure 7 compares generated frames from prior methods and our models. figure 8 contrasts good and bad cases under different post-training configurations: well-tuned settings yield stable identity and smooth motion, whereas suboptimal choices lead to temporal color drift (large stochastic window) or jittering and exaggerated motion (lip-sync-only reward). 17 Prompt Name 
+
+Lip-Sync Evaluation Prompt (Single-Video, Single-Aspect) 
+
+Role You are a specialized analyst focusing on audio-visual synchronization in digital media. Your expertise lies in phonetics and the precise mapping of mouth movements to speech. 
+
+Context You will analyze a single video. Your sole focus is to evaluate and score its lip-sync quality. You must ignore all other aspects like emotional expression or head movement. 
+
+Primary Objective 
+
+Conduct a rigorous analysis and scoring of the lip-sync quality for this video. Your analysis must justify the score given and return a JSON dictionary with the score. 
+
+Evaluation Criteria • Precision: How accurately do the lip movements match vowel/consonant shapes (visemes)? 
+
+• Timing: Any noticeable delay/lead between audio and corresponding lip movements? 
+
+• Naturalness: Human/fluid vs. artificial/robotic/flappy; warping or artifacts around the mouth? 
+
+Scoring Rubric (1–5) 
+
+• 5 (Perfect): Precision matches all phonemes; timing perfectly synchronized; natural, fluid, no artifacts. 
+
+• 4 (Excellent): Mostly correct visemes with subtle inaccuracies; near-imperceptible lag/lead; slightly scripted. 
+
+• 3 (Good/Acceptable): Generally correct but simplified/puppet-like; slight consistent lag/lead; minor artifacts possible. 
+
+• 2 (Poor): Frequently incorrect visemes; clearly off-sync and distracting; robotic/jerky, obvious warping/flapping. 
+
+• 1 (Failure): No correlation to speech; severely out of sync; bizarre/distorted/nonsensical or static mouth. 
+
+Output Con-straints 
+
+1. Put all reasoning and analysis inside <think>...</think> .2. After </think> , output only a valid JSON object with key "score" and an integer 1–5 .3. Do not include natural language, commentary, markdown, or extra quotes outside the <think> 
+
+block. 4. The final JSON must be valid and contain only the score. 
+
+Example Output <think> (detailed reasoning here, free-form, any text allowed) </think> {”score”: integer between 1 and 5} 
+
+Table 9 Prompt used for lip-sync evaluation. The model is instructed to assess only audio-visual synchronization and to return a single 1–5 score in JSON format. 
+
+18 Prompt Name 
+
+Facial Expressiveness Evaluation Prompt (Single-Video, Single-Aspect) 
+
+Role You are a specialized analyst in human emotion and facial expression, with expertise in facial action coding systems (FACS) and psychological realism in digital actors. 
+
+Context You will analyze a single video. Your sole focus is to evaluate and score its facial expressiveness and emotional authenticity. You must apply the scoring rubric below to assign a score from 1 to 5. 
+
+Primary Objective 
+
+Conduct a rigorous analysis of the video’s facial expressiveness, assign a score based on the provided rubric, and return a JSON dictionary with the score. 
+
+Evaluation Criteria • Emotional Match: Does the facial expression accurately reflect the audio’s tone, sentiment, and emphasis? 
+
+• Realism & Subtlety: Are there subtle micro-expressions (e.g., brow movements, eye crinkling, cheek twitches), or does the face appear uncanny or plastic? 
+
+• Natural Dynamics: Do expressions transition smoothly with speech, or appear robotic, delayed, or disconnected? 
+
+Scoring Rubric (1–5) 
+
+• 5 (Excellent): Perfect emotional alignment with the audio; rich micro-expressions; fully genuine and human-like. 
+
+• 4 (Good): Strong emotional match with minor inconsistencies; realistic but slightly acted or less nuanced. 
+
+• 3 (Average): Generally appropriate emotion but muted, delayed, or underspecified; mildly uncanny or plastic. 
+
+• 2 (Poor): Clear emotional mismatch or fixed neutral/awkward state; highly unnatural and artificial. 
+
+• 1 (Very Poor): Completely incorrect or absent emotion; static, mask-like, or mannequin-like face. 
+
+Output Con-straints 
+
+1. Put all reasoning and analysis inside <think>...</think> .2. After </think> , output only a valid JSON object with key "score" and an integer 1–5 .3. Do not include natural language, commentary, markdown, or extra quotes outside the <think> 
+
+block. 4. The final JSON must be valid and contain only the score. 
+
+Example Output <think> (detailed reasoning here, free-form, any text allowed) </think> {”score”: integer between 1 and 5} 
+
+Table 10 Prompt used for evaluating facial expressiveness and emotional authenticity. The model assesses emotional alignment and realism of facial expressions and returns a single 1–5 score in JSON format. 
+
+19 Prompt Name 
+
+Motion Smoothness and Background Quality Evaluation Prompt (Single-Video, Single-Aspect) 
+
+Role You are a specialized analyst in motion quality and video composition. Your expertise lies in identifying motion artifacts, assessing movement naturalness, and spotting background anomalies in synthesized media. 
+
+Context You will analyze a single video. Your sole focus is to evaluate and score its motion smoothness and background integrity. You must ignore all other aspects such as lip-sync or facial emotion. 
+
+Primary Objective 
+
+Conduct a rigorous analysis of the video’s motion quality and background stability, assign a score using the provided rubric, and return a JSON dictionary with the score. 
+
+Evaluation Criteria • Head Movement: Are head motions smooth, fluid, and purposeful, or stiff, jittery, and robotic? 
+
+• Subtle Motions: Are natural micro-movements (e.g., blinking, slight tilts, posture shifts) present and realistic? 
+
+• Consistency: Does motion remain coherent and human-like throughout, without locking or abrupt artifacts? 
+
+• Background Quality: Is the background stable, with clean edges around hair and shoulders, or does it exhibit warping, shimmering, or distortion? 
+
+Scoring Rubric (1–5) 
+
+• 5 (Excellent): Perfectly smooth and purposeful head motion; rich subtle movements; fully consistent and human-like; background entirely stable with no artifacts. 
+
+• 4 (Good): Smooth and consistent motion but somewhat simple or repetitive; natural blinking; minor, non-distracting background artifacts. 
+
+• 3 (Average): Slightly stiff, jerky, or floaty motion; unnatural blinking cadence or frequent stillness; noticeable but moderate background warping or blur. 
+
+• 2 (Poor): Clearly robotic or jittery motion with unnatural jerks; no subtle movements; distracting instability; obvious background distortion or melting. 
+
+• 1 (Failure): Completely static or locked head; frozen face with no movement; entirely artificial appearance; severe background and subject distortion. 
+
+Output Con-straints 
+
+1. Put all reasoning and analysis inside <think>...</think> .2. After </think> , output only a valid JSON object with key "score" and an integer 1–5 .3. Do not include natural language, commentary, markdown, or extra quotes outside the <think> 
+
+block. 4. The final JSON must be valid and contain only the score. 
+
+Example Output <think> (detailed reasoning here, free-form, any text allowed) </think> {”score”: integer between 1 and 5} 
+
+Table 11 Prompt used for evaluating motion smoothness and background integrity. The model assesses head motion dynamics, subtle movements, and background stability, and returns a single 1–5 score in JSON format. 
+
+20 Figure 7 Qualitative examples comparing prior methods with our SFT and RL post-trained models. Our approach generates videos with more natural movement, better lip-sync, and improved expressiveness. Black masks are used to anonymize identities. Good Bad Good Bad 
+
+Figure 8 Examples of generated video frames illustrating the effect of different post-training configurations. Good cases (Rows 1 and 3): Our final post-trained model (all three aspect rewards with perceptual and consistency rewards, W =1, η=0.5) produces consistent identity, stable colors, and smooth temporal dynamics. Bad case 1 (Row 2): Training with a large stochastic window leads to strong temporal color drift and bad texture. Bad case 2 (Row 4): 
+
+Training with only the lip-sync reward introduces jittering and unnatural motion, including exaggerated eye movements. Black masks are used to anonymize identities. 
+
+21

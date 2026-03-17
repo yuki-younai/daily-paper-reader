@@ -1,0 +1,516 @@
+Title: Soft Sequence Policy Optimization
+
+URL Source: https://arxiv.org/pdf/2602.19327v2
+
+Published Time: Fri, 27 Feb 2026 01:39:18 GMT
+
+Number of Pages: 6
+
+Markdown Content:
+# Soft Sequence Policy Optimization 
+
+Svetlana Glazyrina 1 Maksim Kryzhanovskiy 1 2 Roman Ischenko 1 2 
+
+## Abstract 
+
+A significant portion of recent research on Large Language Model (LLM) alignment focuses on de-veloping new policy optimization methods based on Group Relative Policy Optimization (GRPO). Two prominent directions have emerged: (i) a shift toward sequence-level importance sampling weights that better align with the sequence-level rewards used in many tasks, and (ii) alternatives to PPO-style clipping that aim to avoid the associ-ated loss of training signal and entropy collapse. We introduce Soft Sequence Policy Optimization, an off-policy reinforcement learning objective that incorporates soft gating functions over token-level probability ratios within sequence-level impor-tance weights. We provide theoretical motivation for SSPO and investigate practical modifications to improve optimization behavior. Empirically, we show that SSPO improves training stability and performance in mathematical reasoning tasks. 
+
+## 1. Introduction 
+
+Reinforcement learning (RL) has become a central ingredi-ent in enhancing the reasoning abilities of large language models (LLMs), particularly for tasks requiring long chains of thought (CoT), multi-step decision making, and delayed rewards. While supervised fine-tuning excels at imitating local patterns present in static datasets, RL enables optimiza-tion over entire generated sequences, making it especially attractive for complex reasoning, program synthesis, and decision-centric language modeling. Among modern RL approaches for LLM alignment, group-based policy optimization methods have emerged as a practi-cal and effective recipe. These methods sample multiple can-didate responses per input prompt and normalize sequence-level rewards within each group, yielding a reliable prompt value estimate without relying on an auxiliary critic net-       
+
+> 1Lomonosov Moscow State University, Moscow, Russia
+> 2Institute for Artificial Intelligence, Lomonosov Moscow State University, Moscow, Russia. Correspondence to: Maksim Kryzhanovskiy <kryzhanovskiyms@my.msu.ru >.
+> Preprint. February 27, 2026.
+
+work. Representative algorithms such as Group Relative Policy Optimization (GRPO) (Shao et al., 2024) and REIN-FORCE Leave-One-Out (RLOO) (Ahmadian et al., 2024) demonstrate that relative comparisons within a group can significantly stabilize training, reduce computational over-head, and improve reasoning performance across a wide range of domains. Despite their empirical success, existing group-based meth-ods face important limitations when deployed at scale. In particular, off-policy learning becomes unavoidable in realis-tic training pipelines. As model sizes increase, architectures incorporate sparsity (e.g., Mixture-of-Experts), and gener-ated sequences become longer, large rollout batches are required to fully utilize modern hardware.To improve sam-ple efficiency, these batches are typically partitioned into multiple mini-batches for gradient updates. This practice inevitably induces an off-policy setting, where responses are sampled from a behavior policy while updates are applied to a newer policy, a regime in which GRPO-like algorithms increasingly dominate current practice. In off-policy group-based optimization, policy updates are usually weighted by importance sampling (IS) ratios be-tween the current and behavior policies. These ratios are well known to suffer from high variance, especially for long sequences where token-level likelihood ratios compound multiplicatively. Uncontrolled IS weights can destabilize training and ultimately degrade performance. Two broad strategies have emerged to mitigate this issue. First, many methods apply hard clipping to large importance weights, limiting their influence on the gradient (Schulman et al., 2017; Shao et al., 2024; MiniMax et al., 2025). While effec-tive at reducing variance, hard clipping introduces a difficult tradeoff: aggressive clipping improves stability but reduces sample efficiency and limits exploration (Chen et al., 2022; Dwyer et al., 2025), whereas loose clipping preserves learn-ing signal at the cost of noisy and brittle updates. Second, in accordance with insights from RLOO and moti-vated by the prevalence of sequence-level rewards in LLM alignment (e.g., RLHF and RLVR), recent work proposes enforcing sequence-level coherence of importance weights rather than treating token-level contributions independently. This perspective motivates objectives such as Group Se-quence Policy Optimization (GSPO) (Zheng et al., 2025) 1
+
+> arXiv:2602.19327v2 [cs.LG] 26 Feb 2026 Soft Sequence Policy Optimization
+
+and Geometric-Mean Policy Optimization (GMPO) (Zhao et al., 2025), which replace arithmetic aggregation of token-level ratios with multiplicative or geometric formulations that better respect the structure of sequence probabilities. A key innovation of GMPO is the combination of sequence-level weighting with token-level probability ratio clipping. However, existing solutions remain incomplete. Sequence-coherent objectives, such as GSPO, improve stability but do not fully address the interaction between off-policy learn-ing and entropy-regularized objectives commonly used in modern RL for LLMs. In parallel, soft policy optimiza-tion methods — such as Soft Adaptive Policy Optimization (SAPO) (Gao et al., 2025) — highlight the importance of entropy-aware objectives that smoothly interpolate between exploitation and exploration, but they are not explicitly de-signed for sequence-level optimization. In this paper, we propose Soft Sequence Policy Optimization (SSPO) , a new off-policy reinforcement learning objective that unifies and extends insights from sequence-level and soft policy optimization. SSPO introduces a soft, sequence-level weighting mechanism with token-level weight atten-uation that controls importance sampling variance without resorting to hard clipping, while preserving coherent credit assignment to entire responses. By operating at the sequence level and incorporating entropy-aware regularization, SSPO achieves a more favorable bias–variance tradeoff than prior approaches in off-policy group-based RL. The main contributions of this work are as follows: • We propose Soft Sequence Policy Optimization (SSPO), a sequence-coherent off-policy objective with soft importance weighting. • We provide theoretical analysis of the gradient behavior and its bias–variance properties. • We empirically evaluate SSPO against GRPO, GMPO, and SAPO on mathematical reasoning benchmarks. 
+
+## 2. Preliminaries 
+
+Since we do not modify the additive KL-divergence regular-ization term in the loss, we omit it for brevity. 
+
+Notation Following standard conventions in the literature, an autoregressive language model parameterized by θ is defined by a policy πθ . x denotes a query and D denotes the set of queries. Given a response y to a query x, the likelihood of y under the policy πθ is defined as 
+
+πθ (y | x) = 
+
+> |y|
+
+Y
+
+> t=1
+
+πθ (yt | x, y <t ),
+
+where |y| denotes the number of tokens in y. Each query–response pair (x, y ) is assigned a reward r(x, y ) ∈
+
+[0 , 1] by a verifier r.Throughout this paper, we adopt a compact notation for advantage-dependent clipping operators commonly used in policy optimization objectives. Rather than explicitly writing expressions of the form 
+
+min 
+
+
+
+ρ · bA, clip( ρ, 1 − εlow , 1 + εhigh ) · bA
+
+
+
+,
+
+we define the advantage-aware clipping function 
+
+fClip (ρ; bA) := 
+
+(min( ρ, 1 + εhigh ), bA > 0,
+
+max( ρ, 1 − εlow ), bA ≤ 0, (1) and write the clipped weights compactly as fClip (ρ; bA) · bA.This notation enables a unified presentation of hard and soft clipping mechanisms in subsequent sections. 
+
+Group Relative Policy Optimization (GRPO) Building on Proximal Policy Optimization (PPO) (Schulman et al., 2017), Group Relative Policy Optimization (GRPO) (Shao et al., 2024) enables off-policy learning by leveraging sam-ples generated by an older (behavior) policy πθold . Simi-lar to PPO, GRPO employs a clipping mechanism to con-strain policy updates within a proximal region around the behavior policy. The key difference is that GRPO replaces computationally and memory-intensive advantage estima-tors based on a critic network —- whose reliability may be questionable — with a relative advantage computed among responses to the same query. 
+
+JGRPO (θ) = Ex∼D , {yi}Gi=1 ∼πθold (·| x)
+
+ 1
+
+G
+
+> G
+
+X
+
+> i=1
+
+1
+
+|yi|
+
+> |yi|
+
+X
+
+> t=1
+
+fClip (ρi,t (θ); bAi,t ) · bAi,t 
+
+ . (2) Here, G denotes the group size, i.e., the number of responses generated for a single query. The importance ratio ρi,t (θ)
+
+and the advantage bAi,t for token yi,t are defined as 
+
+ρi,t (θ) = πθ (yi,t |x, y i,<t )
+
+πθold (yi,t |x, y i,<t ) , (3) 
+
+bAi,t = bAi = r(x, y i) − mean  {r(x, y i)}Gi=1 
+
+
+
+std  {r(x, y i)}Gi=1 
+
+ . (4) The notation bAi = bAi,t is valid since all tokens in the sequence yi share the same advantage. 2Soft Sequence Policy Optimization 
+
+Group Sequence Policy Optimization (GSPO) Group Sequence Policy Optimization (GSPO) (Zheng et al., 2025) identifies a primary problem of GRPO: a mismatch between the unit of optimization and the unit of reward. In GRPO, importance sampling weights for off-policy correction and clipping are applied at the token level, whereas the advan-tage remains constant across all tokens in a sequence. In contrast, GSPO performs optimization — and in particular clipping — directly at the sequence level. Its objective is given by 
+
+JGSPO (θ) = Ex∼D , {yi}Gi=1 ∼πθold (·| x)
+
+"
+
+1
+
+G
+
+> G
+
+X
+
+> i=1
+
+fClip (si(θ); bAi) · bAi
+
+#
+
+, (5) where the importance ratio si(θ) is computed based on the sequence likelihood, with length normalization to control variance (Zheng et al., 2023): 
+
+si(θ) = 
+
+ πθ (yi|x)
+
+πθold (yi|x)
+
+ 1
+
+> |yi|
+
+(6) GSPO has been shown to improve training stability for large models and to increase sample efficiency, even as the fraction of clipped tokens grows. 
+
+Geometric-Mean Policy Optimization (GMPO) 
+
+Geometric-Mean Policy Optimization (GMPO) (Zhao et al., 2025) combines response-level importance sampling with token-level probability ratio clipping. GMPO adopts the same sequence-length normalization as GSPO but is motivated by a different intuition: reducing sensitivity to outliers and variance in token-level importance sampling weights by replacing the arithmetic mean over tokens in the GRPO objective with a geometric mean. Specifically, GMPO optimizes the following objective: 
+
+JGMPO (πθ ) = Ex∼D ,{yi}Gi=1 ∼πθold (·| x)
+
+ 1
+
+G
+
+> G
+
+X
+
+> i=1
+
+
+
+> |yi|
+
+Y
+
+> t=1
+
+fClip (ρi,t (θ); bAi)
+
+
+
+> 1
+> |yi|
+
+· ˆAi
+
+ . (7) This geometric aggregation improves robustness to tokens with disproportionately large importance weights and re-duces the range of the loss values, leading to more stable updates. The authors further observe that token-level clip-ping is less aggressive than sequence-level clipping and more effectively constrains the range of importance sam-pling ratios. 
+
+Soft Adaptive Policy Optimization (SAPO) In existing group-based policy optimization methods, high variance in importance sampling weights is typically mitigated through hard clipping. This introduces a trade-off between update stability and sample efficiency and may also reduce explo-ration abilities. As an alternative, Soft Adaptive Policy Optimization (SAPO) (Gao et al., 2025) employs a smooth, temperature-controlled gating mechanism that preserves the learning signal for all sampled tokens. The SAPO objective is defined as: 
+
+JSAPO (θ) = Ex∼D ,{yi}Gi=1 ∼πθold (·| x)
+
+"
+
+1
+
+G
+
+> G
+
+X
+
+> i=1
+
+1
+
+|yi|
+
+> |yi|
+
+X
+
+> t=1
+
+fSoft (ri,t (θ); bAi,t ) · bAi,t 
+
+#
+
+, (8) where 
+
+fSoft (x; bA) = σ
+
+
+
+τ ( bA) · (x − 1) 
+
+
+
+· 4
+
+τ ( bA) ,τ ( bA) = 
+
+(
+
+τpos , if bA > 0
+
+τneg , otherwise .
+
+(9) Here, τpos and τneg denote the temperatures for positive and negative advantages, respectively, and σ(x) = 1 /(1 + e−x)
+
+is the sigmoid function. By construction, the sigmoid-shaped gating function pre-serves gradients during on-policy updates while remaining bounded. Attenuating the contribution of outlier tokens, rather than truncating it entirely, allows SAPO to maintain informative learning signals throughout training and induces a continuous trust region. 
+
+## 3. Soft Sequence Policy Optimization 
+
+While Soft Adaptive Policy Optimization (SAPO) preserves token-level adaptivity through smooth gating, it is sequence-coherent only under two mild assumptions: (i) small pol-icy updates, i.e., ρi,t (θ) ≈ 1, and (ii) low intra-sequence dispersion of importance ratios, 1
+
+> |yi|
+
+P|yi|
+
+> t=1
+
+ log ρi,t (θ) −
+
+log si(θ)2. These assumptions may be violated in practice, particularly for long sequences or during the early stages of training. Our goal is therefore to redesign the SAPO objec-tive to relax these assumptions while retaining token-level adaptivity. In the absence of clipping, the geometric mean of token-wise importance ratios recovers the length-normalized sequence-level importance ratio used in GSPO. GMPO can thus be interpreted as a relaxation of sequence-level policy optimiza-tion that preserves token-level adaptivity. Building on this observation, we propose Soft Sequence Policy Optimization (SSPO). SSPO aggregates token-level gating functions using a geometric mean, yielding the ob-3Soft Sequence Policy Optimization 
+
+jective 
+
+JSSPO (θ) = Ex∼D , {yi}Gi=1 ∼πθold (·| x)
+
+ 1
+
+G
+
+> G
+
+X
+
+> i=1
+
+
+
+> |yi|
+
+Y
+
+> t=1
+
+f
+
+
+
+ρi,t (θ); bAi
+
+
+
+> 1
+> |yi|
+
+· bAi
+
+ . (10) Here, f ( · ; bA) is a non-negative gating function whose prop-erties are specified below. 
+
+Gradient Analysis To analyze the optimization behavior of SSPO, we compare its gradient to that of SAPO. Differentiating the SAPO objective in Eq. (8) with respect to the model parameters θ yields the weighted policy gradient 
+
+∇θ JSAPO (θ) = Ex∼D , {yi}Gi=1 ∼πθold (·| x)
+
+"
+
+1
+
+G
+
+> G
+
+X
+
+> i=1
+
+1
+
+|yi|
+
+> |yi|
+
+X
+
+> t=1
+
+f ′
+
+> Soft
+
+
+
+ρi,t (θ); bAi,t 
+
+
+
+ρi,t (θ) ·· ∇ θ log πθ (yi,t | x, y i,<t ) bAi,t 
+
+#
+
+. (11) For the sigmoid-based gate in SAPO, 
+
+f ′
+
+> Soft
+
+(ρ; bA) = 4 g(ρ; bA) 1 − g(ρ; bA),g(ρ; bA) = σ
+
+
+
+τ ( bA)( ρ − 1) 
+
+
+
+, (12) the derivative peaks at ρ = 1 and exponentially decays as 
+
+ρ deviates from unity, inducing a soft trust region while preserving on-policy behavior. Differentiating the SSPO objective in Eq. (10) yields 
+
+∇θ JSSPO (θ) = Ex∼D , {yi}Gi=1 ∼πθold (·| x)
+
+"
+
+1
+
+G
+
+> G
+
+X
+
+> i=1
+
+
+
+> |yi|
+
+Y
+
+> t=1
+
+f (ρi,t (θ); bAi)
+
+
+
+> 1
+> |yi|
+
+· bAi ·· 1
+
+|yi|
+
+> |yi|
+
+X
+
+> t=1
+
+f ′(ρi,t (θ); bAi)
+
+f (ρi,t (θ); bAi) ρi,t (θ)
+
+∇θ log πθ (yi,t | x, y i,<t )
+
+#
+
+. (13) Thus, each token-level policy gradient is modulated by (i) a sequence-level geometric aggregation of token gates, and (ii) a local soft importance weight w(ρ; bA) = f ′(ρ; bA)   
+
+> f(ρ;bA)
+
+ρ. 
+
+Gate Design Motivated by Eq. (13) and the Scopic ob-jective (Chen et al., 2022), we require the gating function 
+
+f (ρ; bA) to satisfy: (i) f (ρ; bA) > 0 for all ρ > 0; (ii) 
+
+f (ρ; bA) = 1 and f ′(ρ; bA)   
+
+> f(ρ;bA)
+
+= 1 at ρ = 1 to maintain on-policy behavior; (iii) f ′(ρ; bA)   
+
+> f(ρ;bA)
+
+forms a bell-shaped curve centered at 
+
+ρ = 1 to suppress the influence of outlier importance ratios. We instantiate the gate as 
+
+fSSPO (ρ; bA) = exp 1
+
+τ ( bA) · arctan 
+
+
+
+τ ( bA) · (ρ − 1) 
+
+!
+
+,
+
+(14) where τ ( bA) is an advantage-dependent temperature. This choice yields the normalized weight 
+
+f ′
+
+> SSPO
+
+(ρ; bA)
+
+fSSPO (ρ; bA) = 11 +  τ ( bA) · (ρ − 1) 2 , (15) which peaks at unity when ρ = 1 and decays quadratically for large deviations. Since the geometric mean is less sensitive to outliers than the arithmetic mean, we choose the bell-shaped curve, which provides heavy-tailed attenuation. Ratio (15) induces a Cauchy-shaped soft trust region. As a result, SSPO yields bounded gradients without hard clipping while preserving unbiased on-policy updates. 
+
+Other Design Choices A central design challenge in SSPO is balancing update stability with sufficient policy ex-pressiveness. Following SAPO, we employ distinct tempera-tures for positive and negative advantages, with τneg ⩾ τpos ,causing gradients associated with negative advantage to-kens to decay more rapidly. This design is motivated by two observations. First, DAPO (Yu et al., 2025) shows that relaxing the effective upper bound on policy updates (Clip-Higher) improves exploration and mitigates entropy collapse. Second, negative-advantage tokens are empirically more destabilizing (Gao et al., 2025), as their gradients redis-tribute probability mass toward many unsampled and often irrelevant tokens, whereas positive advantages primarily sharpen the sampled token’s logit. The final SSPO objective is therefore 
+
+JSSPO (θ) = Ex∼D , {yi}Gi=1 ∼πθold (·| x)
+
+ 1
+
+G
+
+> G
+
+X
+
+> i=1
+
+
+
+> |yi|
+
+Y
+
+> t=1
+
+fSSPO 
+
+
+
+ρi,t (θ); bAi
+
+
+
+> 1
+> |yi|
+
+· bAi
+
+ , (16) where fSSPO is defined in (14) and uses advantage-wise temperature τ ( bA) (9). 4Soft Sequence Policy Optimization 
+
+## 4. Experiments 
+
+We conduct experiments using two LLM models fine-tuned from the cold start: Qwen2.5-0.5B-Instruct and Qwen2.5-7B-Instruct. As training tasks we have picked mathematical reasoning using for training datasets GSM8k and Deep-Math103k. We have trained three different configurations with each of gate-functions introduced in this paper, com-paring results to GRPO, SAPO and GMPO. For smaller Qwen2.5-0.5B-Instruct model we have picked default hyper-parameters for clipping in GRPO and GMPO and τpos , τneg 
+
+values for methods using soft gates. Bigger model Qwen2.5-7B-Instruct required careful hyperparameter tuning both for hard clipping methods and soft clipping, in ablation study we will be also providing intuition for picking τpos and τneg 
+
+based on the results of hard clipped approaches. 
+
+## 5. Results 
+
+Experimental evaluation is currently in progress. We defer detailed quantitative comparisons to a forthcoming revision. 
+
+## 6. Related Works 
+
+Group-based policy optimization has become a strong base-line for reinforcement learning with large language models, particularly in alignment and reasoning tasks. Methods such as GRPO (Shao et al., 2024) and RLOO (Ahmadian et al., 2024) estimate advantages by sampling multiple re-sponses per prompt and computing relative rewards within each group, avoiding an auxiliary critic network. GRPO further enables off-policy updates leveraging importance-weighted updates, making it a practical default in large-scale RL pipelines and inducing various modifications (Yu et al., 2025; Liu et al., 2025b;a). In realistic training setups, off-policy learning is unavoid-able due to large rollout buffers and mini-batch gradient steps. However, applying token-level importance sampling ratios to sequence-level rewards introduces a policy–reward mismatch that can destabilize training. Recent work ad-dresses this issue by enforcing sequence-level coherence in policy updates. GSPO (Zheng et al., 2025) and GMPO (Zhao et al., 2025) substitute arithmetic mean of token-level ratios with sequence-consistent formulations, improving stability and variance control. Hard clipping of importance ratios, originally introduced in PPO (Schulman et al., 2017), remains a common strat-egy for variance reduction in off-policy optimization (Shao et al., 2024; MiniMax et al., 2025). While effective, clipping induces a fundamental bias–variance tradeoff: aggressive clipping improves stability but harms sample efficiency and exploration, whereas loose clipping leads to noisy updates (Chen et al., 2022; Dwyer et al., 2025). Several works ex-plore alternatives, including asymmetric clipping (Yu et al., 2025) and gradient-preserving approaches (Su et al., 2025a), but these methods remain sensitive to hyperparameters. An alternative line of work advocates for soft, entropy-aware objectives that avoid hard clipping. SAPO (Gao et al., 2025) and related soft trust-region methods (Dwyer et al., 2025) demonstrate improved robustness in off-policy settings by smoothly attenuating large importance ratios. Recent work also explores global soft constraints on pol-icy distributions, such as Entropy Ratio Clipping (Su et al., 2025b), which uses the ratio of policy entropies between updates to constrain distributional drift beyond standard im-portance clipping. However, these approaches are primarily developed for token-level objectives and do not explicitly address sequence-level credit assignment in group-based learning. 
+
+## 7. Conclusion 
+
+The paper introduces SSPO – a novel optimization objec-tive for RLVR. Its design combines alignment between the reward unit and the importance correction unit with a flexi-ble token-wise gate function. SSPO adopts both the lower variance of sequence importance weights and gradient pre-serving gating functions for outlier tokens, which allows for better exploration while staying in a trust region. We provide extensive empirical validation of the gate function choice and theoretical motivation of the proposed gates. 
+
+## Computational Resources 
+
+The research was carried out using the MSU-270 supercom-puter of Lomonosov Moscow State University. 
+
+## Acknowledgements 
+
+This work was supported by the Ministry of Eco-nomic Development of the Russian Federation in accor-dance with the subsidy agreement (agreement identifier 000000C313925P4H0002; grant No 139-15-2025-012). 
+
+## Impact Statement 
+
+This paper presents work whose goal is to advance the field of Machine Learning. There are many potential societal consequences of our work, none which we feel must be specifically highlighted here. 
+
+## References 
+
+Ahmadian, A., Cremer, C., Gall ´e, M., Fadaee, M., Kreutzer, J., Pietquin, O., ¨Ust ¨un, A., and Hooker, S. Back to basics: Revisiting reinforce style optimization for learning from 5Soft Sequence Policy Optimization 
+
+human feedback in llms, 2024. URL https://arxiv. org/abs/2402.14740 .Chen, X., Diao, D., Chen, H., Yao, H., Piao, H., Sun, Z., Yang, Z., Goebel, R., Jiang, B., and Chang, Y. The sufficiency of off-policyness and soft clipping: Ppo is still insufficient according to an off-policy measure, 2022. URL https://arxiv.org/abs/2205.10047 .Dwyer, M., Sobey, A., and Chapman, A. It’s not you, it’s clipping: A soft trust-region via probability smoothing for llm rl, 2025. URL https://arxiv.org/abs/ 2509.21282 .Gao, C., Zheng, C., Chen, X.-H., Dang, K., Liu, S., Yu, B., Yang, A., Bai, S., Zhou, J., and Lin, J. Soft adaptive pol-icy optimization, 2025. URL https://arxiv.org/ abs/2511.20347 .Liu, Z., Chen, C., Li, W., Qi, P., Pang, T., Du, C., Lee, W. S., and Lin, M. Understanding r1-zero-like training: A critical perspective, 2025a. URL https://arxiv. org/abs/2503.20783 .Liu, Z., Liu, J., He, Y., Wang, W., Liu, J., Pan, L., Hu, X., Xiong, S., Huang, J., Hu, J., Huang, S., Obando-Ceron, J., Yang, S., Wang, J., Su, W., and Zheng, B. Part i: Tricks or traps? a deep dive into rl for llm reasoning, 2025b. URL https://arxiv.org/abs/2508.08221 .MiniMax, :, Chen, A., Li, A., Gong, B., Jiang, B., Fei, B., Yang, B., Shan, B., Yu, C., Wang, C., Zhu, C., Xiao, C., Du, C., Zhang, C., Qiao, C., Zhang, C., Du, C., Guo, C., Chen, D., Ding, D., Sun, D., Li, D., Jiao, E., Zhou, H., Zhang, H., Ding, H., Sun, H., Feng, H., Cai, H., Zhu, H., Sun, J., Zhuang, J., Cai, J., Song, J., Zhu, J., Li, J., Tian, J., Liu, J., Xu, J., Yan, J., Liu, J., He, J., Feng, K., Yang, K., Xiao, K., Han, L., Wang, L., Yu, L., Feng, L., Li, L., Zheng, L., Du, L., Yang, L., Zeng, L., Yu, M., Tao, M., Chi, M., Zhang, M., Lin, M., Hu, N., Di, N., Gao, P., Li, P., Zhao, P., Ren, Q., Xu, Q., Li, Q., Wang, Q., Tian, R., Leng, R., Chen, S., Chen, S., Shi, S., Weng, S., Guan, S., Yu, S., Li, S., Zhu, S., Li, T., Cai, T., Liang, T., Cheng, W., Kong, W., Li, W., Chen, X., Song, X., Luo, X., Su, X., Li, X., Han, X., Hou, X., Lu, X., Zou, X., Shen, X., Gong, Y., Ma, Y., Wang, Y., Shi, Y., Zhong, Y., Duan, Y., Fu, Y., Hu, Y., Gao, Y., Fan, Y., Yang, Y., Li, Y., Hu, Y., Huang, Y., Li, Y., Xu, Y., Mao, Y., Shi, Y., Wenren, Y., Li, Z., Li, Z., Tian, Z., Zhu, Z., Fan, Z., Wu, Z., Xu, Z., Yu, Z., Lyu, Z., Jiang, Z., Gao, Z., Wu, Z., Song, Z., and Sun, Z. Minimax-m1: Scaling test-time compute efficiently with lightning attention, 2025. URL 
+
+https://arxiv.org/abs/2506.13585 .Schulman, J., Wolski, F., Dhariwal, P., Radford, A., and Klimov, O. Proximal policy optimization algo-rithms, 2017. URL https://arxiv.org/abs/ 1707.06347 .Shao, Z., Wang, P., Zhu, Q., Xu, R., Song, J., Bi, X., Zhang, H., Zhang, M., Li, Y. K., Wu, Y., and Guo, D. Deepseekmath: Pushing the limits of mathemat-ical reasoning in open language models, 2024. URL 
+
+https://arxiv.org/abs/2402.03300 .Su, Z., Pan, L., Lv, M., Li, Y., Hu, W., Zhang, F., Gai, K., and Zhou, G. Ce-gppo: Coordinating entropy via gradient-preserving clipping policy optimization in re-inforcement learning, 2025a. URL https://arxiv. org/abs/2509.20712 .Su, Z., Pan, L., Lv, M., Mei, T., Lin, Z., Li, Y., Hu, W., Tang, R., Gai, K., and Zhou, G. Entropy ratio clipping as a soft global constraint for stable reinforcement learning, 2025b. URL https://arxiv.org/abs/2512.05591 .Yu, Q., Zhang, Z., Zhu, R., Yuan, Y., Zuo, X., Yue, Y., Dai, W., Fan, T., Liu, G., Liu, L., Liu, X., Lin, H., Lin, Z., Ma, B., Sheng, G., Tong, Y., Zhang, C., Zhang, M., Zhang, W., Zhu, H., Zhu, J., Chen, J., Chen, J., Wang, C., Yu, H., Song, Y., Wei, X., Zhou, H., Liu, J., Ma, W.-Y., Zhang, Y.-Q., Yan, L., Qiao, M., Wu, Y., and Wang, M. Dapo: An open-source llm reinforcement learning system at scale, 2025. URL https://arxiv.org/ abs/2503.14476 .Zhao, Y., Liu, Y., Liu, J., Chen, J., Wu, X., Hao, Y., Lv, T., Huang, S., Cui, L., Ye, Q., Wan, F., and Wei, F. Geometric-mean policy optimization, 2025. URL 
+
+https://arxiv.org/abs/2507.20673 .Zheng, C., Ke, P., Zhang, Z., and Huang, M. Click: Control-lable text generation with sequence likelihood contrastive learning, 2023. URL https://arxiv.org/abs/ 2306.03350 .Zheng, C., Liu, S., Li, M., Chen, X.-H., Yu, B., Gao, C., Dang, K., Liu, Y., Men, R., Yang, A., Zhou, J., and Lin, J. Group sequence policy optimization, 2025. URL 
+
+https://arxiv.org/abs/2507.18071 .6

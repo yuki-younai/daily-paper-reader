@@ -1,0 +1,857 @@
+Title: Phase-Aware Mixture of Experts for Agentic Reinforcement Learning
+
+URL Source: https://arxiv.org/pdf/2602.17038v1
+
+Published Time: Fri, 20 Feb 2026 01:22:57 GMT
+
+Number of Pages: 16
+
+Markdown Content:
+# Phase-Aware Mixture of Experts for Agentic Reinforcement Learning 
+
+## Shengtian Yang 1, 3 , Yu Li 1, Shuo He 2, Yewen Li 3, Qingpeng Cai 3, Peng Jiang 3, Lei Feng 1* ,
+
+> 1
+
+School of Computer Science and Engineering, Southeast University, Nanjing, China 
+
+> 2
+
+Nanyang Technological University 
+
+> 3
+
+Kuaishou Technology yangshengtian@kuaishou.com, fenglei@seu.edu.cn 
+
+Abstract 
+
+Reinforcement learning (RL) has equipped LLM agents with a strong ability to solve complex tasks. However, existing RL methods normally use a single policy network, causing 
+
+simplicity bias where simple tasks occupy most parameters and dominate gradient updates, leaving insufficient capacity for complex tasks. A plausible remedy could be employing the Mixture-of-Experts (MoE) architecture in the policy net-work, as MoE allows different parameters (experts) to spe-cialize in different tasks, preventing simple tasks from dom-inating all parameters. However, a key limitation of tradi-tional MoE is its token-level routing, where the router assigns each token to specialized experts, which fragments phase-consistent patterns into scattered expert assignments and thus undermines expert specialization. In this paper, we propose 
+
+Phase-Aware Mixture of Experts (PA-MoE) . It first features a lightweight phase router that learns latent phase boundaries directly from the RL objective without pre-defining phase cat-egories. Then, the phase router allocates temporally consistent assignments to the same expert, allowing experts to preserve phase-specific expertise. Experimental results demonstrate the effectiveness of our proposed PA-MoE. Code is available at https://anonymous.4open.science/r/PA-MoE-576C/. 
+
+## Introduction 
+
+Reinforcement learning (RL) has equipped LLM agents with a strong ability to solve complex tasks such as embodied navigation (Shridhar et al. 2021) and web interaction (Yao et al. 2022). However, most RL-based agents use a single policy network throughout an episode, causing simplicity bias , as shown in Figure 1(a): since simple tasks are more fre-quent and easier to optimize, they dominate gradient updates and occupy most of the network’s representational capacity, leaving insufficient capacity for complex tasks. For example, existing methods suffer from this limitation. RLOO (Ahma-dian et al. 2024) optimizes a single policy network and re-duces variance through leave-one-out baselines, but its shared parameters are still biased toward high-frequency simple pat-terns. GRPO (Shao et al. 2024) uses group-relative rewards to form advantages without a critic; however, when simple and complex tasks are mixed in the same batch, the larger gradi-ents from easily-solved simple tasks overshadow the learning signal from complex ones. GiGPO (Feng et al. 2025) refines 
+
+> *
+
+Corresponding author. Simple Medium Complex       
+
+> 0
+> 20
+> 40
+> 60
+> 80
+> 100
+> Percentage (%)  75%
+> 20%
+> 5%
+> 94%
+> 80%
+> 65%
+> (a) Single Policy:
+> Simplicity Bias
+> Parameter %
+> Performance %
+> Simple Medium Complex
+> 0
+> 20
+> 40
+> 60
+> 80
+> 100
+> Percentage (%)
+> 30% 35% 35%
+> 96% 92% 98%
+> (b) Phase-MoE (Ours):
+> Balanced & High Performance
+> Parameter % (Per Expert)
+> Performance %
+
+Figure 1: Single-Policy Networks vs. Our PA-MoE. (a) Single-policy networks exhibit severe simplicity bias: sim-ple tasks (pick and place) occupy 75% of parameters while complex tasks (heat/cool/clean requiring multi-step tool inter-action) receive only 5%. Parameter occupancy is measured as the fraction of training batches where each task category contributes >50% of the batch loss. (b) PA-MoE achieves balanced parameter allocation ( ∼30% per expert) and uni-formly high performance across all task difficulties (96%-92%-98%). learning signals with hierarchical group-relative advantages for multi-step trajectories, yet the underlying single-policy architecture still conflates task difficulties, causing simple sub-tasks to dominate parameter updates. Fortunately, Mixture-of-Experts (MoE) (Shazeer et al. 2017) provides a natural remedy to this simplicity bias by sparsely activating only a small subset of experts for each input, enabling different parameter blocks to specialize in distinct behaviors. As a result, MoE can prevent frequent sim-ple decisions from dominating shared parameters, thereby reserving dedicated capacity for harder sub-skills across tra-jectories. This motivation aligns with a broad line of MoE research (i.e. (Lepikhin et al. 2021; Du et al. 2022; Zoph et al. 2022)) that scales model capacity efficiently via conditional computation and encourages expert specialization through routing, which has proven effective in large language models and multi-domain learning settings. However, directly adopt-ing conventional MoE for RL-based agent policies is nontriv-ial: traditional MoE relies on token-level routing that assigns experts independently per token based on local representa-tions, which is mismatched to sequential decision making. As shown in Figure 2(a), such token-level routing induces exces-sive expert switching (45 step-level equivalent switches per     
+
+> arXiv:2602.17038v1 [cs.AI] 19 Feb 2026 Token
+> MoE
+> Trajectory
+> MoE
+> Phase MoE
+> (Ours)
+> 0
+> 10
+> 20
+> 30
+> 40
+> 50
+> Expert Switches per Episode
+> 45
+> 3
+> 8
+> (a) Routing Overhead Comparison
+> 010 20 30 40
+> Timestep in Episode
+> (b) Phase-Level Expert Assignment
+> (Semantic Coherence)
+
+Figure 2: Routing Granularity Comparison. (a) Expert switches per episode across routing strategies. Token-level MoE causes excessive fragmentation (45 switches), while trajectory-level MoE is overly coarse (3 switches). PA-MoE strikes a balance with 8 switches per episode. (b) Visual-ization of phase-level expert assignment showing semantic coherence: the same expert (indicated by color) is maintained within each contiguous behavioral phase, with switches oc-curring only at phase boundaries. episode), fragmenting temporally coherent, phase-consistent patterns (e.g., planning, acting, verifying) into scattered ex-pert assignments. Consequently, specialization is weakened and credit assignment is dispersed across experts, thereby undermining the very benefit MoE is expected to provide. In this paper, we propose Phase-Aware Mixture of Ex-perts (PA-MoE) , a phase-aware MoE policy that learns the phase structure of trajectories end-to-end from the RL ob-jective. At its core, PA-MoE introduces a lightweight phase router that predicts an expert assignment at the environment-step level and, crucially, enforces temporally consistent rout-ing so that contiguous segments of a trajectory are handled by the same expert. To keep the parameter overhead min-imal, each expert is implemented as a LoRA module (Hu et al. 2022) on top of a shared backbone, which isolates phase-specific updates while retaining general language and reasoning capabilities. This phase-consistent routing has two practical advan-tages. First, by allowing each expert to accumulate stable learning signals over contiguous segments, it encourages experts to develop distinct behavioral specializations. Con-sequently, it mitigates simplicity bias by preventing easy behaviors from monopolizing shared parameters. As a result, PA-MoE achieves more balanced expert utilization and more uniform performance across task difficulties, as shown in Figure 1(b). Second, it provides a routing granularity that better matches sequential decision making: token-level rout-ing switches experts excessively, fragmenting temporally coherent behaviors and dispersing credit assignment across experts, whereas trajectory-level routing is overly coarse, lim-iting within-episode adaptation when the required behavior changes. In contrast, PA-MoE strikes a principled middle ground by reducing unnecessary switching while still per-mitting expert changes at genuine phase boundaries, thereby balancing coherence and adaptability. As illustrated in Fig-ure 2(b), the same expert is maintained within each contigu-ous segment, with switches occurring only at semantic phase boundaries, reinforcing consistent strategy execution. Experi-ments on ALFWorld and WebShop demonstrate that PA-MoE improves over the GiGPO baseline by +7.7% and +14.9% respectively, and notably, PA-MoE with 1.5B parameters outperforms the 7B baseline. 
+
+## Related Work 
+
+LLM-Based Agents. Prompting methods such as Re-Act (Yao et al. 2023b), Reflexion (Shinn et al. 2023) and Tree-of-Thoughts (Yao et al. 2023a) enable LLM agents through in-context demonstrations, but are bounded by con-text length and cannot improve from trial-and-error experi-ence. Supervised fine-tuning approaches including Agent-Tuning (Zeng et al. 2024), FireAct (Chen et al. 2023) and Toolformer (Schick et al. 2023) distill successful trajecto-ries into model weights, achieving better generalization than prompting but requiring curated demonstrations and not opti-mizing for long-horizon outcomes directly. Reinforcement learning enables agents to improve the policy through en-vironment interaction. Recent work applies policy-gradient methods, i.e. REINFORCE (Williams 1992), PPO (Schulman et al. 2017), GRPO (Shao et al. 2024), and GiGPO (Feng et al. 2025), to train LLM policies on agentic tasks, with RLHF (Ouyang et al. 2022) demonstrating the effectiveness of RL for aligning language models. However, these methods use a single policy network for all behavioral phases, leading to simplicity bias when heterogeneous behaviors induce con-flicting learning signals. Gradient-surgery techniques like PC-Grad (Yu et al. 2020) and CAGrad (Liu et al. 2021) mitigate conflicts by projecting or rescaling gradients at each update, but operate at the optimization level and do not induce persis-tent specialization for temporally contiguous phases within a trajectory. PA-MoE addresses this gap through architectural parameter isolation that persists across training. 
+
+Mixture of Experts. MoE architectures scale model capac-ity through sparse expert activation (Shazeer et al. 2017). Switch Transformer (Fedus, Zoph, and Shazeer 2022) sim-plifies routing to top-1 selection, while Mixtral (Jiang et al. 2024) demonstrates MoE effectiveness in open-weight LLMs. These advances target language modeling, where token-level routing aligns naturally with the next-token prediction ob-jective. For sequential decision-making, this granularity is misaligned: agent trajectories are structured by temporally ex-tended behavioral phases, not linguistic tokens. Token-level routing fragments coherent action sequences, where differ-ent tokens within a single “open fridge” action may route to different experts, disrupting behavioral consistency. To our knowledge, no prior work explores phase-level expert routing for agentic tasks. PA-MoE bridges this gap by routing at environment-step granularity with temporal consistency regularization, enabling experts to specialize for distinct be-havioral modes. 
+
+Hierarchical and Modular RL. Hierarchical RL decom-poses behavior into temporal abstractions. The options frame-work (Sutton, Precup, and Singh 1999) introduces tempo-rally extended actions with initiation and termination condi-tions, while Option-Critic (Bacon, Harb, and Precup 2017) learns options end-to-end. These methods modify the MDP structure by introducing semi-MDPs or hierarchical action spaces, and often require intrinsic rewards or explicit termi-nation learning. Modular approaches (Andreas, Klein, and Levine 2017; Devin et al. 2017; Goyal et al. 2021) decom-pose policies into reusable components but typically require predefined module inventories or compositional task struc-ture. PA-MoE is complementary to both lines: we do not alter the action space or introduce temporal action abstractions, applying temporal abstraction solely to parameter routing. Unlike modular policies, we do not require predefined phase categories; the router discovers boundaries that maximize task reward through end-to-end learning driven directly by the RL objective. 
+
+## Method 
+
+We present Phase-Aware Mixture of Experts (PA-MoE), which decomposes an agent policy into specialized experts operating at the phase level. As shown in Figure 3, PA-MoE consists of a phase-aware router that selects experts based on execution context, and a set of LoRA-based experts sharing a frozen base language model. At each timestep t, given obser-vation ot, action history ht, and goal g, the router selects an expert k∗ which then generates action at. PA-MoE is agnos-tic to the underlying RL algorithm and can be combined with any policy-gradient method. Intuitively, phase-aware routing reduces policy gradient variance by isolating updates from heterogeneous behavioral phases into disjoint parameters; we provide analysis and empirical validation in Appendix . 
+
+Phase-Aware Router 
+
+The router πr determines which expert handles each decision by integrating two complementary information streams (Fig-ure 3): goal-conditioned observation encoding and temporal history modeling. 
+
+Observation Encoding. We apply cross-attention between the current observation ot and task goal g to produce a goal-conditioned representation: 
+
+oalign  
+
+> t
+
+= CrossAttn (Q=Enc (ot), K =Enc (g), V =Enc (g)) ,
+
+where Enc (·) denotes mean-pooling over the final hid-den states of the frozen base model, producing a fixed-dimensional representation ∈ Rdmodel for variable-length text inputs. This cross-attention mechanism allows the router to focus on goal-relevant aspects of the observation, distinguish-ing between states that appear similar but require different behavioral modes depending on the task objective. 
+
+Temporal Modeling. We encode the recent action and ob-servation history ht = [ at−L:t−1, o t−L:t−1] using a 3-layer LSTM. Each action and observation in the history is first embedded via mean-pooling over the base model’s token embeddings, then concatenated and fed sequentially: 
+
+henc  
+
+> t
+
+= LSTM (Embed (ht)) ∈ Rd, (1) where L = 5 is the history window and d = 256 is the LSTM hidden dimension. The LSTM’s recurrent structure is well-suited for tracking sequential state changes that signal phase transitions in long-horizon trajectories. 
+
+Expert Distribution. Both representations are concatenated and passed through an MLP to obtain the expert distribution: 
+
+pt = softmax  MLP ([ oalign  
+
+> t
+
+; henc  
+
+> t
+
+]) /τ  ∈ ∆K , (2) where τ is a temperature parameter (see Section ). 
+
+Expert Selection. We use deterministic expert selection via 
+
+k∗ = arg max k pkt for both training and inference. The router parameters are optimized through the RL objective as de-scribed in Section . 
+
+Temporal Consistency 
+
+To encourage temporally stable expert assignments, we intro-duce a consistency mechanism through two components. 
+
+Switching Penalty. Let zt = arg max k pkt denote the se-lected expert at step t. We penalize transitions between con-secutive steps: 
+
+Lswitch = λs
+
+T − 1
+
+XT −1 
+
+> t=1
+
+1[zt̸ = zt+1 ],
+
+where 1[·] is the indicator function, λs = 0 .05 , and T de-notes the episode length (which varies across episodes). Since the indicator function is non-differentiable, we implement the backward pass using a differentiable surrogate: we re-place 1[zt̸ = zt+1 ] with 1 − P 
+
+> k
+
+pkt · pkt+1 during gradient computation, which measures the soft disagreement between consecutive routing distributions. The forward pass uses the hard indicator for accurate loss computation, while the back-ward pass uses this soft approximation to propagate gradients to router parameters. 
+
+Temperature Annealing. We apply temperature annealing to the router’s softmax during training following a linear schedule: 
+
+τ (t) = max 
+
+
+
+τf , τ 0 − (τ0 − τf ) · tTanneal 
+
+
+
+, (3) with τ0 = 2 .0, τf = 0 .5, and Tanneal = 3000 steps. High ini-tial temperature encourages exploration of different routing patterns, while low final temperature produces more decisive assignments. 
+
+Switch Metric. We define an expert switch as a change in the selected expert between consecutive environment steps: 
+
+1[zt̸ = zt+1 ] where zt = arg max k pkt . This step-level met-ric directly measures behavioral coherence. Fewer switches indicate that the same expert handles temporally contigu-ous decisions, enabling consistent strategy execution within each phase. This differs from token-level switches (which would count routing changes during action generation); we use step-level switches because agent behavior is structured by environment interactions, not linguistic tokenization. Combined, these mechanisms reduce expert switches from 45 per episode (without consistency) to 8.4 (with consis-tency), while maintaining the flexibility to adapt at genuine phase boundaries. For reference, token-level MoE exhibits approximately 1,200 routing changes per episode when mea-sured at token granularity; we report the step-level equivalent (45 environment steps with at least one intra-step expert change) for comparable measurement across methods. See Appendix for details on the token-level baseline and metric conversion. 
+
+Behavioral Experts 
+
+We implement K = 4 experts as LoRA adapters (Hu et al. 2022) sharing a frozen base model θbase (Figure 3). Each State 𝑠   
+
+> Reward 𝑟
+> Action 𝑎
+> LLM agent
+> env
+
+𝑔 𝑜 𝑡       
+
+> Phase Router (∅)
+> CrossAttn 𝑜 𝑡
+> align
+> +LSTM (ℎ𝑡
+> enc )
+> MLP + SoftMax
+> ……
+> 𝐾 LoRA Experts
+> Frozen
+> Base LLM
+> Regularization
+> ( Bal + Switch)
+> T
+> Annealing
+> ℒswitc hℒbal
+
+Router Loss 
+
+Policy Loss           
+
+> RL Loss
+> (ℒRL )
+> div Loss
+> (ℒdi v)
+> T
+> ෍
+> 𝑖 ≠𝑗
+> max 0,𝜏 div −KL 𝜋 exp
+> 𝑖 ቛ𝜋 exp
+> 𝑗
+> Action 𝑎 𝑡
+> Only 𝑘 ∗
+> updates
+> 𝑘 ∗=argmax (𝑝 𝑡 )
+
+Figure 3: PA-MoE Architecture. Upper panel: Phase-Aware Router (Sec. ) processes observation ot and goal g via cross-attention, and action history ht via LSTM, to select expert k∗ = arg max pi. Balance loss Lbal ensures uniform expert utilization. 
+
+Lower panel: Phase-Aware MoE Execution shows agent-environment interaction. The router selects expert k∗ from K LoRA-based experts sharing a frozen base model (gray). The selected expert generates action via policy πk∗
+
+> exp
+
+(at|st, h t, g ). Training optimizes both router and experts jointly via RL loss LRL and diversity loss Ldiv (Sec. ). expert k is parameterized as: 
+
+πk
+
+> exp
+
+(a|s) = LLM (a|s; θbase + BkAk), (4) where Bk ∈ Rd×r and Ak ∈ Rr×d are low-rank matrices with rank r = 32 , applied to query and value projections across all transformer layers. LoRA experts share a frozen backbone, providing param-eter efficiency while maintaining general language capabil-ities. The low-rank constraint encourages complementary adjustments to the base policy. Expert specialization emerges during training without manual assignment. Phase-specific entropy demands differ sharply across behavioral modes; we provide quantitative entropy analysis in Appendix . 
+
+Behavioral Phase Definition 
+
+PA-MoE operates at the phase level rather than token or trajectory level. We formally define: 
+
+Definition 0.1 (Behavioral Phase) . A behavioral phase ϕ
+
+is a maximal trajectory segment [tstart , t end ] where the router assigns the same expert: arg max k πr (st)k = k∗ for all t ∈
+
+ϕ.
+
+Post-hoc Validation. We verify that learned phases exhibit behavioral coherence by measuring within-phase entropy variance. Empirically, phases satisfy Var t∈ϕ[H(π(a|st))] <
+
+0.18 bits 2. Phase boundaries occur when task requirements change, triggering both expert switches and entropy shifts. 
+
+Policy-Gradient Integration and Optimization 
+
+PA-MoE integrates with any policy-gradient method. The training procedure consists of two components: (1) the router determines expert assignments based on execution context, and (2) the selected expert is optimized using the base algo-rithm’s update rule. 
+
+General Framework. At each timestep t, the router selects expert k∗ = arg max k πr (k|st). The selected expert πk∗
+
+> exp
+
+generates action at and receives the policy gradient update from the base RL algorithm. Only the selected expert re-ceives gradients at each step, enabling phase-level parameter isolation. 
+
+Instantiations. In our primary experiments, we instantiate PA-MoE with GiGPO (Feng et al. 2025), which computes group-based advantages from multiple sampled trajectories. For each state s, we sample n = 8 trajectories and compute advantages: 
+
+Agroup  
+
+> t
+
+= f (rank (τ ), R (τ )) , (5) based on relative trajectory rankings within each group. The selected expert is updated via the clipped surrogate objective: 
+
+Lk∗ 
+
+> RL
+
+= Et
+
+min  ρtAgroup  
+
+> t
+
+, clip (ρt, 1−ϵ, 1+ ϵ)Agroup 
+
+> t
+
+ ,
+
+where ρt = πk∗
+
+> exp
+
+(at|st)/π k∗
+
+> exp, old
+
+(at|st) is the importance sampling ratio and ϵ = 0 .2 is the clipping threshold. 
+
+Router Optimization. The router is trained jointly with the experts through the same RL objective. Specifically, the router parameters θr receive gradients from the policy loss of the selected expert. Since expert selection is determin-istic ( k∗ = arg max k pkt ), we use the straight-through esti-mator (Bengio, L ´eonard, and Courville 2013) to propagate gradients: the forward pass uses hard expert selection, while the backward pass computes gradients with respect to pt as if the selection were soft. This allows the router to learn which expert assignments lead to higher group-relative advantages. 
+
+Generalization to Other Algorithms. PA-MoE can also be applied to other RL policy-gradient methods by substituting the appropriate advantage computation and policy objective. For PPO, we use the standard generalized advantage estima-tor (GAE) (Schulman et al. 2016) with a shared critic network. For GRPO, we employ group-relative policy optimization with ranking-based advantages. For RLOO, we use leave-one-out baseline estimation. The router-expert interaction mechanism remains identical across all instantiations. 
+
+Regularization. To prevent degenerate solutions, we em-ploy two regularization terms. The diversity loss enforces minimum separation between expert policies: 
+
+Ldiv = X 
+
+> i̸=j
+
+max(0 , τ div − KL (πi
+
+> exp
+
+∥πj
+
+> exp
+
+)) , (6) with margin τdiv = 0 .1. To avoid the computational cost of 
+
+K(K − 1) forward passes, we compute Ldiv periodically (ev-ery 100 training steps) using cached action distributions from recent trajectories. Specifically, we maintain a buffer of the most recent 1,000 state-action pairs per expert; at each diver-sity update, we sample 64 states and compute KL divergences using the cached logits with current expert parameters. Dur-ing diversity loss computation, gradients flow only to expert parameters while the router remains detached. The balance loss: 
+
+Lbal = XKk=1 (fk − 1/K )2, (7) where fk is expert k’s activation frequency over a training batch, prevents router collapse by encouraging uniform uti-lization. The complete objective combines the base RL loss with regularization: 
+
+L = LRL + αLdiv + βLbal + γLswitch (8) Here LRL denotes the policy objective of the base algorithm (e.g., GiGPO, PPO, GRPO, or RLOO). 
+
+## Experiments 
+
+Experimental Setup 
+
+Benchmark datasets. We evaluate our PA-MoE on ALF-World (Shridhar et al. 2021), a household task benchmark requiring multi-step interaction, and WebShop (Yao et al. 2022), a goal-directed web navigation environment. ALF-World contains six task types involving object manipulation; we train on approximately 3,500 procedurally generated tasks and evaluate on 140 held-out validation instances, with suc-cess measured as task completion within 50 steps. WebShop simulates e-commerce where agents search for and purchase products matching natural language specifications across 500 validation tasks; we report both score (weighted attribute matching) and binary success rate. We experiment with Qwen2.5-1.5B-Instruct and Qwen2.5-7B-Instruct (Yang et al. 2024) as base models. Baselines in-clude prompt-based methods (vanilla prompting, ReAct (Yao et al. 2023b), Reflexion (Shinn et al. 2023)) and RL-trained policies using PPO (Schulman et al. 2017), RLOO (Ahma-dian et al. 2024), GRPO (Shao et al. 2024), GiGPO (Feng et al. 2025), and GEPO (Yuan et al. 2025). For closed-source models, we report GPT-4o and Gemini-2.5-Pro results from prior work (Feng et al. 2025). Our PA-MoE uses K = 4 experts with LoRA rank r = 32 
+
+applied to query and value projections. We set the α = 0 .01 ,
+
+β = 0 .001 and γ = 1 respectively. We use 8 H800 GPUs for all experiments. 
+
+Main Results 
+
+Table 1 reports comprehensive comparisons across model sizes, RL algorithms, and benchmarks. 
+
+ALFWorld Performance. PA-MoE+GiGPO with Qwen2.5-1.5B achieves 93.8% overall success, improving over the GiGPO baseline (86.1%) by +7.7 percentage points. Gains concentrate on tasks requiring precise multi-step manipula-tion. For example, heating reaches 100% (vs. 91.3%), cooling 89.5% (vs. 71.7%), and cleaning 95.8% (vs. 91.8%). These tasks involve low-frequency but decisive actions, which is ex-actly where simplicity bias most severely impacts baselines. Taken together, the improvement pattern reveals PA-MoE’s mechanism. Navigation-heavy tasks (pick, pick2) show mod-est gains (+1.1%, +12.2%) since baselines already allocate sufficient capacity to frequent actions. Manipulation-heavy tasks show larger gains (+8.7% heating, +17.8% cooling) because PA-MoE dedicates Expert 2 to these critical but rare interactions. This asymmetric improvement directly reflects the capacity rebalancing shown in Section . 
+
+Cross-Algorithm Generalization. PA-MoE improves all tested RL algorithms, confirming that benefits stem from architectural design rather than algorithm-specific interac-tions: With GRPO, overall accuracy increases from 72.8% to 74.2%, while the most challenging task type (look-at-object) jumps dramatically from 53.7% to 87.5% (a 33.8 percentage point improvement). RLOO shows the largest overall gain at 4.5 points (69.7% → 74.2%), with substantial improve-ments on manipulation tasks such as Clean (+16.5%) and Heat (+20.5%), though with some regression on simpler Pick tasks. Even PPO, whose separate critic network already pro-vides some degree of gradient separation, achieves modest but consistent improvement (54.4% → 56.2%). The varying improvement magnitudes correlate with baseline headroom: weaker baselines (GRPO, RLOO) benefit more from capacity reallocation than stronger ones (GiGPO). Table 1: Performance comparison on ALFWorld and WebShop benchmarks. For ALFWorld, we report the average success rate (%) for each subtask as well as the overall result. For WebShop, we report both the average score and the average success rate (%). We report mean and standard deviation over 3 random seeds for RL methods. Prompting results are deterministic single runs. “GiGPO w/o std” refers to variants without advantage standardization, respectively. 
+
+Type Method ALFWorld WebShop 
+
+Pick Look Clean Heat Cool Pick2 All Score Succ. 
+
+Closed-Source Model ‡
+
+Prompting GPT-4o † 75.3 60.8 31.2 56.7 21.6 49.8 48.0 31.8 23.7 Prompting Gemini-2.5-Pro † 92.8 63.3 62.1 69.0 25.4 58.7 60.3 42.5 35.9 
+
+Qwen2.5-1.5B-Instruct 
+
+Prompting Qwen2.5 † 5.9 5.5 3.3 9.7 4.2 0.0 4.1 23.1 5.2 Prompting ReAct † 17.4 20.5 15.7 6.2 7.7 2.0 12.8 40.1 11.3 Prompting Reflexion † 35.3 22.2 21.7 13.6 19.4 3.7 21.8 55.8 21.9 RL Training GEPO 98.7 ±1.2 79.9 ±5.9 94.6 ±2.3 81.9 ±9.0 76.6 ±9.1 88.6 ±4.8 89.1 ±0.8 89.9 ±1.4 75.6 ±2.5
+
+RL Training PPO 64.8 ±3.5 40.5 ±6.9 57.1 ±4.9 60.6 ±6.6 46.4 ±4.0 47.4 ±1.9 54.4 ±3.1 73.8 ±3.0 51.5 ±2.9
+
+RL Training PPO + PA-MoE 88.6 ±3.4 37.5 ±6.2 50.0 ±4.4 55.6 ±6.0 36.8 ±4.4 37.5 ±1.1 56.2 ±3.4 73.9 ±3.4 52.3 ±2.4
+
+RL Training RLOO 88.3 ±3.0 52.8 ±8.6 71.0 ±5.9 62.8 ±8.7 66.4 ±5.5 56.9 ±4.7 69.7 ±2.5 73.9 ±5.6 52.1 ±6.7
+
+RL Training RLOO + PA-MoE 74.3 ±3.4 50.0 ±7.2 87.5 ±6.4 83.3 ±8.0 73.7 ±5.4 62.5 ±4.1 74.2 ±2.4 73.9 ±5.4 58.6 ±6.4
+
+RL Training GRPO 85.3 ±1.5 53.7 ±8.0 84.5 ±6.8 78.2 ±7.9 59.7 ±5.0 53.5 ±5.6 72.8 ±3.6 75.8 ±3.5 56.8 ±3.8
+
+RL Training GRPO + PA-MoE 87.5 ±1.4 87.5 ±6.2 87.5 ±6.4 81.2 ±7.2 50.0 ±5.4 45.8 ±5.1 74.2 ±3.4 73.9 ±3.4 57.0 ±3.4
+
+RL Training GiGPO 94.4 ±5.9 67.5 ±3.6 94.8 ±3.8 94.4 ±3.8 79.8 ±4.7 76.4 ±5.4 86.7 ±1.7 83.1 ±1.6 65.0 ±3.2
+
+RL Training GiGPO w/o std 96.0 ±1.4 76.5 ±3.9 91.8 ±5.5 91.3 ±6.3 71.7 ±8.4 79.5 ±7.7 86.1 ±4.7 83.5 ±1.8 67.4 ±4.5
+
+RL Training GiGPO + PA-MoE 97.1 ±1.4 75.0 ±3.2 95.8 ±6.4 100.0 ±0.0 89.5 ±4.4 91.7 ±4.1 93.8 ±2.4 91.0 ±1.4 82.3 ±3.4
+
+Qwen2.5-7B-Instruct 
+
+Prompting Qwen2.5 † 33.4 21.6 19.3 6.9 2.8 3.2 14.8 26.4 7.8 Prompting ReAct † 48.5 35.4 34.3 13.2 18.2 17.6 31.2 46.2 19.5 Prompting Reflexion † 62.0 41.6 44.9 30.9 36.3 23.8 42.7 58.1 28.8 RL Training GEPO 100.0 ±0.0 80.2 ±9.2 98.6 ±2.4 95.6 ±4.0 94.3 ±5.9 86.7 ±12 .6 94.9 ±3.8 91.0 ±2.7 80.5 ±6.7
+
+RL Training PPO 92.3 ±4.0 64.0 ±8.4 92.5 ±2.4 89.5 ±7.0 80.3 ±2.0 68.8 ±8.3 80.4 ±2.7 81.4 ±3.1 68.7 ±5.1
+
+RL Training PPO + PA-MoE 93.5 ±3.8 67.5 ±7.6 93.8 ±2.2 91.2 ±6.4 82.5 ±2.4 71.5 ±7.8 82.6 ±2.5 82.8 ±2.9 70.3 ±4.8
+
+RL Training RLOO 87.6 ±4.3 78.2 ±8.3 87.3 ±5.8 81.3 ±7.6 71.9 ±5.2 48.9 ±8.4 75.5 ±4.6 80.3 ±3.2 65.7 ±4.0
+
+RL Training RLOO + PA-MoE 89.2 ±4.0 80.5 ±7.9 89.5 ±5.4 83.5 ±7.2 74.2 ±5.0 52.5 ±8.0 78.2 ±4.2 82.1 ±3.0 67.8 ±3.8
+
+RL Training GRPO 90.8 ±5.1 66.1 ±6.7 89.3 ±5.4 74.7 ±6.9 72.5 ±5.4 64.7 ±7.3 77.6 ±5.2 79.3 ±2.8 66.1 ±3.7
+
+RL Training GRPO + PA-MoE 92.3 ±4.6 69.5 ±6.4 91.5 ±5.0 77.5 ±6.5 75.0 ±5.2 67.8 ±7.0 80.2 ±4.8 81.5 ±2.6 68.5 ±3.5
+
+RL Training GiGPO 97.7 ±1.6 82.7 ±7.9 98.8 ±1.6 83.7 ±7.2 89.3 ±5.2 79.2 ±6.6 90.8 ±1.3 84.4 ±2.9 72.8 ±3.2
+
+RL Training GiGPO w/o std 91.8 ±5.4 88.6 ±6.3 95.9 ±3.2 90.2 ±2.6 86.5 ±5.5 85.2 ±4.7 90.2 ±2.3 86.2 ±2.6 75.2 ±3.8
+
+RL Training GiGPO + PA-MoE 87.5 ±1.6 100.0 ±0.0 100.0 ±0.0 100.0 ±0.0 100.0 ±0.0 100.0 ±0.0 95.3 ±0.8 93.1 ±1.4 82.8 ±3.4
+
+Parameter Efficiency. PA-MoE (93.8%) with 1.5B parame-ters outperforms the vanilla 7B GiGPO baseline (90.2%) by +3.6 points while using fewer parameters. This demonstrates that architectural design can substitute for parameter scaling when the core bottleneck is capacity allocation rather than raw model capacity. With the 7B model, PA-MoE+GiGPO reaches 95.3% with 100% success on five of six task cate-gories. Compared to GEPO (94.9%), PA-MoE shows compa-rable performance with substantially lower variance (std 0.8 vs. 3.8), indicating more stable training dynamics. 
+
+WebShop Performance. PA-MoE+GiGPO achieves 82.3% success and 91.0 score, outperforming GiGPO (67.4%, 83.5) by +14.9 percentage points. The larger gain on WebShop compared to ALFWorld (+14.9 vs. +7.7) reflects WebShop’s longer episodes and more diverse action space, which am-plify simplicity bias in baselines. Notably, the 7B model only marginally exceeds 1.5B (82.3%), suggesting that Web-Shop’s difficulty stems from behavioral diversity rather than language understanding, a bottleneck that parameter scaling alone cannot address but phase-aware routing can. 
+
+Per-Task Variance. While PA-MoE improves aggregate per-formance across all algorithm-benchmark pairs, we observe occasional task-specific regressions in some configurations, particularly with PPO and RLOO where baseline perfor-mance is already low and training is less stable. These regres-sions are concentrated in a small subset of tasks and do not change the overall ranking. We provide detailed analysis in Appendix . 
+
+Ablation Studies 
+
+We conduct systematic ablations using Qwen2.5-1.5B with GiGPO on ALFWorld. All ablation results report mean over 3 seeds; standard deviations are provided in Appendix . 
+
+Number of Experts. Table 2 compares expert counts. The Table 2: Ablation on number of experts ( K). K=0 uses a sin-gle shared LoRA adapter without routing. All six ALFWorld task types shown. Bold indicates best per column; underline indicates ties with best. We report the average success rate (%) for each subtask as well as the overall result. See Ap-pendix for K=3 , 5 results and standard deviations.                                    
+
+> KPick Pick2 Look Heat Cool Clean All 094.3 87.5 62.5 94.4 89.5 83.3 88.3 297.1 91.7 62.5 100.0 73.7 100.0 91.4 4 (ours) 97.1 91.7 75.0 100.0 89.5 95.8 93.8
+> 691.4 70.8 62.5 100.0 84.2 91.7 85.9
+
+Table 3: Comparison of routing granularities. Switches de-notes average expert switches per episode, measured at the environment step level (i.e., P 
+
+> t
+
+1[zt̸ = zt+1 ]). Trajectory-level assigns one expert per episode at t=0 based on initial observation, with minimal within-episode adaptation. See Appendix for token-level baseline details. Routing Pick(%) Heat(%) All(%) Token-level 88.6 86.1 85.7 Trajectory-level 94.3 91.7 88.5 Phase-level (ours) 97.1 100.0 93.8 
+
+K = 0 configuration uses a single shared LoRA adapter with-out phase-aware routing, and all decisions use the same expert regardless of behavioral context. This achieves 88.3% suc-cess, already +2.2 points over vanilla GiGPO (86.1%), indi-cating that LoRA adaptation provides some benefit even with-out routing. However, performance remains uneven: 94.4% on heating versus 62.5% on look-at-object, a 32-point gap. Adding K = 2 experts improves to 91.4%, though look-at-object remains unchanged. K = 4 achieves our best result at 93.8%, with more balanced performance across tasks. The total improvement (+7.7%) can be attributed to two sources: LoRA adaptation (+2.2%, comparing K=0 to vanilla GiGPO) and phase-aware multi-expert specialization (+5.5%, comparing K=4 to K=0 ). K = 6 degrades to 85.9% due to data fragmentation: with approximately 3,500 training tasks across 6 task types and 6 experts, finer expert partitioning reduces per-expert sample efficiency. We use 
+
+K = 4 experts; performance is robust across K ∈ { 3, 4, 5}
+
+as detailed in Appendix . 
+
+Routing Granularity. Table 3 compares temporal scales. Token-level routing causes severe fragmentation (45 step-level switches/episode), yielding only 85.7% success, which is 8.1 points below phase-level. The gap is pronounced on ma-nipulation tasks (86.1% vs. 100.0% on heating) where multi-step sequences require coherence. Trajectory-level routing (3 switches; primarily using a single expert per episode with limited adaptation) achieves 88.5% but lacks fine-grained within-episode flexibility. 
+
+Router Components. Table 4 ablates router inputs. Remov-ing action history drops performance to 89.2% ( −4.6), as the router loses context about task progress. Removing goal attention yields 90.5% ( −3.3), preventing appropriate phase Table 4: Ablation on router components. Router Configuration Success Rate (%) w/o action history 89.2 w/o goal attention 90.5 w/o both 86.8 Full router (ours) 93.8 
+
+Table 5: Emergent expert specialization on ALFWorld (role and activation frequency).            
+
+> E1 E2 E3 E4
+> Role Explore Manipulate Navigate Recover Action (%) 73 82 64 71
+
+selection. Without both, performance falls to 86.8%, barely exceeding baseline. 
+
+Regularization Terms. Removing Ldiv causes expert col-lapse (88.3%), while removing Lbal leads to router collapse (87.5%). Both regularizers are necessary; see Appendix for details. 
+
+Comparison with Gradient Surgery Methods. Prior work addresses gradient conflicts through local modifications at each update step (PCGrad (Yu et al. 2020), GradNorm (Chen et al. 2018)). We compare PA-MoE against these baselines by applying gradient surgery to phase-partitioned losses. As de-tailed in Appendix , gradient surgery provides modest gains over GiGPO baseline (+0.7–1.8%) but falls substantially short of PA-MoE’s +7.7% improvement. PA-MoE provides persistent parameter separation across phases, while gradient-level approaches modify updates at each step without pre-venting heterogeneous phases from repeatedly competing for shared parameters over long horizons. 
+
+Effectiveness of Phase-Aware Routing 
+
+We verify that the phase-aware routing of our PA-MOE pro-duces meaningful expert specialization. 
+
+Expert Specialization Patterns. We analyze expert activa-tion patterns across 500 validation episodes. Table 5 summa-rizes the emergent specialization in terms of role and activa-tion frequency. Quantitative entropy statistics are reported in Appendix . 
+
+Phase Semantic Grounding. To verify that learned phases correspond to interpretable behavioral modes, we compare router assignments against human annotations. Three an-notators labeled 50 episodes with phase boundaries (inter-annotator κ = 0 .83 ). Router-assigned phases achieve 87% step-level overlap with human labels, with disagreements concentrated at ambiguous phase boundaries. We observe a substantial entropy gap between exploration and interaction; quantitative results are reported in Appendix . 
+
+## Conclusion 
+
+We identified a fundamental mismatch between single-policy networks and the heterogeneous demands of agentic tasks, where simplicity bias, gradient conflicts, and mode mismatch cause performance disparities across task types. PA-MoE addresses these issues through LoRA adaptation and phase-aware multi-expert specialization. PA-MoE achieves 93.8% on ALFWorld (vs. 86.1% baseline) and 82.3% on WebShop (vs. 67.4%), matching or exceeding larger models. Our abla-tions show phase-level routing is essential: token-level rout-ing causes 8.1% performance loss through fragmentation, while trajectory-level sacrifices adaptability. Analysis reveals emergent expert specialization aligned with intuitive behav-ioral phases despite no explicit supervision. Comparisons with gradient surgery methods (Appendix ) confirm that per-sistent parameter isolation yields stronger gains than per-step gradient corrections. 
+
+Limitations and Future Work. Expert count K requires task-specific tuning, though performance is robust across 
+
+K ∈ { 3, 4, 5}. Our experiments focus on discrete actions; continuous control may require modified expert parameter-ization. The router adds minimal inference overhead, but real-time applications may benefit from router distillation. Whether learned routing patterns transfer across task distri-butions remains an important direction for future work; pre-liminary analysis suggests phase boundaries may generalize within task families but require adaptation across domains. Integrating PA-MoE with hierarchical action abstractions could further improve sample efficiency on tasks with deeper temporal structure. 
+
+## References 
+
+Ahmadian, A.; Cremer, C.; Gall ´e, M.; Fadaee, M.; Kreutzer, J.; Pietquin, O.; ¨Ust ¨un, A.; and Hooker, S. 2024. Back to basics: Revisiting reinforce style optimization for learning from human feedback in llms. In ACL .Andreas, J.; Klein, D.; and Levine, S. 2017. Modular multi-task reinforcement learning with policy sketches. In Interna-tional Conference on Machine Learning , 166–175. PMLR. Bacon, P.-L.; Harb, J.; and Precup, D. 2017. The option-critic architecture. In Proceedings of the Thirty-First AAAI Conference on Artificial Intelligence , AAAI’17, 1726–1734. AAAI Press. Bengio, Y.; L ´eonard, N.; and Courville, A. C. 2013. Estimat-ing or Propagating Gradients Through Stochastic Neurons for Conditional Computation. CoRR , abs/1308.3432. Chen, B.; Shu, C.; Shareghi, E.; Collier, N.; Narasimhan, K.; and Yao, S. 2023. FireAct: Toward Language Agent Fine-tuning. CoRR , abs/2310.05915. Chen, Z.; Badrinarayanan, V.; Lee, C.-Y.; and Rabinovich, A. 2018. GradNorm: Gradient Normalization for Adaptive Loss Balancing in Deep Multitask Networks. In International Conference on Machine Learning .Devin, C.; Gupta, A.; Darrell, T.; Abbeel, P.; and Levine, S. 2017. Learning modular neural network policies for multi-task and multi-robot transfer. In International Conference on Robotics and Automation .Du, N.; Huang, Y.; Dai, A. M.; Tong, S.; Lepikhin, D.; Xu, Y.; Krikun, M.; Zhou, Y.; Yu, A. W.; Firat, O.; et al. 2022. GLaM: Efficient Scaling of Language Models with Mixture-of-Experts. In International Conference on Machine Learn-ing .Fedus, W.; Zoph, B.; and Shazeer, N. 2022. Switch trans-formers: Scaling to trillion parameter models with simple and efficient sparsity. Journal of Machine Learning Research ,23(120): 1–39. Feng, L.; Xue, Z.; Liu, T.; and An, B. 2025. Group-in-Group Policy Optimization for LLM Agent Training. In Advances in Neural Information Processing Systems .Goyal, A.; Lamb, A.; Hoffmann, J.; Sodhani, S.; Levine, S.; Bengio, Y.; and Sch ¨olkopf, B. 2021. Recurrent indepen-dent mechanisms. In International Conference on Learning Representations .Hu, E. J.; Shen, Y.; Wallis, P.; Allen-Zhu, Z.; Li, Y.; Wang, S.; Wang, L.; and Chen, W. 2022. LoRA: Low-rank adaptation of large language models. In International Conference on Learning Representations .Jiang, A. Q.; Sablayrolles, A.; Roux, A.; Mensch, A.; Savary, B.; Bamford, C.; Chaplot, D. S.; de Las Casas, D.; Hanna, E. B.; Bressand, F.; Lengyel, G.; Bour, G.; Lample, G.; Lavaud, L. R.; Saulnier, L.; Lachaux, M.; Stock, P.; Sub-ramanian, S.; Yang, S.; Antoniak, S.; Scao, T. L.; Gervet, T.; Lavril, T.; Wang, T.; Lacroix, T.; and Sayed, W. E. 2024. Mixtral of Experts. CoRR , abs/2401.04088. Lepikhin, D.; Lee, H.; Xu, Y.; Chen, D.; Firat, O.; Huang, Y.; Krikun, M.; Shazeer, N.; and Chen, Z. 2021. GShard: Scaling Giant Models with Conditional Computation and Au-tomatic Sharding. In International Conference on Learning Representations .Li, Y.; Yang, Z.; Huang, Y.; Liu, X.; and Qi, G. 2025. C 3TG: Conflict-aware, Composite, and Collaborative Controlled Text Generation. arXiv preprint arXiv:2511.09292 .Li, Y.; Zhang, S.; Wu, R.; Huang, X.; Chen, Y.; Xu, W.; Qi, G.; and Min, D. 2024. MATEval: a multi-agent discussion framework for advancing open-ended text evaluation. In 
+
+International Conference on Database Systems for Advanced Applications , 415–426. Springer. Liu, B.; Liu, X.; Jin, X.; Stone, P.; and Liu, Q. 2021. Conflict-Averse Gradient Descent for Multi-task learning. In Advances in Neural Information Processing Systems .Ouyang, L.; Wu, J.; Jiang, X.; Almeida, D.; Wainwright, C.; Mishkin, P.; Zhang, C.; Agarwal, S.; Slama, K.; Ray, A.; et al. 2022. Training language models to follow instructions with human feedback. In Advances in Neural Information Processing Systems .Schick, T.; Dwivedi-Yu, J.; Dess `ı, R.; Raileanu, R.; Lomeli, M.; Hambro, E.; Zettlemoyer, L.; Cancedda, N.; and Scialom, T. 2023. Toolformer: Language models can teach themselves to use tools. In Advances in Neural Information Processing Systems .Schulman, J.; Moritz, P.; Levine, S.; Jordan, M. I.; and Abbeel, P. 2016. High-Dimensional Continuous Control Using Generalized Advantage Estimation. In Bengio, Y.; and LeCun, Y., eds., 4th International Conference on Learning Representations .Schulman, J.; Wolski, F.; Dhariwal, P.; Radford, A.; and Klimov, O. 2017. Proximal policy optimization algorithms. 
+
+arXiv preprint arXiv:1707.06347 .Shao, Z.; Wang, P.; Zhu, Q.; Xu, R.; Song, J.; Zhang, M.; Li, Y.; Wu, Y.; and Guo, D. 2024. DeepSeekMath: Pushing the limits of mathematical reasoning in open language models. 
+
+arXiv preprint arXiv:2402.03300 .Shazeer, N.; Mirhoseini, A.; Maziarz, K.; Davis, A.; Le, Q. V.; Hinton, G. E.; and Dean, J. 2017. Outrageously Large Neural Networks: The Sparsely-Gated Mixture-of-Experts Layer. In 
+
+5th International Conference on Learning Representations .Shinn, N.; Cassano, F.; Gopinath, A.; Narasimhan, K.; and Yao, S. 2023. Reflexion: Language agents with verbal re-inforcement learning. In Advances in Neural Information Processing Systems .Shridhar, M.; Yuan, X.; C ˆot ´e, M.-A.; Bisk, Y.; Trischler, A.; and Hausknecht, M. 2021. ALFWorld: Aligning Text and Embodied Environments for Interactive Learning. In 
+
+International Conference on Learning Representations .Sutton, R. S.; Precup, D.; and Singh, S. 1999. Between MDPs and Semi-MDPs: A Framework for Temporal Abstraction in Reinforcement Learning. Artif. Intell. , 112(1-2): 181–211. Williams, R. J. 1992. Simple statistical gradient-following algorithms for connectionist reinforcement learning. Machine Learning , 8(3): 229–256. Yang, A.; Yang, B.; Zhang, B.; Hui, B.; Zheng, B.; Yu, B.; Li, C.; Liu, D.; Huang, F.; Wei, H.; Lin, H.; Yang, J.; Tu, J.; Zhang, J.; Yang, J.; Yang, J.; Zhou, J.; Lin, J.; Dang, K.; Lu, K.; Bao, K.; Yang, K.; Yu, L.; Li, M.; Xue, M.; Zhang, P.; Zhu, Q.; Men, R.; Lin, R.; Li, T.; Xia, T.; Ren, X.; Ren, X.; Fan, Y.; Su, Y.; Zhang, Y.; Wan, Y.; Liu, Y.; Cui, Z.; Zhang, Z.; and Qiu, Z. 2024. Qwen2.5 Technical Report. CoRR ,abs/2412.15115. Yang, S.; Feng, Y.; Liu, Y.; Zhang, J.; and Qin, J. 2025. MoniTor: Exploiting Large Language Models with Instruc-tion for Online Video Anomaly Detection. arXiv preprint arXiv:2510.21449 .Yao, S.; Chen, H.; Yang, J.; and Narasimhan, K. 2022. Web-Shop: Towards Scalable Real-World Web Interaction with Grounded Language Agents. In Koyejo, S.; Mohamed, S.; Agarwal, A.; Belgrave, D.; Cho, K.; and Oh, A., eds., Ad-vances in Neural Information Processing Systems 35: Annual Conference .Yao, S.; Yu, D.; Zhao, J.; Shafran, I.; Griffiths, T.; Cao, Y.; and Narasimhan, K. 2023a. Tree of thoughts: Deliberate problem solving with large language models. In Advances in Neural Information Processing Systems .Yao, S.; Zhao, J.; Yu, D.; Du, N.; Shafran, I.; Narasimhan, K. R.; and Cao, Y. 2023b. ReAct: Synergizing Reasoning and Acting in Language Models. In The Eleventh International Conference on Learning Representations .Yu, T.; Kumar, S.; Gupta, A.; Levine, S.; Hausman, K.; and Finn, C. 2020. Gradient Surgery for Multi-Task Learning. In 
+
+Advances in Neural Information Processing Systems .Yuan, J.; Zhao, W.; Bai, Z.; et al. 2025. Graph-Enhanced Policy Optimization in LLM Agent Training. arXiv preprint arXiv:2510.26270 .Zeng, A.; Liu, M.; Lu, R.; Wang, B.; Liu, X.; Dong, Y.; and Tang, J. 2024. AgentTuning: Enabling Generalized Agent Abilities for LLMs. In Findings of the Association for Com-putational Linguistics, ACL 2024, Bangkok, Thailand and virtual meeting, August 11-16, 2024 , volume ACL 2024 of 
+
+Findings of ACL , 3053–3077. Association for Computational Linguistics. Zoph, B.; Bello, I.; Kumar, S.; Du, N.; Huang, Y.; Dean, J.; Shazeer, N.; and Fedus, W. 2022. ST-MoE: Designing Stable and Transferable Sparse Expert Models. arXiv preprint arXiv:2202.08906 .Supplementary Material 
+
+This supplementary material provides additional technical details and experimental results supporting the main paper. Appendix establishes the gradient isolation property that enables PA-MoE to eliminate cross-phase interference. Appendix details the token-level MoE baseline implementation and metric conversion. Appendix provides empirical evidence for simplicity bias through gradient conflict and entropy mismatch analyses. Appendix describes the router forward pass, gradient flow, and temperature scheduling. Appendix presents comprehensive ablation studies on regularization terms, gradient surgery methods, expert counts, and router architectures. Appendix reports expert specialization statistics and WebShop task breakdown. Appendix analyzes failure cases to identify systematic issues. Appendix examines task-specific performance variations across algorithm-benchmark pairs. 
+
+## Gradient Isolation Property 
+
+We provide the mathematical foundation for gradient isolation in PA-MoE (Yang et al. 2025), (Li et al. 2024) and (Li et al. 2025) . Consider a system with K experts, each parameterized by disjoint LoRA parameters {θk = ( Bk, A k)}Kk=1 , while the base model parameters θbase remain frozen during training. For any trajectory τ = ( s0, a 0, r 0, . . . , s T , a T , r T ), the router πr assigns each timestep t to exactly one expert via k∗ =arg max k pkt . This assignment partitions the trajectory into disjoint phases {ϕk}Kk=1 where ϕk = {t : k∗ 
+
+> t
+
+= k} contains all timesteps handled by expert k.The loss function for expert k on trajectory τ aggregates only over its assigned timesteps: Lk(τ ) = P 
+
+> t∈ϕk
+
+ℓt(θk), where ℓt
+
+denotes the per-step loss. Since the parameter sets θi and θj are disjoint for i̸ = j, we have ∂Lj /∂θ i = 0 for all i̸ = j. This gradient isolation property is the key mechanism by which PA-MoE eliminates cross-phase interference during training. 
+
+Note on Diversity Loss: The diversity loss Ldiv is computed separately from the main RL objective using cached representa-tions (see Section 3.5 of main paper). During diversity loss computation, all experts receive gradients but the router is detached. This periodic computation (every 100 steps) does not violate the gradient isolation principle for the RL objective, which governs the primary training dynamics. 
+
+## Token-level MoE Baseline 
+
+We provide implementation details for the token-level MoE baseline to ensure fair comparison. 
+
+Implementation 
+
+The token-level baseline routes at the action generation stage: during autoregressive decoding, each output token is routed independently to one of K = 4 experts via k∗ 
+
+> i
+
+= arg max k softmax (MLP (hi)) k, where hi is the hidden state at decoding position i. This mirrors standard MoE implementations in Switch Transformer and Mixtral. Observation tokens are processed by the frozen base model without routing. Both methods use identical expert architectures (LoRA adapters with rank 32 on Q/V projections) and the same total parameter budget. The only difference is routing granularity. 
+
+Switch Metric Conversion 
+
+We report all switch counts at the environment step level for comparability across methods. Token-level MoE exhibits approxi-mately 1,200 routing changes per episode at token granularity. Converting to step-level by counting environment steps with at least one intra-action expert change yields 45 step-level switches. Our phase-level method exhibits 8.4 switches per episode. The conversion formula is: Switches step =
+
+> T
+
+X
+
+> t=1
+
+1 ∃i, j ∈ tokens (at) : k∗
+
+> i
+
+̸ = k∗
+
+> j
+
+ , (9) where tokens (at) denotes the set of token positions in action at.
+
+Why Token-level Routing Underperforms 
+
+Token-level routing achieves 85.7% success compared to 93.8% for phase-level routing. The performance gap arises from fragmentation: with average action length of 8.3 tokens and independent per-token routing, experts change frequently within a single action. During a “heat potato” action, different tokens (“heat”, “potato”, “with”, “microwave”) may route to different experts, disrupting semantic coherence. We also tested top-2 routing, which achieved a success rate of 86.9%, slightly better than top-1 but still significantly below phase-level routing. This suggests that the core issue is granularity mismatch rather than routing sparsity. Empirical Evidence for Simplicity Bias 
+
+This section details the methodology behind Figure 1 in the main paper and provides additional analysis of the simplicity bias phenomenon. 
+
+Parameter Occupancy Metric. The “Parameter %” reported in Figure 1(a) of the main paper quantifies how often each task category dominates the gradient signal during training. We define the parameter occupancy for task category c as: Occupancy (c) = 1
+
+N
+
+> N
+
+X
+
+> i=1
+
+1
+
+"
+
+L(i)
+
+> c
+
+P 
+
+> c′
+
+L(i)
+
+> c′
+
+> 0.5
+
+#
+
+, (10) where N is the total number of training batches and L(i) 
+
+> c
+
+is the loss contribution from task category c in batch i. Intuitively, this metric measures the fraction of training updates where a task category contributes the majority of the batch loss, and thus dominates the gradient direction. Higher occupancy means the model’s parameters are more frequently updated to fit that category. 
+
+Simplicity Bias in Figure 1(a). Using this metric, we observe that simple tasks (pick-and-place) achieve 75% parameter occupancy while complex tasks (heat/cool/clean) receive only 5%, despite complex tasks comprising a substantial portion of the task distribution. This imbalance demonstrates simplicity bias: the optimization process is dominated by easily-learned behaviors, starving complex behaviors of gradient signal and resulting in the observed performance gap (94% vs. 65%). 
+
+Gradient Conflict Analysis 
+
+Figure 4 visualizes gradient conflicts that arise when a single policy must learn heterogeneous behavioral phases. 1.0 0.5 0.0 0.5 1.0              
+
+> Gradient Dimension 1
+> 1.00
+> 0.75
+> 0.50
+> 0.25
+> 0.00
+> 0.25
+> 0.50
+> 0.75
+> 1.00
+> Gradient Dimension 2  Explore
+> Interact
+> Navigate
+> Recover
+> (a) Gradient Direction Conflicts
+> 020 40 60 80 100 120 140
+> Training Epoch
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> 0.8
+> Gradient Conflict Score
+> (b) Conflict Evolution During Training
+> Single Policy
+> PA-MoE
+> 88 90 92 94 96 98 100
+> Simple Task Performance (%)
+> 60
+> 65
+> 70
+> 75
+> 80
+> 85
+> 90
+> 95
+> 100
+> 105
+> Complex Task Performance (%)
+> GiGPO
+> PA-MoE
+> (c) Pareto Analysis
+> Pareto Frontier
+> Single Policy
+> PA-MoE
+
+Figure 4: Gradient conflict analysis. (a) Phase-specific gradients projected onto top-2 principal components show pairwise conflicts: Explore and Interact gradients form angles exceeding 90°, and no two phases produce aligned gradients. (b) Gradient conflict score throughout training, defined as the average negative cosine similarity between phase gradients. Single policy maintains high conflict ( > 0.4) while PA-MoE reduces conflict to near-zero by epoch 50. (c) Pareto analysis of simple vs. complex task performance. PA-MoE achieves Pareto optimality while GiGPO baseline suffers degraded complex task performance. Panel (a) reveals that gradient directions from different behavioral phases point in conflicting directions when projected onto principal components. The Explore phase gradient and Interact phase gradient form an angle greater than 90°, indicating that updates beneficial for exploration actively harm manipulation performance. This opposition is not limited to these two phases: Navigate and Recover also produce conflicting gradients, creating a four-way tension where every gradient update represents a compromise. Panel (b) tracks the gradient conflict score throughout training, computed as: Conflict (t) = 1
+
+|P| 2 − |P| 
+
+X
+
+> i̸=j
+
+max(0 , − cos( ∇θ Li, ∇θ Lj )) ,
+
+The single policy baseline exhibits persistent high conflict in the 0.4–0.8 range that settles around 0.45 after convergence, indicating that the monolithic architecture cannot resolve the fundamental tension between phases. PA-MoE achieves near-zero conflict scores by epoch 50 through parameter isolation. Panel (c) examines the trade-off between simple task performance (single-phase tasks) and complex task performance (multi-phase tasks). The GiGPO baseline achieves 96% on simple tasks but only 68% on complex tasks, falling well below the Pareto frontier. PA-MoE achieves 97% and 98% respectively, eliminating the trade-off through architectural separation. Explore Interact Navigate Recover                   
+
+> 0.0
+> 0.5
+> 1.0
+> 1.5
+> 2.0
+> 2.5
+> 3.0
+> 3.5
+> 4.0
+> Policy Entropy (bits)
+> (a) Policy Entropy Across Phases
+> Optimal
+> Single Policy
+> PA-MoE
+> 0.0 2.5 5.0 7.5 10.0 12.5 15.0 17.5
+> Action ID
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> Probability
+> (b) Action Distribution Modality
+> Explore (H=3.5)
+> Interact (H=0.5)
+> Single (H=2.3)
+> 010 20 30 40 50
+> Timestep in Episode
+> 0.0
+> 0.5
+> 1.0
+> 1.5
+> 2.0
+> 2.5
+> 3.0
+> 3.5
+> 4.0
+> Policy Entropy (bits)
+> Explore Interact Navigate Recover
+> (c) Entropy Evolution in Episode
+> Optimal
+> Single Policy
+> Explore Interact Navigate Recover
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> 1.2
+> 1.4
+> 1.6
+> Entropy Deviation
+> (d) Entropy Mismatch by Phase
+> Single Policy Error
+> PA-MoE Error
+
+Figure 5: Entropy mismatch analysis. All entropy values reported in bits (log base 2). (a) Policy entropy across phases: optimal phase-specific entropy (blue), single policy entropy (coral), and PA-MoE entropy (green). (b) Action distribution modality for exploration (diffuse, H=3 .5 bits), interaction (peaked, H=0 .5 bits), and single policy (intermediate, H=2 .3 bits). (c) Entropy evolution over episode timesteps. (d) Absolute entropy deviation from optimal by phase. 
+
+Entropy Mismatch Analysis 
+
+Figure 5 examines the entropy mismatch problem when a single policy must handle phases with fundamentally different entropy requirements. Panel (a) compares policy entropy across four behavioral phases. The optimal entropy profile varies substantially: Explore requires high entropy (approximately 3.5 bits) for broad action sampling, Interact requires low entropy (approximately 0.5 bits) for precise manipulation, Navigate requires moderate entropy (approximately 1.5 bits), and Recover requires moderate-high entropy (approximately 2.0 bits). The single policy converges to an intermediate level around 2.3 bits across all phases, inadequately serving each phase. PA-MoE closely matches the phase-specific optimum through expert specialization. Panel (b) visualizes representative action probability profiles. During exploration, the policy must remain diffuse over plausible actions (high entropy, H ≈ 3.5 bits), whereas interaction requires a sharply peaked distribution to execute precise manipulations (low entropy, H ≈ 0.5 bits). A single shared policy produces an intermediate distribution ( H ≈ 2.3 bits) that is simultaneously too concentrated for effective exploration and too diffuse for reliable manipulation. Panel (c) tracks entropy evolution over episode timesteps. The optimal trajectory exhibits sharp entropy transitions at phase boundaries, dropping from high entropy during exploration to low entropy during interaction. The single policy remains comparatively flat around 2.3 bits throughout the episode, indicating an inability to adapt entropy to phase-specific requirements. PA-MoE tracks the phase transitions closely by routing to specialized experts. Panel (d) quantifies entropy deviation as |Hpolicy − Hoptimal | for each phase. The single policy shows large deviations across all phases, with the largest gap during Interact (approximately 1.6 bits), where excessive entropy causes manipulation failures. PA-MoE achieves near-zero deviation (below 0.1 bits) across all phases. The gradient conflict and entropy mismatch analyses are complementary: gradient conflicts arise precisely because Explore phase gradients push toward higher entropy while Interact phase gradients push toward lower entropy. When averaged in shared parameters, the resulting update achieves an intermediate entropy level that serves neither phase well. 
+
+## Router Implementation Details 
+
+Algorithm 1: Phase-Aware Router Forward Pass 
+
+Require: Observation ot, goal g, history ht, temperature τ 
+
+> 1:
+
+oemb ← MeanPool (LLM hidden (ot)) {Enc( ot)} 
+
+> 2:
+
+gemb ← MeanPool (LLM hidden (g)) {Enc( g)} 
+
+> 3:
+
+oalign  
+
+> t
+
+← CrossAttn (Q=oemb , K =gemb , V =gemb ) 
+
+> 4:
+
+henc  
+
+> t
+
+← LSTM (Embed (ht))  
+
+> 5:
+
+pt ← softmax (MLP ([ oalign  
+
+> t
+
+; henc  
+
+> t
+
+]) /τ ) 
+
+> 6:
+
+k∗ ← arg max k pkt 
+
+> 7:
+
+return k∗, pt
+
+Gradient Flow. At each training step, gradients flow as follows: the router outputs distribution pt over experts, expert 
+
+k∗ = arg max k pkt is selected and generates action at, the selected expert receives the RL gradient weighted by group-based advantage Agroup  
+
+> t
+
+, and the straight-through estimator propagates gradients through the argmax to update router parameters. This ensures that experts specialize on assigned trajectory segments with no gradient interference between experts. 
+
+Temperature Schedule. The router temperature τ follows a linear annealing schedule: τ (t) = max( τf , τ 0−(τ0−τf )·t/T anneal ),with τ0 = 2 .0, τf = 0 .5, and Tanneal = 3000 steps. High initial temperature encourages exploration of routing patterns, while low final temperature produces decisive assignments. 
+
+Switching Penalty Gradient. For the switching penalty Lswitch , the forward pass computes the hard indicator 1[zt̸ = zt+1 ].The backward pass uses a differentiable surrogate: 
+
+∂Lswitch 
+
+∂p t
+
+≈ − λs
+
+T − 1 · pt+1 , (11) derived from the soft approximation 1 − P 
+
+> k
+
+pkt · pkt+1 . This encourages the router to increase probability mass on the same expert as the subsequent step. 
+
+## Ablation Studies 
+
+Regularization Terms 
+
+Table 6 examines the contribution of diversity and balance losses. Removing Ldiv causes expert collapse where all experts converge to identical policies, matching the K = 0 single-adapter performance. Removing Lbal produces router collapse where nearly all decisions route to a single expert. Both regularizers are necessary. Table 6: Impact of regularization terms on ALFWorld. Mean ± std over 3 seeds. Configuration Success(%) ∆
+
+Full (both losses) 93.8 ±2.4 –w/o Ldiv 88.3 ±3.1 −5.5
+
+w/o Lbal 87.5 ±2.8 −6.3
+
+w/o both 86.5 ±3.5 −7.3
+
+Gradient Conflict Mitigation Methods 
+
+We compare against gradient-surgery techniques adapted to the agentic RL setting. We partition training steps into behavioral phases and treat each as a separate objective, computing gradients independently and combining them using PCGrad, GradNorm, or CAGrad before applying updates. Gradient surgery methods provide modest improvements (+0.7 to +1.8) while PA-MoE achieves substantially larger gains (+7.7). The difference reflects architectural versus optimization-level solutions: gradient surgery addresses conflicts locally at each update, whereas PA-MoE prevents heterogeneous phases from ever competing for shared parameters. Table 7: Comparison with gradient surgery methods. Mean ± std over 3 seeds. Method Success(%) ∆
+
+GiGPO (baseline) 86.1 ±4.7 –+ PCGrad 87.3 ±3.9 +1.2 + GradNorm 86.8 ±4.2 +0.7 + CAGrad 87.9 ±3.6 +1.8 
+
+GiGPO + PA-MoE 93.8 ±2.4 +7.7 
+
+Expert Count Analysis 
+
+Table 8 presents results across all expert counts tested with standard deviations. Table 8: Ablation on number of experts ( K). Mean ± std over 3 seeds. We report the average success rate (%) for each subtask as well as the overall result. 
+
+K Pick Look Heat Cool Clean Pick2 All 0 94.3 ±1.8 62.5 ±5.1 94.4 ±3.2 89.5 ±4.1 83.3 ±4.8 87.5 ±3.9 88.3 ±2.1
+
+2 97.1 ±1.2 62.5 ±4.8 100 ±0.0 73.7 ±5.6 100 ±0.0 91.7 ±3.4 91.4 ±1.9
+
+3 95.7 ±1.5 83.3 ±5.2 97.9 ±2.1 85.1 ±4.3 94.6 ±3.1 87.5 ±4.2 91.7 ±2.0
+
+4 97.1 ±1.4 75.0 ±3.2 100 ±0.0 89.5 ±4.4 95.8 ±6.4 91.7 ±4.1 93.8 ±2.4
+
+5 94.8 ±1.6 70.8 ±4.1 98.2 ±1.8 87.3 ±4.8 93.4 ±5.2 89.6 ±3.8 91.2 ±2.2
+
+6 91.4 ±2.1 62.5 ±5.4 100 ±0.0 84.2 ±5.1 91.7 ±4.9 70.8 ±5.8 85.9 ±2.8
+
+Performance improves from K = 0 through K = 4 , then degrades for K ≥ 5. The K = 2 configuration improves Heat and Clean to 100% but leaves Look-at-object unchanged at 62.5% and degrades Cool from 89.5% to 73.7%. This pattern reflects ALFWorld’s four distinct behavioral modes: with only two experts, the model must merge incompatible modes. Router confidence analysis confirms this interpretation: K = 2 shows 31% of decisions with confidence below 0.6, compared to only 12% for K = 4 .The K = 6 configuration drops to 85.9% due to three failure modes: data fragmentation (each expert sees fewer training examples), router instability (18% of episodes exhibit thrashing with 3+ switches within 5 consecutive steps), and imbalanced utilization (two experts handle 47% of decisions while one handles only 8%). These findings indicate K = 4 provides the appropriate balance for ALFWorld’s complexity. 
+
+Router Architecture 
+
+Table 9: Router architecture comparison Architecture Heat(%) Cool(%) All(%) MLP only 83.3 68.4 84.2 GRU + CrossAttn 97.9 87.4 92.8          
+
+> LSTM + CrossAttn 100 89.5 93.8
+> Transformer + CrossAttn 98.6 88.1 93.2 Bi-LSTM + CrossAttn 99.3 89.2 93.7
+
+The MLP-only router achieves only 84.2%, confirming that temporal context is essential for phase detection. LSTM out-performs GRU (93.8% vs 92.8%) due to superior long-term memory retention across ALFWorld’s 30–50 step trajectories. Transformer-based routers achieve comparable performance (93.2%) but require more parameters. Bidirectional LSTM provides no improvement since routing decisions must be made online. 
+
+## Additional Results 
+
+Expert Specialization Statistics 
+
+Activation percentages indicate the fraction of phase-specific actions handled by each expert, compared to 25% expected under random assignment. Expert 2 handles 81.7% of manipulation actions with low entropy ( H=0 .5 bits), consistent with the need Table 10: Emergent expert specialization. Entropy in bits. Expert Phase Activation Entropy (bits) Expert 1 Exploration 73.2% 3.5 Expert 2 Manipulation 81.7% 0.5 Expert 3 Navigation 64.1% 1.5 Expert 4 Recovery 71.3% 2.0 for precise, low-variance action selection during interaction. In contrast, Expert 1 handles 73.2% of exploration actions with high entropy ( H=3 .5 bits), supporting broad action sampling during search. Experts 3 and 4 occupy intermediate regimes for navigation ( H=1 .5 bits) and recovery ( H=2 .0 bits), respectively. These phase-aligned entropy profiles match the entropy mismatch analysis in Appendix (Fig. 5) and emerge without explicit phase supervision. 
+
+WebShop Task Breakdown 
+
+Table 11: WebShop performance by subtask type Subtask Freq. Baseline PA-MoE ∆
+
+Simple search 32% 84.3% 91.2% +6.9% Multi-attribute 28% 62.1% 78.6% +16.5% Option selection 25% 71.4% 84.9% +13.5% Price comparison 15% 49.2% 73.8% +24.6% Overall 100% 67.4% 82.3% +14.9% PA-MoE shows the largest gains on complex subtasks. Simple searches improve modestly (+6.9) since the baseline already performs reasonably. Price comparison tasks, which require navigating multiple pages while tracking information, improve dramatically (+24.6) because PA-MoE’s expert separation provides dedicated capacity for navigation, extraction, and comparison behaviors. 
+
+## Failure Analysis 
+
+We analyzed 100 randomly sampled failures to identify systematic issues. Router oscillation accounts for 23% of failures, where rapid expert switching within a coherent phase disrupts execution. Incorrect expert selection causes 18% of failures due to ambiguous observations leading to phase misidentification. Expert under-training contributes 15% of failures, concentrated on rare task types. A representative case: for “Put a clean mug in the coffee machine,” the agent explored successfully (steps 1–8, Expert 1) and began cleaning (steps 9–15, Expert 2). At step 16, the router prematurely switched to Expert 3 based on a subtle observation change, causing navigation away from the sink before cleaning completed. Steps 17–30 showed oscillation between Experts 1 and 3, ultimately failing at step 31. The root cause is that the router lacks explicit task-completion signals and relies on observation features that can change before manipulation sequences finish. Potential mitigations include adding task-state features to router input, learning a termination predictor, or increasing the consistency regularizer weight. 
+
+## Task-Specific Performance Analysis 
+
+PA-MoE achieves consistent aggregate improvements across all algorithm-benchmark pairs. Here we examine task-specific variations to better understand the method’s characteristics under different conditions. We identify three primary causes for task-specific regressions through trajectory analysis. 
+
+(1) Critic-Router Incompatibility (PPO-specific). PPO uses a shared critic network to estimate state values across all behavioral phases. When combined with PA-MoE, this creates a fundamental tension: the critic must learn a single value estimate V (s) for states that yield different expected returns depending on which expert is selected. Formally, the optimal value under expert k is 
+
+V k(s) = Eπk [P 
+
+> t
+
+γtrt|s0 = s], but the shared critic converges to an averaged estimate that is suboptimal for any individual expert. This mismatch manifests most severely on multi-phase tasks (Clean, Heat, Cool, Pick2) where expert selection significantly affects trajectory outcomes. For single-phase tasks like Pick, the critic’s averaged estimate remains reasonable because all experts Table 12: Task-algorithm combinations with performance variations Algorithm Task Baseline PA-MoE ∆
+
+PPO Clean 57.1% 50.0% −7.1%PPO Cool 46.4% 36.8% −9.6%PPO Pick2 47.4% 37.5% −9.9%RLOO Pick 88.3% 74.3% −14 .0%GRPO Cool 59.7% 50.0% −9.7%GRPO Pick2 53.5% 45.8% −7.7%GiGPO (7B) Pick 97.7% 87.5% −10 .2%produce similar trajectories. Despite this, PPO+PA-MoE achieves higher aggregate performance (56.2% vs. 54.4%) because the benefits of phase-aware routing on complex tasks outweigh the critic incompatibility on simpler ones. 
+
+(2) Expert Data Fragmentation (RLOO/GRPO-specific). RLOO and GRPO compute advantages through within-batch comparisons: RLOO uses leave-one-out baselines, while GRPO uses group-relative rankings. PA-MoE’s phase-level routing fragments training samples across K = 4 experts, reducing the effective batch size for each expert’s advantage computation. Consider Pick2 tasks, which comprise only 14% of training data. With phase-level routing, manipulation steps are handled by Expert 2, which receives approximately 14% × 35% ≈ 4.9% of batch samples for Pick2-specific updates. This 4 × reduction in effective samples degrades advantage estimation quality for rare task-phase combinations. The RLOO regression on Pick (−14 .0% ) occurs because Pick’s high frequency (23% of data) makes it sensitive to the reduced within-expert batch diversity resulting fewer distinct Pick trajectories per expert to lead to higher-variance baseline estimates. 
+
+(3) Routing Overhead in High-Performance Regimes. The GiGPO-7B Pick regression (97.7% → 87.5%) occurs when baseline performance approaches ceiling. In such cases, the task’s behavioral phases are already well-captured within shared parameters, and PA-MoE’s routing mechanism introduces failure modes without commensurate benefit. Trajectory analysis reveals two routing-induced error patterns: (i) misrouting (6.2% of failures), where correct actions are generated but suboptimal expert selection leads to inconsistent execution; and (ii) transition errors (3.8% of failures), where context is partially lost at expert switch boundaries. These errors are negligible when baseline performance is low but become the dominant failure mode when the baseline already solves 97.7% of cases. This is expected behavior: PA-MoE is designed to address simplicity bias, which is less pronounced when tasks are already well-solved by the base model. 
+
+Algorithm Compatibility. These observations highlight that PA-MoE’s benefits are most pronounced when paired with algorithms that do not introduce conflicting architectural assumptions. GiGPO demonstrates the strongest compatibility, achieving consistent improvements across nearly all task types. This compatibility arises because GiGPO’s group-based advantage estimation operates at the trajectory level rather than requiring dense within-batch comparisons, naturally accommodating expert-partitioned updates without sample fragmentation. 
+
+Aggregate Robustness. Despite task-specific regressions, PA-MoE improves aggregate performance for every algorithm tested (PPO: +1.8%, RLOO: +4.5%, GRPO: +1.4%, GiGPO: +7.7%). The improvements on complex multi-phase tasks consistently exceed the regressions on edge cases, validating PA-MoE’s design goal of addressing simplicity bias in heterogeneous behavioral settings.

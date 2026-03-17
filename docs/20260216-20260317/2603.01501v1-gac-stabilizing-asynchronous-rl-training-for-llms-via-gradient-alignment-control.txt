@@ -1,0 +1,1481 @@
+Title: GAC: Stabilizing Asynchronous RL Training for LLMs via Gradient Alignment Control
+
+URL Source: https://arxiv.org/pdf/2603.01501v1
+
+Published Time: Tue, 03 Mar 2026 03:02:50 GMT
+
+Number of Pages: 20
+
+Markdown Content:
+# GAC: Stabilizing Asynchronous RL Training for LLMs via Gradient Alignment Control 
+
+Haofeng Xu 1 2 Junwei Su 1 † Yukun Tian 3 2 Lansong Diao 2 Zhengping Qian 2 Chuan Wu 1 †
+
+## Abstract 
+
+Asynchronous execution is essential for scaling reinforcement learning (RL) to modern large-model workloads, including large language mod-els and AI agents, but it can fundamentally alter RL optimization behavior. While prior work on asynchronous RL focuses on training through-put and distributional correction, we show that na ¨ıvely applying asynchrony to policy-gradient updates can induce qualitatively different train-ing dynamics and lead to severe training instabil-ity. Through systematic empirical and theoretical analysis, we identify a key signature of this insta-bility: asynchronous training exhibits persistently high cosine similarity between consecutive policy gradients, in contrast to the near-orthogonal up-dates observed under synchronized training. This 
+
+stale-aligned gradient effect amplifies correlated updates and increases the risk of overshooting and divergence. Motivated by this observation, we propose G RADIENT ALIGNMENT CONTROL 
+
+(GAC), a simple dynamics-aware stabilization method that regulates asynchronous RL progress along stale-aligned directions via gradient projec-tion. We establish convergence guarantees under bounded staleness and demonstrate empirically that GAC recovers stable, on-policy training dy-namics and matches synchronized baselines even at high staleness. 
+
+## 1. Introduction 
+
+Reinforcement learning (RL) provides a principled frame-work for optimizing large language models (LLMs) as decision-makers, where text generation is modeled as a se-quence of actions and learning is driven by feedback on com-
+
+> †
+
+Corresponding authors. 1Department of Computer Science, The University of Hong Kong, Hong Kong SAR, China 2Alibaba Group, China 3Southeast University, Nanjing, China. Correspon-dence to: Junwei Su <junweisu.cs@gmail.com >, Chuan Wu 
+
+<cwu@cs.hku.hk >.
+
+Preprint. March 3, 2026. 
+
+plete responses rather than token-level supervision (Zhang et al., 2025; Wang et al., 2025a). Unlike supervised pre-training, RL enables LLMs to learn from delayed, outcome-based signals—such as human preferences, task success, or correctness—allowing models to improve behaviors that are difficult or impossible to specify with static annotations. In modern alignment pipelines, policy-gradient methods such as Group Relative Policy Optimization (GRPO) (Shao et al., 2024) train an LLM by sampling multiple candidate responses to the same prompt and reinforcing those that achieve higher relative reward within the group, thereby directly optimizing response-level quality and reasoning performance. This RL-based fine-tuning paradigm has be-come central to aligning LLMs with human intent, improv-ing mathematical and logical reasoning, and adapting pre-trained models to complex, open-ended tasks where explicit supervision is unavailable or insufficient (Feng et al., 2025). Despite this algorithmic flexibility, the scalability of RL for LLMs is increasingly constrained by system-level bot-tlenecks rather than by limitations of the learning algo-rithms themselves (Sheng et al., 2024; Zhong et al., 2025). A typical RL training pipeline consists of several hetero-geneous stages—rollout generation via model inference, reward and advantage computation, and policy optimiza-tion—that operate on different time scales and often rely on distinct hardware resources. In LLM settings, rollout generation is frequently dominated by inference latency and sampling throughput, whereas policy optimization is compute-intensive and highly optimized on accelerators. As model sizes and deployment scales grow, enforcing strict synchronization across these stages leads to significant un-derutilization of resources (Fu et al., 2025; Wang et al., 2025b). Fully synchronous policy-gradient methods such as GRPO execute these stages in lockstep, requiring all work-ers to complete rollout collection and preprocessing (e.g., reward computation) before any policy update can proceed. In large-scale distributed systems, this design exacerbates straggler effects caused by variable rollout lengths, hetero-geneous hardware, and resource contention, resulting in substantial idle time and poor wall-clock efficiency (Sheng et al., 2025). To alleviate these issues, modern RL systems increasingly 1
+
+> arXiv:2603.01501v1 [cs.LG] 2 Mar 2026 GAC: Asynchronous RL
+
+adopt asynchronous training, in which rollout generation and policy optimization proceed concurrently. While this relaxation of synchronization is essential for scaling RL to large models and high-throughput deployments, it also fundamentally alters the learning dynamics of policy opti-mization—introducing new sources of bias and instability that must be carefully understood and controlled. 
+
+Limitations and Gaps in Existing Work. There has been growing interest in asynchronous RL as a means of ad-dressing the scalability challenges of modern large-scale systems. However, existing efforts leave a critical gap in understanding and controlling the learning dynamics in-duced by asynchrony. Broadly, prior work falls into two categories. The first line of research is systems-oriented (Fu et al., 2025; Sheng et al., 2025; Lu et al., 2025): it focuses on exploiting the engineering benefits of asynchrony—such as mitigating stragglers, improving hardware utilization, and maximizing throughput under asynchronous execution. These approaches typically treat the learning algorithm as a black box and devote limited attention to how stale roll-outs and delayed updates fundamentally alter the underlying training process. The second line is algorithm-oriented (Xi et al., 2025; Zheng et al., 2025; Li et al., 2026): it develops asynchronous RL methods from a largely system-agnostic perspective. They primarily emphasize distributional cor-rections to reduce the mismatch between the on-policy dis-tribution in synchronous training and the off- or stale-policy distributions induced by asynchrony. While such corrections can be effective when training dynamics remain stable and free from collapse, they overlook a more fundamental issue: asynchronous and synchronous training can exhibit qual-itatively different training dynamics . As we demonstrate in this paper, na ¨ıvely applying asynchronous execution to GRPO-style updates—without explicitly accounting for the resulting training dynamics—can lead to severe instability and even training collapse. 
+
+Contributions. Motivated by these observations, we study asynchronous RL from an underexplored training-dynamics perspective . We characterize the key dynamical differences between synchronous and asynchronous policy training that give rise to training instability and collapse, and we identify a simple yet effective control mechanism that directly tar-gets these dynamics. Our approach intervenes at the level of training behavior rather than solely correcting distributional shift, providing both theoretical insight and practical stabil-ity improvements. Our main contributions are summarized as follows: 1. Characterization of asynchronous training dynam-ics. We conduct a systematic empirical comparison between synchronous and asynchronous reinforcement learning and uncover two consistent findings. First, un-der comparable hyperparameters, asynchronous train-ing is substantially more prone to collapse than its synchronous counterpart. Second, this instability is associated with a sharp dynamical distinction captured by the cosine similarity between consecutive policy gradients. Contrary to the behavior commonly observed in supervised learning, synchronous RL often exhibits low cosine similarity across successive gradi-ents, indicating diverse descent directions over time, whereas asynchronous RL exhibits persistently high co-sine similarity. This alignment provides an explanation for instability: gradient staleness in asynchronous exe-cution repeatedly reinforces similar update directions, increasing the risk of overshooting and divergence. We further support this empirical observation with a theo-retical analysis (Theorem 3.1) showing that stale gradi-ents introduce a systematic bias that increases gradient alignment and fundamentally alters the convergence behavior of asynchronous RL. 2. A dynamics-aware stabilization method with con-vergence guarantees. Motivated by the above find-ings, we propose GAC (Gradient Alignment Control), a simple yet effective mechanism for stabilizing asyn-chronous reinforcement learning by explicitly regulat-ing its progress along stale-aligned update directions. GAC leverages the cosine similarity between consecu-tive policy gradients to adaptively project the current gradient relative to the previous update and modulate the effective gradient direction, thereby preventing ex-cessive movement along highly correlated directions that can lead to overshooting and instability. We pro-vide theoretical analysis (Proposition 4.1) showing that GAC can reduce alignment-induced bias and improve the convergence stability of asynchronous RL. Impor-tantly, GAC is algorithm- and system-agnostic, and can be readily integrated with existing RL algorithms and distributed training systems to stabilize large-scale asynchronous RL training. 3. End-to-end improvements in asynchronous GRPO training. We evaluate GAC in large-scale asyn-chronous GRPO training across Qwen3 models rang-ing from 1.7B to 8B parameters and seven mathemat-ical reasoning benchmarks. Under moderate to large staleness, na ¨ıve asynchronous GRPO (and baselines) exhibits unstable dynamics and frequent performance collapses. In contrast, GAC consistently stabilizes training, restores on-policy-like optimization behav-ior, and substantially closes the performance gap to synchronized GRPO, while preserving the through-put benefits of asynchronous execution. These results demonstrate that explicitly controlling gradient align-ment is both necessary and sufficient for stabilizing large-scale asynchronous GRPO in practice. 2GAC: Asynchronous RL 
+
+## 2. Preliminaries 
+
+2.1. Group-Relative Policy Optimization (GRPO) 
+
+GRPO is a policy-gradient method designed for reinforce-ment learning with outcome-level or verifier-based rewards, and is widely used in large language model post-training. GRPO follows the clipped-surrogate optimization frame-work of Proximal Policy Optimization (PPO) (Schulman et al., 2017), but replaces value-function–based advantages with a group-relative normalization computed over multiple responses to the same prompt. Let πθ (a | s) denote a stochastic policy parameterized by θ,and πθb denote the behavior policy used to generate train-ing data. For a sampled state–action pair (s, a ), define the importance ratio           
+
+> rθ(s, a )≜πθ(a|s)
+> πθb(a|s).
+
+Given an advantage estimate A, GRPO adopts the PPO clipped surrogate          
+
+> ℓε(r, A )≜min  rA, clip( r, 1−ε, 1 + ε)A.
+
+For a prompt or context c ∼ D, GRPO samples a group of G trajectories {τ (g)}Gg=1 , producing scalar returns 
+
+{R(g)}Gg=1 . The group-relative advantage is defined as        
+
+> A(g)
+> b≜R(g)−μG
+> σG+ε,
+
+where μG and σG are the mean and standard deviation of the returns within the group. This normalization serves as an implicit control variate, reducing gradient variance without requiring a learned value function. Let dπθb (s, a | c) denote the discounted state–action vis-itation distribution induced by the behavior policy under context c. The GRPO objective is given by     
+
+> LGRPO (θ) = Ec∼D
+> "
+> 1
+> G
+> GX
+> g=1
+> E(s,a )∼dπθb(·| c)
+> ℓε(rθ(s, a ), A (g)
+> b)#
+> .
+
+The clipping operation enforces a trust-region–like con-straint on policy updates, while group-relative normalization provides context-aware credit assignment suitable for sparse or outcome-based rewards. 
+
+2.2. Synchronous and Asynchronous GRPO Training 
+
+We distinguish between synchronous and asynchronous exe-cution of GRPO by whether rollout generation and policy op-timization are coupled, consistent with standard distributed RL pipelines (Mnih et al., 2016; Espeholt et al., 2018). In synchronous GRPO , rollout generation and optimization proceed in lockstep. At update step t, trajectories are gener-ated using the current policy πθt , and the aggregated policy gradient 
+
+gt ≜ ∇θ LGRPO (θt)
+
+is computed from on-policy data. The policy parameters are updated as 
+
+θt+1 = θt + ηg t,
+
+where η > 0 is the learning rate. In this regime, gradients are evaluated under the current policy distribution, and standard on-policy optimization behavior is observed. In asynchronous GRPO , rollout generation is decoupled from optimization to improve system throughput. At opti-mization step t, the data batch may be generated by a stale behavior policy πθt−τ , where τ ≥ 0 denotes the staleness induced by pipeline delays and straggler effects. The learner update takes the form 
+
+θt+1 = θt + η ˆgt,
+
+where ˆgt is a stochastic gradient estimator constructed from trajectories sampled under dπθt−τ .Asynchronous execution decouples rollout generation from policy optimization to maximize throughput, but fundamen-tally transforms GRPO into an off-policy procedure. Al-though the behavior policy is corrected by importance ratios in the GRPO objective at the surrogate level, asynchrony in-troduces a fundamental discrepancy: gradients are evaluated under a lagged distribution rather than the current policy. Prior work attributes such off-policy failures primarily to distributional mismatch, which erodes the local validity of surrogate objectives and manifests as trust-region violations (e.g., KL divergence spikes, elevated clip fractions). This staleness further induces systematic bias and temporal cou-pling between successive updates, which does not arise in synchronized training and can qualitatively alter optimiza-tion dynamics. Understanding and controlling the resulting training behavior is the central focus of this work. 
+
+## 3. Training Dynamics of Asynchronous RL 
+
+In this section, we present one of the central findings of this paper: asynchronous and synchronous RL exhibit qual-itatively different training dynamics . We begin with an empirical study demonstrating that staleness introduced by asynchronous execution can induce catastrophic instabil-ity in policy optimization. We then show that this insta-bility is consistently preceded by a clear dynamical sig-nature—persistent alignment between consecutive policy gradients—captured by their cosine similarity. In contrast, synchronized RL typically exhibits low inter-gradient simi-larity, with near-orthogonal update directions. Finally, we provide a theoretical analysis that grounds these empirical observations, showing how gradient staleness induces align-ment and fundamentally alters the convergence behavior of asynchronous RL. 3GAC: Asynchronous RL 0 50 100 150 200 
+
+> Training Steps
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> Reward
+> S-0
+> S-4
+> S-8
+> S-16
+
+(a) Reward trajectory. 0 50 100 150 200  
+
+> Training Steps
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> Accuracy
+> S-0
+> S-4
+> S-8
+> S-16
+
+(b) Accuracy trajectory. 0 50 100 150 200   
+
+> Training Steps
+> 0.75
+> 0.50
+> 0.25
+> 0.00
+> 0.25
+> Cosine Similarity
+> S-0
+> S-4 60 80
+> 0.05
+> 0.00
+> 0.05
+
+(c) ct curves ( s=0 , s=4 ). 0 50 100 150 200  
+
+> Training Steps
+> 1.0
+> 0.5
+> 0.0
+> 0.5
+> Cosine Similarity  S-8
+> S-16
+
+(d) ct curves ( s=8 , s=16 ). 
+
+Figure 1. Progressive instability under increasing staleness. Panels (a–b) report training reward and validation accuracy across staleness levels. Panels (c–d) report consecutive-gradient cosine similarity ct, contrasting synchronized training ( s=0 ) with mild ( s=4 ) and larger staleness ( s=8 , 16 ). Results on MATH with Qwen3-4B. 
+
+3.1. Staleness Induces Catastrophic Instability 
+
+We study the effect of staleness by varying s ∈ { 0, 4, 8, 16 },where s denotes the number of optimization steps by which the behavior policy lags behind the learner policy. We de-fine training collapse as a failure mode in which learning dynamics become persistently unstable, leading to sustained degradation or oscillatory behavior that precludes reliable convergence. In practice, collapse is characterized by the following: (i) sharp drops in validation accuracy with no sub-sequent recovery over extended training, and (ii) reward tra-jectories that stagnate or exhibit large-amplitude, recurrent fluctuations. Figure 1 (a)–(b) show the resulting degradation in training behavior as staleness increases. Synchronized training ( s=0 ) exhibits stable, well-behaved convergence. Even a small amount of staleness ( s=4 ) introduces mild non-stationarity, with noticeable but limited fluctuations in both reward and accuracy. At s=8 , these fluctuations grow into large-amplitude oscillations that repeatedly disrupt learning progress. At s=16 , training becomes markedly unstable: reward and accuracy undergo severe drops and sustained oscillations, preventing reliable convergence. This progres-sive degradation reveals a fundamental stability limitation of asynchronous GRPO under staleness, motivating the need for explicit stabilization. 
+
+3.2. Gradient Alignment as a Dynamical Signature 
+
+Having established that asynchronous GRPO can fail catas-trophically, we now identify what distinguishes stable and unstable training dynamics . To this end, we introduce the 
+
+consecutive-gradient cosine similarity 
+
+ct ≜ ⟨ˆgt, ˆgt−1⟩∥ˆgt∥2 ∥ˆgt−1∥2
+
+, (1) 
+
+where ˆgt denotes the aggregated policy gradient estimate used at update step t, computed from the update batch and potentially induced by staled rollout policy (see Ap-pendix A.1). This metric captures whether successive up-dates explore diverse descent directions ( |ct| ≈ 0) or repeat-edly reinforce similar directions ( |ct| ≈ 1). 
+
+Distinct cosine-similarity behavior under synchronous and asynchronous training. We empirically find that consecutive-gradient cosine similarity exhibits a clear qual-itative difference between synchronous and asynchronous RL, as illustrated in Figure 1 (c)–(d). In synchronous RL, cosine similarity remains tightly concentrated near zero throughout training, indicating that consecutive policy-gradient updates are nearly orthogonal and explore diverse descent directions—behavior that is stable across training stages and model scales (additional on-policy results across model sizes are provided in Appendix D). In contrast, asyn-chronous RL exhibits persistently large-magnitude cosine similarity: under staleness, |ct| departs from zero and be-comes markedly more volatile. Even at mild staleness (s=4 ), |ct| occasionally exhibits abrupt spikes, which are followed by noticeable drops in reward and accuracy. At larger staleness ( s=8 and s=16 ), cosine similarity oscillates with very large amplitude over extended periods, indicating repeated reinforcement of similar update directions. This sustained alignment provides a mechanistic explanation for training collapse: correlated updates amplify effective step sizes along a low-dimensional subspace, causing errors to accumulate, overshoot the trust region, and trigger diver-gence. Crucially, the rise in |ct| consistently precedes re-ward collapse, identifying gradient alignment as a leading indicator—and likely a causal driver—of instability rather than a consequence of failure. Together, these observations establish consecutive-gradient alignment as a robust stabil-ity signature distinguishing synchronous from asynchronous training dynamics and motivating explicit alignment control in asynchronous RL. 
+
+3.3. Theoretical Evidence 
+
+We now show that the empirical gradient-alignment phe-nomenon admits a direct theoretical explanation. The key observation is that asynchronous execution fundamentally changes the structure of the stochastic gradient update. In particular, stale rollouts can introduce a persistent bias that couples consecutive gradients, causing the optimization tra-jectory to deviate from standard descent behavior. 
+
+Theorem 3.1 (Convergence of Asynchronous GRPO, Infor-mal) . Under standard smoothness and bounded-variance assumptions, and assuming locally bounded parameter drift 
+
+4GAC: Asynchronous RL 
+
+induced by staleness, the iterates satisfy              
+
+> min
+> 0≤t≤T−1E∥∇L (θt)∥2≤2( L⋆− L (θ0))
+> ηT + 2 Lησ 2+ Err( T)+ 4Lη T
+> T−1X
+> t=0
+> E∥bt∥2−2
+> T
+> T−1X
+> t=0
+> ηρ tλtE∥bgt−1∥2,
+
+where L⋆ ≜ sup θ L(θ), L is the smoothness constant of 
+
+L(θ), σ2 bounds the variance of the gradient, bt denotes the staleness-induced bias arising from stale rollouts, and bgt−1
+
+is the stochastic gradient from the previous update. The co-efficients ρt and λt quantify the persistence and strength of temporal coupling induced by staleness, respectively. Under the small-drift linearization, the bias admits the approxima-tion bt ≈ ηt−1Btbgt−1, where Bt is a local linear operator mapping parameter staleness into gradient bias. The term 
+
+Err( T ) collects higher-order remainder terms due to rollout noise and approximation error. 
+
+The formal version of Theorem 3.1 and its proof can be found in Appendix E. Theorem 3.1 extends the noncon-vex convergence guarantee with two staleness-dependent effects. The term P 
+
+> t
+
+E∥bt∥2 captures the magnitude of the staleness-induced bias and is always detrimental. The final term reflects temporal coupling : when the bias aligns with previous gradients, consecutive updates become correlated. 
+
+Alignment-induced instability and collapse. Under asynchrony, empirical results show that this temporal cou-pling strengthens over time, leading to persistent alignment between consecutive gradients. Through the approximation 
+
+bt ≈ ηt−1Btbgt−1, such alignment directly inflates the bias magnitude ∥bt∥ as past gradients are repeatedly reinforced. As a result, the bias penalty term P 
+
+> t
+
+E∥bt∥2 grows and eventually dominates the right-hand side of the bound, over-whelming the descent signal. When this occurs, updates no longer behave as local descent steps, leading to unstable dynamics and training collapse. This transition manifests empirically as a sharp rise in consecutive-gradient cosine similarity immediately preceding performance degradation. The analysis identifies alignment persistence —rather than distributional mismatch alone—as the primary driver of in-stability in asynchronous GRPO. This perspective motivates explicit control of inter-step gradient alignment to suppress bias amplification and prevent collapse, which directly in-forms the design of our method below. 
+
+## 4. Gradient Alignment Control (GAC) 
+
+We propose GAC, a dynamics-aware stabilization mecha-nism for asynchronous GRPO that explicitly regulates inter-step gradient alignment induced by stale rollouts. Unlike prior approaches that operate at the surrogate or distribu-tional level, GAC intervenes directly at the level of the policy-gradient update. The method monitors the alignment between consecutive gradients and selectively suppresses progress along stale-aligned directions while preserving in-formative orthogonal components. This intervention breaks the positive feedback loop created by temporal coupling under staleness and restores update geometry closer to that observed in synchronized training. The complete procedure of GAC is presented at Algorithm 1. 
+
+4.1. Directional Gradient Projection 
+
+The core operation of GAC is a directional projection that rescales gradient components relative to a reference direc-tion. Let v be a nonzero reference vector and u ≜ v/ ∥v∥2
+
+its unit direction. Given any gradient g, we decompose it into components parallel and orthogonal to u:
+
+g∥ ≜ ⟨g, u ⟩u, g⊥ ≜ g − g∥. (2) GAC applies anisotropic rescaling with directional gains 
+
+(α, β ) ∈ R2+:
+
+g′ ≜ α g ∥ + β g ⊥. (3) Choosing α < β attenuates progress along the reference direction u while preserving the residual update signal in the orthogonal subspace. This operation can be equivalently written as a rank-one linear transform g′ =  βI + ( α −
+
+β)uu ⊤g, highlighting that GAC modifies update geometry rather than gradient magnitude uniformly. 
+
+4.2. Adaptive Alignment Control under Stale Rollouts 
+
+In asynchronous GRPO, gradients bgt are computed from rollouts generated by a stale behavior policy πθt−τ , which induces temporal coupling across updates. To regulate this effect, GAC tracks the cosine similarity ct (Eq. 1) between consecutive gradients, which serves as a direct measure of alignment. As shown in Section 3, synchronized train-ing maintains |ct| near zero, whereas asynchronous train-ing exhibits persistently elevated alignment prior to col-lapse. GAC partitions the alignment space using two thresh-olds 0 < c low < c high , corresponding to three operational regimes: 
+
+Safe regime (|ct| ≤ clow ). Alignment remains within the on-policy range. No intervention is applied and the update proceeds normally: θt+1 = θt + η bgt.
+
+Projection regime (clow < |ct| < c high ). Alignment is elevated but correctable. GAC applies directional projection to reduce alignment to the target level clow .
+
+Violation regime (|ct| ≥ chigh ). Alignment indicates a se-vere trust-region violation. The update is skipped to prevent destabilizing overshoot: θt+1 = θt.
+
+In the projection regime, GAC uses the previous gradient as 5GAC: Asynchronous RL 
+
+the reference direction, ut−1 ≜ bgt−1/∥bgt−1∥2, and rescales the parallel component to achieve the target alignment: 
+
+bg′ 
+
+> t
+
+= clow 
+
+|ct| ⟨bgt, u t−1⟩ut−1 +
+
+bgt − ⟨ bgt, u t−1⟩ut−1
+
+
+
+. (4) This rescaling preserves orthogonal gradient information while reducing the magnitude of the alignment component. 
+
+4.3. Provable Benefit 
+
+We now connect the projection mechanism to the theoret-ical analysis of staleness-induced bias, bt. The following proposition formalizes how GAC attenuates this effect. 
+
+Proposition 4.1 (Bias reduction via orthogonal projection, Informal) . Assume the small-drift linearization and tempo-ral persistence conditions hold, such that bt ≈ ηt−1Btbgt−1.
+
+Let b⊥ 
+
+> t
+
+denote the effective bias after applying GAC with 
+
+α ≤ β. Then 
+
+E∥b⊥ 
+
+> t
+
+∥2 ≤ E∥bt∥2 − η2λ2 
+
+> t
+
+E∥bgt−1∥2 + O(ϵt), (5) 
+
+where λt > 0 quantifies the alignment strength between bt
+
+and bgt−1, and ϵt collects higher-order approximation terms. 
+
+Interpretation. The formal version of Proposition 4.1 and its proof can be found in Appendix F. Proposition 4.1 shows that suppressing the previous-step direction yields a strict reduction in the magnitude of the staleness-induced bias. The removed term scales with the same persistence factor λt
+
+that drives gradient alignment under stale rollouts. Conse-quently, GAC directly weakens the mechanism responsible for pre-collapse amplification, providing a principled expla-nation for the stabilization effects observed empirically. 
+
+## 5. Experiments 
+
+In this section, we conduct a comprehensive evaluation of GAC for stabilizing off-policy GRPO training induced by stale rollouts. Across experiments, GAC remains stable at large staleness, consistently outperforms off-policy base-lines, and recovers on-policy-level performance. Implemen-tation details, additional results and hyperparameter choices are provided in Appendix C. 
+
+Experimental setup. We extensively evaluate GAC on seven mathematical reasoning bench-marks: AIME24/25 (Art of Problem Solving, 2024a), AMC23/24 (Art of Problem Solving, 2024b), Math500 (Hendrycks et al., 2021), OlympiadBench (He et al., 2024), and MinervaMath (Lewkowycz et al., 2022). Experiments use widely adopted Qwen3 model family at three parameter scales (1.7B/4B/8B) (Yang et al., 2025), and Llama3.2-3B-Instruct (Grattafiori et al., 2024) to verify robustness across different architectures. We vary the staleness level over s ∈ { 4, 8, 16 , 32 } to assess performance under different degrees of asynchrony. 
+
+Baselines. We compare GAC against three off-policy base-lines designed for stale-rollout optimization: GRPO (Shao et al., 2024), standard GRPO applied directly to stale roll-outs; M2PO (Zheng et al., 2025), a trust-region method designed to handle large staleness; and BAPO (Xi et al., 2025), an adaptive clipping approach for off-policy RL. We also report GRPO ( s=0 ), fully synchronized training with fresh rollouts, as the on-policy reference. 
+
+5.1. Training Dynamics Under Staleness 
+
+We evaluate the efficacy of GAC under large staleness ( s =16 , which saturates throughput gains in most asynchronous RL systems) by analyzing both convergence behavior and the underlying gradient-alignment mechanism. 
+
+Convergence behavior. Figure 2 presents training reward and validation accuracy (from MinervaMath (Lewkowycz et al., 2022) for Qwen3-1.7B/4B/8B and Llama-3.2-3B-Instruct. All off-policy baselines exhibit unstable conver-gence across model scales: reward and accuracy undergo severe fluctuations, abrupt drops, and in extreme cases, complete collapse. In contrast, GAC maintains smooth monotonic convergence throughout training, achieving sta-bility comparable to synchronized GRPO. Critically, GAC achieves this stability without sacrificing sample efficiency, converging at rates comparable to synchronized training without requiring extended optimization and reaching sim-ilar final performance. The consistent behavior across the 1.7B–8B range and both model families demonstrates that explicit alignment control resolves the fundamental instabil-ity of asynchronous GRPO. 
+
+Gradient alignment regulation. Figure 3 reports the consecutive-gradient cosine similarity ct for Qwen3-4B and Qwen3-8B, revealing the mechanism behind GAC’s stabi-lization. Synchronized training (GRPO, s=0 ) and GAC both keep |ct| tightly concentrated near zero with negli-gible variance throughout optimization, indicating near-orthogonal consecutive gradients. In contrast, the off-policy baselines—stale-rollout GRPO, M2PO and BAPO—exhibit a sustained rise in |ct| that escalates to high magnitudes with severe oscillations. GAC restores gradient-alignment dynamics to the same low-alignment regime observed in synchronized training, consistent with its intended mecha-nism of regulating update geometry under staleness. 
+
+5.2. Model Performance 
+
+Table 1 summarizes accuracy on seven reasoning bench-marks under a large staleness setting ( s=16 ), with syn-chronized GRPO ( s=0 ) reported as an on-policy reference. Across model families and scales, stale-rollout GRPO and strong off-policy baselines (M2PO, BAPO) exhibit substan-tial accuracy degradation under staleness, consistently un-6GAC: Asynchronous RL 0 25 50 75 100 125 150 
+
+> Training Steps
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> Reward
+> GRPO(S-0)
+> GRPO(S-16)
+> BAPO(S-16)
+> M2PO(S-16)
+> GAC(S-16)
+
+(a) Llama-3.2-3B-Inst. 0 25 50 75 100 125  
+
+> Training Steps
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> Reward
+
+(b) Qwen3-1.7B 0 25 50 75 100 125  
+
+> Training Steps
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> Reward
+
+(c) Qwen3-4B 0 25 50 75 100 125 150 175  
+
+> Training Steps
+> 0.2
+> 0.4
+> 0.6
+> Reward
+
+(d) Qwen3-8B 0 25 50 75 100 125 150 
+
+> Training Steps
+> 0.00
+> 0.05
+> 0.10
+> Accuracy
+
+(e) Llama-3.2-3B-Inst. 0 25 50 75 100 125  
+
+> Training Steps
+> 0.05
+> 0.10
+> 0.15
+> 0.20
+> 0.25
+> Accuracy
+
+(f) Qwen3-1.7B 0 25 50 75 100 125  
+
+> Training Steps
+> 0.15
+> 0.20
+> 0.25
+> 0.30
+> Accuracy
+
+(g) Qwen3-4B 0 25 50 75 100 125 150 175  
+
+> Training Steps
+> 0.15
+> 0.20
+> 0.25
+> 0.30
+> Accuracy
+
+(h) Qwen3-8B 
+
+Figure 2. Cross-scale learning curves under large staleness. Panels (a–d) report training reward and panels (e–h) report MinervaMath validation accuracy for Qwen3-1.7B/4B/8B and Llama-3.2-3B-Instruct. Curves compare synchronized GRPO, stale-rollout GRPO, M2PO, BAPO, and GAC. 0 25 50 75 100 125 
+
+> Training Steps
+> 0.5
+> 0.0
+> 0.5
+> 1.0
+> Cosine Similarity
+> GRPO(S-0)
+> GRPO(S-16)
+> BAPO(S-16)
+> M2PO(S-16)
+> GAC(S-16)
+
+(a) Qwen3-4B: ct0 25 50 75 100 125 150 175  
+
+> Training Steps
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> Cosine Similarity  GRPO(S-0)
+> GRPO(S-16)
+> BAPO(S-16)
+> M2PO(S-16)
+> GAC(S-16)
+
+(b) Qwen3-8B: ct
+
+Figure 3. Gradient-alignment dynamics under staleness. 
+
+Consecutive-gradient cosine similarity ct for Qwen3-4B/8B, com-paring synchronized GRPO, stale-rollout GRPO, M2PO, BAPO and GAC. 
+
+derperforming the on-policy reference. This persistent gap underscores the fundamental challenge of maintaining stable optimization under asynchrony. In contrast, GAC achieves the highest average accuracy among stale-rollout methods and largely closes the gap to synchronized training. On Qwen3-8B, GAC achieves 50.2% compared to 51.0% for the on-policy reference, while off-policy baselines fall 4–5 points below. The gap between GAC and off-policy base-lines is most pronounced on challenging benchmarks, where staleness-induced degradation is amplified. For instance, on AIME24/25 with Qwen3-4B, GAC attains 30.2/30.0, es-sentially matching synchronized training (30.1/30.2), while off-policy baselines degrade substantially. 
+
+5.3. Ablations Robustness to varying staleness. We extend our analysis to s ∈ { 4, 8, 16 , 32 } to assess generalization across asyn-chrony regimes. Figure 4 shows that GAC maintains sta-ble convergence across all staleness levels, including s=32 
+
+where stale-rollout GRPO collapses entirely. In contrast to the progressive degradation of stale-rollout GRPO observed in Section 3.1, GAC achieves stable performance across the entire staleness range. 0 50 100 150 200 
+
+> Training Steps
+> 0.0
+> 0.2
+> 0.4
+> Reward
+> GRPO(S-8)
+> GRPO(S-16)
+> GRPO(S-32)
+> GAC(S-8)
+> GAC(S-16)
+> GAC(S-32)
+
+Figure 4. Robustness across staleness levels. Training re-ward trajectories comparing stale-rollout GRPO and GAC under 
+
+s ∈ { 8, 16 , 32 }. GAC maintains stable convergence across stale-ness levels, whereas stale-rollout GRPO degrades progressively as staleness increases. 
+
+## 6. Related Work 
+
+Due to space limitations, we focus on the most directly related work in the main text and defer a more detailed discussion to Appendix B. As reinforcement learning workloads scale, end-to-end train-ing is increasingly constrained by heterogeneous pipeline stages, where rollout generation and reward evaluation often dominate wall-clock time. A widely adopted systems solu-tion is to use disaggregated actor–learner architectures that decouple trajectory collection from optimization, thereby improving throughput and mitigating straggler effects. Early asynchronous methods such as A3C (Mnih et al., 2016) demonstrated that relaxing strict synchronization can sub-stantially improve scalability, while IMPALA (Espeholt et al., 2018) introduced importance-corrected actor–learner updates (via V-trace) to control off-policy drift at scale. Sub-sequent systems refined this paradigm through more aggres-sive data reuse and communication-efficient designs, includ-ing Ape-X (Horgan et al., 2018) and SEED RL (Espeholt et al., 2020). Collectively, these works establish asynchrony and staleness as practical ingredients for high-throughput 7GAC: Asynchronous RL                                                                                                                                                                                                           
+
+> Table 1. Accuracy under Staleness. Accuracy (%) on seven mathematical reasoning benchmarks for Qwen3 models (1.7B/4B/8B) and Llama-3.2-3B-Instruct. We report synchronized on-policy GRPO ( GRPO-Sync ,s=0 ) as a reference (shaded rows). All other methods are evaluated under stale-rollout training with s=16 .Avg. denotes the mean accuracy across benchmarks. Bold marks the best average accuracy among stale-rollout methods for each model. The last column reports ∆Avg , computed as the improvement of GAC over the strongest stale-rollout baseline among {GRPO, M2PO, BAPO }for the same model.
+> Method AIME24 AIME25 AMC23 AMC24 Math500 Miner. Olymp. Avg. ∆Avg
+> Llama-3.2-3B-Instruct
+> GRPO-Sync 16.7 3.3 28.3 15.6 48.4 13.6 14.6 20.1 –GRPO 10.0 3.0 27.5 13.1 48.8 12.8 14.3 18.5 –M2PO 13.3 2.9 27.9 13.3 48.3 13.2 13.2 18.9 –BAPO 6.7 2.9 25.7 15.4 49.2 12.9 14.0 18.1 –
+> GAC 16.6 3.2 32.5 15.8 47.8 14.0 13.8 20.5 +1.6
+> Qwen3-1.7B
+> GRPO-Sync 16.7 16.9 55.0 53.3 75.4 25.0 28.4 38.7 –GRPO 10.0 13.3 47.5 44.4 68.6 22.1 25.7 33.1 –M2PO 13.3 13.6 42.5 40.2 72.4 23.2 24.1 32.7 –BAPO 16.8 10.2 47.5 38.6 68.4 24.2 24.3 32.8 –
+> GAC 20.0 16.8 54.1 48.9 73.6 25.1 28.1 38.1 +5.0
+> Qwen3-4B
+> GRPO-Sync 30.1 30.2 77.6 68.9 84.6 34.2 36.2 51.7 –GRPO 24.2 23.3 70.3 62.2 77.8 29.6 32.9 45.8 –M2PO 26.7 20.2 71.1 62.8 78.4 29.9 33.4 46.1 –BAPO 26.8 20.1 75.0 60.3 80.2 30.5 33.9 46.7 –
+> GAC 30.2 30.0 80.1 64.5 83.7 32.5 34.9 50.8 +4.1
+> Qwen3-8B
+> GRPO-Sync 26.7 26.6 85.0 66.7 83.0 33.1 36.2 51.0 –GRPO 23.3 23.1 72.3 62.2 82.2 32.7 33.9 47.1 –M2PO 23.5 20.2 72.5 60.0 82.4 31.8 33.2 46.2 –BAPO 26.8 23.4 65.2 66.4 81.9 31.6 32.6 46.8 –
+> GAC 30.0 26.4 78.5 66.5 82.5 33.0 34.4 50.2 +3.1
+
+RL, while also highlighting that delayed gradients and stale rollouts can fundamentally alter optimization behavior and introduce additional instability. Motivated by similar efficiency bottlenecks in large lan-guage model post-training, recent work revisits asyn-chronous execution for RLHF and RLVR under expensive inference-time rollouts. Asynchronous RLHF formulations explicitly exploit off-policy data reuse to improve through-put (Noukhovitch et al., 2024), while large-scale LLM-RL infrastructures such as AReaL (Fu et al., 2025) and AsyncFlow (Han et al., 2025) support decoupled rollout and optimization for scalable reasoning post-training. How-ever, this decoupling naturally introduces stale-rollout gra-dients, where updates are computed using trajectories gen-erated by lagged behavior policies. Under large staleness, this effect amplifies distribution mismatch and destabilizes GRPO-style optimization. Recent off-policy stabilization methods for LLM-RL, such as M2PO (Zheng et al., 2025) and BAPO (Xi et al., 2025), primarily address this issue by strengthening GRPO-style trust-region surrogates through adaptive clipping or likelihood-ratio shaping. In contrast, our method operates at the optimizer interface and is complementary to these approaches. Rather than modifying surrogate objectives or correcting distributional shift, we directly regulate the geometry of the aggregated policy update by suppressing progress along stale-aligned directions. This provides a lightweight, system-agnostic stabilization mechanism that targets the alignment-driven instability induced by asynchronous execution. 
+
+## 7. Conclusion 
+
+This paper studies asynchronous GRPO from a training-dynamics perspective and demonstrates that asynchrony can fundamentally alter training dynamics, leading to collapse. Through both empirical evidence and theoretical analysis, we identify persistently elevated consecutive-gradient cosine similarity as a reliable precursor to training collapse, captur-ing the accumulation of stale-aligned updates. Motivated by this insight, we propose GAC, a lightweight gradient-space controller that stabilizes asynchronous GRPO by explicitly regulating progress along stale-aligned directions while pre-serving informative residual updates. GAC operates at the optimizer interface, is system- and algorithm-agnostic, and incurs only constant per-step overhead. Our results demon-strate that GAC effectively stabilizes asynchronous GRPO and restores robust training dynamics under staleness. 8GAC: Asynchronous RL 
+
+## Impact Statement 
+
+This paper presents work whose goal is to advance the train-ing of reinforcement learning. There are many potential societal consequences of our work, none of which we feel must be specifically highlighted here. 
+
+## References 
+
+Art of Problem Solving. AIME Problems and Solu-tions. https://artofproblemsolving.com/ wiki/index.php/AIME , 2024a. Accessed: 2026-01-28. Art of Problem Solving. AMC Problems and Solu-tions. https://artofproblemsolving.com/ wiki/index.php/AMC , 2024b. Accessed: 2026-01-28. Bai, Y., Jones, A., Ndousse, K., Askell, A., Chen, A., DasSarma, N., Drain, D., Fort, S., Ganguli, D., et al. Training a helpful and harmless assistant with reinforce-ment learning from human feedback. arXiv preprint arXiv:2204.05862 , 2022. DeepSeek-AI. DeepSeek-R1: Incentivizing reasoning ca-pability in LLMs via reinforcement learning. arXiv preprint arXiv:2501.12948 , 2025. URL https:// arxiv.org/abs/2501.12948 .Espeholt, L., Soyer, H., Munos, R., Simonyan, K., Mnih, V., Ward, T., Doron, Y., Firoiu, V., Harley, T., Dunning, I., Legg, S., and Kavukcuoglu, K. IMPALA: Scalable dis-tributed deep-RL with importance weighted actor-learner architectures. In Dy, J. and Krause, A. (eds.), Proceed-ings of the 35th International Conference on Machine Learning , volume 80 of Proceedings of Machine Learn-ing Research , pp. 1407–1416. PMLR, 10–15 Jul 2018. Espeholt, L., Marinier, R., Sta ´nczyk, P., Wang, K., and Michalski, M. Seed rl: Scalable and efficient deep-rl with accelerated central inference. In International Conference on Learning Representations (ICLR) , 2020. Feng, L., Xue, Z., Liu, T., and An, B. Group-in-group policy optimization for llm agent training. arXiv preprint arXiv:2505.10978 , 2025. Fu, W., Gao, J., Shen, X., Zhu, C., Mei, Z., He, C., Xu, S., Wei, G., Mei, J., Wang, J., Yang, T., Yuan, B., and Wu, Y. Areal: A large-scale asynchronous reinforcement learning system for language reasoning. arXiv preprint arXiv:2505.24298 , 2025. Gao, C., Zheng, C., Chen, X.-H., Dang, K., Liu, S., Yu, B., Yang, A., Bai, S., Zhou, J., and Lin, J. Soft adaptive policy optimization. arXiv preprint arXiv:2501.20347 ,2025. Qwen Team, Alibaba. Grattafiori, A., Dubey, A., Jauhri, A., Pandey, A., Kadian, A., Al-Dahle, A., Letman, A., Mathur, A., Schelten, A., Fan, A., et al. The llama 3 herd of models. arXiv preprint arXiv:2407.21783 , 2024. Han, Z., You, A., Wang, H., Luo, K., Yang, G., Shi, W., Chen, M., Zhang, S., Lan, Z., Deng, C., Ji, H., Liu, W., Huang, Y., Zhang, Y., Pan, C., Wang, J., Huang, X., Li, C., and Wu, J. Asyncflow: An asynchronous streaming rl framework for efficient llm post-training. arXiv preprint arXiv:2507.01663 , 2025. He, C., Luo, R., Bai, Y., Hu, S., Thai, Z. L., Shen, J., Hu, J., Han, X., Huang, Y., Zhang, Y., et al. Olympiad-bench: A challenging benchmark for promoting AGI with olympiad-level bilingual multimodal scientific problems. 
+
+arXiv preprint arXiv:2402.14008 , 2024. Hendrycks, D., Burns, C., Kadavath, S., Arora, A., Basart, S., Tang, E., Song, D., and Steinhardt, J. Measuring mathematical problem solving with the MATH dataset. 
+
+arXiv preprint arXiv:2103.03874 , 2021. Horgan, D., Quan, J., Budden, D., Barth-Maron, G., Hessel, M., van Hasselt, H., and Silver, D. Distributed priori-tized experience replay. In International Conference on Learning Representations (ICLR) , 2018. Le, T., Bui, N. D., Ngo Van, L., and Le, T. Sharpness-controlled group relative policy optimization with token-level probability shaping. arXiv preprint arXiv:2511.00066 , 2025. Lewkowycz, A., Andreassen, A., Dohan, D., Dyer, E., Michalewski, H., Ramasesh, V., Slone, A., Anil, C., Schlag, I., Gutman-Solo, T., et al. Solving quantitative reasoning problems with language models. In Advances in Neural Information Processing Systems , volume 35, pp. 3843–3857, 2022. Li, X., Wu, S., and Shen, Z. A-3po: Accelerating asyn-chronous llm training with staleness-aware proximal pol-icy approximation, 2026. Lightman, H., Kosaraju, V., Burda, Y., Edwards, H., Baker, B., Lee, T., Leike, J., Schulman, J., Sutskever, I., and Cobbe, K. Let’s verify step by step. arXiv preprint arXiv:2305.20050 , 2023. Lu, H., Liu, Z., Xiong, S., He, Y., Gao, W., Wu, Y., Wang, W., Liu, J., Li, Y., Zhao, H., Huang, J., Yang, S., Li, X., Luo, Y., Liu, Z., Pan, L., Yan, J., Wang, W., Su, W., Wang, J., Qu, L., and Zheng, B. Part ii: Roll flash – accelerating rlvr and agentic training with asynchrony, 2025. Mnih, V., Badia, A. P., Mirza, M., Graves, A., Lillicrap, T., Harley, T., Silver, D., and Kavukcuoglu, K. Asyn-chronous methods for deep reinforcement learning. In 
+
+International Conference on Machine Learning , 2016. 9GAC: Asynchronous RL 
+
+Noukhovitch, M., Huang, S., Xhonneux, S., Hosseini, A., Agarwal, R., and Courville, A. Asynchronous RLHF: Faster and more efficient off-policy RL for language mod-els. arXiv preprint arXiv:2410.18252 , 2024. Ouyang, L., Wu, J., Jiang, X., Almeida, D., Wainwright, C., Mishkin, P., Zhang, C., Agarwal, S., Slama, K., Ray, A., et al. Training language models to follow instructions with human feedback. arXiv preprint arXiv:2203.02155 ,2022. Schulman, J., Levine, S., Moritz, P., Jordan, M. I., and Abbeel, P. Trust region policy optimization. arXiv preprint arXiv:1502.05477 , 2015. Schulman, J., Wolski, F., Dhariwal, P., Radford, A., and Klimov, O. Proximal policy optimization algorithms. In 
+
+arXiv preprint arXiv:1707.06347 , 2017. Shao, Z., Wang, P., Zhu, Q., Xu, R., Song, J., Bi, X., Zhang, H., Zhang, M., Li, Y. K., Wu, Y., et al. Deepseekmath: Pushing the limits of mathematical reasoning in open lan-guage models. arXiv preprint arXiv:2402.03300 , 2024. Sheng, G., Zhang, C., Ye, Z., Wu, X., Zhang, W., Zhang, R., Peng, Y., Lin, H., and Wu, C. Hybridflow: A flexible and efficient rlhf framework, 2024. Sheng, G., Tong, Y., Wan, B., Zhang, W., Jia, C., Wu, X., Wu, Y., Li, X., Zhang, C., Peng, Y., Lin, H., Liu, X., and Wu, C. Laminar: A scalable asynchronous rl post-training framework, 2025. Uesato, J., Kushman, N., Kumar, R., Song, F., Siegel, N., Wang, L., Creswell, A., Irving, G., and Higgins, I. Solv-ing math word problems with process-and outcome-based feedback. arXiv preprint arXiv:2211.14275 , 2022. Wang, S., Zhang, S., Zhang, J., Hu, R., Li, X., Zhang, T., Li, J., Wu, F., Wang, G., and Hovy, E. Reinforcement learning enhanced llms: A survey, 2025a. Wang, W., Xiong, S., Chen, G., Gao, W., Guo, S., He, Y., Huang, J., Liu, J., Li, Z., Li, X., et al. Reinforcement learning optimization for large-scale learning: An effi-cient and user-friendly scaling library. arXiv preprint arXiv:2506.06122 , 2025b. Wen, L., Cai, Y., Xiao, F., He, X., An, Q., Duan, Z., Du, Y., Liu, J., Tang, L., Lv, X., Zou, H., Deng, Y., Jia, S., and Zhang, X. Light-r1: Curriculum sft, dpo and rl for long cot from scratch and beyond. arXiv preprint arXiv:2503.10460 , 2025. Xi, Z., Guo, X., Nan, Y., Zhou, E., Shen, J., Chen, W., Liu, J., Huang, J., Zhang, Z., Guo, H., Deng, X., Lei, Z., Zheng, M., Wang, G., Zhang, S., Sun, P., Zheng, R., Yan, H., Gui, T., Zhang, Q., and Huang, X. Bapo: Stabilizing off-policy reinforcement learning for llms via balanced policy optimization with adaptive clipping, 2025. Yang, A., Li, A., Yang, B., Zhang, B., Hui, B., Zheng, B., Yu, B., Gao, C., Huang, C., Lv, C., et al. Qwen3 technical report. arXiv preprint arXiv:2505.09388 , 2025. Yu, Z. et al. Dapo: An open-source llm reinforcement learn-ing system at scale. arXiv preprint arXiv:2503.14476 ,2025. Zhang, K., Zuo, Y., He, B., Sun, Y., Liu, R., Jiang, C., Fan, Y., Tian, K., Jia, G., Li, P., Fu, Y., Lv, X., Zhang, Y., Zeng, S., Qu, S., Li, H., Wang, S., Wang, Y., Long, X., Liu, F., Xu, X., Ma, J., Zhu, X., Hua, E., Liu, Y., Li, Z., Chen, H., Qu, X., Li, Y., Chen, W., Yuan, Z., Gao, J., Li, D., Ma, Z., Cui, G., Liu, Z., Qi, B., Ding, N., and Zhou, B. A survey of reinforcement learning for large reasoning models, 2025. Zheng, C., Liu, S., Li, M., Chen, X.-H., Yu, B., Gao, C., Dang, K., Liu, Y., Men, R., Yang, A., Zhou, J., and Lin, J. Group sequence policy optimization. arXiv preprint arXiv:2412.15498 , 2024. Qwen Team, Alibaba. Zheng, H., Zhao, J., and Chen, B. Prosperity before collapse: How far can off-policy rl reach with stale data on llms?, 2025. Zhong, Y., Zhang, Z., Song, X., Hu, H., Jin, C., Wu, B., Chen, N., Chen, Y., Zhou, Y., Wan, C., Zhou, H., Jiang, Y., Zhu, Y., and Jiang, D. Streamrl: Scalable, heteroge-neous, and elastic rl for llms with disaggregated stream generation, 2025. Ziegler, D. M., Stiennon, N., Wu, J., Brown, T. B., Radford, A., Amodei, D., Christiano, P. F., and Irving, G. Fine-tuning language models from human preferences. arXiv preprint arXiv:1909.08593 , 2019. 10 GAC: Asynchronous RL 
+
+## A. Additional Details and Discussion 
+
+A.1. Computing Consecutive-Gradient Cosine Similarity 
+
+We provide implementation details for the consecutive-gradient cosine similarity ct in Eq. (1) . At update step t, we define ˆgt as the aggregated policy gradient estimate after completing backpropagation and gradient accumulation for the GRPO objective (using the rollout data available at step t, which may be stale). We conceptually treat ˆgt as the flattened concatenation of all trainable parameter gradients. The metric ct is scale-invariant and serves as a geometric diagnostic of successive update directions. 
+
+Efficient computation under data parallelism. Under distributed training with gradient sharding (e.g., FSDP, DeepSpeed ZeRO), we compute ct without materializing full gradients. Let ˆg(r) 
+
+> t
+
+and ˆg(r) 
+
+> t−1
+
+denote gradient shards on rank r. Each rank computes three local dot products: 
+
+⟨ˆg(r) 
+
+> t
+
+, ˆg(r)
+
+> t−1
+
+⟩, ⟨ˆg(r) 
+
+> t
+
+, ˆg(r) 
+
+> t
+
+⟩, ⟨ˆg(r)
+
+> t−1
+
+, ˆg(r)
+
+> t−1
+
+⟩, (6) followed by a single all-reduce to obtain global quantities 
+
+⟨ˆgt, ˆgt−1⟩, ∥ˆgt∥22, ∥ˆgt−1∥22. (7) We then compute 
+
+ct = ⟨ˆgt, ˆgt−1⟩
+
+p∥ˆgt∥22 · ∥ ˆgt−1∥22 + ϵ , (8) where ϵ = 10 −8 ensures numerical stability. 
+
+Evaluation protocol. Unless otherwise stated, ct is computed on raw aggregated gradient estimates ˆgt before optimizer transformations or GAC intervention. 
+
+A.2. Computational and Memory Overhead Computational overhead. GAC introduces only lightweight overhead beyond standard gradient computation. Per update, it evaluates the consecutive-gradient cosine similarity ct using a constant number of inner products on sharded gradients and a constant-size collective reduction to aggregate the required statistics across workers. Under distributed training with gradient sharding (e.g., FSDP or DeepSpeed ZeRO), this adds negligible communication volume relative to routine training collectives, with overhead primarily arising from an additional synchronization point. When |ct| falls in the projection regime ( clow < |ct| < c high ), GAC applies an adaptive rank-one correction to the current gradient: 
+
+ˆg′ 
+
+> t
+
+= β ˆgt + ( α − β) ⟨ˆgt, u t−1⟩ut−1, (9) where α = clow /|ct| is computed dynamically and we use β = 1 . This intervention consists of a small number of elementwise linear operations (a scale and an addition) and therefore incurs O(dlocal ) memory-bandwidth work per update, where dlocal is the number of gradient elements on the local rank. The projection is applied in-place to parameter gradients and does not require additional forward/backward passes. 
+
+Memory footprint. GAC maintains a single additional gradient snapshot for the previous update direction ˆgt−1, resulting in an O(dlocal ) persistent memory overhead per rank. Any temporary buffers used to flatten gradients for similarity computation are short-lived and do not affect the asymptotic memory complexity. 
+
+A.3. Pseudocode for GAC 
+
+Algorithm 1 provides the complete pseudocode of GAC. At each update, GAC computes the consecutive-gradient cosine similarity ct and selects among three behaviors: a standard gradient step in the low-alignment regime, an adaptive projection step that suppresses the component aligned with the previous gradient, or an update skip when alignment exceeds the high-threshold safeguard. 11 GAC: Asynchronous RL 
+
+Algorithm 1 Gradient Alignment Control (GAC)  
+
+> 1:
+
+Input: thresholds clow , chigh , learning rate η 
+
+> 2:
+
+Initialize: θ0, ˆg0 ← 0 
+
+> 3:
+
+for t = 1 , 2, . . . , T do  
+
+> 4:
+
+Compute gradient ˆgt from stale rollouts under πθt−τ 
+
+> 5:
+
+ct ← ⟨ ˆgt, ˆgt−1⟩/(∥ˆgt∥2 ∥ˆgt−1∥2) 
+
+> 6:
+
+if |ct| ≤ clow then  
+
+> 7:
+
+θt ← θt−1 + η ˆgt 
+
+> 8:
+
+else if |ct| ≥ chigh then  
+
+> 9:
+
+θt ← θt−1 
+
+> 10:
+
+else  
+
+> 11:
+
+u ← ˆgt−1/∥ˆgt−1∥2, α ← clow /|ct| 
+
+> 12:
+
+g∥ ← ⟨ ˆgt, u ⟩u, g⊥ ← ˆgt − g∥ 
+
+> 13:
+
+ˆg′ 
+
+> t
+
+← α g ∥ + g⊥ 
+
+> 14:
+
+θt ← θt−1 + η ˆg′ 
+
+> t
+> 15:
+
+end if  
+
+> 16:
+
+end for 
+
+## B. Extended Related Work 
+
+RLVR and GRPO Variants. Reinforcement learning has become a standard paradigm for post-training large language models toward complex objectives. Algorithmically, modern RL for LLMs largely builds upon trust-region policy optimiza-tion, from TRPO (Schulman et al., 2015) to PPO (Schulman et al., 2017), which stabilizes updates via constrained or clipped surrogate objectives. These foundations enabled RLHF to achieve strong empirical gains in summarization, instruction following, and safety alignment (Ziegler et al., 2019; Ouyang et al., 2022; Bai et al., 2022). More recently, reinforcement learning with verifiable rewards (RLVR) has gained prominence in reasoning-centric post-training, substituting learned reward models with programmatic verifiers that yield sparse, binary feedback (Lightman et al., 2023; Uesato et al., 2022). This paradigm shift necessitates optimization methods robust to high-variance, outcome-level signals. GRPO (Shao et al., 2024; DeepSeek-AI, 2025) has emerged as a canonical RLVR algorithm, inspiring a growing family of variants designed to enhance stability and credit assignment under verifier sparsity. Notable examples include DAPO (Yu et al., 2025), which decouples clipping design from sampling allocation to prioritize informative rollouts; GSPO (Zheng et al., 2024), which applies sequence-level rather than token-level trust-region control; SAPO (Gao et al., 2025), which adapts clipping thresholds dynamically to improve stability-exploration tradeoffs; and TR-GRPO (Le et al., 2025), which introduces token-aware modifications for robust credit assignment. Beyond surrogate-level redesigns, Light-R1 (Wen et al., 2025) demonstrates a practical post-training pipeline for long-CoT reasoning in which GRPO is employed as the RL stage on long-CoT models, further improving mathematical reasoning performance. While these methods primarily improve GRPO via surrogate-level redesigns, we take an optimizer-level perspective that stabilizes the policy update by directly controlling its geometry. 
+
+Asynchronous RL Training Frameworks and Off-policy RL Algorithms. As RL workloads scale, end-to-end training is increasingly constrained by heterogeneous pipeline stages, where rollout generation and reward evaluation often dominate wall-clock time. A common systems solution is to adopt disaggregated actor–learner architectures that decouple trajectory collection from optimization, thereby improving throughput and mitigating straggler effects. Early asynchronous methods such as A3C (Mnih et al., 2016) demonstrated that relaxing strict synchronization can substantially improve scalability, while IMPALA (Espeholt et al., 2018) introduced an importance-corrected actor–learner design (via V-trace) to control off-policy drift at scale. Subsequent systems further refined the same principle through more aggressive data reuse and communication efficiency, including replay-centric distributed training in Ape-X (Horgan et al., 2018) and accelerated centralized inference in SEED RL (Espeholt et al., 2020). Collectively, these works establish asynchrony and staleness as practical ingredients for high-throughput RL, while also underscoring that delayed gradients and stale rollouts can introduce nontrivial off-policy effects that may require additional stabilization when instantiated in GRPO-style LLM post-training. Motivated by similar efficiency bottlenecks in LLM post-training, recent work revisits asynchronous execution for RLHF and RLVR under expensive inference-time rollouts. For example, asynchronous RLHF formulations explicitly exploit off-policy data reuse to improve throughput (Noukhovitch et al., 2024), while large-scale LLM-RL infrastructures such as AReaL (Fu et al., 2025) and AsyncFlow (Han et al., 2025) support decoupled rollout–train execution for scalable reasoning post-training. 12 GAC: Asynchronous RL                               
+
+> Table 2. GRPO hyperparameters. Configuration used across all experiments.
+> Parameter Value
+> Optimization
+> Optimizer AdamW Learning rate ( η)1×10 −6
+> AdamW β’s (0 .9,0.999)
+> AdamW ϵadam 1×10 −8
+> Weight decay 1×10 −2
+> Clip ratio ( ϵclip )0.2 Entropy coefficient 0.001 KL coefficient 0.001 KL loss type low var kl
+> Gradient clipping True
+> Training
+> Train batch size 256 Responses per prompt ( n)8Critic warmup steps 0Evaluation frequency 25
+> Generation
+> Sampling True Temperature 0.6 Top-p0.95 Max sequence length 2048
+
+However, this decoupling naturally introduces stale-rollout gradients , where updates are computed on trajectories generated by lagged behavior policies, amplifying distribution mismatch and destabilizing GRPO-style optimization under large staleness. To address this challenge, recent off-policy stabilization methods for LLM-RL, such as M2PO (Zheng et al., 2025) and BAPO (Xi et al., 2025), primarily reinforce GRPO-style trust-region surrogates through adaptive clipping and likelihood-ratio shaping, which improves robustness under stale data. In contrast, our method is complementary and operates at the optimizer interface: we directly regulate the geometry of the aggregated update by suppressing progress along stale-aligned directions, providing a lightweight, system-agnostic stabilization layer for asynchronous RL pipelines. 
+
+## C. Implementation Details 
+
+C.1. Testbed 
+
+All experiments are conducted on a single 8-GPU machine equipped with NVIDIA H800-80GB GPUs, interconnected via 400 GB/s NVLink. Our software stack uses CUDA 12.6, PyTorch 2.7.1, NCCL 2.26.2, vLLM 0.10.0, and FlashAttention 2.7.4.post1. 
+
+C.2. Training framework 
+
+All experiments are implemented on top of the open-source VERL (Sheng et al., 2024) framework, which provides an end-to-end RL post-training pipeline for large language models. VERL couples rollout generation with policy optimization in a modular design, enabling both fully synchronized execution and stale-rollout (asynchronous) training within the same codebase. 
+
+C.3. Hyperparameters Common hyperparameters. We use a single shared GRPO training recipe across all methods and model scales to ensure controlled comparisons. In particular, we fix the learning rate to 1 × 10 −6 and the train batch size to 256 in all experiments. Unless otherwise stated, the remaining optimization and generation settings are also kept identical, including the clipping threshold, entropy/KL regularization, and decoding parameters. Table 2 summarizes the full set of common hyperparameters. 13 GAC: Asynchronous RL 
+
+Table 3. On-policy ( s=0 ) statistics of consecutive-gradient alignment. We report the 90th percentile q0.9(|ct|), the maximum max |ct|,and the fraction of updates with |ct| ≤ 0.05 (computed over updates after step 50 to exclude early transients). These values motivate anchoring clow to the on-policy range and setting chigh well above it. 
+
+Model q0.9(|ct|) max |ct| Pr( |ct| ≤ 0.05) 
+
+Qwen3-1.7B 0.0471 0.0924 0.91 Llama-3.2-3B-Instruct 0.0687 0.1276 0.83 Qwen3-4B 0.0296 0.0645 0.99 Qwen3-8B 0.0317 0.0625 0.98 0 50 100 150 200 250 
+
+Training Steps    
+
+> 0.10
+> 0.12
+> 0.14
+> 0.16
+> 0.18
+> 0.20
+> 0.22
+> 0.24
+> Accuracy
+> clow = 0.03
+> clow = 0.05
+> clow = 0.07
+
+(a) Fixed chigh =0 .3. OlympiadBench validation accuracy trajectories under s=16 for Qwen3-1.7B while sweeping clow .
+
+chigh =0 .2 chigh =0 .3 chigh =0 .4
+
+clow =0 .03 26.8 26.3 25.5 
+
+clow =0 .05 26.2 26.9 27.1 
+
+clow =0 .07 25.7 26.6 24.9 
+
+(b) Grid sensitivity. Validation accuracy on OlympiadBench (Qwen3-1.7B, s=16 )across (clow , c high ); the default is highlighted. 
+
+Figure 5. Threshold robustness of GAC. Ablations around the default (clow , c high )=(0 .05 , 0.3) show that accuracy varies only mildly across nearby settings, supporting practical robustness without per-model retuning. 
+
+GAC thresholds. GAC introduces two alignment thresholds, clow and chigh , which partition the observed consecutive-gradient cosine similarity ct into the three operational regimes described in Section 4.2. Unless otherwise stated, we use a single default configuration across all experiments, setting clow = 0 .05 and chigh = 0 .3 for both Qwen3 and Llama models and across scales. For numerical stability when computing ct, we use ϵ = 10 −8 in the cosine denominator. 
+
+Rationale for choosing clow and chigh . We choose the default thresholds to be interpretable and transferable across model families and scales. The lower threshold clow is anchored to the empirical on-policy alignment range measured under synchronized GRPO ( s=0 ). Table 3 summarizes on-policy statistics of |ct| (computed after step 50 to exclude early transients), showing consistently small inter-step alignment across models and scales. Setting clow = 0 .05 thus places typical on-policy updates within the low-alignment regime, providing a principled reference level without per-model tuning. The upper threshold chigh specifies a conservative boundary for extreme alignment events; we set chigh = 0 .3 to be well separated from the on-policy range (Table 3), providing a safeguard under large staleness. 
+
+Threshold robustness. Table 5b reports a local 3 × 3 sweep around (clow , c high ) = (0 .05 , 0.3) . Performance remains robust across the grid, indicating that GAC is robust to threshold choice; we thus use (0 .05 , 0.3) unchanged in all main experiments. 14 GAC: Asynchronous RL 0 25 50 75 100 125 150 175 200     
+
+> Training Steps
+> 0.75
+> 0.50
+> 0.25
+> 0.00
+> 0.25
+> 0.50
+> 0.75
+> 1.00
+> Cosine Similarity
+> GRPO(S-0)
+> GRPO(S-16) 150 160 170 180
+> 0.05
+> 0.00
+> 0.05
+
+(a) Qwen3-1.7B 0 25 50 75 100 125 150 175 200     
+
+> Training Steps
+> 0.2
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> Cosine Similarity
+> GRPO(S-0)
+> GRPO(S-16)
+> 150 160 170 180
+> 0.05
+> 0.00
+> 0.05
+
+(b) Qwen3-4B 0 50 100 150 200 250 300    
+
+> Training Steps
+> 0.4
+> 0.2
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> Cosine Similarity
+> GRPO(S-0)
+> GRPO(S-16)
+> 180 190 200 210
+> 0.05
+> 0.00
+> 0.05
+
+(c) Qwen3-8B 0 20 40 60 80 100 120 140 160     
+
+> Training Steps
+> 0.75
+> 0.50
+> 0.25
+> 0.00
+> 0.25
+> 0.50
+> 0.75
+> 1.00
+> Cosine Similarity
+> GRPO(S-0)
+> GRPO(S-16)
+> 90 100 110 120
+> 0.05
+> 0.00
+> 0.05
+
+(d) Llama-3.2-3B-Instruct 
+
+Figure 6. Consecutive-gradient cosine similarity under synchronized vs. stale-rollout training across scales. Each panel corresponds to a different model and overlays ct for synchronized training ( s=0 ) and stale-rollout training ( s=16 ). 
+
+## D. On-Policy Gradient Alignment Across Model Scales 
+
+Figure 6 demonstrates that synchronized GRPO maintains low consecutive-gradient alignment across model families and scales. Across all four models, on-policy training ( s=0 ) keeps |ct| near zero throughout optimization, indicating near-orthogonal consecutive gradients and stable descent. Asynchronous training ( s=16 ) exhibits substantially higher and more volatile |ct|, consistent with the alignment-driven instability characterized in Section 3. This gradient-geometry perspective constitutes a key contribution of our work. Existing analyses of asynchronous RL typically diagnose instability through distributional mismatch or surrogate-level trust-region violations (e.g., elevated clip fraction). We show that consecutive-gradient cosine similarity provides a direct, early indicator of training stability that precedes these conventional diagnostics, enabling proactive intervention before performance degradation occurs. 
+
+## E. Formal Convergence Analysis for Asynchronous GRPO 
+
+E.1. Setup 
+
+Let L denote a differentiable surrogate objective to be maximized . Consider the asynchronous (stale-rollout) stochastic gradient ascent iteration 
+
+θt+1 = θt + η bgt, (10) where bgt is a stochastic gradient estimator constructed from rollouts generated by a possibly stale behavior policy (e.g., 
+
+πθt−τt ). Throughout, we use the standard decomposition 
+
+bgt = ∇L(θt) + bt + ξt, (11) 15 GAC: Asynchronous RL 
+
+where bt denotes the staleness-induced bias and ξt is a zero-mean noise term. 
+
+E.2. Assumptions Assumption A.1 (Smoothness). L is L-smooth: for all θ, θ ′ ∈ Rd,
+
+∥∇ L(θ) − ∇ L(θ′)∥ ≤ L∥θ − θ′∥.
+
+Assumption A.2 (Noise). There exists σ2 > 0 such that 
+
+E[ξt | F t] = 0 , E∥ξt∥2 | F t
+
+ ≤ σ2.
+
+Assumption A.3 (Bounded objective). L⋆ := sup θ L(θ) < ∞.
+
+Assumption A.4 (Stepsize). The stepsize is constant and satisfies η ≤ 14L .
+
+E.3. Alignment-Aware Convergence Theorem E.1 (Alignment-Aware Convergence under Staleness) . Under Assumptions A.1–A.4, the iterates generated by 
+
+(10) –(11) satisfy, for any T ≥ 1,
+
+min   
+
+> 0≤t≤T−1
+
+E∥∇ L(θt)∥2 ≤ 2( L⋆ − L(θ0)) 
+
+ηT + 2 Lησ 2 + 4Lη T 
+
+> T−1
+
+X
+
+> t=0
+
+E∥bt∥2
+
+− 2
+
+T 
+
+> T−1
+
+X
+
+> t=0
+
+E⟨∇ L(θt), b t⟩. (12) 
+
+Proof. By L-smoothness, 
+
+L(θt+1 ) ≥ L(θt) + η⟨∇ L(θt), bgt⟩ − Lη 2
+
+2 ∥bgt∥2.
+
+Taking conditional expectation and using (11), 
+
+E[⟨∇ L(θt), bgt⟩ | F t] = ∥∇ L(θt)∥2 + ⟨∇ L(θt), b t⟩.
+
+Moreover, 
+
+E∥bgt∥2 | F t
+
+ ≤ 2∥∇ L(θt)∥2 + 2 ∥bt∥2 + σ2.
+
+Combining the above and using η ≤ 1/(4 L) yields 
+
+η
+
+2 E∥∇ L(θt)∥2 ≤ E[L(θt+1 ) − L(θt)] − ηE⟨∇ L(θt), b t⟩ + Lη 2E∥bt∥2 + Lη 2
+
+2 σ2.
+
+Summing over t = 0 , . . . , T − 1, telescoping, and using L(θT ) ≤ L⋆ gives 
+
+1
+
+T 
+
+> T−1
+
+X
+
+> t=0
+
+E∥∇ L(θt)∥2 ≤ 2( L⋆ − L(θ0)) 
+
+ηT + 2 Lησ 2 + 4Lη T 
+
+> T−1
+
+X
+
+> t=0
+
+E∥bt∥2 − 2
+
+T 
+
+> T−1
+
+X
+
+> t=0
+
+E⟨∇ L(θt), b t⟩.
+
+The result follows by min t at ≤ 1
+
+> T
+
+P 
+
+> t
+
+at. □
+
+E.4. Temporal Persistence and Gradient Alignment 
+
+We now express the alignment term in (12) through temporal coupling induced by staleness. 
+
+Assumption A.5 (Bounded staleness and drift). At time t, the gradient is computed using rollouts generated at θt−τt
+
+with τt ≤ S, so that 
+
+θt − θt−τt =
+
+> τt
+
+X
+
+> k=1
+
+η bgt−k.
+
+16 GAC: Asynchronous RL 
+
+Assumption A.6 (Small-drift linearization). There exist matrices Bt and remainders rt such that 
+
+bt = Bt(θt − θt−τt ) + rt, E∥rt∥ ≤ εt.
+
+Assumption A.7 (Temporal persistence). There exists λt ≥ 0 such that 
+
+Ebg⊤
+
+> t−1
+
+Btbgt−1
+
+ ≥ λt E∥bgt−1∥2.
+
+Assumption A.8 (One-step alignment stability). There exist ρt ∈ [0 , 1] and δt ≥ 0 such that 
+
+E[⟨∇ L(θt), B tbgt−1⟩] ≥ ρt Ebg⊤
+
+> t−1
+
+Btbgt−1
+
+ − δt.
+
+Discussion of assumptions and empirical validation. Assumptions A.5–A.8 formalize the minimal structure needed to capture how staleness alters optimization dynamics in asynchronous GRPO. Assumption A.5 is purely structural, expressing parameter drift as the accumulation of intervening updates under bounded staleness, and holds by construction in practical asynchronous pipelines. Assumption A.6 introduces a local linearization of the staleness-induced bias, which is standard in delayed-gradient analyses and is justified as long as parameter drift remains moderate—precisely the regime prior to collapse. Assumptions A.7 and A.8 characterize temporal persistence: they require that the bias induced by stale rollouts retains nontrivial alignment with recent update directions and that this alignment does not vanish abruptly from one step to the next. Importantly, these assumptions are directional and expectation-based, rather than global or worst-case. Our empirical results provide direct evidence supporting these assumptions. Across model scales and benchmarks, asynchronous GRPO consistently exhibits persistently elevated cosine similarity between consecutive gradients, indicating that stale gradients systematically reinforce previous update directions (supporting Assumption A.7). Moreover, the smooth evolution of alignment prior to collapse suggests that this persistence is stable across successive steps, consistent with Assumption A.8. Finally, the sharp rise in gradient alignment immediately preceding training collapse coincides with large parameter drift and breakdown of local linear behavior, aligning with the interpretation that Assumption A.6 holds in the stable regime and fails precisely when instability emerges. Together, these observations validate the assumptions as accurate descriptors of the dynamics leading to collapse, rather than as restrictive conditions imposed for analytical convenience. 
+
+Lemma E.2 (Alignment Expansion) . Under Assumptions A.5–A.6, 
+
+⟨∇ L(θt), b t⟩ = η⟨∇ L(θt), B tbgt−1⟩ + η
+
+> τt
+
+X
+
+> k=2
+
+⟨∇ L(θt), B tbgt−k⟩ + ⟨∇ L(θt), r t⟩.
+
+Proof. Substitute the drift expansion into bt and expand the inner product. □
+
+Theorem E.3 (Convergence of Asynchronous GRPO with Alignment Persistence) . Under Assumptions A.1–A.8, the iterates satisfy 
+
+min   
+
+> 0≤t≤T−1
+
+E∥∇ L(θt)∥2 ≤ 2( L⋆ − L(θ0)) 
+
+ηT + 2 Lησ 2 + 4Lη T 
+
+> T−1
+
+X
+
+> t=0
+
+E∥bt∥2
+
+− 2
+
+T 
+
+> T−1
+
+X
+
+> t=0
+
+η ρ tλtE∥bgt−1∥2 + Err( T ), (13) 
+
+where 
+
+Err( T ) = 2
+
+T 
+
+> T−1
+
+X
+
+> t=0
+
+η
+
+> τt
+
+X
+
+> k=2
+
+E ⟨∇ L(θt), B tbgt−k⟩ + E∥∇ L(θt)∥∥ rt∥ + ηδ t
+
+!
+
+.
+
+Proof. Apply Lemma E.2 inside Theorem E.1. The leading term is lower bounded using Assumptions A.7–A.8, while the remaining terms are controlled by absolute values and collected into Err( T ). □
+
+17 GAC: Asynchronous RL 
+
+## F. Advantage of GAC: Bias Suppression via Alignment Control 
+
+The convergence bounds in Theorems E.1–E.3 show that staleness impacts optimization primarily through the bias term 
+
+bt. In particular, the penalty P 
+
+> t
+
+E∥bt∥2 is always detrimental and can dominate the bound under large staleness. Under temporal persistence (Assumptions A.5–A.8), the leading component of bt is aligned with the previous update direction, which motivates GAC’s strategy of attenuating progress along this stale-aligned direction. We formalize this intuition by showing that projecting bt away from span( bgt−1) yields a strict reduction in the squared bias magnitude, up to higher-order approximation terms. 
+
+Proposition F.1 (Bias reduction via stale-direction projection) . Fix an iteration t ≥ 1 and let bgt−1 be the previous stochastic gradient. Define the reference direction 
+
+ut−1 ≜
+
+(bgt−1/∥bgt−1∥2, bgt−1̸ = 0 ,
+
+0, bgt−1 = 0 .
+
+Let P ⊥ 
+
+> t−1
+
+≜ I − ut−1u⊤ 
+
+> t−1
+
+denote the orthogonal projector onto span( ut−1)⊥.Assume the staleness-induced bias bt admits the one-step persistent linearization 
+
+bt = ηt−1Btbgt−1 + rt, (14) 
+
+where Bt ∈ Rd×d is (possibly random) and rt is a remainder term. Assume further the following temporal persistence 
+
+condition holds: 
+
+bg⊤
+
+> t−1
+
+Btbgt−1 ≥ λt∥bgt−1∥22 almost surely , (15) 
+
+for some λt > 0.Define the projected (effective) bias as 
+
+b⊥ 
+
+> t
+
+≜ P ⊥
+
+> t−1
+
+bt.
+
+Then the following inequality holds: 
+
+E∥b⊥ 
+
+> t
+
+∥22 ≤ E∥bt∥22 − η2
+
+> t−1
+
+λ2 
+
+> t
+
+E∥bgt−1∥22 + 2 ηt−1λt E[∥bgt−1∥2 ∥rt∥2] . (16) 
+
+In particular, if E∥rt∥22 ≤ ϵ2 
+
+> t
+
+for some ϵt ≥ 0, then 
+
+E∥b⊥ 
+
+> t
+
+∥22 ≤ E∥bt∥22 − η2
+
+> t−1
+
+λ2 
+
+> t
+
+E∥bgt−1∥22 + 2 ηt−1λt ϵt
+
+q
+
+E∥bgt−1∥22. (17) 
+
+Proof. If bgt−1 = 0 , then ut−1 = 0 and P ⊥ 
+
+> t−1
+
+= I, so b⊥ 
+
+> t
+
+= bt and (16) holds trivially. We assume bgt−1̸ = 0 below. 
+
+Step 1: Pythagorean identity for orthogonal projection. Since P ⊥ 
+
+> t−1
+
+is an orthogonal projector, we have the decomposi-tion 
+
+bt = ( ut−1u⊤
+
+> t−1
+
+)bt + ( I − ut−1u⊤
+
+> t−1
+
+)bt = ( ut−1u⊤
+
+> t−1
+
+)bt + b⊥ 
+
+> t
+
+,
+
+and the two components are orthogonal. Therefore, 
+
+∥bt∥22 = ∥b⊥ 
+
+> t
+
+∥22 + ∥(ut−1u⊤
+
+> t−1
+
+)bt∥22. (18) Moreover, 
+
+(ut−1u⊤
+
+> t−1
+
+)bt = ⟨bt, u t−1⟩ut−1, ∥(ut−1u⊤
+
+> t−1
+
+)bt∥22 = ⟨bt, u t−1⟩2.
+
+Plugging this into (18) yields the exact identity 
+
+∥b⊥ 
+
+> t
+
+∥22 = ∥bt∥22 − ⟨ bt, u t−1⟩2 = ∥bt∥22 − ⟨bt, bgt−1⟩2
+
+∥bgt−1∥22
+
+. (19) 18 GAC: Asynchronous RL 
+
+Step 2: Lower bound the removed component using persistence. Using the one-step linearization (14), 
+
+⟨bt, bgt−1⟩ = ηt−1 bg⊤
+
+> t−1
+
+Btbgt−1 + ⟨rt, bgt−1⟩.
+
+By the persistence condition (15), 
+
+ηt−1 bg⊤
+
+> t−1
+
+Btbgt−1 ≥ ηt−1λt∥bgt−1∥22.
+
+Also, by Cauchy–Schwarz, 
+
+⟨rt, bgt−1⟩ ≥ −∥ rt∥2 ∥bgt−1∥2.
+
+Combining the two displays gives the deterministic bound 
+
+⟨bt, bgt−1⟩ ≥ ηt−1λt∥bgt−1∥22 − ∥ rt∥2 ∥bgt−1∥2. (20) 
+
+Step 3: Square and normalize. Divide (20) by ∥bgt−1∥2 and square both sides: 
+
+⟨bt, bgt−1⟩2
+
+∥bgt−1∥22
+
+≥
+
+
+
+ηt−1λt∥bgt−1∥2 − ∥ rt∥2
+
+2
+
+= η2
+
+> t−1
+
+λ2 
+
+> t
+
+∥bgt−1∥22 − 2ηt−1λt∥bgt−1∥2∥rt∥2 + ∥rt∥22.
+
+Dropping the nonnegative last term ∥rt∥22 yields 
+
+⟨bt, bgt−1⟩2
+
+∥bgt−1∥22
+
+≥ η2
+
+> t−1
+
+λ2 
+
+> t
+
+∥bgt−1∥22 − 2ηt−1λt∥bgt−1∥2∥rt∥2. (21) 
+
+Step 4: Plug back into the projection identity and take expectation. Substitute (21) into (19): 
+
+∥b⊥ 
+
+> t
+
+∥22 ≤ ∥ bt∥22 − η2
+
+> t−1
+
+λ2 
+
+> t
+
+∥bgt−1∥22 + 2 ηt−1λt∥bgt−1∥2∥rt∥2.
+
+Taking expectation gives (16). Finally, if E∥rt∥22 ≤ ϵ2 
+
+> t
+
+, then by Cauchy–Schwarz, 
+
+E[∥bgt−1∥2∥rt∥2] ≤
+
+q
+
+E∥bgt−1∥22
+
+q
+
+E∥rt∥22 ≤ ϵt
+
+q
+
+E∥bgt−1∥22,
+
+which yields (17). 
+
+## G. Per-Benchmark Performance Analysis 
+
+Figure 7 reports a per-benchmark breakdown of final validation accuracy for Qwen3-4B under stale-rollout training ( s=16 ). Across all seven benchmarks, GAC consistently outperforms all off-policy baselines across benchmarks. Moreover, GAC achieves performance that is highly comparable to synchronized GRPO: the per-benchmark gaps remain small and do not exhibit systematic deterioration under asynchrony. Importantly, this recovery does not come from trading off learning speed for stability—GAC preserves smooth, stable convergence while maintaining a convergence rate that closely tracks the synchronized reference throughout training. 19 GAC: Asynchronous RL 0 50 100 150 200 250 
+
+Training Steps 
+
+0.0 
+
+0.1 
+
+0.2 
+
+0.3 
+
+0.4 
+
+0.5 
+
+0.6 
+
+0.7 
+
+0.8 
+
+> Accuracy
+
+GRPO(S-0) 
+
+GRPO(S-16) 
+
+BAPO(S-16) 
+
+M2PO(S-16) 
+
+GAC(S-16) 
+
+(a) AMC23 0 50 100 150 200 250 
+
+Training Steps 
+
+0.0 
+
+0.1 
+
+0.2 
+
+0.3 
+
+0.4 
+
+0.5 
+
+0.6 
+
+0.7 
+
+> Accuracy
+
+GRPO(S-0) 
+
+GRPO(S-16) 
+
+BAPO(S-16) 
+
+M2PO(S-16) 
+
+GAC(S-16) (b) AMC24 0 50 100 150 200 250 
+
+Training Steps 
+
+0.00 
+
+0.05 
+
+0.10 
+
+0.15 
+
+0.20 
+
+0.25 
+
+0.30 
+
+0.35 
+
+> Accuracy
+
+GRPO(S-0) 
+
+GRPO(S-16) 
+
+BAPO(S-16) 
+
+M2PO(S-16) 
+
+GAC(S-16) 
+
+(c) OlympiadBench 0 50 100 150 200 250 
+
+Training Steps 
+
+0.00 
+
+0.05 
+
+0.10 
+
+0.15 
+
+0.20 
+
+0.25 
+
+0.30 
+
+0.35 
+
+> Accuracy
+
+GRPO(S-0) 
+
+GRPO(S-16) 
+
+BAPO(S-16) 
+
+M2PO(S-16) 
+
+GAC(S-16) (d) MinervaMath 0 50 100 150 200 250 
+
+Training Steps 
+
+0.0 
+
+0.1 
+
+0.2 
+
+0.3 
+
+> Accuracy
+> GRPO(S-0)
+> GRPO(S-16)
+> BAPO(S-16)
+> M2PO(S-16)
+> GAC(S-16)
+
+(e) AIME24 0 50 100 150 200 250 
+
+Training Steps 
+
+0.0 
+
+0.1 
+
+0.2 
+
+0.3  
+
+> Accuracy
+> GRPO(S-0)
+> GRPO(S-16)
+> BAPO(S-16)
+> M2PO(S-16)
+> GAC(S-16)
+
+(f) AIME25 0 50 100 150 200 250 
+
+Training Steps 
+
+0.0 
+
+0.2 
+
+0.4 
+
+0.6 
+
+0.8  
+
+> Accuracy
+> GRPO(S-0)
+> GRPO(S-16)
+> BAPO(S-16)
+> M2PO(S-16)
+> GAC(S-16)
+
+(g) Math500 
+
+Figure 7. Per-benchmark accuracy breakdown for Qwen3-4B under staleness ( s=16 ). Each panel reports final validation accuracy on one benchmark, comparing GAC against synchronized GRPO (on-policy reference) and off-policy baselines under stale rollouts. 
+
+20

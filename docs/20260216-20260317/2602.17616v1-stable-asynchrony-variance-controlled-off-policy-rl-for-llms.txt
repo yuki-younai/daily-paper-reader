@@ -1,0 +1,934 @@
+Title: Stable Asynchrony: Variance-Controlled Off-Policy RL for LLMs
+
+URL Source: https://arxiv.org/pdf/2602.17616v1
+
+Published Time: Fri, 20 Feb 2026 02:09:04 GMT
+
+Number of Pages: 18
+
+Markdown Content:
+# Stable Asynchrony: Variance-Controlled Off-Policy RL for LLMs 
+
+Luke Huang * 1 Zhuoyang Zhang 1 Qinghao Hu 1 Shang Yang 1 Song Han 1 2 
+
+# Abstract 
+
+Reinforcement learning (RL) is widely used to improve large language models on reasoning tasks, and asynchronous RL training is attrac-tive because it increases end-to-end through-put. However, for widely adopted critic-free policy-gradient methods such as REINFORCE and GRPO, high asynchrony makes the policy-gradient estimator markedly higher variance :training on stale rollouts creates heavy-tailed im-portance ratios, causing a small fraction of sam-ples to dominate updates. This amplification makes gradients noisy and learning unstable rela-tive to matched on-policy training. Across math and general reasoning benchmarks, we find col-lapse is reliably predicted by effective sample size (ESS) and unstable gradient norms. Motivated by this diagnosis, we propose Variance Controlled 
+
+Policy Optimization ( VCPO ), a general stabi-lization method for REINFORCE/GRPO-style al-gorithms that (i) scales learning rate based on effective sample size to dampen unreliable up-dates, and (ii) applies a closed-form minimum-variance baseline for the off-policy setting, avoid-ing an auxiliary value model and adding mini-mal overhead. Empirically, VCPO substantially improves robustness for asynchronous training across math, general reasoning, and tool-use tasks, outperforming a broad suite of baselines spanning masking/clipping stabilizers and algorithmic vari-ants. This reduces long-context, multi-turn train-ing time by 2.5 × while matching synchronous per-formance, demonstrating that explicit control of policy-gradient variance is key for reliable asyn-chronous RL at scale. 
+
+# 1. Introduction 
+
+Policy-gradient (PG) methods are a widely used class of reinforcement learning (RL) algorithms that optimize a pa-    
+
+> *Equal contribution 1MIT 2NVIDIA. Correspondence to: Luke Huang <lukh23@mit.edu >, Song Han <songhan@mit.edu >.
+
+rameterized policy directly from sampled trajectories. In LLM post-training, PG-style algorithms are now standard for improving reasoning behavior, with widely used objec-tives including REINFORCE (Williams, 1992), Proximal Policy Optimization (PPO) (Schulman et al., 2017), and GRPO (Shao et al., 2024). These methods are typically implemented in an on-policy or near on-policy regime, where data generation and learn-ing must occur sequentially after each other. This coupling becomes a major systems bottleneck for long-sequence rea-soning: rollout lengths are highly variable and exhibit a long tail (Hu et al., 2025)., creating pipeline bubbles and poor compute utilization in synchronous RL training. To improve throughput, several recent systems decou-ple rollout generation from learning via asynchronous, pipelined training. Prior works such as asynchronous RLHF (Noukhovitch et al., 2024) AReaL (Fu et al., 2025), LlamaRL (Wu et al., 2025), and PipelineRL (Pich ´e et al., 2025) demonstrate that overlapping generation with opti-mization can substantially reduce end-to-end wall-clock time. However, this efficiency comes at the cost of training quality: the sampler generates trajectories under a lagging behavior policy while the learner continues to update, mak-ing training effectively off-policy which leads to learning degradation or even collapse. In this work, we focus on the optimization failure mode created by off-policy training and propose variance-targeted controls that can be applied on top of existing asynchronous RL frameworks. We find that the underlying mechanism be-hind asynchronous training instabilities is higher-variance gradient estimates . We show that the effective sample size (Kish, 1995) (ESS) – a well-known diagnostic for im-portance sampled estimates – collapses when the sampler and learner distributions significantly diverge and that this collapse predicts gradient volatility and KL spikes across reasoning tasks. Motivated by this diagnosis, we propose 
+
+Variance Controlled Policy Optimization (VCPO), a sim-ple drop-in method that directly controls the variance of the policy-gradient estimator with two complementary com-ponents: (i) an effective sample size guided step scaling 
+
+that down-weights unreliable updates and (ii) a closed-form minimum-variance off-policy reward baseline based on per-trajectory gradient norms, avoiding training an aux-1
+
+> arXiv:2602.17616v1 [cs.LG] 19 Feb 2026
+
+Stable Asynchrony: Variance-Controlled Off-Policy RL for LLMs 
+
+Figure 1. Long-context, tool-integrated multi-turn RL comparing synchronous training ( k=0 ) to a two-step policy lag ( k=2 ) with VCPO versus sequence-level truncated importance sampling (TIS). Top: AIME-2025 validation accuracy vs. cumulative wall-clock time. VCPO matches the best synchronous accuracy 2.5× faster ( ≈42h vs. ≈105h) and continues to improve thereafter. Bottom: Gradient norm vs. training steps. The TIS run shows an instability characterized by a brief gradient-norm spike followed by rapid collapse. 
+
+iliary critic or value model. To make (ii) practical at scale, we present the first scalable implementation for exact per-example gradient-norm computation with negligible run-time overhead, and leverage these statistics to build a low-overhead, gradient-aware baseline for variance reduction. Across highly asynchronous training regimes and across mathematical reasoning, general reasoning, and tool-use tasks, VCPO remains robust and effective from 1.5B to 7B models, outperforms a broad suite of baselines spanning masking/clipping stabilizers and algorithmic variants, and cuts long-context multi-turn training compute by 2.5 × while matching synchronous performance. We will release an open-source implementation and reproducibility artifacts. 
+
+# 2. Background 
+
+2.1. Reinforcement Learning for Large Language Models 
+
+We consider finetuning a pretrained language model policy 
+
+πθ to maximize a scalar reward R(x, y ) that scores a com-pletion y = ( y1, . . . , y T ) for a prompt x (e.g., from a reward model or task-specific evaluator). Under an autoregressive policy, the likelihood of generating y is 
+
+πθ (y | x) = 
+
+> T
+
+Y
+
+> t=1
+
+πθ (yt | x, y <t ).
+
+Let D denote a dataset (distribution) of prompts. RL opti-mizes the expected reward 
+
+J(θ) = Ex∼D , y ∼πθ (·| x)[R(x, y )] .
+
+On-Policy Gradient Estimator . In On-Policy RL, we esti-mate ∇θ J(θ) with sequences y sampled from the policy πθ
+
+itself. This leads to the REINFORCE gradient (Williams, 1992) 
+
+∇θ J(θ) = Ex∼D , y ∼πθ [R(x, y ) ∇θ log πθ (y | x)] 
+
+∇θ log πθ (y | x) = 
+
+> T
+
+X
+
+> t=1
+
+∇θ log πθ (yt | x, y <t )
+
+which motivates a surrogate loss of 
+
+Lon-policy (θ) = −Ex∼D , y ∼πθ (·| x)[R(x, y ) log πθ (y | x)] 
+
+(1) A standard variance reduction technique is to subtract a baseline that may depend on the state st = ( x, y <t ), but not on the current action/token yt:
+
+∇θ J(θ) = Ex, y ∼πθ
+
+" TX
+
+> t=1
+
+At ∇θ log πθ (yt | x, y <t )
+
+#
+
+,
+
+where an advantage-like term can be written as 
+
+At = R(st, y t) − b(st), b(st) = b(x, y <t ).
+
+In actor–critic methods such as PPO, the baseline is a learned value function b(st) = Vϕ(st) and advantages At
+
+2Stable Asynchrony: Variance-Controlled Off-Policy RL for LLMs 
+
+are computed via GAE. Critic-free methods such as GRPO instead use structured baselines (e.g., per-prompt group normalization), avoiding the overhead of training and serv-ing a value model. In this paper, we focus on critic-free, REINFORCE-style updates, which are widely used for LLM reasoning post-training due to their lower resource require-ments. 
+
+Off-Policy Gradient Estimator . In practical LLM RL systems, rollout generation and training are inevitably mis-matched, causing training to be off-policy. This mismatch can arise even without explicit asynchronous training due to numerical issues (Qi et al., 2025; Xi et al., 2026), ker-nel and hardware issues (Liu et al., 2025a), or unavoidable differences in inference and training implementations (He, 2025). We therefore distinguish the sampler policy μ used to generate trajectories from the current learner policy πθ
+
+being optimized. Importance Sampling (IS) corrects this mismatch. For a prompt x and completion y consisting of tokens y1, · · · , y T ,define the (sequence-level) IS ratio 
+
+w(x, y ) ≜ πθ (y | x)
+
+μ(y | x) =
+
+> T
+
+Y
+
+> t=1
+
+πθ (yt | yt−11 x)
+
+μ(yt | yt−11 x) (2) With importance sampling, Eq (1) can be expressed as an expectation relative to the sampler policy , which leads to the unbiased off-policy surrogate loss 
+
+Loff-policy (θ) = −Ex∼D , y ∼μ(·| x)
+
+w(x, y ) A(x, y )log πθ (y | x). (3) where A(x, y ) denotes an advantage-like signal (e.g., R − b
+
+or token-level advantages). 
+
+2.2. The Role of Effective Sample Size in Off-Policy RL 
+
+In practice, the core challenge of importance sampling is not bias but finite-sample variance . Known as the Curse of the Horizon (Liu et al., 2018; 2020), the product structure in (2) makes w(x, y ) highly sensitive to small per-token probabil-ity shifts, so the resulting weights can become heavy-tailed and a few samples may dominate each update To quantify this weight degeneracy, given per-sample gra-dient contributions gi and importance weights wi, define standardized weights ˜wi = wi/ PBj=1 wj and the corre-sponding weighted estimator ˆg = PBi=1 ˜wigi. A common diagnostic is the effective sample size (ESS) (Kong, 1992; Kong et al., 1994): 
+
+ESS ≜
+
+PBi=1 wi
+
+2
+
+PBi=1 w2
+
+> i
+
+= 1
+
+PBi=1 ˜w2
+
+> i
+
+∈ [1 , B ].
+
+ESS measures how many samples effectively contribute to the weighted estimate: if weights are nearly uniform then 
+
+ESS ≈ B, while if a few weights dominate then ESS ≪ B.Moreover, under mild conditions (e.g., weak correlation between gi and wi), we have 
+
+Var(ˆ g) ≈
+
+ BX
+
+> i=1
+
+˜w2
+
+> i
+
+
+
+Var( g) = 1ESS Var( g),
+
+Intuitively, this means the variance of off-policy gradient estimates only matches the on-policy averaging rate with 
+
+B replaced by ESS . Thus, when ESS collapses, gradient estimates become substantially higher variance, leading to high step-to-step volatility and KL. For this reason, practical RL systems and algorithms often apply clipping (Schulman et al., 2017), truncation (Espeholt et al., 2018), or masking which limit the influence of extreme weights, at the cost of introducing bias relative to the exact IS correction. 
+
+2.3. RL stabilization methods 
+
+While prior methods have been proposed to stabilize LLM RL in on-policy or near-on-policy settings, we discuss these works as they closely related to asynchronous train-ing’s highly off-policy issues. These approaches broadly fall into three categories: (1) masking/clipping to sup-press outlier updates, (2) algorithmic changes to the es-timator/objective/baseline, and (3) system-side changes that reduce sampler–learner mismatch. 
+
+Masking / clipping mechanisms. Similar to truncation and clipping mechanisms proposed by previous works (Es-peholt et al., 2018; Schulman et al., 2017), recent work has propsed masking or truncating samples with outlier importance-weight ratios to prevent them from dominating updates. Token or sequence-level T RUNCATED IMPORTANCE SAM - 
+
+> PLING
+
+(TIS) constrains the IS ratio maximum. TIS has been used in large-scale asynchronous systems such as L LA -
+
+> MA
+
+RL (Wu et al., 2025) and AR EAL (Fu et al., 2025) as well as in near on-policy RL to correct learner–sampler mismatch in modern LLM RL training stacks (Yao et al., 2025a;b) Closely related is token or sequence-level M ASKED IMPOR - 
+
+> TANCE
+
+SAMPLING (MIS), which discard away updates with extreme IS ratios. I CE POP proposed token-level MIS to improve stability in MoE RL (Zhao et al., 2025) while other works motivate sequence-level MIS due training–inference mismatch analyses (Liu et al., 2025a). Notably, D EEP SEEK -V3.2 uses masking sequences above a geometric-mean threshold and with negative advantages, illustrating a practi-cal masking rule used at scale (DeepSeek-AI et al., 2025). Finally, M2PO iteratively drops token-level losses until a second-moment proxy of importance weights falls below a threshold (Zheng et al., 2025b;c). 3Stable Asynchrony: Variance-Controlled Off-Policy RL for LLMs 
+
+Algorithmic changes. GSPO improves training stability in MoE RL, defining importance ratios as the geometric mean of the token-level IS ratios over the sequence and performs sequence-level clipping/optimization (Zheng et al., 2025a). OPTIMAL TOKEN BASELINE (OTB) derives an on-policy variance-minimizing baseline and proposes a logit-based proxy (“energy”) for gradient-norms without extra backward passes (Li et al., 2025). 
+
+System-side changes. A complementary direction reduces mismatch via numerical and systems alignment. Switching from BF16 to FP16 can reduce train–inference numerical inconsistencies and improve stability (Qi et al., 2025), while Rollout Routing Replay (R3) stabilizes MoE RL by replay-ing inference-time expert routing during training (Ma et al., 2025). These mitigations are orthogonal to variance-aware optimization and can be combined with our approach. 
+
+2.4. Asynchronous distributed RL 
+
+In this paper, we adopt P IPELINE RL-k (Pich ´e et al., 2025) for our asynchronous training setup. At learner update t, the trainer optimizes the current policy πθt using trajectories sampled by a (possibly stale) behavior policy μ = πθt′ ,where k bounds the policy lag t − t′ (with k = 0 recovering the synchronous/on-policy regime). This induces off-policy updates whose severity increases with k. We also follow PipelineRL’s in-flight weight-update scheme, where sam-pling continues while weights are being updated. As a result, a single trajectory may span multiple policy versions. Throughout this paper, we use sequence-level importance sampling to correct for this lag, which is the theoretically grounded importance sampling for sequence-level policy gradients, and optimize the importance-weighted surrogate objective in (3). 
+
+# 3. VCPO: Robust, Scalable Asynchronous Post training 
+
+3.1. Why does Asynchronous Off-Policy RL collapse? 
+
+To understand training collapse under asynchrony, we run controlled experiments with Qwen2.5-7B Base on MATH (Hendrycks et al., 2021), a dataset of competition-style mathematics problems scored by exact-match final-answer correctness, and evaluate on 500 held-out problems (MATH-500). We log three signals over training: (i) the KL divergence between the rollout policy and the current learner policy (policy lag), (ii) reward / validation accuracy, and (iii) the ESS ratio , i.e., the effective sample size computed from sequence-level importance weights and normalized by the minibatch size. 
+
+Baseline choice for diagnostics. To isolate the effect of   
+
+> Figure 2. Sequence-Level TIS Collapse. Qwen2.5-7B Base trained on MATH task with 10-step off-policy (P IPELINE RL-10). The ESS ratio first degrades and then collapses, leading to a spike in rollout–policy KL divergence and a sharp drop in both training reward and validation accuracy. See Appendix F.3 for hyperparam-eters and training details.
+
+policy lag, we adopt a strong masking/clipping baseline for these didactic collapse experiments. Based on the mask-ing and clipping sweeps in Appendix E.2, we find that 
+
+sequence-level truncated importance sampling (TIS) with a higher threshold ( c = 8 .0) delays collapse the longest among masking/clipping methods. We therefore use this setting as our default off-policy correction when diagnosing collapse. 
+
+Optimizer and KL regularization. Unless otherwise noted, we use AdamW with weight decay (see Appendix F.1 for details). Following prior asynchronous (Fu et al., 2025; Wu et al., 2025; Espeholt et al., 2018) and synchronous (Yu et al., 2025) RL works, we do not incorporate explicit KL regular-ization loss as it constrains learning ability. We corroborate this observation with our own experiments (Appendix E.3). 
+
+Training Collapse. Figure 2 shows a representative col-lapse under high staleness (10 steps off-policy). As the ESS ratio collapses, updates become dominated by a few trajectories, leading to a KL explosion and an abrupt drop in training reward and validation accuracy. This supports our hypothesis that high-variance, dominated updates drives training collapse. For further evidence, see Appendix A for examples on math and reasoning tasks. 4Stable Asynchrony: Variance-Controlled Off-Policy RL for LLMs 
+
+3.2. Effective Sample Size Guided Step-Size Scaling for Stable Updates 
+
+If asynchronous training fails due a subset of unreliable updates, a natural idea is to reduce the impact of those updates so that optimization remains robust under policy lag. A useful analogy comes from large-batch optimiza-tion: as batch size increases, gradient noise typically de-creases (McCandlish et al., 2018), allowing larger stable learning rates. While SGD often follows the linear scaling rule (η ∝ B) (Goyal et al., 2017), a widely used heuris-tic for adaptive optimizers such as Adam/AdamW is the 
+
+square-root scaling law : increasing minibatch size by a fac-tor k permits scaling the learning rate by √k (equivalently, 
+
+η ∝ √B) (Krizhevsky, 2014; Hoffer et al., 2017; You et al., 2020). In asynchronous off-policy RL, however, the nominal batch size B can be misleading. As discussed in Section 2.2, importance weights may be heavy-tailed, so a batch of size 
+
+B can behave like a much smaller batch with only ESS 
+
+effectively independent samples. In this regime, ESS is the relevant notion of effective batch size, and step-size selection should depend on ESS rather than on B.Thus, motivated by the square-root scaling law η ∝ √B,we propose learning-rate scaling via an effective batch-size rule 
+
+ηeff ∝ √ρess , ρess ≜ ESS 
+
+B (4) where we call ρess the effective sample size ratio .Because even on-policy/synchronous training can have 
+
+ρon ess < 1 in practice (e.g., due to inevitable training-sampling differences and finite-sample effects), we introduce an em-pirical on-policy reference ρon ess ≜ E[ρess | on-policy ] which is a constant estimated from 1 step of a on-policy run (or a running average of a few-steps) 1. We then rescale the step size by the relative reliability of the batch: 
+
+ηeff = η ·
+
+s
+
+ρoff ess 
+
+ρon ess 
+
+(5) This scaling preserves the on-policy step scale when ρess ≈
+
+ρon , and automatically shrinks updates as ρess collapses. Thus when training is nearly on-policy and ESS ≈ B and 
+
+ηeff ≈ η; when a few samples dominate, ESS ≪ B and ηeff 
+
+shrinks like pESS /B , damping the unstable, high-variance updates that coincide with KL/gradient spikes. 
+
+3.3. Minimum Variance Baselines for Off-Policy RL 
+
+Subtracting a baseline from the reward (or advantage) leaves the expected policy gradient unchanged but can substan-  
+
+> 1Empirically, ρon is typically well-approximated by the first on-policy step.
+
+tially reduce variance. This control-variate view dates to reinforcement-comparison methods (Dayan, 1991) and was formalized for policy gradients (Greensmith et al., 2004), with optimal baselines derived in the on-policy set-ting (Weaver & Tao, 2013). In more recent work, systems often use simple group base-lines (e.g., per-prompt mean reward) for efficiency (Li et al., 2023; Shao et al., 2024), while recent work studies heuris-tic or approximate optimal baselines on-policy (Hao et al., 2025; Li et al., 2025). In highly asynchronous training, however, importance weighting changes the variance struc-ture. We thus derive the variance-minimizing baseline for an 
+
+off-policy, importance-weighted policy-gradient estimator. 
+
+Setup. Consider the off-policy gradient estimator with a scalar baseline b:
+
+ˆG(b) = 1
+
+B
+
+> B
+
+X
+
+> i=1
+
+wi(Ri − b) ∇θ log πθ (τi) (6) where each sample i contribute a score-gradient vector 
+
+gi = ∇θ log πθ (τi), a scalar reward/advantage Ri, and an importance ratio wi.
+
+Minimum Variance Off-policy Baseline. As we derive in Appendix B), minimizing Var( ˆG(b)) over scalar b yields a closed-form solution for the off-policy optimal baseline (OPOB) 
+
+b⋆ 
+
+> OPOB
+
+=
+
+PBi=1 w2 
+
+> i
+
+∥gi∥2 Ri
+
+PBi=1 w2 
+
+> i
+
+∥gi∥2 . (7) Compared to common group baselines (e.g., b = 1
+
+> B
+
+P 
+
+> i
+
+Ri), Eq. (7) shows that variance-optimal baselining in the off-policy regime depends on both (i) the importance weights wi
+
+and (ii) the gradient magnitudes ∥gi∥2. Intuitively, samples that are both highly upweighted off-policy and induce large parameter changes dominate update variance and should therefore dominate the baseline. 
+
+Connections to prior baselines. Equation (7) can re-cover many familiar special cases. When training is on-policy ( wi = 1 ), it reduces to the classic gradient-norm-weighted optimal baseline (Greensmith et al., 2004; Weaver & Tao, 2013). If, additionally, ∥gi∥ is approximately con-stant within a group, then b⋆ reduces to the group-mean reward baseline commonly used in practice. Our derivation shows that in the off-policy regime, both importance weights and gradient magnitudes are required for variance-optimal baselining. 
+
+3.4. Efficient Baseline-Aware Gradient Computation 
+
+A naive gradient-aware baseline requires two backward passes: one to compute per-sample gradient norms and a second to apply the resulting baseline, roughly doubling backward compute time at scale. We instead implement it 5Stable Asynchrony: Variance-Controlled Off-Policy RL for LLMs 
+
+with a single backward pass, adding minimal wall-clock and memory overhead. 
+
+Key observation: linearity of the baseline term. Note that expanding the equation in (6) yields 
+
+ˆG(b) = 1
+
+B
+
+> B
+
+X
+
+> i=1
+
+wiRigi
+
+| {z }
+
+> reward-weighted term
+
+− b · 1
+
+B
+
+> B
+
+X
+
+> i=1
+
+wigi
+
+| {z }
+
+> score term
+
+. (8) Thus, for any chosen b, the final gradient can be formed by combining two aggregated quantities: 
+
+SR =
+
+> B
+
+X
+
+> i=1
+
+wiRigi, S1 =
+
+> B
+
+X
+
+> i=1
+
+wigi
+
+ˆG(b) = 1
+
+B (SR − bS S ).
+
+Score-gradient reweighting into two buffers. We take ad-vantage of this linearity by computing per-sample score gradients gi once and accumulate them into two gra-dient buffers: (i) GR a buffer that accumulates the reward/advantage-weighted score gradients Riwigi, and (ii) 
+
+GS a score buffer that accumulates score gradients wigi.Afterwards, we form the final update by a simple linear combination of these buffers: 
+
+GR = X
+
+> i
+
+wiRigi, GS = X
+
+> i
+
+wigi.
+
+⇒ ˆG(b) = 1
+
+B (GR − b G S ) ,
+
+This avoids any additional backward pass to incorporate the baseline term. 
+
+Implementation. We implement Algorithm 1 in verl 
+
+using the Megatron-LM backend so that we can efficiently obtain gradient norm statistics. As can be seen in Figure 3, our method reduces the overhead of the naive method from 100% to a 19% step time overhead while only modestly increase memory usage by 14%. See Appendix C for more implementation details. 
+
+3.5. VCPO: Variance Controlled Policy Optimization 
+
+As noted in Appendix E.2, we find that sequence-level 
+
+truncated importance sampling (TIS) with a higher thresh-old ( c = 8 .0) delays collapse the longest among mask-ing/clipping methods. We thus combine sequence-level TIS with our effective-sample-size step-size scaling and our off-policy optimal baseline. This leads to the following surrogate loss, whose gradient equals our baseline-aware, 
+
+Algorithm 1 Single-backward accumulation with Off-Policy Optimal Baseline baseline 
+
+1: Input: Minibatch {(xi, τ i, R i, w i)}Bi=1 , learner policy 
+
+πθ
+
+2: Output: Baseline-aware gradient estimate ˆG(b⋆
+
+> OPOB
+
+)
+
+and scalar baseline b⋆
+
+> OPOB
+
+3: Initialize gradient buffers GR ← 0, GS ← 0
+
+4: Initialize baseline numerators N ← 0, D ← 0
+
+5: for i = 1 to B do 
+
+6: ℓi ← log πθ (τi | xi)
+
+7: gi ← ∇ θ ℓi (backprop )
+
+8: si ← ∥ gi∥22
+
+9: GR ← GR + ( wiRi) gi
+
+10: GS ← GS + wi gi
+
+11: N ← N + w2 
+
+> i
+
+si Ri
+
+12: D ← D + w2 
+
+> i
+
+si
+
+13: end for 
+
+14: b⋆ 
+
+> OPOB
+
+← stopgrad 
+
+ ND+ε
+
+
+
+15: ˆG(b⋆
+
+> OPOB
+
+) ← 1 
+
+> B
+
+(GR − b⋆ 
+
+> OPOB
+
+GS )
+
+16: return ˆG(b⋆
+
+> OPOB
+
+), b ⋆
+
+> OPOB
+
+truncated IS policy-gradient estimator 
+
+LVCPO (θ) = −Ex∼D , y ∼μ(·| x)
+
+h
+
+wTIS (x, y ) ( R(x, y ) − b⋆
+
+> OPOB
+
+) log πθ (y | x)
+
+i
+
+≈ − 1
+
+B
+
+> B
+
+X
+
+> i=1
+
+wTIS  
+
+> i
+
+(Ri − b⋆
+
+> OPOB
+
+) log πθ (yi | xi),
+
+(9) where the sequence-level truncated importance weight is 
+
+wTIS (x, y ) = min 
+
+
+
+sg 
+
+ πθ (y | x)
+
+μ(y | x)
+
+
+
+, c
+
+
+
+We then apply AdamW using the gradient ∇θ LVCPO (θ), but scale learning rate η with an ESS-scaled step size 
+
+ηeff = η ·
+
+s
+
+ρoff ess 
+
+ρon ess 
+
+such each training step size scales with ESS accordingly. Note although we adopt TIS, we still use the unclipped IS ratios to calculate ESS. 
+
+# 4. Empirical Evaluation 
+
+4.1. Tasks 
+
+We evaluate VCPO across three representative RL post-training pipelines for LLM reasoning and agentic tool use. These settings require long rollouts (reasoning and multi-turn interactions with tool calls), so training is often domi-nated by rollout generation. As a result, strictly on-policy 6Stable Asynchrony: Variance-Controlled Off-Policy RL for LLMs  
+
+> Figure 3. Compute (left) and memory (right) overhead of baseline-aware updates for Qwen2.5-7B on 4 ×H100 GPUs (TP=4) with a sequence length of 8192 tokens.
+
+training underutilizes compute: the gradient updates must wait for sampling to complete, and this bottleneck worsens at scale and in sparse-reward domains that require more exploration. We test VCPO in highly asynchronous regimes. Across all three pipelines, VCPO remains robust to substantial learner– sampler mismatch, improving throughput while preserving strong learning performance 1. Mathematical problem solving. We evaluate on GSM8K (Cobbe et al., 2021), a benchmark of grade-school math word problems, and on MATH (Hendrycks et al., 2021), a dataset of competition-style mathematics problems spanning mul-tiple subjects and difficulty levels. For both bench-marks, we use a binary reward based on exact match of the final numeric answer and train on the official training split while evaluating on the official validation split. 2. General reasoning (verifiable). We construct a Countdown-style arithmetic reasoning dataset using Reasoning Gym (Stojanovski et al., 2025), where re-wards are verifiable by deterministic checking of the final answer. We sample 9,000 problems for training and hold out 1,000 problems for validation, following prior setups for verifiable-reward reasoning tasks (Liu et al., 2025b). 3. Tool-integrated multi-turn reasoning. We evaluate multi-turn tool use in the SimpleTIR setting (Xue et al., 2025), where the model must interleave reasoning with external tool calls. We train using the DAPO dataset (Yu et al., 2025) and evaluate on a held-out exam-style benchmark (AIME2025).  
+
+> Figure 4. GSM8K with Qwen2-1.5B under P IPELINE RL-12 (high policy lag). Most baselines lead to training collapse (or crash, e.g. Geometric MIS masks all sequences and has no loss), while VCPO remains stable throughout training and matches synchronous per-formance. Training details and hyperparameters can be found in Appendix F.2.
+
+4.2. Metrics and Baselines On-Policy Training as Oracle Baseline To disentangle task-learning dynamics from instabilities introduced by asynchrony, we report a fully synchronous ( k = 0 ) RL run as an oracle reference (matched training steps and hy-perparameters). 
+
+Other Baselines. We compare against representative prior approaches spanning (i) masking/clipping-based stabiliza-tion (e.g., M2PO, geometric sequence masking, TIS), (ii) objective-level approaches such as GSPO and OTB, and (iii) numerical/systems mitigations (e.g. using fp16 precision). In this paper, we train dense models, and so MoE specific methods such as Rollout Routing Replay are not considered. 
+
+4.3. VCPO Matches Synchronous Performance with Better Throughput 
+
+Across mathematical reasoning tasks, VCPO matches the final performance of fully synchronous RL even under high asynchrony. On GSM8K and MATH-500, Figures 4 and 5 show that VCPO remains stable throughout training and reaches accuracy comparable to the synchronous reference, whereas several baselines collapse or crash in this regime. In a general reasoning task such as Countdown, Figure 5 shows that VCPO attains the same peak performance as syn-chronous RL with higher end-to-end throughput enabled by asynchronous training. Furthermore, component ablations show both ESS based learning rate scaling and the off-policy optimal baseline improve robustness, and combining them yields the best stability and accuracy (Appendix D). 7Stable Asynchrony: Variance-Controlled Off-Policy RL for LLMs                                              
+
+> Figure 5. Qwen2.5-7B under P IPELINE RL-10 (10 Steps Off-Policy) on Countdown and MATH-500. Across both tasks, sequence level truncated importance sampling (TIS) suffers ESS-ratio collapse followed by KL/gradient instability and degraded accuracy, whereas VCPO maintains healthy ESS and stable updates, reaching synchronous performance. Training details and hyperparameters are provided in Appendix F.3.
+> Table 1. End-to-end training times and validation accuracy for synchronous vs. asynchronous training (lag k).
+> Method Countdown ↑Steps GPU hours ↓
+> Base 1.6% ––Sync ( k=0 )38.4% 400 143.2 Async ( k=10 )41.9% 400 89.6 Method MATH-500 ↑Steps GPU hours ↓
+> Base 40.2% ––Sync ( k=0 )72.0% 400 134.4 Async ( k=10 )71.6% 400 92.8 Method AIME 2025 ↑Steps GPU hours ↓
+> Base 5.3% ––Sync ( k=0 )26.7% 300 420.2 Async ( k=2 )27.8% 220 168.9
+
+4.4. VCPO Provides State-of-the-Art Stability Under High Asynchrony Enabling Longer Stable Training. Figure 4 summa-rizes our highly asynchronous training results (12 steps off-policy) on GSM8K with Qwen2-1.5B. While the syn-chronous baseline trains smoothly, most existing stabiliza-tion approaches fail under this level of policy lag. In contrast, VCPO consistently avoids collapse. Across baselines: (i) ratio-based clipping (TIS) and masking (MIS) eventually collapse; (ii) algorithmic variants such as GSPO and OTB do not reliably prevent collapse; and (iii) systems-side mitigations (e.g., FP16) delay collapse but do not ad-dress the underlying instability mechanism. Although (ii) and (iii) were not designed specifically for highly asyn-chronous RL, we include them for completeness because they are commonly used to stabilize on-policy LLM-RL training. See Appendix E for additional comparisons and ablations, including systematic sweeps over TIS/MIS hyperparam-eters, algorithmic and systems variants (GSPO, OTB, learning-rate tuning), and tasks. 
+
+Avoiding Effective Sample Size Collapse and Training Degradation. As shown in Figure 5, in both general math-ematical (MATH-500) and reasoning tasks (Countdown), naively training under high asynchrony leads to ESS-ratio collapse followed by gradient instability and performance degradation. However, VCPO remains stable, maintain-ing a high ESS ratio, stable gradient norms, and KL levels throughout training. 
+
+4.5. VCPO Enables Fast and Stable Long-Context Multi-Turn RL 
+
+We further evaluate VCPO in a long-context, tool-integrated multi-turn setting following SimpleTIR (Xue et al., 2025), where rollouts are substantially longer and training is known to be more brittle (Li et al., 2025). We train with minibatch size 128 and 16 responses per prompt, using a maximum completion length of 12K tokens and up to 5 tool calls per trajectory. We train on the DAPO (Yu et al., 2025) dataset and evaluate on AIME 2025, see Appendix F.4 for more details. Due to longer trajectories and prevalence of out-of-distribution tool calls, we use a lower level of asynchrony (2 8Stable Asynchrony: Variance-Controlled Off-Policy RL for LLMs 
+
+steps off-policy). Figure 1 shows that unlike sequence-level TIS which collapses, VCPO improves steadily in both train reward and AIME2025 accuracy, reducing compute by 2.5×
+
+compared the synchronous baseline. This demonstrates that our variance-control mechanisms transfer to long-horizon, multi-turn post-training. 
+
+# 5. Discussion 
+
+In this work, we introduce VCPO, a drop-in method for robust, off-policy asynchronous RL LLM post-training. We identify a consistent failure mode in highly asynchronous regimes– an effective sample size collapse that amplifies policy gradient variance–and building on this diagnosis, VCPO stabilizes training with two main contributions (i) 
+
+effective-sample-size–guided step-size rescaling to auto-matically damp unreliable updates, and (ii) a closed-form minimum-variance baseline for importance-weighted gra-dients that avoids training an auxiliary value model and adds minimal overhead. Across mathematical reasoning, general reasoning, and long-context multi-turn tool use, VCPO improves robustness under substantial learner–sampler mis-match while preserving the throughput benefits of asyn-chronous rollouts, highlighting explicit variance control as a key ingredient for reliable asynchronous RL at scale. 
+
+Limitations and future work. We study dense Transformer policies under standard precision and a fixed set of asyn-chronous pipeline designs. Future work should evaluate VCPO on MoE models (where routing can amplify mis-match), under more aggressive quantization (e.g., FP8), and in substantially longer-horizon agentic settings (e.g., search/planning with sparse rewards), where additional ex-ploration and memory mechanisms may be needed along-side variance control. 
+
+# Impact Statement 
+
+More stable asynchronous RL can reduce wasted compute and enable more efficient post-training for reasoning and tool use. However, improving reliability may also increase agent capabilities and potential misuse; deployments should therefore follow domain-appropriate safety evaluations and monitoring. 
+
+# References 
+
+Cobbe, K., Kosaraju, V., Bavarian, M., Chen, M., Jun, H., Kaiser, L., Plappert, M., Tworek, J., Hilton, J., Nakano, R., Hesse, C., and Schulman, J. Training verifiers to solve math word problems, 2021. URL https://arxiv. org/abs/2110.14168 .Dayan, P. Reinforcement comparison. In Touretzky, D. S., Elman, J. L., Sejnowski, T. J., and Hinton, G. E. (eds.), 
+
+Connectionist Models: Proceedings of the 1990 Summer School , pp. 45–51. Morgan Kaufmann, San Mateo, CA, 1991. DeepSeek-AI, Liu, A., Mei, A., Lin, B., Xue, B., Wang, B., Xu, B., et al. Deepseek-v3.2: Pushing the frontier of open large language models, 2025. URL https: //arxiv.org/abs/2512.02556 .Degris, T., White, M., and Sutton, R. S. Off-policy actor-critic, 2012. URL https://arxiv.org/abs/ 1205.4839 .Espeholt, L., Soyer, H., Munos, R., Simonyan, K., Mnih, V., Ward, T., Doron, Y., Firoiu, V., Harley, T., Dun-ning, I., Legg, S., and Kavukcuoglu, K. Impala: Scal-able distributed deep-rl with importance weighted actor-learner architectures, 2018. URL https://arxiv. org/abs/1802.01561 .Fu, W., Gao, J., Shen, X., Zhu, C., Mei, Z., He, C., Xu, S., Wei, G., Mei, J., Wang, J., Yang, T., Yuan, B., and Wu, Y. Areal: A large-scale asynchronous reinforcement learning system for language reasoning, 2025. URL https:// arxiv.org/abs/2505.24298 .Goyal, P., Doll ´ar, P., Girshick, R., Noordhuis, P., Wesolowski, L., Kyrola, A., Tulloch, A., Jia, Y., and He, K. Accurate, large minibatch SGD: Training Ima-geNet in 1 hour, 2017. URL https://arxiv.org/ abs/1706.02677 .Greensmith, E., Bartlett, P. L., and Baxter, J. Variance reduc-tion techniques for gradient estimates in reinforcement learning. Journal of Machine Learning Research , 5(Nov): 1471–1530, 2004. URL https://www.jmlr.org/ papers/v5/greensmith04a.html .9Stable Asynchrony: Variance-Controlled Off-Policy RL for LLMs 
+
+Hao, Y., Dong, L., Wu, X., Huang, S., Chi, Z., and Wei, F. On-policy rl with optimal reward baseline, 2025. URL 
+
+https://arxiv.org/abs/2505.23585 .He, H. Defeating nondeterminism in llm inference, September 2025. URL 
+
+https://thinkingmachines.ai/blog/ defeating-nondeterminism-in-llm-inference/ .Thinking Machines Lab blog post. Published Sep 10, 2025. Hendrycks, D., Burns, C., Kadavath, S., Arora, A., Basart, S., Tang, E., Song, D., and Steinhardt, J. Measuring math-ematical problem solving with the MATH dataset, 2021. URL https://arxiv.org/abs/2103.03874 .Hoffer, E., Hubara, I., and Soudry, D. Train longer, general-ize better: closing the generalization gap in large batch training of neural networks. In Advances in Neural Infor-mation Processing Systems (NeurIPS) , 2017. Hu, Q., Yang, S., Guo, J., Yao, X., Lin, Y., Gu, Y., Cai, H., Gan, C., Klimovic, A., and Han, S. Taming the long-tail: Efficient reasoning rl training with adaptive drafter, 2025. URL https://arxiv.org/abs/2511.16665 .Kish, L. Survey Sampling . John Wiley & Sons, 1995. ISBN 9780471109495. Later reprint/edition listing; original publication 1965. Kong, A. A note on importance sampling using stan-dardized weights. Technical Report 348, Department of Statistics, The University of Chicago, July 1992. URL https://d3qi0qp55mx5f5.cloudfront. net/stat/docs/tech-rpts/tr348.pdf .Kong, A., Liu, J. S., and Wong, W. H. Sequential imputa-tions and Bayesian missing data problems. Journal of the American Statistical Association , 89(425):278–288, 1994. doi: 10.1080/01621459.1994.10476469. URL 
+
+https://www.tandfonline.com/doi/abs/ 10.1080/01621459.1994.10476469 .Krizhevsky, A. One weird trick for parallelizing convolu-tional neural networks. arXiv preprint arXiv:1404.5997 ,2014. Li, Y., Xu, J., Li, Z., Liu, J., Liu, W., et al. The optimal token baseline: Variance reduction for long-horizon llm-rl, December 2025. URL https://www.notion.so/ 399211a558b782cfa936014c0d42dfb8?pvs= 21 . Online report (Notion). Accessed 2026-01-14. Li, Z., Xu, T., Zhang, Y., Lin, Z., Yu, Y., Sun, R., and Luo, Z.-Q. Remax: A simple, effective, and efficient reinforce-ment learning method for aligning large language mod-els, 2023. URL https://arxiv.org/abs/2310. 10505 .Liu, J., Li, Y., Fu, Y., Wang, J., Liu, Q., and Jiang, Z. When speed kills stability: Demystifying RL collapse from the training-inference mismatch, September 2025a. URL https://yingru.notion.site/ When-Speed-Kills-Stability-Demystifying-RL-Collap 
+
+Online report / blog post. First published Sep 17, 2025. Accessed 2026-01-14. Liu, M., Diao, S., Lu, X., Hu, J., Dong, X., Choi, Y., Kautz, J., and Dong, Y. Prorl: Prolonged reinforcement learn-ing expands reasoning boundaries in large language mod-els, 2025b. URL https://arxiv.org/abs/2505. 24864 .Liu, Q., Li, L., Tang, Z., and Zhou, D. Breaking the curse of horizon: Infinite-horizon off-policy estimation. In Advances in Neural Information Processing Systems (NeurIPS) , 2018. Liu, Y., Bacon, P.-L., and Brunskill, E. Understanding the curse of horizon in off-policy evaluation via conditional importance sampling. In Proceedings of the 37th Interna-tional Conference on Machine Learning (ICML) , volume 119 of Proceedings of Machine Learning Research , pp. 6184–6193. PMLR, 2020. Ma, W., Zhang, H., Zhao, L., Song, Y., Wang, Y., Sui, Z., and Luo, F. Stabilizing moe reinforcement learning by aligning training and inference routers, 2025. URL 
+
+https://arxiv.org/abs/2510.11370 .McCandlish, S., Kaplan, J., Amodei, D., and Team, O. D. An empirical model of large-batch training, 2018. URL 
+
+https://arxiv.org/abs/1812.06162 .Noukhovitch, M., Huang, S., Xhonneux, S., Hosseini, A., Agarwal, R., and Courville, A. Asynchronous rlhf: Faster and more efficient off-policy rl for language models, 2024. URL https://arxiv.org/abs/2410.18252 .Pich ´e, A., Kamaloo, E., Pardinas, R., and Bahdanau, D. Pipelinerl: Faster on-policy reinforcement learn-ing for long sequence generation, 2025. URL https: //arxiv.org/abs/2509.19128 .Qi, P., Liu, Z., Zhou, X., Pang, T., Du, C., Lee, W. S., and Lin, M. Defeating the training-inference mismatch via fp16, 2025. URL https://arxiv.org/abs/ 2510.26788 .Schulman, J., Wolski, F., Dhariwal, P., Radford, A., and Klimov, O. Proximal policy optimization algo-rithms, 2017. URL https://arxiv.org/abs/ 1707.06347 .Shah, V., Obando-Ceron, J., Jain, V., Bartoldson, B., Kailkhura, B., Mittal, S., Berseth, G., Castro, P. S., Bengio, Y., Malkin, N., Jain, M., Venkatraman, S., 10 Stable Asynchrony: Variance-Controlled Off-Policy RL for LLMs 
+
+and Courville, A. A comedy of estimators: On kl regularization in rl training of llms. arXiv preprint arXiv:2512.21852 , 2026. version 2, 6 Jan 2026. Shao, Z., Wang, P., Zhu, Q., Xu, R., Song, J., Bi, X., Zhang, H., Zhang, M., Li, Y. K., Wu, Y., and Guo, D. Deepseekmath: Pushing the limits of mathemat-ical reasoning in open language models, 2024. URL 
+
+https://arxiv.org/abs/2402.03300 .Stojanovski, Z., Stanley, O., Sharratt, J., Jones, R., Adefioye, A., Kaddour, J., and K ¨opf, A. Reasoning gym: Reasoning environments for reinforcement learning with verifiable rewards, 2025. URL https://arxiv.org/abs/ 2505.24760 .Sutton, R. S., McAllester, D., Singh, S., and Mansour, Y. Policy gradient methods for reinforcement learn-ing with function approximation. In Advances in Neural Information Processing Systems (NeurIPS) ,2000. URL https://papers.nips.cc/paper/ 1713-policy-gradient-methods-for-reinforcement-learning-with-function-approximation .Weaver, L. and Tao, N. The optimal reward baseline for gradient-based reinforcement learning, 2013. URL 
+
+https://arxiv.org/abs/1301.2315 .Williams, R. J. Simple statistical gradient-following algo-rithms for connectionist reinforcement learning. Machine Learning , 8:229–256, 1992. doi: 10.1007/BF00992696. URL https://link.springer.com/article/ 10.1007/BF00992696 .Wu, B., Wang, S., Tang, Y., Ding, J., Helenowski, E., Tan, L., Xu, T., Gowda, T., Chen, Z., Zhu, C., Tang, X., Qian, Y., Zhu, B., and Hou, R. Llamarl: A dis-tributed asynchronous reinforcement learning framework for efficient large-scale llm training, 2025. URL https: //arxiv.org/abs/2505.24034 .Xi, H., Ruan, C., Liao, P., Lin, Y., Cai, H., Zhao, Y., Yang, S., Keutzer, K., Han, S., and Zhu, L. Jet-rl: En-abling on-policy fp8 reinforcement learning with uni-fied training and rollout precision flow, 2026. URL 
+
+https://arxiv.org/abs/2601.14243 .Xue, Z., Zheng, L., Liu, Q., Li, Y., Zheng, X., Ma, Z., and An, B. Simpletir: End-to-end reinforcement learning for multi-turn tool-integrated reasoning, 2025. URL https: //arxiv.org/abs/2509.02479 .Yao, F., Liu, L., Zhang, D., Dong, C., Shang, J., and Gao, J. Your efficient rl framework secretly brings you off-policy rl training, August 2025a. URL https://fengyao. notion.site/off-policy-rl . Online report / blog post. First published Aug 5, 2025; last updated Oct 13, 2025. Accessed 2026-01-14. Yao, F., Liu, L., Zhang, D., Dong, C., Shang, J., and Gao, J. On the rollout-training mismatch in modern rl systems. In OPT2025: 17th Annual Workshop on Optimization for Machine Learning , 2025b. URL https://opt-ml. org/papers/2025/paper116.pdf . Workshop paper. Accessed 2026-01-14. You, Y., Li, J., Reddi, S., Hseu, J., Kumar, S., Bhojanapalli, S., Song, X., Demmel, J., Keutzer, K., and Hsieh, C.-J. Large batch optimization for deep learning: Training bert in 76 minutes. In International Conference on Learning Representations (ICLR) , 2020. Yu, Q. et al. Dapo: An open-source llm reinforcement learning system at scale, 2025. URL https://arxiv. org/abs/2503.14476 .Zhao, X., Liu, Y., Xu, K., Guo, J., Wang, Z., Sun, Y., Kong, X., Cao, Q., Jiang, L., Wen, Z., Zhang, Z., and Zhou, J. Small leak can sink a great ship—boost rl training on moe with icepop!, September 2025. URL https:// ringtech.notion.site/icepop . Online report (Notion). Accessed 2026-01-14. Zheng, C., Liu, S., Li, M., Chen, X.-H., Yu, B., Gao, C., Dang, K., Liu, Y., Men, R., Yang, A., Zhou, J., and Lin, J. Group sequence policy optimization, 2025a. URL 
+
+https://arxiv.org/abs/2507.18071 .Zheng, H., Zhao, J., and Chen, B. Prosperity before col-lapse: How far can off-policy rl reach with stale data on llms?, 2025b. URL https://arxiv.org/abs/ 2510.01161 .Zheng, H., Zhao, J., and Chen, B. How far can off-policy rl reach with stale data on llms? (m2po page), 2025c. URL https://m2po.notion. site/rl-stale-m2po . Online project page (No-tion). Accessed 2026-01-14. 11 Stable Asynchrony: Variance-Controlled Off-Policy RL for LLMs 
+
+# A. Why does the Asynchronous RL collapse? 
+
+Across model sizes and tasks, we find the same qualitative pattern: runs that remain stable maintain a healthy ESS ratio, while unstable runs exhibit a pronounced ESS-ratio collapse shortly before KL/gradient explosions and performance col-lapse. This supports our central diagnosis that asynchronous failure is driven by importance-weight degeneracy and dom-inated off-policy updates.  
+
+> Figure 6. Qwen2-1.5B Base on GSM8K questions. Truncated Importance Sampling (TIS) exhibits both effective sample size (ESS) collapse and KL explosion, leading to training collapse.
+
+In addition to Figure 2, which illustrates a collapse trajectory on MATH-500, we observe the same qualitative failure pat-tern across another mathematical reasoning task (GSM8K) and general reasoning task (Countdown). Figure 6 shows a representative GSM8K run under high policy lag ( k=12 )using truncated importance sampling (TIS): the ESS ratio degrades and then collapses (i.e., the weighted update be-comes dominated by a small subset of trajectories), followed by instability in rollout–policy KL and a sharp drop in task performance. Once ESS collapses, updates become effec-tively single-sample, making the policy-gradient estimator extremely high variance and precipitating abrupt KL spikes. Similarly, on Countdown (Figure 7), validation accuracy collapses to near zero within the first ∼50 training steps, consistent with rapid weight degeneracy and dominated off-policy updates.   
+
+> Figure 7. Countdown (Qwen2-1.5B Base) under high asynchrony with TIS. Validation accuracy collapses to near zero within the first ∼50 training steps, indicating rapid training failure.
+
+# B. Optimal Off-Policy Reward Baseline 
+
+We derive the variance-minimizing scalar reward base-line for an importance-weighted policy-gradient estimator. Throughout, we assume standard regularity conditions for the score-function gradient estimator, including (i) support: 
+
+μ(τ ) > 0 whenever πθ (τ ) > 0 so importance ratios are well-defined, and (ii) interchange of gradient and expecta-tion so that Eτ ∼πθ [∇θ log πθ (τ )] = 0 . These conditions are standard in policy-gradient analyses (Williams, 1992; Sutton et al., 2000; Degris et al., 2012). 
+
+B.1. Single-sample derivation 
+
+Let a single trajectory sample τ have reward (or advantage) 
+
+R ∈ R and score-gradient vector 
+
+g ≜ ∇θ log πθ (τ ).
+
+In the off-policy setting, trajectories are sampled from a be-havior policy μ, and we use the (unnormalized) importance ratio 
+
+w ≜ πθ (τ )
+
+μ(τ ) .
+
+Consider the (single-sample) importance-weighted policy-gradient estimator with a constant baseline b:
+
+G(b) = w (R − b) g. (10) Subtracting a constant baseline does not change the expected gradient because 
+
+Eτ ∼μ[wg ] = Eτ ∼πθ [g] = Eτ ∼πθ [∇θ log πθ (τ )] = 0 .
+
+12 Stable Asynchrony: Variance-Controlled Off-Policy RL for LLMs 
+
+Therefore, minimizing Var( G(b)) over b is equivalent to minimizing the second moment E∥G(b)∥22.We have 
+
+E∥G(b)∥22 = Ew2(R − b)2∥g∥22
+
+ . (11) Differentiating (11) with respect to b yields 
+
+∂∂b Ew2(R − b)2∥g∥22
+
+ = −2 Ew2(R − b)∥g∥22
+
+ .
+
+Setting the derivative to zero gives the variance-minimizing baseline 
+
+b⋆ = Ew2R∥g∥22
+
+
+
+E[w2∥g∥22] . (12) 
+
+B.2. Minibatch estimator and plug-in form 
+
+For a minibatch of B i.i.d. samples {(τi, R i, w i, g i)}Bi=1 
+
+drawn from μ, the minibatch estimator is 
+
+ˆG(b) = 1
+
+B
+
+> B
+
+X
+
+> i=1
+
+wi(Ri − b)gi.
+
+Since averaging i.i.d. samples scales variance by 1/B , the same b⋆ in (12) minimizes Var( ˆG(b)) .In practice, we use the minibatch plug-in estimate corre-sponding to (12): 
+
+b⋆ ≈
+
+PBi=1 w2 
+
+> i
+
+∥gi∥22Ri
+
+PBi=1 w2 
+
+> i
+
+∥gi∥22
+
+(13) 
+
+Remarks. (i) In the on-policy regime ( w ≡ 1), Eq. (12) reduces to the classic gradient-norm-weighted optimal base-line (Greensmith et al., 2004; Weaver & Tao, 2013). (ii) Relative to group-mean baselines b = 1
+
+> B
+
+P 
+
+> i
+
+Ri, Eq. (13) shows that variance-optimal baselining in the off-policy regime depends on both the importance ratios and the gra-dient magnitudes. In comparison, GRPO adopts the mean normalize and RLOO uses a leave-one-out estimator 
+
+bGRPO = 1
+
+N
+
+> N
+
+X
+
+> i=1
+
+Ri, bk 
+
+> RLOO
+
+= 1
+
+N − 1
+
+X
+
+> i̸=k
+
+Ri
+
+# C. Efficient Baseline Aware Gradient Computations 
+
+We implement our baseline-aware updates in Megatron-LM, leveraging its explicit control over parameter shards and optimizer state under DP ×TP ×CP parallelism. 
+
+Per-trajectory gradient-norm statistics under deferred DP synchronization. Computing the OPOB baseline re-quires per-trajectory gradient norms ∥gi∥2. A naive im-plementation would perform two backward passes: one to obtain ∥gi∥2 and a second to form the baseline-adjusted policy gradient. Instead, we compute all required quantities in a single backward pass by deferring the data-parallel (DP) gradient all-reduce until after local per-trajectory statistics are computed. Concretely, we run backprop with DP com-munication disabled so that each worker retains its local gradients, compute the needed per-trajectory scalars locally, and then perform a single DP all-reduce on the final com-bined gradient. This design preserves the FLOPs of a single backward pass while replacing the naive two-backward implementation with modest additional memory traffic (for an extra gradient buffer) and a small number of additional scalar reductions. 
+
+Two-buffer accumulation for baseline-aware gradients. 
+
+For each trajectory τi, we form the per-trajectory negative log-likelihood Li = − log πθ (τi) and backpropagate once to obtain the score-gradient gi = ∇θ log πθ (τi). During this pass, we accumulate gi into two gradient buffers: (i) a reward-weighted buffer with coefficient wiRi, and (ii) a score buffer with coefficient wi. After the loop, we compute the OPOB baseline b⋆ 
+
+> OPOB
+
+from the locally accumulated per-trajectory statistics (Algorithm 1) and form the final baseline-aware gradient ˆG = 1 
+
+> B
+
+(GR − b⋆ 
+
+> OPOB
+
+GS ) with-out any additional forward/backward pass. 
+
+# D. Component Ablations of VCPO 
+
+We ablate VCPO into its two core variance-control com-ponents: ESS-guided step-size scaling and the off-policy optimal baseline. To quantify each component’s contribu-tion under the same asynchronous regime and model/task, we compare: (i) TIS (sequence-level truncated IS only), (ii) 
+
+TIS + ESS step-size scaling (our step-size rule applied to AdamW), (iii) TIS + OPOB (our closed-form off-policy baseline), and All runs use identical hyperparameters except for the ablated component. Figure 8 shows that both components improve stability and performance relative to TIS alone, and are complementary. 
+
+# E. Further VCPO Ablation and Comparison Studies 
+
+This appendix provides additional ablations in the MATH and GSM8K setting to isolate the contributions of (i) the ESS-guided step-size rule and (ii) the optimal off-policy baseline as well compare with previous methods. Unless otherwise noted, we follow the same training setup as in the main experiments Appendix F.3). 13 Stable Asynchrony: Variance-Controlled Off-Policy RL for LLMs  
+
+> Figure 8. Component ablations on MATH-500 under high asyn-chrony (Qwen2.5-7B, P IPELINE RL-10). We compare TIS alone, as well as adding ESS-guided step-size scaling or the off-policy optimal baseline (OPOB). Both components improve stability and accuracy.
+
+E.1. Is Lowering the Learning Rate Sufficient for Stable Asynchronous RL? 
+
+A natural question is whether instability under high asyn-chrony can be addressed by simply lowering the learning rate. Our ESS-guided rule can be viewed as an automatic, data-dependent step-size schedule: it reduces the effective step size precisely when importance weights concentrate, without requiring manual learning-rate sweeps. To test whether conservative tuning alone is sufficient, we run fixed low-learning-rate baselines under the same asyn-chronous setting. Figure 9 compares VCPO to a lower learning rate (with lr= 1−7 instead of lr= 1−6) variant of truncated importance sampling (TIS). While reducing the learning rate can mitigate catastrophic collapse, it does so by slowing learning and yielding worse final accuracy. In contrast, VCPO achieves both higher accuracy and stable training without per-task learning-rate tuning, illustrating a favorable stability–efficiency tradeoff. 
+
+E.2. Are Clipping or Masking Methods Sufficient? 
+
+We next examine whether standard heuristics that directly bound importance ratios are sufficient to stabilize highly asynchronous RL. We report additional results for both 
+
+masking (MIS-style) and clipping (TIS-style) applied to different ratio definitions. 
+
+Methods. We consider three ratio variants for both mask-ing and clipping: (i) sequence ratio (full-trajectory like-lihood ratio), (ii) token ratio (per-token likelihood ratio), and (iii) geometric mean ratio (a length-normalized proxy). For masking, we zero out the update when the chosen ratio  
+
+> Figure 9. Lowering the learning rate is not a substitute for variance-aware step-size control. On MATH-500 under high asynchrony, a very small fixed learning rate (TIS + Low LR) improves stability but converges more slowly and to lower accuracy, despite exhibit-ing similar ESS levels. VCPO reaches higher accuracy with stable updates without learning-rate sweeps.
+
+exceeds a threshold; for clipping, we cap the ratio at the threshold. DeepSeek-v3.2 (DeepSeek-AI et al., 2025) introduces a masking heuristic that is closely related to masked impor-tance sampling, using a geometric-mean MIS with an ad-ditional sign constraint on advantages to discard unstable updates. 
+
+Thresholds. Following prior work and practitioner guid-ance suggesting that bounding extreme ratios can reduce variance (Yao et al., 2025a; Wu et al., 2025; Fu et al., 2025), we evaluate two representative maximum thresh-olds, c ∈ { 2.0, 8.0}, across all ratio variants. (We keep other hyperparameters matched to the main setup.) In Figure 10, TIS (a, b ) denotes truncated importance sam-pling where ratios outside the interval (a, b ) are clipped back into (a, b ), while MIS (a, b ) denotes masked impor-tance sampling where updates with ratios outside (a, b ) are discarded (i.e., assigned zero weight). 
+
+Findings and tuning sensitivity. Figure 10 shows that these masking/clipping methods can delay collapse in some settings, but it is not a reliable substitute for VCPO under high asynchrony. In particular, sequence-level MIS is highly brittle: at both thresholds we find it can mask nearly all sequences, effectively removing the learning signal and causing training to fail. Token-level variants can be less brittle but remain unstable and sensitive to the threshold 14 Stable Asynchrony: Variance-Controlled Off-Policy RL for LLMs 
+
+choice. Among the baselines we tested, sequence-level TIS with the larger threshold ( c = 8 .0) performs best , but still underperforms VCPO and does not consistently prevent late-stage instability. A further limitation is additional overhead of hyperpa-rameter tuning: the importance-ratio distribution becomes broader and more heavy-tailed as model sizes increases, moving to lower preivios, so the stabilizing threshold de-pends strongly on the degree of off-policy-ness. In practice this requires additional sweeps over both the threshold and the ratio definition (sequence vs. token vs. geometric mean), which becomes increasingly costly when scaling to new tasks, models, or lag values.      
+
+> Figure 10. Masking and clipping ablations under 12 steps off-policy on GSM8K (Qwen2-1.5B). We compare truncated impor-tance sampling (TIS) and masked importance sampling (MIS) us-ing sequence-level, token-level, and geometric-mean ratio statistics with thresholds c∈ { 2.0,8.0}. Overall, these methods bounding is highly sensitive to the threshold and fail to prevent training col-lapse.
+
+M2PO-style masking. We reproduce M2PO (Zheng et al., 2025b) using the authors’ recommended masking threshold (max = 0 .04 ). Figure 11 shows that at high pol-icy lag (P IPELINE RL k=12 ) on GSM8K with Qwen2-1.5B, M2PO does not yield stable training: the trusted-token (mask) fraction becomes highly erratic and can collapse to-ward masking nearly all tokens, coinciding with KL spikes and a sharp drop in validation accuracy. We note reducing the lag to k=10 does not reliably fix this behavior. We suspect that the commonly adopted P IPELINE RL style asyn-chronous training setup may differ from the exact regime studied in M2PO. In particular, their pipeline appears to train on exclusively stale rollouts from a fixed-lag behavior policy, whereas our system maintains a queue with mixed-staleness samples and may also include in-flight updates with partially completed rollouts. This additional hetero-geneity can broaden the importance-ratio distribution and may exacerbate masking instability, so the results in Fig-ure 11 should be interpreted as evaluating M2PO under our (more heterogeneous) P IPELINE RL style asynchronous stack.      
+
+> Figure 11. M2PO under high asynchrony on GSM8K (Qwen2-1.5B). Top: GSM8K validation accuracy. Bottom-left: rollout– policy KL divergence (log scale). Bottom-right: trusted-token mask fraction (log scale). At k=12 (and similarly at k=10 ), the mask fraction becomes unstable and can collapse toward masking nearly all tokens, coinciding with KL instability and training col-lapse. Shaded regions indicate run-to-run variability.
+
+E.3. Does KL Loss Improve Stability? 
+
+A common stabilization method is to add a KL regularizer (Schulman et al., 2017; Shao et al., 2024) toward a reference policy, either as an explicit penalty in the objective or by folding it into the reward. To test whether KL regulariza-tion alone can mitigate the collapse we observe under large policy lag, we follow prior work (Shah et al., 2026) which recommends a KL penalty to the reward (i.e., no direct gradients through the KL term) 
+
+R′(x, y ) = R(x, y ) − β KL( πθ (· | x) ∥ πref (· | x)) .
+
+We use a coefficient β = 0 .001 and apply this modification on top of the S EQ -TIS baseline in a highly asynchronous setting ( k = 12 ). As shown in Figure 12, adding KL-in-reward does not prevent collapse: training still eventually 15 Stable Asynchrony: Variance-Controlled Off-Policy RL for LLMs 
+
+becomes unstable and fails. Moreover, KL regularization reduces peak performance, yielding a lower best validation accuracy than S EQ -TIS without the KL term.    
+
+> Figure 12. Effect of adding a KL penalty in the reward for S EQ -TIS under high asynchrony ( k= 12 ) on GSM8K with Qwen2-1.5B. KL-in-reward ( β= 0 .001 ) does not prevent eventual col-lapse and also lowers the peak validation accuracy compared to SEQ -TIS without KL.
+
+E.4. Are Gradient-Norm Proxies Like Response Length or Logit “Energy” Sufficient? 
+
+Two recent works propose replacing per-trajectory gradient norms with cheaper proxies when constructing variance-reducing baselines. For example, OPO uses response length as a proxy for gradient magnitude (Hao et al., 2025): 
+
+∥gi∥ ∝ Li, (OPO) motivated by the intuition that longer responses contribute more log-probability terms. OTB introduces a logit-based “energy” proxy (Li et al., 2025). By defining the cumulative per-token score-function norm 
+
+Wt ≜
+
+> t
+
+X
+
+> j=1
+
+∥∇ θ log πθ (yj | x, y <j )∥22 , (OTB) and approximate the per-token score norm using a closed-form weight 
+
+ˆwt = 1 − 2 πθ (yt | x, y <t ) + ∥πt∥22, (14) where ∥πt∥22 = P 
+
+> v∈V
+
+π2 
+
+> θ
+
+(v | x, y <t ) is the sum of squared next-token probabilities. While these proxies are attractive for systems reasons, not only are they are derived in the on-policy setting, but also in the on-policy setting their approximations weakly correlate with true ∥gi∥. 
+
+> Figure 13. Qwen2.5-7B Base trained on MATH-500 under high asynchrony ( k=10 ): the logit-energy proxy baseline (OTB) eventu-ally becomes unstable and collapses, while our off-policy optimal baseline (OPOB) remains stable and sustains higher validation accuracy throughout training.
+
+To disentangle the role of our ESS scaling rule, we compare OTB’s proxy with only our VCPO’s off policy optimal base-line technique. Empirically, Figure 13 shows that OTB fails to prevent learning collapse, suggesting that both length and logit “energy” are both poorly correlated with ∥gi∥, and baselines constructed from these proxies yield weaker stabi-lization than using the true per-trajectory gradient norms. Further evidence can be seen in Figure 14 which shows that both OPO and OTB’s proxies do not reliably track true per-trajectory gradient norms. 
+
+# F. VCPO Training Details 
+
+F.1. Optimization Hyperparameters 
+
+We list the hyperparameters for optimization used in all our experiments in Table 2.                
+
+> Table 2. Optimization hyperparameters
+> Hyperparameter Value
+> Optimizer AdamW Learning rate 1×10 −6
+> Warmup steps 0Weight decay 0.1 AdamW β1, β 20.9, 0.999 AdamW ϵ10 −8
+> Gradient clipping 1.0 Entropy coefficient 0.0 KL coefficient 0.0
+
+F.2. GSM8K Task and reward. We train on the GSM8K training split (Cobbe et al., 2021) using a binary reward that checks whether the model’s final numeric answer exactly matches 16 Stable Asynchrony: Variance-Controlled Off-Policy RL for LLMs  
+
+> Figure 14. Qwen2-1.5B Base trajectories on GSM8K questions, with max response length capped to 4096 tokens
+
+the ground truth. We evaluate on the GSM8K test set and report accuracy (exact-match) over the full set. 
+
+Asynchronous setup. We use PIPELINE RL-k asyn-chronous rollouts with maximum policy lag k=12 , and compute sequence-level importance weights between the sampler and learner policies. All methods (including our baselines) share the same sampling/training pipeline and dif-fer only in the variance-control and/or masking rules applied to the policy-gradient update. 
+
+F.3. Countdown and MATH Countdown (Reasoning Gym). We build a Countdown-style arithmetic reasoning dataset using Reasoning Gym (Stojanovski et al., 2025). Rewards are verifiable by deterministic checking of the final answer; we use 9,000 problems for training and 1,000 held-out problems for vali-dation. 
+
+MATH. We train on the official MATH training split (Hendrycks et al., 2021) with an exact-match final-answer reward. We report validation accuracy on the stan-dard MATH validation split, and additionally use the MATH-500 subset for controlled comparisons in the main paper. 
+
+Asynchronous setup. For both tasks, we run PIPELINE RL-k with maximum policy lag k=10 and                               
+
+> Table 3. Training hyperparameters for the GSM8K task
+> Hyperparameter Value Reference
+> Model Qwen2-1.5B Learning Rate 1×10 −6
+> Learning Rate Schedule Warmup Stable Decay Learning Rate Warmup Steps 5Learning Rate Stable Steps 395 Learning Rate Decay Steps 0Generation Temperature 1.0 Max Prompt Token Length 1024 Response Length 2048 Number of Prompts per Batch 8Number of Completions per Prompt 8Batch Size (effective) 64 Number of Training Steps 400 Total Prompts Seen 3200 Total Episodes 25600
+> Asynchronous-specific hyperparameters
+> Max Staleness 12 PIPELINE RL-
+> kvalue Number of Sampler GPUs 6Number of Trainer GPUs 2Max IS ratio 2.0/8.0 Max value from TIS
+> ρon ess 1.0 On-policy ESS ratio (See 5)
+
+use sequence-level importance sampling for off-policy correction. We use 4×H100 GPUs for sampling and 
+
+4×H100 GPUs for training 
+
+F.4. Multi-Turn Tool Integrated Reasoning Task, data, and evaluation. We follow the SimpleTIR setting (Xue et al., 2025) for multi-turn tool-integrated rea-soning. We train on the DAPO-17K dataset (Yu et al., 2025) and evaluate on held-out exam benchmarks (AIME 2024 and AIME 2025), reporting exact-match final-answer accu-racy. We use Qwen2.5-7B Base (rather than newer Qwen3 variants) to reduce the risk of evaluation-set contamination. 
+
+Rollout Configuration and Asynchrony. We generate up to 5 turns per episode with a maximum completion length of 12,288 tokens (Table F.4). We run asynchronous training with moderate policy lag (P IPELINE RL-2) and compute sequence-level importance weights for off-policy correction. We use 2×B200 GPUs for sampling and 2×B200 GPUs for training 17 Stable Asynchrony: Variance-Controlled Off-Policy RL for LLMs 
+
+Table 4. Training hyperparameters for the MATH and Countdown task 
+
+Hyperparameter Value Reference 
+
+Model Qwen2.5-7B Learning Rate 1 × 10 −6
+
+Learning Rate Schedule Warmup Stable Decay Learning Rate Warmup Steps 0Learning Rate Stable Steps 400 Learning Rate Decay Steps 0Generation Temperature 1.0 Max Prompt Token Length 2048 Response Length 4096 Number of Prompts per Batch 32 Number of Completions per Prompt 16 Batch Size (effective) 512 Number of Training Steps 400 Total Prompts Seen 12,800 Total Episodes 204,800 
+
+Asynchronous-specific hyperparameters 
+
+Max Staleness 10 PIPELINE RL-
+
+k value Number of Sampler GPUs 4Number of Trainer GPUs 4Max IS ratio 8.0 Max value from TIS 
+
+ρon ess 1.0 On-policy ESS ratio (See 5) 
+
+Table 5. Training hyperparameters for the multi-turn tool integrated reasoning 
+
+Hyperparameter Value Reference 
+
+Model Qwen2.5-7B Learning Rate 1 × 10 −6
+
+Learning Rate Schedule Warmup Stable Decay Learning Rate Warmup Steps 0Learning Rate Stable Steps 200 Learning Rate Decay Steps 0Generation Temperature 1.0 Max Prompt Token Length 2048 Response Length 12,288 Number of Prompts per Batch 128 Number of Completions per Prompt 16 Batch Size (effective) 2048 Number of Training Steps 200 Total Prompts Seen 25,600 Total Episodes 409,600 
+
+Asynchronous-specific hyperparameters 
+
+Max Staleness 2 PIPELINE RL-
+
+k value Number of Sampler GPUs 2Number of Trainer GPUs 2Max IS ratio 8.0 Max value from TIS 
+
+ρon ess 0.55 On-policy ESS ratio (See 5) 
+
+18

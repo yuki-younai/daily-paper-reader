@@ -1,0 +1,595 @@
+Title: Evaluate-as-Action: Self-Evaluated Process Rewards for Retrieval-Augmented Agents
+
+URL Source: https://arxiv.org/pdf/2603.09203v2
+
+Published Time: Fri, 13 Mar 2026 00:31:19 GMT
+
+Number of Pages: 13
+
+Markdown Content:
+# Evaluate-as-Action: Self-Evaluated Process Rewards for Retrieval-Augmented Agents 
+
+Jiangming Shu 1, Yuxiang Zhang 1, Ye Ma 2, Xueyuan Lin 2, Jitao Sang 1*1School of Computer Science and Technology, Beijing Jiaotong University 
+
+> 2
+
+Hithink Research 
+
+{jiangmingshu, yuxiangzhang, jtsang}@bjtu.edu.cn maye@myhexin.com linxy59@mail2.sysu.edu.cn 
+
+Abstract 
+
+Retrieval-augmented agents can query exter-nal evidence, yet their reliability in multi-step reasoning remains limited: noisy retrieval may derail multi-hop question answering, while outcome-only reinforcement learning provides credit signals that are too coarse to optimize intermediate steps. We propose E VAL ACT 
+
+(Evaluate-as-Action), which converts implicit retrieval quality assessment into an explicit action and enforces a coupled Search-to-Evaluate protocol so that each retrieval is im-mediately followed by a structured evaluation score, yielding process signals aligned with the interaction trajectory. To leverage these signals, we introduce Process-Calibrated Ad-vantage Rescaling (PCAR), a GRPO-based optimization method that rescales advantages at the segment level according to evaluation scores, emphasizing reliable segments while updating uncertain ones conservatively. Exper-iments on seven open-domain QA benchmarks show that E VAL ACT achieves the best aver-age accuracy, with the largest gains on multi-hop tasks, and ablations verify that the explicit evaluation loop drives the primary improve-ments while PCAR provides consistent addi-tional benefits. 
+
+1 Introduction 
+
+Large language model (LLM) agents have shifted automated reasoning from passive response gen-eration to autonomous problem solving, where models plan, interact with external tools, and it-eratively refine their beliefs across multi-step tra-jectories (Yao et al., 2022; Schick et al., 2023). Retrieval-augmented generation (RAG) further ex-tends this capability by grounding decisions in external evidence, enabling open-domain ques-tion answering beyond the limits of parametric knowledge (Lewis et al., 2020; Guu et al., 2020). 
+
+> *Corresponding author.
+
+However, as queries shift from single-hop fac-toids to multi-hop narratives, the central bottle-neck is no longer tool access itself, but the agent’s ability to navigate, verify, and synthesize evi-dence over long-horizon, noise-prone interaction sequences (Trivedi et al., 2023; Asai et al., 2024). Despite substantial progress, ensuring reliable intermediate reasoning remains a key challenge. Existing agentic baselines, from prompting meth-ods that interleave retrieval and reasoning (Trivedi et al., 2023) to RL-based search agents such as Search-R1 (Jin et al., 2025) and refinement frameworks such as AutoRefine (Shi et al., 2025), still rely primarily on implicit internal reasoning for noise suppression and self-correction. This paradigm suffers from two fundamental limita-tions. First, error propagation : without an ex-plicit, immediate mechanism for evidence verifica-tion, a single irrelevant document can derail down-stream reasoning, causing irreversible trajectory drift in multi-hop settings. Second, coarse credit assignment : standard RL optimization, including PPO-based RLHF (Ouyang et al., 2022; Schulman et al., 2017) and outcome-reward post-training methods such as GRPO (Shao et al., 2024), typi-cally relies on sparse signals tied to final-answer correctness. Such outcome-only supervision can-not distinguish informative retrieval steps from re-dundant or misleading actions within long trajec-tories; as a result, the optimizer often reinforces or penalizes an entire trajectory nearly uniformly, degrading sample efficiency and causing perfor-mance saturation as task complexity grows. To address these challenges, we introduce EVAL ACT , a reinforcement learning frame-work that transforms the agent’s implicit self-assessment of retrieval quality into an explicit, policy-selectable action. EVAL ACT enforces a strictly coupled search-then-evaluate protocol: each Search action must be immediately followed by an Evaluate action that produces a structured 1
+
+> arXiv:2603.09203v2 [cs.AI] 12 Mar 2026
+
+self-assessment score reflecting the utility of the retrieved evidence. This design directly addresses the two limitations identified above. At inference time, the evaluation output provides actionable control signals that facilitate early pruning of un-productive branches, reducing error propagation without external oracle supervision. During train-ing, it produces dense, trajectory-aligned process signals that make intermediate reliability directly optimizable and enable finer-grained credit assign-ment. To leverage these process signals effectively, we further propose Process-Calibrated Advan-tage Rescaling (PCAR) built upon Group Rel-ative Policy Optimization (GRPO) (Shao et al., 2024). Instead of broadcasting a single trajectory-level advantage to all tokens, PCAR uses step-wise self-evaluation scores to modulate updates at the segment level, amplifying gradients for reli-able, progress-making steps while applying con-servative updates to uncertain segments. Impor-tantly, this provides process-level guidance with-out requiring expensive human-annotated process reward models (Lightman et al., 2023), while complementing prior verification-oriented supervi-sion that does not explicitly target retrieval behav-ior (Ma et al.). Together, E VAL ACT and PCAR convert introspection into an executable action space with trainable process signals, improving learning stability and multi-hop generalization. Our contributions are as follows: • We propose E VAL ACT , an RL framework that transforms implicit retrieval quality evaluation into an explicit Evaluate action and enforces a coupled Search →Evaluate protocol, produc-ing dense, trajectory-aligned self-evaluation re-wards for tool-using agents. • We introduce Process-Calibrated Advantage Rescaling (PCAR), a GRPO-based optimization strategy that leverages step-wise self-evaluation scores to refine credit assignment and stabilize learning in long-horizon retrieval trajectories. • We achieve the best average performance across seven open-domain QA benchmarks with two backbone scales, with particularly strong gains on multi-hop tasks; extensive ablations show that the explicit evaluation loop accounts for the dominant improvements, while PCAR provides consistent additional benefits. 
+
+2 Methodology 
+
+We present our approach in three parts. First, we formulate retrieval-augmented multi-hop ques-tion answering as sequential decision-making un-der partial observability, providing a unified view for both inference-time interaction and RL train-ing (§2.1). Second, we introduce EVAL ACT 
+
+(Evaluate-as-Action), which transforms implicit retrieval quality evaluation into an explicit, policy-selectable action and enforces a coupled 
+
+Search →Evaluate interaction protocol (§2.2). Third, we propose Process-Calibrated Advantage Rescaling (PCAR), a GRPO-based optimization method that rescales segment-wise policy gradi-ents using self-evaluation scores, improving credit assignment and stabilizing learning (§2.3). Fig-ure 1 illustrates the coupled Search →Evaluate 
+
+loop and the PCAR-weighted GRPO update. 
+
+2.1 Problem Formulation 
+
+Let Mθ be an LLM parameterized by θ, induc-ing a stochastic policy πθ over textual tokens and tool-mediated actions. We model retrieval-augmented multi-hop question answering as a POMDP ⟨S , A, O, P⟩ . At time t = 0 , . . . , T , the agent samples an action at ∼ πθ(· | ht) condi-tioned on the observable history 
+
+ht = [ x, a 0, o 0, . . . , a t−1, o t−1 ], (1) where x is the input query and ot ∈ O is the obser-vation returned by the environment after executing 
+
+at. A trajectory is τ = {(at, o t)}Tt=0 , while the un-derlying state st ∈ S is unobserved. The transition function P(st+1 | st, a t) governs state evolution and is implicitly defined by the retrieval environ-ment and the agent’s reasoning process. 
+
+Action space. We partition A into (i) reason-ing tokens Athink , (ii) tool actions Atool , and (iii) a terminal answer action Aanswer . Tool actions include retrieval Search (q) and self-evaluation 
+
+Evaluate (c, z ), where q is a query string, c is a textual assessment, and z ∈ [0 , 10] is a scalar con-fidence score reported by the policy. 
+
+Observations. For tool actions, the environment returns 
+
+ot ∼
+
+
+
+R(q), if at = Search (q),
+
+Φ( z), if at = Evaluate (c, z ),
+
+∅, otherwise ,
+
+(2) 2where R(q) denotes the top-k retrieved documents and Φ( ·) maps the reported score to a discrete feed-back cue used for subsequent decision-making. 
+
+2.2 EVAL ACT : Evaluate-as-Action 
+
+EVAL ACT transforms implicit retrieval quality evaluation into an executable action and couples each retrieval step with immediate self-assessment. Specifically, after any retrieval action at =
+
+Search (q) with observation ot = R(q), the agent must invoke exactly one evaluation action at+1 =
+
+Evaluate (c, z ). The assessment c is conditioned on the retrieved documents, and z ∈ [0 , 10] is a self-reported confidence score. This one-to-one coupling aligns each retrieval result with an explicit reliability assessment, enabling segment-wise training signals. 
+
+Inference-time control without oracle signals. 
+
+To avoid external supervision, the environment-side evaluator is deliberately non-interpretive: it neither parses c nor inspects retrieved documents. Instead, it deterministically maps z to a discrete control cue I = Φ( z):
+
+Φ( z) = 
+
+
+
+Ilow , z ∈ [0 , 3] ,
+
+Imid , z ∈ (3 , 7] ,
+
+Ihigh , z ∈ (7 , 10] .
+
+(3) The cue I is appended to the context and modu-lates subsequent actions via instruction condition-ing. For completeness, Appendix B specifies the Evaluate format and feedback templates, and Ap-pendix C presents a complete multi-hop trajec-tory showing how the agent assigns calibrated self-evaluation scores to guide iterative evidence gath-ering. 
+
+2.3 Reinforcement Learning with PCAR 
+
+We optimize πθ to maximize expected reward, us-ing GRPO as the backbone and PCAR to incorpo-rate process signals from Evaluate .
+
+Gated outcome reward. To enforce protocol compliance while optimizing answer quality, we use a gated reward: 
+
+G(y, y ∗) = 
+
+{
+
+F1 (yans , y ∗), if Ifmt (y) = 1 ,
+
+0, otherwise , (4) where yans is the final answer extracted from 
+
+<answer> tags and Ifmt (y) indicates whether (i) reasoning is enclosed by <think> tags and (ii) ev-ery Search is immediately followed by Evaluate .
+
+GRPO. Given G rollouts {y1, . . . , y G} sampled from πθold for the same input x, we compute group-normalized advantages 
+
+Ai = ri − μgroup 
+
+σgroup + ε , (5) where ri = G(yi, y ∗) and μgroup , σ group are the within-group mean and standard deviation. 
+
+PCAR: segment-wise advantage rescaling. 
+
+Standard GRPO applies the same Ai to all tokens, which can inadvertently reinforce unreliable inter-mediate steps. PCAR instead rescales advantages at the segment level using the self-evaluation scores. Let yi contain Ki segments, each associ-ated with a score zi,k ∈ [0 , 10] . We first compute an intra-trajectory standardized reliability signal 
+
+˜zi,k = zi,k − μi
+
+σi + ε , (6) where μi and σi are the mean and standard devia-tion of {zi,k }Ki
+
+> k=1
+
+. This normalization makes ˜zi,k 
+
+reflect relative reliability within the trajectory and suppress trivial constant scoring. We then define a score-scaled gain 
+
+λi,k = λbase + ( λmax − λbase ) · zi,k 
+
+10 , (7) and compute the token-level calibrated advantage for any token t belonging to segment k:
+
+ˆAi,t = Ai · clamp(1 + λi,k ˜zi,k , δ, ∞) , (8) where δ > 0 prevents gradient inversion; we set 
+
+δ = 10 −6 in all experiments unless otherwise spec-ified. Finally, we maximize the GRPO-style clipped objective with the calibrated advantages: 
+
+J (θ) = Ex∼D ,{yi}Gi=1 ∼πθold 
+
+[
+
+1
+
+G
+
+> G
+
+∑
+
+> i=1
+> Li
+
+∑
+
+> t=1
+
+(
+
+LCLIP 
+
+> i,t
+
+− β DKL (πθ(· | ht) ∥ πθref (· | ht)) 
+
+)]
+
+, (9) where Li is the length of yi and 
+
+LCLIP  
+
+> i,t
+
+= min 
+
+(
+
+ρi,t ˆAi,t , clip( ρi,t , 1 − ϵ, 1 + ϵ) ˆAi,t 
+
+)
+
+, ρ i,t = πθ(yi,t | ht)
+
+πθold (yi,t | ht) .
+
+(10) By steering updates toward segments that are both outcome-aligned and process-reliable, PCAR 3Query Actor  
+
+> model .. .
+> Ref
+> model
+> Reward
+> Func
+
+.     
+
+> Group
+> Computation
+> think Search(q) Eval(c, z) R(q) Ф(z) answer
+> Segment i,1
+
+... 
+
+> {z i,k }k=1
+> PC AR
+> EvalAct
+> Protocol
+> y1
+> y2
+> yG
+> .. .
+> r1
+> r2
+> rG
+> .. .
+> A1
+> A2
+> AG
+> .. .
+> Â1
+> Â2
+> ÂG
+> Process-Calibrated
+> Advantage Rescaling
+
+yi Eval(c, z) Ф(z) 
+
+> Segment i,k
+
+... 
+
+> KL
+> agent action
+> env obs.
+> Ki
+
+Figure 1: Overview of E VAL ACT with PCAR. The agent follows a coupled Search →Evaluate protocol, pro-ducing segment-wise self-evaluation scores {zi,k } that PCAR uses to rescale GRPO advantages. 
+
+improves credit assignment in long-horizon re-trieval trajectories. For reproducibility, Ap-pendix A provides pseudocode for the complete EVAL ACT training loop with PCAR, including protocol-compliant rollouts, GRPO advantage es-timation, and segment-wise advantage rescaling. 
+
+3 Experiments 
+
+3.1 Experimental Setup Datasets. We evaluate open-domain question an-swering performance on seven widely-used bench-marks spanning both single-hop and multi-hop settings: Natural Questions (NQ) (Kwiatkowski et al., 2019), TriviaQA (Joshi et al., 2017), and PopQA (Mallen et al., 2023) as single-hop datasets, and HotpotQA (Yang et al., 2018), 2Wiki-MultihopQA (Ho et al., 2020), MuSiQue (Trivedi et al., 2022), and Bamboogle (Press et al., 2023) as multi-hop datasets that typically require it-erative evidence acquisition. For training, we use the publicly released ASearcherBase35K cor-pus (Gao et al., 2025) and remove invalid or non-actionable samples via lightweight filtering, result-ing in 27 k instances for RL. For supervised warm-up, we synthesize 2k protocol-compliant trajecto-ries by prompting DeepSeek-V3.2 (Non-thinking Mode) (Liu et al., 2025) to follow the E VAL ACT 
+
+interaction format. 
+
+Baselines. We compare E VAL ACT against rep-resentative baselines spanning direct answering, single-pass retrieval augmentation, and multi-step retrievalreasoning. (1) Direct Generation uses the instruction-tuned backbone model to answer using only parametric knowledge, without any retrieval. (2) Naïve RAG retrieves documents once and concatenates them with the query, then generates the answer in a single forward pass. (3) IRCoT (Trivedi et al., 2023) interleaves re-trieval and chain-of-thought prompting for multi-hop reasoning. (4) Search-o1 (Li et al., 2025) and (5) Search-R1 (Jin et al., 2025) represent recent search-augmented agentic baselines with iterative retrieval and reasoning. (6) AutoRefine (Shi et al., 2025) is an iterative refinement baseline that alter-nates between evidence gathering and answer re-finement. For all retrieval-enabled baselines, we use the same retrieval environment as E VAL ACT ,including the corpus, retriever, returned top-k doc-uments, and search budget, ensuring controlled comparison under matched external evidence ac-cess. 
+
+Evaluation Metrics. We report Exact Match (EM) as the primary evaluation metric on all benchmarks, computed via exact string matching between the normalized prediction and the refer-ence answer. During RL training, the outcome-level reward is defined as the token-level F1 score between the generated answer and the ground-truth reference (cf. Eq. 4). At test time, perfor-mance is evaluated using EM to align with stan-dard open-domain QA evaluation protocols. 
+
+3.2 Implementation Details 
+
+We conduct experiments with two backbones, Qwen2.5-3B-Instruct and Qwen2.5-7B-Instruct. Unless otherwise specified, training uses 8
+
+NVIDIA A100 GPUs with full-parameter opti-mization and gradient checkpointing. We use a fixed open-domain retrieval environment built on the December 2018 Wikipedia dump with a stan-dard BM25 retriever, without reranking or post-4retrieval filtering. At each retrieval step, the top-
+
+k = 3 documents are returned and appended to the dialogue context. The tool budget is capped at 
+
+20 Search calls per question. For RL optimization, we implement the GRPO-based training described in §2.3 with the follow-ing default hyperparameters: learning rate 1 ×
+
+10 −6, global batch size 256 , 2 epochs, 5 rollouts per prompt, rollout temperature 1.0, KL coeffi-cient β = 0 .001 , and clip ratio ϵ = 0 .2. For PCAR, we set the score-based modulation param-eters (λbase , λ max ) = (0 .1, 0.5) in Eq. 7, which de-termine the minimum and maximum strength of segment-wise rescaling. 
+
+3.3 Main Results 
+
+Table 1 reports EM scores on seven open-domain QA benchmarks. Across both backbone scales, EVAL ACT achieves the highest average EM among all compared methods, reaching 44.0% with EvalAct-3B and 47.1% with EvalAct-7B. In both cases, it outperforms the second-best base-line, AutoRefine, by 3.5 and 1.6 points, respec-tively. 
+
+Comparison with Baselines. Compared with Search-o1, Search-R1, IRCoT, and Naïve RAG, EVAL ACT consistently outperforms these base-lines on the majority of benchmarks, with the largest gains appearing in multi-hop settings. This trend is consistent across both 3B and 7B back-bones, indicating that the improvements are robust across model scales. Unlike prior approaches that rely on implicit self-correction within free-form reasoning, E VAL ACT explicitly models evaluation as a discrete action, enabling segment-level credit assignment during RL optimization. 
+
+Multi-Hop Benchmarks. The strongest gains of EVAL ACT emerge on multi-hop datasets. Across both backbone scales, E VAL ACT achieves the best performance on all four multi-hop bench-marks: 2WikiMultihopQA, Bamboogle, Hot-potQA, and MuSiQue. The gains are espe-cially large on 2WikiMultihopQA and Bamboogle, where EvalAct-3B improves over AutoRefine by 10.6 and 13.6 points, respectively, and EvalAct-7B improves over the strongest baseline by 10.7 and 4.8 points. Consistent improvements are also observed on HotpotQA and MuSiQue. These re-sults suggest that explicit intermediate evaluation is particularly beneficial for tasks requiring iter-ative evidence aggregation and long-horizon rea-soning, where the coupled evaluation loop helps control error propagation across extended interac-tion sequences. 
+
+Single-Hop Benchmarks. On these single-hop datasets, E VAL ACT remains competitive but does not consistently outperform AutoRefine, which performs better on NQ and PopQA. This is ex-pected: AutoRefine is designed for iterative an-swer refinement, which is particularly effective when the main challenge is answer polishing rather than multi-step evidence accumulation in single-hop settings. Nevertheless, the substantial gains on multi-hop benchmarks outweigh these gaps, resulting in the best overall average perfor-mance. 
+
+4 Ablation Studies 
+
+We conduct ablation studies to understand the con-tribution of each component in E VAL ACT . Fig-ure 3 provides an overview: (a) training curves showing stable convergence for both 3B and 7B backbones, (b) model ablation comparing training variants, (c) method ablation isolating the evalua-tion loop and PCAR, and (d) sensitivity analysis of PCAR hyperparameters. The following subsec-tions detail these analyses. 
+
+4.1 Model Ablation: Disentangling Format Alignment from Reasoning 
+
+A prerequisite for E VAL ACT is protocol com-pliance: the agent must reliably produce well-formed tool calls and adhere to the strictly coupled 
+
+Search →Evaluate loop. To disentangle the con-tributions of format acquisition (via SFT) from rea-soning capability (via RL), we construct six train-ing variants based on the Qwen2.5-3B-Instruct backbone and evaluate them on four multi-hop benchmarks. The variants are defined as follows: • Base (Instruct) / SFT-Only: the backbone model evaluated without and with supervised warm-up, respectively. • Base + RL / SFT + RL (Vanilla): standard GRPO optimizing for answer correctness with-out enforcing the explicit Evaluate loop; re-trieval tools are invoked freely. • Base EvalAct: applied directly to the Base model without SFT warm-up. 5Single-Hop QA Multi-Hop QA Avg. Method NQ PopQA TriviaQA 2Wiki Bamboogle HotpotQA MuSiQue Backbone: Qwen2.5-3B-Instruct 
+
+Direct Generation 10.6 10.8 28.8 24.4 2.4 14.9 2.0 13.4 IRCoT 11.1 20.0 31.2 17.1 24.0 16.4 6.7 18.1 Search-o1 23.8 26.2 47.2 21.8 32.0 22.1 5.4 25.5 Naïve RAG 34.8 38.7 54.4 22.6 8.0 25.5 4.7 27.0 Search-R1 34.1 37.8 54.5 31.9 26.4 32.4 10.3 32.5 AutoRefine 46.7 45.0 62.0 39.4 34.4 40.5 15.7 40.5 EvalAct-3B(ours) 38.5 43.2 62.1 50.0 48.0 44.3 21.6 44.0 Backbone: Qwen2.5-7B-Instruct 
+
+Direct Generation 13.4 14.0 40.8 25.0 12.0 18.3 3.1 18.1 IRCoT 22.4 30.1 47.8 14.9 22.4 13.3 7.2 22.6 Search-o1 15.1 13.1 44.3 17.6 29.6 18.7 5.8 20.6 Naïve RAG 34.9 39.2 58.5 23.5 20.8 29.9 5.8 30.4 Search-R1 39.3 39.7 61.0 41.4 36.8 37.0 14.6 38.5 AutoRefine 48.4 48.7 65.9 40.5 51.2 45.1 18.7 45.5 EvalAct-7B(ours) 38.5 43.6 65.6 52.1 56.0 48.8 25.3 47.1 
+
+Table 1: Main results (EM, %) on seven open-domain QA benchmarks. Bold and underlined values indicate the best and second-best performance, respectively. 
+
+• EvalAct (Ours): the full pipeline, i.e., SFT warm-up followed by E VAL ACT RL training. 2Wiki HotpotQA Bamboogle MuSiQue    
+
+> 0
+> 10
+> 20
+> 30
+> 40
+> 50
+> TPFR (%)
+> 25.9%
+> 37.2%
+> 40.8% 38.9%
+> 3.8% 5.0%
+> 8.8% 9.6%
+> Base (Instruct)
+> SFT-Only
+
+Figure 2: Effect of SFT on Format Alignment. The Base model exhibits high tool parsing failure rates. 
+
+SFT for Format Alignment. We first examine the role of supervised warm-up in establishing pro-tocol compliance. As shown in Figure 2, SFT substantially reduces tool-formatting and parsing failures, providing a stable initialization for struc-tured tool use. Consistent with this observation, SFT alone improves the multi-hop average from 
+
+14 .2% to 24 .8% (Table 2). Under vanilla RL with-out the explicit evaluation loop, performance is                       
+
+> Model Variant SFT RL Paradigm Avg. EM
+> 1. Base (Instruct) 7-14.2 2. SFT-Only 3-24.8 3. Base + RL (Vanilla) 7Standard 33.1 4. SFT + RL (Vanilla) 3Standard 33.5 5. Base EvalAct 7EvalAct 17.1 6. EvalAct (Ours) 3EvalAct 41.0
+
+Table 2: Ablation of training stages and paradigms on multi-hop benchmarks (Avg. EM, %). Vanilla denotes standard RL without the explicit evaluation loop. 
+
+only weakly affected by SFT initialization, reach-ing 33 .1% from the Base model and 33 .5% from the SFT-initialized model. This suggests that stan-dard RL can eventually recover a functional tool-calling policy, whereas SFT primarily stabilizes early optimization by aligning the model with the required format. 
+
+Effectiveness of the EvalAct Paradigm. We next isolate the effect of enforcing the coupled 
+
+Search →Evaluate loop. With the same back-bone and training budget, E VAL ACT (O URS ) at-tains 41 .0% average EM, exceeding the strongest vanilla baseline ( 33 .5% ) by +7 .5 points (Table 2). This gain supports the hypothesis that convert-ing intermediate evaluation into an explicit action yields more informative process signals than im-6plicit verification under outcome-only optimiza-tion. By contrast, applying E VAL ACT directly without supervised warm-up yields only 17 .1% ,highlighting the difficulty of learning a structured action protocol from scratch. 
+
+4.2 Method Ablation: Dissecting Structural and Optimization Components 
+
+We further decompose the performance gains of EVAL ACT into two sources: the structural contri-bution of the explicit evaluation loop and the op-timization contribution of Process-Calibrated Ad-vantage Rescaling (PCAR). We compare the full model against two ablated variants: (1) w/o Eval Loop: removing Evaluate and reverting to a stan-dard retrieval policy optimized via vanilla GRPO (equivalent to SFT+RL in §4.1); (2) w/o PCAR: 
+
+retaining the Evaluate structure and confidence scores z, but optimizing with standard GRPO with-out confidence-based advantage rescaling.                      
+
+> Method 2Wiki Bam. Hotpot Mus. Avg. EvalAct 50.0 48.0 44.3 21.6 41.0
+> w/o PCAR 48.2 46.2 44.1 20.8 39.8 w/o Eval Loop 41.4 37.2 38.9 16.5 33.5
+> Table 3: Method ablation on multi-hop benchmarks (EM, %).
+
+Structural Contribution of the Evaluation Loop. Removing the explicit evaluation mecha-nism causes the largest performance degradation. As shown in Table 3, eliminating Evaluate low-ers average EM from 41 .0% to 33 .5% , a drop of 
+
+7.5 points. This degradation is consistent across all four benchmarks, with especially pronounced declines on 2WikiMultihopQA ( −8.6) and Bam-boogle ( −10 .8). These results suggest that the primary benefit of E VAL ACT lies in its explicit evaluation loop, which enforces intermediate ver-ification and thereby reduces error propagation in multi-hop reasoning. 
+
+Optimization Contribution of PCAR. Beyond the structural benefit of the explicit evaluation loop, PCAR provides additional optimization gains. Compared with standard GRPO applied to the same evaluation-augmented framework, PCAR raises average EM from 39 .8% to 41 .0% ,a gain of 1.2 points. Improvements are ob-served on all four benchmarks, with gains of 
+
+1.8 points on both 2WikiMultihopQA and Bam-boogle, and smaller but consistent improvements on HotpotQA and MuSiQue. These results in-dicate that confidence-aware advantage rescaling complements the explicit evaluation structure by providing more informative gradient signals for segments with varying reliability estimates. 
+
+4.3 Hyperparameter Sensitivity 
+
+We analyze the sensitivity of PCAR to the rescal-ing intensity governed by λbase and λmax . To char-acterize the strength of reliability-aware modula-tion, we define the Relative Importance Ratio (RIR) as the ratio between the maximum and min-imum attainable advantage multipliers under full-confidence conditions. When the standardized re-liability score satisfies ˜z ∈ [−1, 1] , the unclamped multiplier spans 1±λmax ; after applying the lower-bound clamp with threshold δ, the effective ratio is approximated by RIR ≈ (1 + λmax )/ max( δ, 1 −
+
+λmax ).                  
+
+> Setting Params RIR Avg. ∆
+> EvalAct (Low) 0.05 /0.25 1.67 39.8 -0.3
+> EvalAct (Mid) 0.10 /0.50 3.040.1 -EvalAct (High) 0.20 /1.00 200 39.4 -0.7
+> Table 4: Parameter ablation on PCAR intensity. RIR is the ratio between max/min multipliers.
+
+Table 4 reports three representative configura-tions corresponding to low, moderate, and high rescaling intensity. Performance remains rela-tively stable across settings, with average EM ranging from 39 .4% to 40 .1% . The moderate con-figuration ( EvalAct (Mid) , RIR = 3 .0) achieves the best overall performance. Under conservative rescaling ( Low , RIR =1.67 ), the separation between high- and low-reliability segments is limited, potentially reduc-ing the effectiveness of segment-level credit as-signment. Conversely, aggressive rescaling ( High ,RIR = 200 ) slightly degrades performance. In this regime, the minimum multiplier approaches zero and is clipped by the lower-bound constraint, leading to highly imbalanced gradient magnitudes across segments. Such extreme modulation can restrict corrective updates on low-reliability steps and destabilize optimization. Overall, these results suggest that moderate reli-ability rescaling provides a balanced trade-off be-tween emphasizing high-confidence segments and preserving sufficient gradient flow for error correc-tion. 70 60 120 180          
+
+> 0.2
+> 0.4
+> 0.6
+> (a) EvalAct Training Curves
+> EvalAct-7B
+> EvalAct-3B
+> 060 120 180
+> 0.2
+> 0.4
+> 0.6
+> (b) Model Ablation
+> EvalAct (Ours)
+> SFT+RL
+> Base+RL
+> Base EvalAct
+> 060 120 180
+> 0.2
+> 0.4
+> 0.6
+> (c) Method Ablation
+> EvalAct (Ours)
+> -w/o PCAR
+> -w/o Eval Loop
+> 060 120 180
+> 0.40
+> 0.48
+> 0.56
+> 0.64
+> (d) Hyperparameter Ablation
+> EvalAct (Ours)
+> EvalAct (Low)
+> EvalAct (High)
+> Training Steps
+> F1 Score (mean)
+
+Figure 3: Training curves and ablation overview. (a) Training curves of E VAL ACT with 3B/7B backbones. (b) Model ablation across training variants. (c) Method ablation on removing the evaluation loop or PCAR. (d) Sensitivity to PCAR rescaling intensity. 
+
+5 Related Work 
+
+5.1 Retrieval-Augmented Language Models 
+
+Retrieval-augmented generation (RAG) enhances LLMs by grounding generation in externally re-trieved knowledge (Lewis et al., 2020; Guu et al., 2020; Borgeaud et al., 2022). Early work focused on improving retrieval quality through dense en-coders (Karpukhin et al., 2020; Izacard and Grave, 2021) or neural rerankers (Nogueira and Cho, 2019). More recent approaches integrate retrieval directly into the reasoning process, enabling mod-els to iteratively query external sources (Yao et al., 2022; Trivedi et al., 2023; Jiang et al., 2023). Self-RAG (Asai et al., 2024) introduces special tokens for assessing retrieval utility, though these remain implicit signals rather than structured actions. Our work builds on this line by converting retrieval evaluation into an explicit, structured action with discrete scores that can serve as training signals. 
+
+5.2 Reinforcement Learning for Tool-Using Agents 
+
+RL has emerged as a promising approach for train-ing LLM agents to use tools effectively (Schick et al., 2023; Nakano et al., 2021; Qin et al., 2023). Search-R1 (Jin et al., 2025) demonstrates that pure RL with outcome rewards can train effective retrieval policies without supervised fine-tuning. However, outcome-only rewards suffer from the credit assignment problem in multi-step trajec-tories. Process reward models (PRMs) address this by providing step-level supervision (Lightman et al., 2023; Uesato et al., 2022; Wang et al., 2024), but typically require expensive human annotations or external verifiers that may not align with the target policy. LeTS (Zhang et al., 2025a) designs retrieval-specific process rewards based on knowl-edge redundancy and exact match, yet relies on heuristics that may not generalize. Recent work has begun to expand the ac-tion space by converting traditionally implicit behaviors into explicit, learnable decisions. MemAct (Zhang et al., 2025b) formulates work-ing memory management as policy actions for context deletion and insertion, enabling end-to-end RL over long-horizon context curation. EVAL ACT shares this action-centric perspective but targets a different behavior: instead of treating retrieval quality assessment as an implicit part of free-form reasoning, we convert evaluation into an explicit action that produces process signals for fine-grained credit assignment. 
+
+5.3 Self-Evaluation and Calibration 
+
+LLMs can evaluate their own outputs (Kadavath et al., 2022; Xie et al., 2023; Madaan et al., 2023), but such assessments vary in calibrationthe align-ment between expressed confidence and actual ac-curacy (Tian et al., 2023). Uncalibrated evaluation during RL training risks reward hacking, where models assign high scores regardless of output quality. Prior work addresses calibration through specialized training objectives (Lin et al., 2022), prompting strategies (Xiong et al., 2023), or post-hoc adjustments (Zhao et al., 2021). We take a different approach: Process-Calibrated Advan-tage Rescaling (PCAR) designs the RL objective such that miscalibrated confidence incurs penal-ties through the advantage signal, naturally in-centivizing well-calibrated evaluations without ex-plicit calibration training. 
+
+6 Conclusion 
+
+We presented E VAL ACT , a framework that ele-vates retrieval evaluation from an implicit reason-ing behavior to an explicit policy action. This design enables retrieval-augmented agents to gen-erate structured process signals during interac-tion and to use them for more fine-grained re-8inforcement learning. Built on this framework, PCAR further improves optimization by aligning policy updates with segment-level reliability es-timates. Across seven open-domain QA bench-marks, E VAL ACT delivers the best average results and shows its largest advantages on multi-hop rea-soning tasks. These findings highlight the value of converting intermediate evaluation into a trainable action for multi-step retrieval-augmented reason-ing. 
+
+Limitations 
+
+This design directly addresses the two limitations identified above. At inference time, the evaluation output provides actionable control signals that fa-cilitate early pruning of unproductive branches, re-ducing error propagation without external oracle supervision. During training, it produces dense, trajectory-aligned process signals that make inter-mediate reliability directly optimizable and enable finer-grained credit assignment. 
+
+References 
+
+Akari Asai, Zeqiu Wu, Yizhong Wang, Avirup Sil, and Hannaneh Hajishirzi. 2024. Self-rag: Learning to re-trieve, generate, and critique through self-reflection. Sebastian Borgeaud, Arthur Mensch, Jordan Hoff-mann, Trevor Cai, Eliza Rutherford, Katie Milli-can, George Bm Van Den Driessche, Jean-Baptiste Lespiau, Bogdan Damoc, Aidan Clark, and 1 oth-ers. 2022. Improving language models by retrieving from trillions of tokens. In International conference on machine learning , pages 2206–2240. PMLR. Jiaxuan Gao, Wei Fu, Minyang Xie, Shusheng Xu, Chuyi He, Zhiyu Mei, Banghua Zhu, and Yi Wu. 2025. Beyond ten turns: Unlocking long-horizon agentic search with large-scale asynchronous rl. 
+
+arXiv preprint arXiv:2508.07976 .Kelvin Guu, Kenton Lee, Zora Tung, Panupong Pa-supat, and Mingwei Chang. 2020. Retrieval aug-mented language model pre-training. In Interna-tional conference on machine learning , pages 3929– 3938. PMLR. Xanh Ho, Anh-Khoa Duong Nguyen, Saku Sugawara, and Akiko Aizawa. 2020. Constructing a multi-hop qa dataset for comprehensive evaluation of rea-soning steps. In Proceedings of the 28th Inter-national Conference on Computational Linguistics ,pages 6609–6625. Gautier Izacard and Edouard Grave. 2021. Leveraging passage retrieval with generative models for open domain question answering. In Proceedings of the 16th conference of the european chapter of the asso-ciation for computational linguistics: main volume ,pages 874–880. Zhengbao Jiang, Frank F Xu, Luyu Gao, Zhiqing Sun, Qian Liu, Jane Dwivedi-Yu, Yiming Yang, Jamie Callan, and Graham Neubig. 2023. Active retrieval augmented generation. In Proceedings of the 2023 Conference on Empirical Methods in Natural Lan-guage Processing , pages 7969–7992. Bowen Jin, Hansi Zeng, Zhenrui Yue, Jinsung Yoon, Sercan Arik, Dong Wang, Hamed Zamani, and Ji-awei Han. 2025. Search-r1: Training llms to rea-son and leverage search engines with reinforcement learning. arXiv preprint arXiv:2503.09516 .Mandar Joshi, Eunsol Choi, Daniel S Weld, and Luke Zettlemoyer. 2017. Triviaqa: A large scale distantly supervised challenge dataset for reading comprehen-sion. In Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics (Vol-ume 1: Long Papers) , pages 1601–1611. Saurav Kadavath, Tom Conerly, Amanda Askell, Tom Henighan, Dawn Drain, Ethan Perez, Nicholas Schiefer, Zac Hatfield-Dodds, Nova DasSarma, Eli Tran-Johnson, and 1 others. 2022. Language mod-els (mostly) know what they know. arXiv preprint arXiv:2207.05221 .Vladimir Karpukhin, Barlas Oguz, Sewon Min, Patrick SH Lewis, Ledell Wu, Sergey Edunov, Danqi Chen, and Wen-tau Yih. 2020. Dense passage re-trieval for open-domain question answering. In 
+
+EMNLP (1) , pages 6769–6781. Tom Kwiatkowski, Jennimaria Palomaki, Olivia Red-field, Michael Collins, Ankur Parikh, Chris Alberti, Danielle Epstein, Illia Polosukhin, Jacob Devlin, Kenton Lee, and 1 others. 2019. Natural ques-tions: a benchmark for question answering research. 
+
+Transactions of the Association for Computational Linguistics , 7:453–466. Patrick Lewis, Ethan Perez, Aleksandra Piktus, Fabio Petroni, Vladimir Karpukhin, Naman Goyal, Hein-rich Küttler, Mike Lewis, Wen-tau Yih, Tim Rock-täschel, and 1 others. 2020. Retrieval-augmented generation for knowledge-intensive nlp tasks. Ad-vances in neural information processing systems ,33:9459–9474. Xiaoxi Li, Guanting Dong, Jiajie Jin, Yuyao Zhang, Yujia Zhou, Yutao Zhu, Peitian Zhang, and Zhicheng Dou. 2025. Search-o1: Agentic search-enhanced large reasoning models. arXiv preprint arXiv:2501.05366 .Hunter Lightman, Vineet Kosaraju, Yuri Burda, Harri-son Edwards, Bowen Baker, Teddy Lee, Jan Leike, John Schulman, Ilya Sutskever, and Karl Cobbe. 2023. Let’s verify step by step. In The Twelfth Inter-national Conference on Learning Representations .
+
+9Stephanie Lin, Jacob Hilton, and Owain Evans. 2022. Teaching models to express their uncertainty in words. arXiv preprint arXiv:2205.14334 .Aixin Liu, Aoxue Mei, Bangcai Lin, Bing Xue, Bingx-uan Wang, Bingzheng Xu, Bochao Wu, Bowei Zhang, Chaofan Lin, Chen Dong, and 1 others. 2025. Deepseek-v3. 2: Pushing the frontier of open large language models. arXiv preprint arXiv:2512.02556 .Ruotian Ma, Peisong Wang, Cheng Liu, Xingyan Liu, Jiaqi Chen, Bang Zhang, Xin Zhou, Nan Du, and Jia Li. S2r: Teaching llms to self-verify and selfcorrect via reinforcement learning, 2025. URL https://arxiv. org/abs/2502.12853 , 4:17. Aman Madaan, Niket Tandon, Prakhar Gupta, Skyler Hallinan, Luyu Gao, Sarah Wiegreffe, Uri Alon, Nouha Dziri, Shrimai Prabhumoye, Yiming Yang, and 1 others. 2023. Self-refine: Iterative refinement with self-feedback. Advances in Neural Information Processing Systems , 36:46534–46594. Alex Mallen, Akari Asai, Victor Zhong, Rajarshi Das, Daniel Khashabi, and Hannaneh Hajishirzi. 2023. When not to trust language models: Investigating ef-fectiveness of parametric and non-parametric mem-ories. In Proceedings of the 61st Annual Meeting of the Association for Computational Linguistics (Vol-ume 1: Long Papers) , pages 9802–9822. Reiichiro Nakano, Jacob Hilton, Suchir Balaji, Jeff Wu, Long Ouyang, Christina Kim, Christopher Hesse, Shantanu Jain, Vineet Kosaraju, William Saunders, and 1 others. 2021. Webgpt: Browser-assisted question-answering with human feedback. arXiv preprint arXiv:2112.09332 .Rodrigo Nogueira and Kyunghyun Cho. 2019. Pas-sage re-ranking with bert. arXiv preprint arXiv:1901.04085 .Long Ouyang, Jeffrey Wu, Xu Jiang, Diogo Almeida, Carroll Wainwright, Pamela Mishkin, Chong Zhang, Sandhini Agarwal, Katarina Slama, Alex Ray, and 1 others. 2022. Training language models to follow in-structions with human feedback. Advances in neural information processing systems , 35:27730–27744. Ofir Press, Muru Zhang, Sewon Min, Ludwig Schmidt, Noah A Smith, and Mike Lewis. 2023. Measuring and narrowing the compositionality gap in language models. In Findings of the Association for Computa-tional Linguistics: EMNLP 2023 , pages 5687–5711. Yujia Qin, Shihao Liang, Yining Ye, Kunlun Zhu, Lan Yan, Yaxi Lu, Yankai Lin, Xin Cong, Xiangru Tang, Bill Qian, and 1 others. 2023. Toolllm: Facilitating large language models to master 16000+ real-world apis. arXiv preprint arXiv:2307.16789 .Timo Schick, Jane Dwivedi-Yu, Roberto Dessì, Roberta Raileanu, Maria Lomeli, Eric Hambro, Luke Zettlemoyer, Nicola Cancedda, and Thomas Scialom. 2023. Toolformer: Language models can teach themselves to use tools. Advances in Neural Information Processing Systems , 36:68539–68551. John Schulman, Filip Wolski, Prafulla Dhariwal, Alec Radford, and Oleg Klimov. 2017. Proximal policy optimization algorithms. arXiv preprint arXiv:1707.06347 .Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, YK Li, Yang Wu, and 1 others. 2024. Deepseekmath: Pushing the limits of mathematical reasoning in open language models. arXiv preprint arXiv:2402.03300 .Yaorui Shi, Sihang Li, Chang Wu, Zhiyuan Liu, Jun-feng Fang, Hengxing Cai, An Zhang, and Xiang Wang. 2025. Search and refine during think: Facili-tating knowledge refinement for improved retrieval-augmented reasoning. In The Thirty-ninth Annual Conference on Neural Information Processing Sys-tems .Katherine Tian, Eric Mitchell, Huaxiu Yao, Christo-pher Manning, and Chelsea Finn. 2023. Fine-tuning language models for factuality. In NeurIPS 2023 Workshop on Instruction Tuning and Instruction Fol-lowing .Harsh Trivedi, Niranjan Balasubramanian, Tushar Khot, and Ashish Sabharwal. 2022. musique: Mul-tihop questions via single-hop question composition. 
+
+Transactions of the Association for Computational Linguistics , 10:539–554. Harsh Trivedi, Niranjan Balasubramanian, Tushar Khot, and Ashish Sabharwal. 2023. Interleav-ing retrieval with chain-of-thought reasoning for knowledge-intensive multi-step questions. In Pro-ceedings of the 61st annual meeting of the associa-tion for computational linguistics (volume 1: long papers) , pages 10014–10037. Jonathan Uesato, Nate Kushman, Ramana Kumar, Francis Song, Noah Siegel, Lisa Wang, Anto-nia Creswell, Geoffrey Irving, and Irina Higgins. 2022. Solving math word problems with process-and outcome-based feedback. arXiv preprint arXiv:2211.14275 .Peiyi Wang, Lei Li, Zhihong Shao, Runxin Xu, Damai Dai, Yifei Li, Deli Chen, Yu Wu, and Zhifang Sui. 2024. Math-shepherd: Verify and reinforce llms step-by-step without human annotations. In Pro-ceedings of the 62nd Annual Meeting of the Associa-tion for Computational Linguistics (Volume 1: Long Papers) , pages 9426–9439. Yuxi Xie, Kenji Kawaguchi, Yiran Zhao, James Xu Zhao, Min-Yen Kan, Junxian He, and Michael Xie. 2023. Self-evaluation guided beam search for rea-soning. Advances in Neural Information Processing Systems , 36:41618–41650. Miao Xiong, Zhiyuan Hu, Xinyang Lu, Yifei Li, Jie Fu, Junxian He, and Bryan Hooi. 2023. Can llms express their uncertainty? an empirical evaluation of confidence elicitation in llms. arXiv preprint arXiv:2306.13063 .
+
+10 Zhilin Yang, Peng Qi, Saizheng Zhang, Yoshua Bengio, William Cohen, Ruslan Salakhutdinov, and Christo-pher D Manning. 2018. Hotpotqa: A dataset for diverse, explainable multi-hop question answering. In Proceedings of the 2018 Conference on Empiri-cal Methods in Natural Language Processing , pages 2369–2380. Shunyu Yao, Jeffrey Zhao, Dian Yu, Nan Du, Izhak Shafran, Karthik R Narasimhan, and Yuan Cao. 2022. React: Synergizing reasoning and acting in language models. In The eleventh international con-ference on learning representations .Qi Zhang, Shouqing Yang, Lirong Gao, Hao Chen, Xi-aomeng Hu, Jinglei Chen, Jiexiang Wang, Sheng Guo, Bo Zheng, Haobo Wang, and 1 others. 2025a. Lets: Learning to think-and-search via process-and-outcome reward hybridization. arXiv preprint arXiv:2505.17447 .Yuxiang Zhang, Jiangming Shu, Ye Ma, Xueyuan Lin, Shangxi Wu, and Jitao Sang. 2025b. Memory as ac-tion: Autonomous context curation for long-horizon agentic tasks. arXiv preprint arXiv:2510.12635 .Zihao Zhao, Eric Wallace, Shi Feng, Dan Klein, and Sameer Singh. 2021. Calibrate before use: Improv-ing few-shot performance of language models. In In-ternational conference on machine learning , pages 12697–12706. PMLR. 
+
+A Pseudocode for E VAL ACT with PCAR 
+
+Algorithm 1 EVAL ACT Training with PCAR (GRPO Backbone) 
+
+1: Input: policy πθ , reference πθref , dataset D, environ-ment E,rollouts per input G, clip ϵ, KL weight β, constant 
+
+ϵ0,PCAR params (λbase , λ max , δ )
+
+2: Output: optimized policy πθ
+
+3: while not converged do 
+
+4: Sample a batch of queries X ∼ D 
+
+5: Initialize training buffer B ← ∅ 
+
+6: for all x ∈ X do 
+
+7: // Protocol-compliant rollouts 
+
+8: for i = 1 to G do 
+
+9: Sample trajectory yi ∼ πθold (· | x) under cou-pled Search → Evaluate 
+
+10: Compute gated reward ri ← G(yi, y ∗)
+
+(Eq. (4)) 11: Segment yi into {σi,k }Ki 
+
+> k=1
+
+aligned with 
+
+Search → Evaluate , record {zi,k }Ki
+
+> k=1
+
+12: end for 
+
+13: // GRPO advantage 
+
+14: μgroup ← mean( {ri}Gi=1 ), σgroup ←
+
+std( {ri}Gi=1 ) + ϵ0
+
+15: for i = 1 to G do 
+
+16: Ai ← (ri − μgroup )/σ group 
+
+17: Compute calibrated advantages { ˆAi,t } for to-kens in yi via PCAR: 18: ˜zi,k ← (zi,k − μi)/(σi + ϵ0), λi,k ←
+
+λbase + ( λmax − λbase ) · zi,k /10 
+
+19: ˆAi,t ← Ai · clamp(1 + λi,k ˜zi,k , δ, ∞) for 
+
+t ∈ σi,k 
+
+20: Add token-level instances from (x, y i) with ad-vantages { ˆAi,t } to B
+
+21: end for 
+
+22: end for 
+
+23: Update πθ by maximizing the clipped objective with KL regularization (Eq. (9)) on B
+
+24: end while 
+
+25: return πθ
+
+B Evaluate Specification and Feedback Templates 
+
+Evaluate Action Format. After each retrieval step, the agent invokes Evaluate (c, z ), where c is a free-form textual assessment of the immediately preceding Search output, and z ∈ [0 , 10] denotes a scalar self-reported confidence score. The envi-ronment intercepts this action and returns a dis-crete control cue I = Φ( z), which is appended to the context to modulate subsequent decision-making. 11 Discrete Feedback Mapping. We instantiate 
+
+Φ( ·) as a deterministic, three-tier binning strategy: 
+
+Φ( z) = 
+
+
+
+Ilow , z ∈ [0 , 3] ,
+
+Imid , z ∈ (3 , 7] ,
+
+Ihigh , z ∈ (7 , 10] .
+
+(11) 
+
+Feedback Templates. The control cue I is ma-terialized as an instruction-style message that con-ditions the agent’s next action. The exact textual templates returned by the environment are detailed below. 
+
+Environment Feedback Templates 
+
+Ilow (Low Quality | z ∈ [0 , 3] )
+
+“The previous Search results are largely irrelevant or unhelpful for answering the question. Do not rely on them. Reformulate the query (e.g., alternative key-words or a different angle) and issue a new Search .” 
+
+Imid (Medium Quality | z ∈ (3 , 7] )
+
+“The previous Search results contain partially use-ful evidence but may be incomplete or noisy. Use only clearly relevant excerpts. Consider an additional, more targeted Search to fill missing details, resolve remaining subproblems, or verify uncertain informa-tion.” 
+
+Ihigh (High Quality | z ∈ (7 , 10] )
+
+“The previous Search results are highly relevant and constitute substantive progress toward answering the question (e.g., providing key facts or resolving an im-portant subtask). Use them as primary evidence to construct the answer. Perform another Search only if a specific critical detail is still missing.” 
+
+C Case Study: Multi-Hop Reasoning Trajectory 
+
+We present a full multi-hop interaction trajectory to illustrate the E VAL ACT framework in practice. The example highlights calibrated self-evaluation: a partial retrieval receives 5/10, while a conclu-sive retrieval receives 10/10. These step-wise con-fidence signals are the same signals used by PCAR for segment-level advantage rescaling during RL. 
+
+EvalAct Trajectory Example 
+
+User: In between Remember the Titans and My Fa-vorite Martian which film grossed $36.8 million do-mestically? 
+
+Agent: 
+
+<think> I need to find out which film grossed $36.8 million domestically between "Remember the Titans" and "My Favorite Martian". I should search for box office information for both films. </think> 
+
+Tool Call [Search]: 
+
+{"query": "Remember the Titans domestic box 
+
+office $36.8 million"} 
+
+Observation [Search]: 
+
+[Doc 1 & 3 omitted for brevity] 
+
+Doc 2 (Title: "Remember the Titans"): "...Remember the Titans opened strongly at the U.S. box office... It eventually went on to gross an estimated $115,654,751 in the U.S., and..." 
+
+Tool Call [Evaluate]: 
+
+{"evaluation": "The search provided information about Remember the Titans’ box office performance, but didn’t specifically mention the $36.8 million figure. The results show it grossed $115,654,751 in the U.S., which is much higher than $36.8 million. This helps narrow down that Remember the Titans didn’t gross $36.8 million, but I need more specific information to compare with My Favorite Martian.", 
+
+"score": 5 
+
+}
+
+Observation [Evaluate]: Score 5/10 (Medium Quality): The previous Search results are partially helpful but may be incomplete or contain noise. Extract and use only the clearly relevant parts. Consider running another more focused Search to fill in missing details, resolve remaining subprob-lems, or verify uncertain information. 
+
+Agent: 
+
+<think> Now I need to search for My Favorite Mar-tian’s box office information. </think> 
+
+Tool Call [Search]: 
+
+{"query": "\"My Favorite Martian\" domestic box office $36.8 million"} 
+
+Observation [Search]: 
+
+[Doc 1 & 2 omitted for brevity] 
+
+Doc 3 (Title: "My Favorite Martian (film)"): "...The film grossed $36.8 million domestically against a bud-get of $65 million..." 
+
+Tool Call [Evaluate]: 
+
+{"evaluation": "This search was highly successful. Document 3 directly mentions \"My Favorite Martian\" and states it grossed $36.8 million domestically against a budget of $65 million. This matches exactly the figure mentioned in the question and confirms this film’s domestic gross. Combined with the previous search showing Remember the Titans grossed much more than $36.8 million ($115+ million), this gives me clear information to answer which film grossed the specified amount.", 
+
+"score": 10 
+
+}
+
+Observation [Evaluate]: Score 10/10 (High Quality): The previous Search re-sults are highly relevant and make strong progress to-ward answering the question... Use them as primary evidence to construct your answer. Only conduct an-other Search if you still need a very specific missing detail. 
+
+12 Agent: 
+
+<think> From the information gathered: 1. Remember the Titans grossed $115,654,751 in the U.S. (much higher than $36.8 million) 2. My Favorite Martian grossed $36.8 million domes-tically Therefore, My Favorite Martian is the film that grossed $36.8 million domestically. </think> <answer> My Favorite Martian </answer> 
+
+13

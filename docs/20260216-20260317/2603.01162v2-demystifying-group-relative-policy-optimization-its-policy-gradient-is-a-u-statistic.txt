@@ -1,0 +1,675 @@
+Title: Demystifying Group Relative Policy Optimization: Its Policy Gradient is a U-Statistic
+
+URL Source: https://arxiv.org/pdf/2603.01162v2
+
+Published Time: Wed, 04 Mar 2026 02:15:30 GMT
+
+Number of Pages: 32
+
+Markdown Content:
+# Demystifying Group Relative Policy Optimization: Its Policy Gradient is a U-Statistic 
+
+## Hongyi Zhou 1,∗ Kai Ye 2,∗ Erhan Xu 2 Jin Zhu 3 Ying Yang 4
+
+## Shijin Gong 5,† Chengchun Shi 2,†
+
+Abstract 
+
+Group relative policy optimization (GRPO), a core methodological component of DeepSeek-Math and DeepSeek-R1, has emerged as a cornerstone for scaling reasoning capabilities of large language models. Despite its widespread adoption and the proliferation of follow-up works, the theoretical properties of GRPO remain less studied. This paper provides a unified framework to understand GRPO through the lens of classical U-statistics. We demonstrate that the GRPO policy gradient is inherently a U-statistic, allowing us to characterize its mean squared error (MSE), derive the finite-sample error bound and asymptotic distribution of the suboptimality gap for its learned policy. Our findings reveal that GRPO is asymptotically equivalent to an ora-cle policy gradient algorithm – one with access to a value function that quantifies the goodness of its learning policy at each training iteration – and achieves asymptotically optimal performance within a broad class of policy gradient algorithms. Furthermore, we establish a universal scaling law that offers principled guidance for selecting the optimal group size. Empirical experiments further validate our theoretical findings, demonstrating that the optimal group size is universal, and verify the oracle property of GRPO. 
+
+# 1 Introduction 
+
+Since the birth of ChatGPT in 2022, large language models (LLMs) have been increasingly in-tegrated into our work and everyday life. These models are evolving at an extremely face pace and can now perform a broad range of tasks at or beyond human level, ushering in an era of rapid technological advancement across scientific, industrial, and societal domains. One of the underlying technologies that enhance the capabilities of these LLMs is reasoning . The idea is straightforward: because LLMs generate human language, they can be guided to perform multi-step reasoning in a manner similar to humans. Initially, this is often achieved through some simple magical prompts 
+
+[Wei et al., 2022] – for example, “Let us think step by step” – which encourage the model to de-compose complex questions into intermediate reasoning steps and produce more accurate solutions; see Figure 1 for an illustration. 
+
+> ∗
+
+Equal contribution. 
+
+> †
+
+Corresponding authors. 
+
+> 1
+
+Department of Mathematics, Tsinghua University; Email: zhou-hy21@mails.tsinghua.edu.cn .
+
+> 2
+
+Department of Statistics, London School of Economics and Political Science; Emails: K.Ye1@lse.ac.uk ,
+
+E.Xu2@lse.ac.uk , c.shi7@lse.ac.uk .
+
+> 3
+
+School of Mathematics, University of Birmingham; Email: j.zhu.7@bham.ac.uk .
+
+> 4
+
+Department of Statistics and Data Science, Tsinghua University; Email: yangying@tsinghua.edu.cn .
+
+> 5
+
+School of Management, University of Science and Technology of China; Email: shijin49@mail.ustc.edu.cn .
+
+1
+
+> arXiv:2603.01162v2 [cs.LG] 3 Mar 2026
+
+Figure 1: An illustration of LLM reasoning. The example shows a prompt and the corresponding model output, consisting of a reasoning trace and a final solution. Early progress in LLM reasoning was driven largely by inference-time techniques that avoid retraining the language model, focusing instead on eliciting or searching for more effective interme-diate reasoning steps. In parallel, Ouyang et al. [2022] established a scalable reinforcement learning with human feedback (RLHF) pipeline for retraining – more precisely, post-training – LLMs to align their outputs with human values. Its main idea is to (i) collect multiple responses for each prompt and obtain human preference over these responses; (ii) learn a reward model from the resulting preference data [Christiano et al., 2017]; and (iii) apply reinforcement learning (RL), specifically the proximal policy optimization algorithm [PPO, Schulman et al., 2017] to fine-tune the LLM parameters so as to maximize the cumulative estimated reward. This work provided a practical demonstration that RL, when combined with human preference feedback, can reliably steer LLM behavior at scale. The RLHF pipeline is applicable to LLM reasoning. However, it introduces two challenges. First, reasoning tasks often produce long intermediate trajectories, making human supervision for labeling responses time-consuming. This challenge can be addressed by reinforcement learning with verifiable rewards [RLVR, Lambert et al., 2025], which similarly employs RL for post-training but replaces the reward function learned from subjective human preference with objective verifiers in applications such as mathematics problems, where solutions are unique, or programming tasks, where the generated code can be executed to verify its correctness. The second challenge is more technical: PPO requires to learn a critic network that quantifies the quality of the model at each step to reduce the variance of the stochastic gradient. Nonetheless, estimating and storing such a network in reasoning tasks is computationally expensive. Group relative policy optimization [GRPO, Shao et al., 2024] represents a major milestone for RL algorithms tailored to LLM reasoning. It provides a highly effective solution to the second challenge by eliminating the critic network entirely and instead sampling multiple outputs for each prompt, using their group average as a proxy for the critic; refer to Figure 2 for an overview of the GRPO pipeline, and Section 3 for details. This approach leads to the development of DeepSeek-R1, a prominent large reasoning model at the time, whose post-training requires only about 147K H800 GPU-hours – an order of magnitude lower than many contemporary large reasoning models, including OpenAI’s o1 series [Jaech et al., 2024]. The methodology was further formalized in a paper published in Nature [Guo et al., 2025], marking the first peer-reviewed LLM article in the journal, and was subsequently deployed by various open-source LLMs. These efforts established GRPO as a foundational RLVR algorithm for LLM reasoning, with numerous follow-up methods built upon it shortly after its introduction (see 2Figure 2: Overview of the GRPO pipeline. For each prompt, GRPO samples multiple reasoning traces to generate outputs, which are then evaluated by a reward model to measure their quality. These rewards are compared against the group mean and standardized to compute the advantage function, which is used to update the policy model, subject to KL regularization with respect to a reference model. Section 2.2 for a review). Beyond LLM reasoning, GRPO has also been applied as a general-purpose RL engine in other domains, including agent settings, where the goal extends beyond chatbots to enabling the model to use external tools or perform more complex tasks [e.g., Qian et al., 2025, Ding and Ye, 2026]. All of the aforementioned developments highlight the practical appeal of GRPO, but they also reveal a theoretical gap, as formal analyses remain limited in the literature. In particular: Q1. Why is GRPO so effective? 
+
+Q2. What is the rationale for using the group mean to approximate the critic network? 
+
+Q3. Can we provide finite-sample or asymptotic analyses regarding its convergence? 
+
+Q4. How many outputs shall we sample per prompt? 
+
+This paper addresses these questions by demystifying GRPO from a statistical perspective. Our key observation is that GRPO is deeply connected to U-statistics [Hoeffding, 1948], a connection that has not been explicitly recognized in prior works. Building on this observation, we conduct a comprehensive analysis of GRPO, covering both finite-sample and asymptotic properties, examining both the original algorithm and its subsequent variants, and analyzing both the policy gradient 
+
+used to update model parameters at each iteration and the suboptimality gap , which measures the difference between the learned policy and the optimal policy; see Figure 3 for a visualization of our theoretical framework. Our theoretical contributions are as follows: 1. We establish the first connection between GRPO and U-statistics by showing that the GRPO policy gradient is inherently a U-statistic (Lemma 1). This addresses Q2 by providing a princi-pled explanation for using the group mean to approximate the critic network through classical U-statistics theory. 3Figure 3: Roadmap of our theoretical results. 2. To address Q3, we provide finite-sample analyses that characterize the mean squared error (MSE) of the GRPO policy gradient (Theorem 2 & Proposition 3) and derive error bounds on its suboptimality gap (Lemma 6). We further establish parameter consistency and derive the asymptotic distribution of the suboptimality gap without requiring parameter identifiablity (Theorem 7). This result is novel in two respects: (i) existing literature primarily focuses on error bounds for the suboptimality gap, which characterize its order but are not as accurate as its distribution; and (ii) classical asymptotic analyses rely on parameter identifiability, an assumption clearly violated in overparameterized LLMs. 3. Our finite-sample and asymptotic analyses lead to two desirable properties of GRPO: (i) the 
+
+oracle property (Corollaries 4 & 9), whereby GRPO is asymptotically equivalent to an oracle algorithm with access to the true critic network; and (ii) optimality (Corollaries 5 & 10), whereby GRPO asymptotically minimizes both the MSE and the suboptimality gap among a broad class of RL algorithms. These theoretical findings are further supported by empirical evidence (Figure 4), which addresses Q1 and explains GRPO’s effectiveness. 4. Finally, to address Q4, we derive a scaling law that delineates how GRPO’s performance depends on the number of sampled outputs per group, and identifies the optimal group size that maxi-mizes its performance (Theorem 8). Notably, this optimal choice depends only on the training data and model architecture, and is independent of other factors such as the training budget or number of iterations. This universality makes our scaling law particularly appealing, as it does require retuning when these factors change. Its universality is further validated empirically (Table 2 & Figure 5). 
+
+# 2 Related works 
+
+Our work connects two modern areas in artificial intelligence – reinforcement learning, and its emerging application to LLM reasoning through RLVR – with the classical theory of U-statistics. 
+
+## 2.1 Reinforcement learning 
+
+The literature on RL is vast. Existing algorithms are broadly distinguished as planning or learning ,based on whether the data generating process is known [e.g., Sutton and Barto, 2018, Chapter 8]. 4Within learning, model-based approaches explicitly estimate the MDP model [e.g., Jiang, 2024], while model-free methods do not. The latter can be further divided into value-based algorithms that learn a value function to measure the goodness of a policy and derive the optimal policy by maximizing this value, and policy-based algorithms that directly searches the optimal policy over a restricted policy class. Over time, RL research has evolved across four phases, summarized below in chronological order: 1. Classical RL : Early works studied non-deep-learning algorithms, in the form of tabular methods that store estimates in lookup tables, or using classical ML models for function approximation. Two foundational examples are tabular Q-learning [Watkins and Dayan, 1992] and fitted Q-iteration [Ernst et al., 2005]. Among these algorithms, GRPO is closely related to policy-based algorithms such as REINFORCE [Williams, 1992] and actor-critic [Konda and Tsitsiklis, 1999]. As demonstrated later, GRPO is in essence a policy-based algorithm adapted for LLM reasoning. 2. Deep RL : Spurred by the deep learning revolution of the 2010s, a line of advanced deep RL algorithms emerged. This era was largely catalyzed by the success of the deep Q-network in mastering video games [Mnih et al., 2015] and the development of AlphaGo for the game of Go [Silver et al., 2016]. Since then, deep RL has become a cornerstone of modern AI research both methodologically [e.g., Mnih et al., 2016, Van Hasselt et al., 2016, Dabney et al., 2018, Zhou et al., 2020, Chen et al., 2021] and theoretically [e.g., Fan et al., 2020, Feng et al., 2023, Shen et al., 2025, Sun et al., 2025]. Of particular relevance to GRPO are trust region policy optimization [TRPO, Schulman et al., 2015] and its successor, PPO. The latter has been a prominent policy-based algorithm widely applied across various domains, including robotics [Andrychowicz et al., 2020] and LLM fine-tuning [Ouyang et al., 2022]. 3. Offline RL : In high-stakes applications where safety concerns make online exploration pro-hibitive, it is more practical to employ offline RL that learns exclusively from static, historical datasets [Levine et al., 2020]. The core principle of offline RL is to apply the pessimistic principle [e.g., Jin et al., 2021, Rashidinejad et al., 2021] for conservative policy learning. While this prin-ciple traces back to the seminal works of Swaminathan and Joachims [2015b,a], the paradigm saw a resurgence in the early 2020s [e.g., Kumar et al., 2019, Wu et al., 2019, Yu et al., 2020, Xie et al., 2021, Uehara and Sun, 2022]. Parallel to offline policy learning, off-policy evaluation seeks to evaluate the impact of adopting a target policy based on the historical data generated by a different policy [e.g., Thomas et al., 2015, Jiang and Li, 2016, Thomas and Brunskill, 2016, Liu et al., 2018, Xie et al., 2019, Kallus and Uehara, 2022]; see Uehara et al. [2022] for a recent review. 4. RLHF : Following the seminal work by Ouyang et al. [2022], the field has seen an unprecedented proliferation of literature dedicated to RLHF Christiano et al. [2017], with the goal of aligning the output of LLMs with human preferences through RL [e.g., Munos et al., 2023, Rafailov et al., 2023, Wu et al., 2024, 2025b, Zeng et al., 2024]. Theoretically, existing works have explored both the asymptotic distribution of the parameter estimates [Liu et al., 2024] and non-asymptotic error bounds for the sub-optimality gap [e.g., Chowdhury et al., 2024, Zhong et al., 2024, Aminian et al., 2025, Ye et al., 2025, Xu et al., 2025a] and regret [Zhang et al., 2025d]. Despite these analyses, GRPO – a key driver of recent breakthroughs in LLM reasoning – remains largely under-theorized. 5Finally, RL is closely related to two branches of research in statistics, primarily motivated by healthcare applications; see Chakraborty and Moodie [2013], Kosorok and Laber [2019], Tsiatis et al. [2019], Li et al. [2023], Shi [2025], Ge et al. [2025], Gazi et al. [2026] for reviews. (i) Early works develop RL algorithms to learn optimal dynamic treatment regimes (DTRs), which are individualized strategies that tailor medical interventions to a patient’s unique characteristics and evolving clinical state. Some representative algorithms include Q-learning [Qian and Murphy, 2011, Song et al., 2015], A-learning [Murphy, 2003, Robins, 2004, Shi et al., 2018] and policy-based methods [Zhang et al., 2013, Zhao et al., 2015]. These studies focus on short-horizon settings, where treatment decisions are made at a single stage or over a small, finite number of stages. (ii) More recently, the literature has expanded to study MDPs under long-horizon settings [e.g., Ertefaie and Strawderman, 2018, Luckett et al., 2020, Liao et al., 2022, Chen et al., 2024, Li et al., 2024a, Shi et al., 2024a,b, Zhou et al., 2024, Ma et al., 2025, Li et al., 2025b, Zhong et al., 2025] as well as RLHF [e.g., Lee et al., 2024, Liu et al., 2025b,a, Xiao et al., 2025b]. 
+
+## 2.2 Reinforcement learning from verifiable rewards 
+
+RLVR, an LLM post-training strategy introduced by [Lambert et al., 2025], directly optimizes LLMs against verifiable outcomes. Unlike RLHF, which requires to learn a reward function from subjective human preferences across multiple candidate responses, RLVR leverages objective feedback signals – for example, by verifying whether a model’s answer matches a ground-truth mathematical solution or by executing the model’s generated code in programming tasks. The original algorithm in Lambert et al. [2025] relied on PPO for policy learning, which learns a separate critic model that evaluates the quality of the learning policy. GRPO, a major breakthrough in RLVR, drastically scales the reasoning capacities of existing LLMs. Its key ingredient lies in completely eliminating the critic model, sampling multiple reasoning traces, and using their average reward as a proxy for the critic (see Section 3 for details). This approach, originally introduced in DeepSeekMath Shao et al. [2024], was largely popularized by DeepSeek-R1 Guo et al. [2025] and later validated by a series of pioneering open-source reasoning models like Qwen2.5 Yang et al. [2025]. Together, these works have sparked a surge of follow-up RLVR algorithms [see, e.g., Zhang et al., 2025a, for a recent review], which can be broadly categorized into three types: 1. The first line of works refined the GRPO policy gradient estimator by (i) modifying [Hao et al., 2025, Xiao et al., 2025a, Zeng et al., 2025] or replacing [Li et al., 2024b, Ahmadian et al., 2024, Hu et al., 2025] the baseline term (the empirical group mean in GRPO); (ii) revising the importance sampling ratio used in GRPO [Zheng et al., 2025a, Pang and Jin, 2025] or removing it altogether [Chu et al., 2025]; and (iii) applying different normalizations to the reward [Xiong et al., 2025, Liu et al., 2025c, Xiao et al., 2025a]. In summary, these algorithms preserve the critic-free GRPO framework while modifying how policy gradient estimators are computed or normalized. 2. The second line of works considered different optimization objectives, including entropy-regularized objectives that encourage exploration to prevent the model from entropy collapse [Zhang et al., 2025b, Cheng et al., 2025, Chen et al., 2025], length- or difficulty-aware objectives that balance correctness with concise reasoning [Zhang and Zuo, 2025, Dai et al., 2025], risk-sensitive targets [Ren et al., 2026] and objectives that guide the model to adaptively select reasoning formats [Wu et al., 2025a]. 63. The third line of works focused on improving GRPO’s training efficiency, either statistically or computationally [Zhang et al., 2025c, Yu et al., 2025, Lin et al., 2025, Xu et al., 2025b]. For example, Yan et al. [2025] leveraged off-policy data from stronger models to provide informative reasoning trajectories and enhance learning. Li et al. [2025a] and Zhan et al. [2026] reused previously generated trajectories instead of discarding all old samples after each policy update. Zheng et al. [2025b] explored multiple reasoning paths concurrently to accelerate reasoning speed, while Xu and Ding [2026] generated only a single sampled output per prompt to reduce computational cost. Despite the popularity in developing practical RLVR algorithms, their theoretical foundations – and those of GRPO specifically – remain largely unexplored. Among those available, Liu et al. [2025c] and Yang et al. [2026] studied the biases of GRPO’s policy gradient and advantage function (see Section 3 for formal definitions). Pang and Jin [2025] upper bounded the expected squared 
+
+ℓ2-norm of the gradient for GRPO’s KL-regularized objective. Davis and Recht [2025] and Vojnovic and Yun [2025] characterized GRPO’s objective function. In particular, Davis and Recht [2025] proved GRPO optimizes an arcsin transformation of the expected reward, rather than the expected reward in its original form. More recently, Yao et al. [2026] discussed the off-policy nature of GRPO. However, these results do not deliver a unified finite-sample and asymptotic characterization of GRPO, nor do they establish a connection to U-statistics – both of which are precisely what our theory establishes. 
+
+## 2.3 U-statistics 
+
+Our work builds upon the classical theory of U-statistics, a class of estimators introduced by Hoeffd-ing [1948] that generalize the sample mean to averages over functions of multiple random variables or vectors. Let {Xi}ni=1 denote a sequence of independent and identically distributed (i.i.d.) ran-dom vectors. A U-statistic of order m is defined by a symmetric kernel function h(X1, . . . , X m). For instance, a second-order U-statistic with a bivariate kernel h is defined as: 
+
+U = 1
+
+n(n − 1) 
+
+X
+
+> i̸=j
+
+h(Xi, X j ). (1) Its statistical property is largely characterized through the Hoeffding decomposition, which ex-presses the U-statistic as a sum of several orthogonal components: 
+
+U = h0 + 2
+
+n
+
+> n
+
+X
+
+> i=1
+
+[h1(Xi) − h0]
+
+| {z }
+
+> first-order term
+
++ 1
+
+n(n − 1) 
+
+X
+
+> i̸=j
+
+[h(Xi, X j ) − h1(Xi) − h1(Xj ) + h0]
+
+| {z }
+
+> second-order term
+
+, (2) where h0 = E[h(X1, X 2)] is the expectation of the kernel and h1(x) = E[h(x, X 2)] denotes the first-order projection. In the non-degenerate case where Var( h1(X1)) > 0, the first-order term dominates the variance and fluctuates at an order of Op(n−1/2), whereas the second-order term decays at a faster rate of Op(n−1). In essence, this decomposition establishes the asymptotic equivalence between a U-statistic and a simple average of i.i.d. random variables (captured by the first-order term), allowing classical limit theorems for sample averages to be directly applied to U-statistics. As we will 7demonstrate in Section 4, this decomposition is instrumental in characterizing the behavior of GRPO’s policy gradient and its estimated optimal policy. Owing to their favorable theoretical properties, U-statistics are widely employed across dis-ciplines, including their extension to U -processes in probability theory [Nolan and Pollard, 1987], their use in semiparametric statistics via higher-order influence functions [Liu et al., 2017], their role in econometrics through the maximum rank correlation estimator [Han, 1987, Sherman, 1993], and their application in estimating optimal individualized treatment regimes via concordance-assisted learning [Fan et al., 2017, Liang et al., 2018]. 
+
+# 3 Preliminaries 
+
+In this section, we first introduce the sequential decision making problem in RL and formulates LLM reasoning as a sequential decision making problem (Section 3.1). We next present a meta-algorithm (see Algorithm 1 for the pseudocode) that unifies a range of policy-based approaches, ranging from the classical REINFORCE algorithm to more advanced advantage actor-critic methods and variants of GRPO (Section 3.2). 
+
+## 3.1 Problem setup 
+
+RL is a powerful machine learning framework for solving sequential decision making problems. In this framework, an agent repeatedly interacts with an environment. At each time step, the agent receives an observation which represents the environment’s current state, and selects an action 
+
+based on this information. In response, the environment provides feedback in the form of a reward 
+
+and transitions to a new state, yielding the next observation . The agent’s objective is to utilize the collected observation-action-reward tuples to learn an optimal policy – a mapping from its observed data history to the space of actions – that maximizes the expected cumulative reward in the long run. In natural language processing, text is represented as a sequence of discrete units known as tokens. Let V denote the vocabulary consisting of all such tokens. LLMs produce text via au-toregressive next token prediction. Specifically, given an input prompt X (e.g., a user query) represented as a sequence of tokens, the model generates the first token Y1 ∈ V sampled from a conditional distribution πθ(•| X) = P(Y1 = •| X), parameterized by θ ∈ Θ. Next, the second token 
+
+Y2 is produced according to πθ(•| X, Y 1). At each time step t, the model generates Yt according to 
+
+πθ(•| X, Y <t ), where Y<t = ( Y1, . . . , Y t−1) represents the previously generated prefix. This iterative procedure continues until the model generates a complete output Y = ( Y1, . . . , Y T ), terminating with an “end-of-sequence” (EOS) token YT . To handle conditioning sets of varying lengths, a Transformer architecture [Vaswani et al., 2017] is commonly employed to parameterize πθ. For reasoning tasks, the output Y contains both a reasoning trace and a final solution (denoted by S); see Figure 1 for an illustration. The above procedure can be naturally formulated as a sequential decision making problem. Specifically, the observation is fixed as the input prompt X, the action at time step t corresponds to the generated token Yt, and the policy is given by πθ. Unlike standard RL settings where rewards may be provided at each step, the reward here is sparse and observed only upon completion of the entire sequence. In GRPO, the terminal reward, denoted by Z, evaluates both the format consistency of the response (i.e., its adherence to a pre-specified template) and the accuracy of the 8Algorithm 1 A meta-algorithm for LLM reasoning.  
+
+> 1:
+
+Input: Prompt distribution f (X), initial parameters θ0 ∈ Θ, sequence of learning rates {ηi}i∈N,batch size B, per-prompt group size G, and baseline functions {C(b,g ) 
+
+> i
+
+}i,b,g . 
+
+> 2:
+
+for i = 0 , 1, 2, . . . , n − 1 do  
+
+> 3:
+
+Sample a batch of prompts {X(b)}Bb=1 
+
+> iid
+
+∼ f (•).  
+
+> 4:
+
+For each X(b), generate a group of G outputs {Y (b,g )}Gg=1 ∼ πθi (·| X(b)).  
+
+> 5:
+
+For each Y (b,g ), obtain its reward Z(b,g ). 
+
+> 6:
+
+Compute the gradient 
+
+bg(θi) = 1
+
+BG 
+
+> B
+
+X
+
+> b=1
+> G
+
+X
+
+> g=1
+
+X
+
+> t
+
+∇θ log πθi (Y (b,g ) 
+
+> t
+
+|X(b), Y (b,g ) 
+
+> <t
+
+)( Z(b,g ) − C(b,g ) 
+
+> i
+
+) 
+
+> 7:
+
+Parameter update: θi+1 ← θi + ηi+1 bg(θi).  
+
+> 8:
+
+end for  
+
+> 9:
+
+Output: πθn .final solution S. All intermediate rewards are set to zero. Our goal is to optimize the policy πθ, or equivalently, the parameter θ, to maximize the expected reward of the generated output Eπθ (Z). Alternatively, this problem can be viewed from a different perspective by treating the entire output sequence Y as a single action. This effectively collapses the time horizon T to 1. Conse-quently, the problem is recast as a bandit problem [e.g., Lai and Robbins, 1985], where the data is summarized by the context-action-reward ( X, Y, Z ) tuples. 
+
+## 3.2 A meta-algorithm 
+
+Existing RLVR algorithms are policy-based algorithms, grounded in the policy gradient theorem [Sutton et al., 1999]. This theorem is instrumental as it provides a closed-form expression for the gradient of the expected reward with respect to the policy parameters, which enables the application of gradient-based algorithms for parameter optimization. In our specific formulation, the gradient of the expected reward can be expressed as: 
+
+g(θ) := ∇θ[Eπθ (Z)] = E
+
+h X 
+
+> t
+
+∇θ log πθ (Yt|X, Y <t )Z
+
+i
+
+. (3) Equation (3) gives rise to the classical REINFORCE algorithm [Williams, 1992]. At the ith iteration, the algorithm (i) samples a prompt X from a reference distribution f (•)1, (ii) utilizes the current parameter θi to generate an output Y , (iii) computes its reward Z, (iv) constructs a plug-in estimator bg(θi) = P 
+
+> t
+
+∇θ log πθ (Yt|X, Y <t )Z based on these samples, and (v) updates the parameters via stochastic gradient ascent θi+1 ← θi + ηibg(θi). While REINFORCE’s gradient estimator is unbiased, it is notoriously susceptible to high vari-ance. A common trick in the literature to reduce its variance is to subtract a baseline term Ci
+
+(which can vary across iterations i) from the reward Z. The rationale lies in that the score function   
+
+> 1While the true distribution fis unknown, it is typically approximated by the empirical distribution of a finite set of prompts. In such cases, our established theoretical guarantees are understood to be conditional on this specific prompt set.
+
+9P 
+
+> t
+
+∇θ log πθ(Yt|X, Y <t ) has an expectation of zero. Consequently, provided that Ci is a function exclusively of the random variable X (being conditionally independent of Y and Z given X), the expectation in (3) remains invariant when Z is replaced by its “centered” version, Z − Ci. As such, the resulting gradient estimator remains unbiased. However, a proper choice of Ci can effectively reduce the variance of the estimator. The most widely adopted Ci is the value function V πθi (X) = Eπθi (Z|X). This choice gives rise to advantage actor-critic (A2C) algorithms [e.g., Mnih et al., 2016], which, in addition to the policy (the actor), learn a value function (the critic) to estimate the baseline and calculate the advantage function (the difference between the return and the critic) for variance reduction. As mentioned in the introduction, this critic network is also a core component of PPO. However, in reasoning tasks, maintaining and updating a separate critic network is extremely computationally intensive. GRPO addresses this inefficiency by eliminating the critic network entirely. It samples multiple outputs for each prompt and utilizes their group mean as the baseline term (see Equation (4)). Because sampling from the policy is drastically more efficient than training a secondary critic model, GRPO offers a highly scalable solution for LLM reasoning. In Section 4, we show that this solution is also mathematically elegant. To unify these methods, we introduce the meta-algorithm in Algorithm 1. It incorporates (i) the centering trick for variance reduction, (ii) minibatch sampling of B prompts per iteration, and (iii) G sampled outputs per prompt for evaluating the gradient. Several aforementioned algorithms arise as special cases: 
+
+• REINFORCE : Recovered by setting B = 1 , G = 1, and C(1 ,1)  
+
+> i
+
+= 0. 
+
+• A2C : Recovered by setting B = 1 , G = 1, and C(1 ,1)  
+
+> i
+
+to the critic network. 
+
+• GRPO-type : Recovered by allowing B, G > 1 and setting C(b,g ) 
+
+> i
+
+to the leave-one-out group mean 2
+
+C(b,g ) 
+
+> i
+
+= ¯Z(b, −g) := 
+
+P  
+
+> k̸=g
+
+Z(b,g )
+
+G − 1 . (4) We conclude this section by noting that while we focus on analyzing Algorithm 1 for building intuition, it departs from standard production-level implementations in three aspects: (i) it omits the reward normalization commonly used in GRPO; (ii) it does not incorporate the importance sampling strategy used in GRPO to enhance sample efficiency through gradient updates per batch; (iii) it excludes the Kullback–Leibler (KL) divergence penalty, which prevents the policy from deviating excessively from the reference model. These simplifications were implemented in GRPO variants such as Dr-GRPO [Liu et al., 2025c] and GPG [Chu et al., 2025], which we analyze rigorously in Sections 4.1 and 4.2. In Section A of the Supplementary Material, we will further bridge these gaps to align our theoretical analysis with standard GRPO implementations. 
+
+# 4 Main results 
+
+This section presents our main theoretical results, where we compare GRPO with two alternatives to demonstrate its effectiveness. To ensure a fair comparison, all algorithms use the same batch        
+
+> 2This is equivalent to using the full group mean G−1PGk=1 Z(b,k )as the baseline, up to a rescaling of the learning rate by a factor of G/ (G−1).
+
+10 Table 1: Three meta-algorithms compared in Section 4, differing in their choice of baseline term. Algorithm Vanilla algorithm GRPO-type algorithm Oracle algorithm Baseline term C(b,g ) 
+
+> i
+
+= 0 C(b,g ) 
+
+> i
+
+= ¯Z(b, −g) C(b,g ) 
+
+> i
+
+= V πθi (X(b))size B and group size G. As summarized in Table 1, their differences lie solely in the choice of the baseline term. Specifically, we analyze: (i) a vanilla algorithm, a minibatch variant of REINFORCE that sets C(b,g ) 
+
+> i
+
+= 0; (ii) a GRPO-type algorithm, which adopts the group mean defined in (4); (iii) an oracle algorithm, which uses the true value function V πθi (X) as the baseline; Notice that the oracle algorithm is not practically implementable: the true value function is unknown and estimating it via a separate network is computationally expensive, as discussed earlier. Nevertheless, this algorithm serve as a benchmark whose performance practical algorithms aim to match. We say that an algorithm achieves the oracle property if it attains asymptotically equivalent performance to the oracle algorithm. We next provide a high-level summary of our findings, covering both finite-sample and asymp-totic results (see Figure 3 for a roadmap of our results): 
+
+• Gradient evaluation : Section 4.1 investigates the properties of policy gradient estimators employed by GRPO-type algorithms. Specifically, Lemma 1 formally establishes the connection between the estimator and the U-statistic. Theorem 2 and Proposition 3 derive bounds on its MSE, which in turn demonstrating the estimator’s superiority over the vanilla algorithm, yielding its oracle property (Corollary 4) and optimality (Corollary 5). 
+
+• Policy optimization : Section 4.2 shifts the focus to the sub-optimality gap of the learned policy. In particular, Lemma 6 presents a finite-sample upper bound on this gap, building upon which Theorem 7 establishes a scaling law that offers insights into the optimal choice of the group size. Theorem 8 further establishes the consistency of the parameter estimates and the asymptotic distribution of the sub-optimality gap without assuming parameter identifiability. These results verify the oracle property of the GRPO policy (Corollary 9) as well as its optimality (Corollary 10). 
+
+• Practical considerations : Section A of the Supplementary Material extends the aforemen-tioned analyses to accommodate (i) reward standardization; (ii) importance sampling and (iii) the KL divergence penalty. This section establishes the connection between the gradient estima-tor and U-statistics (Lemma 11), characterizes the gradient estimator’s MSE (Theorem 12), and derives the policy learning target (Proposition 13). 
+
+## 4.1 Group relative gradient evaluation 
+
+In this section, we consider the task of evaluating the gradient g(θ) (see Equation (3)). To build intuition, we begin with estimating g(θ) for a fixed prompt x. This corresponds to the setting where the prompt distribution f in Algorithm 1 is degenerate at x. The observed data consists of G i.i.d. output-reward pairs {(Y (g), Z (g))}Gg=1 sampled from the model’s policy πθ. Here, we omit the superscript ( b) as the prompt is fixed. We denote the resulting gradient estimators for the vanilla, 11 GRPO-type and oracle algorithms as bgvanilla (x; θ), bgGRPO (x; θ) and bgoracle (x; θ), respectively. These estimators follow the general form, 
+
+bg(x; θ) = 1
+
+G
+
+> G
+
+X
+
+> g=1
+
+∇θ log πθ(Y (g) | x)[ Z(g) − C(g)], (5) with different choices of the baseline term C(g) summarized in Table 1. We begin by demonstrating that the GRPO’s group relative gradient estimator, which contrasts a realized reward Z against its group average, admits a second-order U-statistic representation. 
+
+Lemma 1 (Gradient estimator as a U-statistic) . bgGRPO (x; θ) can be written as a second-order U-statistic: 
+
+bgGRPO (x; θ) = 
+
+G
+
+2
+
+−1 X
+
+> 1≤i<j ≤G
+
+h (Y (i), Z (i)), (Y (j), Z (j)), (6) 
+
+with a symmetric kernel 
+
+h (Y (i), Z (i)), (Y (j), Z (j)) := 12 [∇θ log πθ(Y (i)|x) − ∇ θ log πθ(Y (j)|x)]( Z(i) − Z(j)).
+
+The proof of Lemma 1 is straightforward. By setting C(g) in (5) to the group mean baseline ¯Z(−g) = ( G − 1) −1 P  
+
+> k̸=g
+
+Z(g), each individual term in the sum satisfies 
+
+∇θ log πθ(Y (g) | x)[ Z(g) − ¯Z(−g)] = 1
+
+G − 1
+
+X 
+
+> k̸=g
+
+∇θ log πθ(Y (g) | x)[ Z(g) − Z(k)].
+
+Averaging over all g ∈ {1, . . . , G } and applying a standard symmetrization argument allows 
+
+bgGRPO (x; θ) to be reformulated as the average of the symmetric kernel h over all pairs, yielding the 
+
+U -statistic in (6). Next, applying the Hoeffding decomposition from (2) partitions the group relative gradient estimator into three orthogonal components: (i) the expectation of the kernel, which equals the true gradient 
+
+g(x; θ) = Eπθ [∇θ log πθ(Y | x)( Z|X = x)]; (ii) a first-order term, which can be represented as the difference between the oracle gradient estimator and g(x; θ), since the first-order projection h1 satisfies 2h1(y, z ) = E
+
+h
+
+h (y, z ), (Y, Z )i
+
+= ∇θ log πθ(y | x)z − Eπθ (Z | X = x),
+
+which is precisely each summand in (5) under the oracle baseline C(g) = V πθ (x); (iii) a second-order degenerate term. Since these components are uncorrelated, this decomposition leads to the following MSE bound, as summarized in Theorem 2. 
+
+Assumption 1 (Bounded reward) . Z is almost surely bounded. 
+
+12 Theorem 2 (MSE conditional on the prompt) . Under Assumption 1, we have MSE (bgGRPO (x; θ)) := E∥bgGRPO (x; θ) − g(x; θ)∥2
+
+= trace [Σ oracle (x; θ)] 
+
+G + O
+
+ E∥∇ θ log πθ(Y |x)∥2
+
+G2
+
+
+
+, (7) 
+
+where trace [•] denote the trace of a matrix, Σoracle (x; θ) denotes the asymptotic covariance matrix of the oracle gradient estimator GCov (bgoracle (x; θ)) and ∥ • ∥ denotes the ℓ2-norm of a vector. 
+
+We make two remarks. First, Assumption 1 is generally satisfied. In GRPO, the reward Z is typically the sum of a format reward and an accuracy reward, which evaluate the format consistency and the correctness of the output, respectively. Since both components are bounded within [0 , 1], the final reward Z remains bounded within [0 , 2]. Second, the two terms on the second line of (7) correspond to the expected squared ℓ2-norm of the first- and second-order projections from the Hoeffding decomposition. Crucially, the first-order projection serves as the leading term that scales at a rate of G−1 and coincides with the MSE of the oracle gradient estimator. In contrast, the second-order term decays at a faster rate of G−2,confirming its role as a higher-order residual . This observation establishes the oracle property of 
+
+bgGRPO (θ), which we formalize in Corollary 4: as the group size G → ∞ , the estimator’s MSE becomes equivalent to that of the oracle estimator with access to the true value function. In the official DeepSeekMath implementation, G is set to 64 [Shao et al., 2024], which is sufficiently large for the residual term to be negligible relative to the leading term. Next, we extend Theorem 2 to the minibatch setting, where the prompt is no longer fixed at x.Instead, we sample B i.i.d. prompts {X(b)}Bb=1 and G output-reward pairs per prompt to estimate 
+
+g(θ) = EX∼f (•)[g(X; θ)] . (8) Accordingly, we define the vanilla, oracle, and GRPO-type minibatch gradient estimators as the empirical average of the prompt-specific estimators: 
+
+bg(θ) = 1
+
+B
+
+> B
+
+X
+
+> b=1
+
+bg(X(b); θ).
+
+Proposition 3 (MSE in the minibatch setting) . Under Assumption 1, we have MSE (bgGRPO (θ)) := E∥bgGRPO (θ) − g(θ)∥2
+
+= E∥g(X; θ) − g(θ)∥2
+
+B + trace [Σ oracle (θ)] 
+
+BG + O
+
+ E∥∇ θ log πθ(Y |X)∥2
+
+BG 2
+
+
+
+, (9) 
+
+where Σoracle (θ) = E[Σ oracle (X; θ)] .
+
+In the minibatch setting, the MSE is further reduced by a factor of B−1. The first term in the second line of (9) represents the inherent variance arising from prompt sampling, which is independent of G and shared by all gradient estimators (e.g., vanilla, oracle). Equation (9) is instrumental in deriving our scaling law in the next section. To elaborate, suppose we fix the sampling budget per prompt as N = B × G. Then B = N/G , so the first term scales linearly with G, the second term is constant when N is fixed, and the third term scales inversely with G.Consequently, there exists an optimal choice of G that is neither too small nor too large, balancing 13 the first and third terms to minimize the MSE. As we will show later, the MSE is closely related to the suboptimality gap of the learned policy, and thus there exists a corresponding G that minimizes this suboptimality gap. Additionally, as G → ∞ , the MSE of the GRPO-type gradient again becomes equivalent to that of the oracle gradient, and we formalize such oracle property below. 
+
+Corollary 4 (Oracle property of gradient estimator) . Let MSE A(•) denote the asymptotic MSE of a gradient estimator, obtained by removing errors that are high-order in the group size G, we have MSE A(bgGRPO (x; θ)) = MSE (bgoracle (x; θ)) and MSE A(bgGRPO (θ)) = MSE (bgoracle (θ)) .
+
+Finally, we establish the optimality of the GRPO estimator in Corollary 5 by demonstrating the following properties: (i) it asymptotically minimizes the MSE within the class of gradient estimators of the form (5) where the baseline term is a function of the prompt x only; and (ii) its asymptotic MSE is strictly smaller than that of the vanilla algorithm. 
+
+Assumption 2 (Conditional uncorrelation) . ∥∇ θ log πθ(Y |X)∥2 is conditionally uncorrelated of Z
+
+given X.
+
+Corollary 5 (Optimality of gradient estimator) . Suppose Assumptions 1 and 2 hold. For any gradient estimator bg(x; θ) of the form (5) whose baseline term is a function of the prompt x only, we have MSE A(bgGRPO (x; θ)) ≤ MSE (bg(x; θ)) and MSE A(bgGRPO (θ)) ≤ MSE (bg(θ)) .
+
+In particular, provided that the score functions ∇θ log πθ(Y | x), ∇θ log πθ(Y | X) and the value function V πθ (X) are not almost surely zero, and V πθ (x)̸ = 0 ,MSE A(bgGRPO (x; θ)) < MSE (bgvanilla (x; θ)) and MSE A(bgGRPO (θ)) < MSE (bgvanilla (θ)) .
+
+To conclude this section, we remark that Assumption 2 ensures that the oracle gradient estima-tor minimizes the MSE within the class of unbiased policy gradient estimators [Greensmith et al., 2004]. This assumption is well-supported by the empirical success of modern RL algorithms such as advantage actor-critic and PPO, which prioritize the value function as the optimal baseline for variance reduction. 
+
+## 4.2 Group relative policy optimization 
+
+This section turns to policy optimization and investigates the properties of the policy learned by Algorithm 1. For a given policy π, we evaluate its performance via the suboptimality gap, defined as the difference in the expected return between π and the optimal policy: ∆( π) = max  
+
+> θ∈Θ
+
+Eπθ (Z) − Eπ(Z)By definition, a smaller gap indicates a policy closer to the optimal one. Additionally, the subop-timality gap measures only the quality of the final policy obtained at the last iteration. In the RL literature, an alternative metric is regret [e.g., Jaksch et al., 2010], which quantifies the cumulative difference between the optimal policy and the sequence of intermediate policies across iterations. However, we adopt the suboptimality gap because it better reflects practical LLM applications: 14 once training is complete, only the final policy is deployed in practice. This criterion also aligns with the evaluation metric in deployment-efficient RL [e.g., Huang et al., 2022]. We begin with the following set of conditions under which we establish a finite-sample error bound for the suboptimality gap of the meta-algorithm in Lemma 6. 
+
+Assumption 3 (L-smoothness) . The expected return Eπθ (Z) is L-smooth with respect to θ. That is, its gradient g(•) is differentiable and Lipschitz continuous with some constant L > 0 such that: 
+
+∥g(θ1) − g(θ2)∥ ≤ L∥θ1 − θ2∥, ∀θ1, θ 2 ∈ Θ.
+
+Assumption 4 (Polyak-Lojasiewicz (PL) condition) . There exists some constant μ > 0 such that 
+
+∥g(θ)∥2 ≥ 2μ∆( πθ), ∀θ ∈ Θ. (10) 
+
+Assumption 5 (Learning rate) . The sequence of learning rates {ηi}i≥1 in Algorithm 1 satisfies either (a) a constant schedule where ηi = β for some β < (2 L)−1, or (b) an 1/i schedule where 
+
+ηi = i−1β for some constant β > (2 μ)−1.
+
+The L-smoothness condition (Assumption 3) is standard in the optimization literature [e.g., Nesterov, 2013]. It requires the gradient of the expected return to be a Lipschitz continuous function of θ. The PL condition (Assumption 4) is substantially weaker than the strong concavity condition commonly imposed in the literature [e.g., Boyd and Vandenberghe, 2004]. Specifically, strong concavity requires a unique global optimizer and a strictly negative definite Hessian matrix 
+
+∇2
+
+> θ
+
+Eπθ (Z) – both requirements are likely violated in over-parameterized models such as LLMs. The PL condition, to the contrary, accommodates landscapes with multiple global optimizers and singular Hessians. To see this, consider a hypothetical two-dimensional example where θ =(θ1, θ 2), Θ = R2, and the expected return is Eπθ (Z) = −θ21. Its Hessian matrix 
+
+−2 00 0
+
+
+
+has an eigenvalue of 0 and is therefore not negative definite, violating strong concavity. Nonetheless, its gradient is g(θ) = ( −2θ1, 0) ⊤, which satisfies (10) for any μ ≤ 2. Finally, Assumption 5 considers two standard learning rate schedules. The constant schedule (a) is common in practical applications [Sheng et al., 2025]. To the contrary, the 1 /i schedule (b) is motivated by stochastic approximation theory: it ensures that the suboptimality gap theoretically achieves the optimal convergence rate [Kushner and Yin, 2003]. 
+
+Lemma 6 (Finite-sample sub-optimality gap) . Suppose Assumptions 1 and 3–5 hold. Suppose each C(b,g ) 
+
+> i
+
+in Algorithm 1 is either a function of X(b) or a GRPO-type baseline in (4) . Let 
+
+M = sup i≥0 MSE (bg(θi)) denote the uniform upper bound on the MSE of this algorithm’s gradi-ent estimator. Then for any n ≥ 1, under the constant schedule (a), the output policy of πθn
+
+satisfies 
+
+∆( πθn ) ≤ (1 − 2μβ + Lμβ 2)n∆( πθ0 ) + Lβ 2M
+
+4μβ − 2Lμβ 2 .
+
+Under the 1/i schedule (b), we have 
+
+∆( πθn ) ≤ max 
+
+ (1 + ϵ)Lβ 2M
+
+(4 μβ − 2) n , cn
+
+
+
+,
+
+for any sufficiently small ϵ > 0, where c is a positive constant depending only on (β, μ, L, ϵ ).
+
+15 Lemma 6 provides a unified analysis for the meta-algorithm, covering vanilla, oracle, and GRPO-type estimators under both learning rate schedules. The bounds reveal that the sub-optimality gap: (i) scales with the smoothness constant L; (ii) decreases with the PL constant μ and the number of iterations n; and (iii) is crucially governed by the MSE of the gradient estimator M . As this MSE is the dominant factor (for the constant schedule) and the convergence rate constant (for the 1/i schedule), the oracle property and optimality we established for the GRPO gradient estimator directly translates into the learned policy’s performance. By substituting the MSE bounds derived in Proposition 3 into Lemma 6, we can explicitly characterize how the group size G and batch size 
+
+B affects the suboptimality gap, leading to the following scaling law for GRPO: 
+
+Theorem 7 (Scaling law for GRPO) . For GRPO-type algorithms, the sub-optimality upper bounds established in Lemma 6 depend on B and G through the following quantity 
+
+c1
+
+B + c2
+
+BG + c3
+
+BG 2 , (11) 
+
+where the constants are given by c1 = sup θ E∥g(X; θ) − g(θ)∥22, c2 = sup θ trace [Σ oracle (θ)] and 
+
+c3 = O(sup θ E∥∇ θ log πθ(Y |X)∥2).Under a fixed sampling budget N = BG per iteration or a total sampling budget N = nBG , the optimal group size G∗ that minimizes the sub-optimality upper bounds is: 
+
+G∗ =
+
+r c3
+
+c1
+
+. (12) In GRPO, sampling reasoning traces from the learning policy (Line 4 of Algorithm 1) is com-putationally expensive. With a fixed sampling budget, Equation (11) reveals a trade-off in the allocation of computational resources. A small G allows for a larger batch size B or more itera-tions n, which reduces the first variance term in (11) or accelerates the convergence rates established in Lemma 6. Conversely, a large G reduces the higher-order residual term (the third term in (11)). Our scaling law proposed in (12) explicitly balances this trade-off. Crucially, the optimal group size G∗ is universal : it is independent of the budget N , the number of iterations n and the learning rate schedule. Instead, G∗ depends solely on the underlying data generating process and the geometry of the policy space. This makes our result highly practical for implementation, as the optimal group size remains constant for a given task regardless of the total compute available. We will verify this observation empirically in Section 5. While the constants ci are formally defined as suprema over the parameter space, they may yield conservative theoretical bounds. In practice, these suprema can be relaxed by estimating the constants at a few representative parameter values (e.g., those of the reference model). We remark that the aforementioned results apply only to upper bounds on the suboptimality gap. Although GRPO attains a sharper upper bound, this does not necessarily imply that it achieves a strictly smaller suboptimality gap. To rigorously establish its superior performance, a more refined characterization of its suboptimality gap – beyond bounds – is required. This motivates our study of its asymptotic distribution in Theorem 8 below. Nonetheless, the asymptotic analysis presents substantial theoretical challenges. Most classical asymptotic results rely on the uniqueness of the population-level optimizer (i.e., a unique θ∗ that maximizes Eπθ (Z)) and the strict negative definiteness of the Hessian matrix H(θ∗) at that opti-mum. In overparameterized models such as LLMs, both assumptions are inherently violated. This leads to two complications: (i) Parameter convergence is not well-defined in the classical sense: the 16 estimators may oscillate within an optimal manifold of population-level maximizers and approach different maximizers across iterations. This lack of identifiability prevents the sequence of estima-tors from converging to a single fixed point. (ii) The parameter’s asymptotic distribution becomes analytically intractable, since the estimator fails to converge to a fixed point in the first place. To address the first challenge, we shift our focus from point-wise convergence to set-wise con-vergence. We define Θ ∗ as the set of all population-level maximizers, Θ∗ = {θ ∈ Θ : θ ∈ arg max  
+
+> θ∗∈Θ
+
+Eπθ∗ (Z)},
+
+and characterize parameter convergence by the distance of the estimator θn to the set Θ ∗,
+
+d(θn, Θ∗) = inf  
+
+> θ∗∈Θ∗
+
+∥θn − θ∗∥.
+
+We say the estimator θn is consistent if d(θn, Θ∗) P
+
+→ 0 as n → ∞ . To address the second challenge, we recognize that while the parameter estimates are non-identifiable, the suboptimality gap remains identifiable. We thus shift our analysis to the asymptotic distribution of the suboptimality gap rather than the parameters themselves. We consider the asymptotic regime where the number of iterations n → ∞ , while holding other parameters such as the batch size B and group size G constant. For this analysis, we adopt the 1/i schedule for the learning rate. This is motivated by Lemma 6: under the constant learning rate schedule, the sub-optimality gap might not converge to zero when B and G are fixed. While one could theoretically allow B and G to grow with n or explore alternative decay schedules, these configurations would introduce substantial technical complexity into the proofs without altering our major findings. We focus on this specific regime to more clearly elucidate the performance of GRPO. 
+
+Assumption 6 (Compact support) . The parameter space Θ is compact. 
+
+Assumption 7 (Hessian matrices) . Θ∗ is a connected set. The Hessian matrices at Θ∗ all share the same rank r. Moreover, there exists some orthogonal projection matrix Q and a strictly negative definite matrix H such that Q⊤Q = Ir and Q⊤H(θ∗)Q = H for all θ∗ ∈ Θ∗.
+
+Assumption 8 (Convergence of covariance matrix) . There exists some matrix Γ such that 
+
+E
+
+n
+
+(bg(θi) − g(θi))( bg(θi) − g(θi)) ⊤ θi
+
+o
+
+→ Γ,
+
+almost surely as i → ∞ .
+
+Theorem 8 (Consistency & asymptotic distribution) . Suppose Assumptions 1, 3, 4, 5(b) and 6 hold. Suppose each C(b,g ) 
+
+> i
+
+in Algorithm 1 is either a function of X(b) or a GRPO-type baseline in 
+
+(4) . Then the estimator θn is consistent in the sense that d(θn, Θ∗) P
+
+→ 0.Suppose Assumptions 7 and 8 hold additionally. Then the output policy satisfies 
+
+n∆( πθn ) d
+
+→
+
+> r
+
+X
+
+> k=1
+
+wkχ21,k ,
+
+where r is the rank of the Hessian matrix, {χ21,k }rk=1 are i.i.d. χ21 random variables, and {wk}rk=1 are positive weights determined by the eigenvalues of the asymptotic covariance matrix of the gradient estimators (see the Supplementary Material). 
+
+17 Assumption 6 is mild and commonly imposed in the literature [e.g., Schmidt-Hieber, 2020]. The first part of Assumption 7 relaxes the standard identifiability condition by allowing the population parameter to form a connected manifold rather than a unique point. The second part assumes that, after projection onto a suitable r-dimensional subspace, the parameter becomes identifiable with a strictly negative definite Hessian. This effectively decomposes the parameter space into an identifiable component captured by Q and a non-identifiable component along its orthogonal complement. Assumption 8 requires the conditional covariance of the gradient estimator to converge almost surely. While potentially strong, this assumption is necessary to establish the asymptotic normality. Without it, the limiting distribution may not exist. Theorem 8 is novel in two respects: (i) It establishes the asymptotic distribution of the subop-timality gap for policy gradient estimators as a weighted sum of independent χ2 random variables, whereas most existing literature focuses primarily on finite-sample error bounds. (ii) It derives this limiting distribution in the overparameterized regime, which goes beyond the classical assumption of a unique optimizer with a non-singular Hessian. Nonetheless, establishing such a result in the overparameterized regime is non-trivial. While classical results have established CLTs for parameter estimates in stochastic gradient algorithms [e.g., Zhang, 2016], these results do not directly apply due to overparameterization. Our key idea is to first establish a CLT for the subset of parameters corresponding to directions in which the Hessian is negative definite. A second-order Taylor expansion then shows that the suboptimality gap is driven entirely by the asymptotic behavior of these directions, which facilitates the derivation of its limit. As mentioned earlier, the weights wks are determined by the covariance matrices of the gradient estimators. The oracle and optimality properties of GRPO gradient estimators (Corollaries 4 and 5) directly affect these weights, which in turn establishes the oracle and optimality properties of the GRPO policy. We summarize these results in Corollaries 9 and 10 below. 
+
+Corollary 9 (Oracle property of the policy) . Suppose the assumptions in Theorem 8 hold. Then GRPO’s weights satisfy BG (wk, GRPO − wk, oracle ) → 0 as G → ∞ . Consequently, the suboptimality gap of GRPO is asymptotically equivalent to that of the oracle algorithm. 
+
+Corollary 10 (Optimality of the policy) . Suppose the assumptions in Theorem 8 hold. Suppose Assumption 2 further holds. Then for any meta-algorithm whose baseline term is a function of the prompt only, its weights satisfy wk ≥ wk, oracle + O(B−1G−2). Consequently, as G → ∞ , its suboptimality gap is asymptotically no smaller than that of GRPO. 
+
+# 5 Experiments 
+
+We conduct two sets of experiments in this section to validate our theoretical findings. In Sec-tion 5.1, we empirically compare GRPO with the vanilla and oracle algorithms in terms of gradient evaluation, to verify the oracle property of the GRPO gradient estimator (Corollary 4) and its su-periority over the vanilla estimator (Corollary 5). In Section 5.2, we investigate the optimal group size for policy optimization, to verify the universality of the optimal group size G∗ established by our scaling law (Theorem 7). 18 (a) Base model (b) Instruct model (c) ICL model 
+
+Figure 4: MSEs of three policy gradient estimators (vanilla, GRPO-type, and oracle) under three model configurations (base, instruct and in-context learning (ICL)) for different group sizes. Error bars represent 95% confidence intervals of the empirically estimated MSEs. 
+
+## 5.1 Oracle property in gradient evaluation 
+
+We first evaluate the MSE of the three gradient estimators introduced in Section 4.1: vanilla, GRPO-type, and oracle. To conduct this comparison, we construct a synthetic arithmetic dataset consisting of 500 questions. Each question is a medium-difficulty integer arithmetic problem, sam-pled uniformly from five categories: (i) two-step addition or subtraction, (ii) three-step addition or subtraction, (iii) single-step multiplication, (iv) integer division, and (v) addition or subtraction with parentheses. For each generated problem, we record the ground-truth solution. We then query an LLM (the prompt is provided in Section B of the Supplementary Material), extract the solution from its output, and compute a binary reward indicating whether the solution equals the ground truth. We evaluate gradients aggregated over the 500 questions (see Equation (8)) with respect to three target policies, derived from three models with progressively stronger reasoning capabil-ities: (i) Qwen/Qwen2.5-0.5B Base model, (ii) Qwen/Qwen2.5-0.5B Instruct model, and (iii) 
+
+Qwen/Qwen2.5-0.5B Instruct model with in-context learning [ICL, Brown et al., 2020]. For the third model, in addition to the prompt, we provide a few-shot in-context demonstration containing several arithmetic questions with solutions (see Section B of the Supplementary Material). These models produce target policies of different quality: the base model is expected to achieve the low-est accuracy, while the ICL model attains the highest. We also consider multiple groups sizes 
+
+G ∈ { 4, 8, 16 , 32 , 64 } to estimate the gradient and use Monte Carlo simulations to evaluate each gradient estimator’s MSE and report their associated 95% confidence interval in Figure 4. We make the following observations: 1. Across all combinations of group size and target policy, the vanilla estimator (blue line) exhibits the largest MSE, reflecting the well-known high-variance nature of REINFORCE. In contrast, the GRPO-type estimator (orange line) achieves significantly smaller MSEs in all cases, which verifies the second assertion of Corollary 5 and demonstrates its superiority over the vanilla estimator. 2. The oracle estimator (green line) achieves the smallest MSE, as expected. Nevertheless, with a moderately large group size ( G = 8), the MSE of the GRPO-type estimator is already close to that of the oracle estimator. As G increases further (e.g., G = 32 or 64), the two estimators become nearly indistinguishable, confirming the oracle property in Corollary 4. 19 3. Finally, the MSE of all estimators decreases as the group size G increases. It also decreases with the model’s reasoning capability. This behavior is expected as well: as the model becomes stronger, its outputs are more likely to be correct and thus more deterministic. Conversely, weaker models generate more random outputs, which enlarges the variance of the gradient estimator. 
+
+## 5.2 Optimal group size for policy optimization 
+
+As shown in our theoretical analysis and empirical results (Section 5.2), increasing the group size 
+
+G reduces the MSE of the GRPO-type gradient estimator. However, a larger G also increases computational cost, as more outputs must be sampled per prompt. Under a fixed sampling budget (i.e., a fixed total number of sampled outputs), our scaling law in Theorem 7 shows that the optimal group size G∗ depends only on the data and the policy model, and is universal with respect to other parameters such as the number of iterations n and the total budget per prompt N . In this section, we verify this universality using two widely adopted math reasoning benchmark datasets, GSM8K 
+
+[Cobbe et al., 2021] and MATH [Hendrycks et al., 2021]. We first utilize GSM8K to examine the universality of G∗ across different training iterations 
+
+n. Specifically, we fix the total sampling budget per prompt at N = BG = 1024 and evaluate six candidate group sizes: G ∈ { 4, 8, 16 , 32 , 64 , 128 }. For each choice of G, we apply GRPO to fine-tune the Qwen2.5-1.5B Instruct model and calculate its test accuracy, defined as the percentage of correctly solved problems in the test dataset. In addition to reporting the final accuracy at the last iteration, we also record accuracy at intermediate checkpoints where n ∈ { 200 , 300 , 400 , 600 , 800 }.Given the inherent stochasticity of RLVR – arising, for example, from randomness in sampled outputs – which often leads to high variance across runs, we repeat the training five times for each value of G. We report the mean accuracy along with its associated confidence interval in Figure 5. We note that much of the existing literature reports results from a single training run due to the substantial computational cost of training, which can lead to results that are difficult to reproduce. We make the following observations from Figure 5: 1. Except at training step n = 200, the test accuracy generally increases with the group size G and then decreases as G becomes larger. This trend is consistent with the scaling law in Theorem 7. When G is small, the second-order residual term can be large, inflating the variance of the gradient estimator. Conversely, when G is large, fixing the total sampling budget forces the batch size B to be small, which enlarges the first variance term in (11). As a result, the optimal group size G∗ lies between these two extremes. 2. With the exception of n = 200, the optimal group size is consistently G∗ = 32 across all training steps, demonstrating the universality of G∗ with respect to n. For n = 300 and n = 800, the performance with G = 16 is very close to that with G = 32. However, its accuracy deteriorates more noticeably for other values of n.3. Finally, the differences in test accuracy across different values of G are mostly statistically insignificant, as only five independent runs are conducted for each setting. This limitation is due to the high computational cost of training. While increasing the number of runs could yield more statistically meaningful conclusions, doing so is not computationally feasible at this stage. We next use the MATH dataset to assess the universality of the optimal group size G∗ across different sampling budgets N . The procedure closely follows that used for GSM8K: we con-20 Step 200 Step 300 Step 400   
+
+> Step 600 Step 800 Final Step
+
+Figure 5: Test accuracy of GRPO-fine-tuned models at different training steps with a fixed sampling budget of N = B × G = 1024 per prompt. Both training and evaluation are conducted on GSM8K. Each curve shows accuracy as a function of the group size G ∈ { 4, 8, 16 , 32 , 64 , 128 }. Results are averaged over five independent runs, with shaded regions visualizing 95% confidence bands. sider the same candidate group sizes G ∈ { 4, 8, 16 , 32 , 64 , 128 } and train the model separately for each choice of G. The differences are that, for MATH, we fine-tune a larger and more powerful 
+
+Qwen2.5-Math-7B model, and we evaluate three different sampling budgets, N ∈ { 1024 , 2048 , 4096 }.Test accuracies of the resulting trained models are reported in Table 2. It can be seen that the optimal group size is mostly 64, but increases to 128 as the sampling budget grows. We suspect this shift is due to the finite number of prompts, which remains constant with respect to the batch size B and group size G, and is not accounted for in our theoretical analysis for simplicity. Meanwhile, when the sampling budget is fixed at 1024, the optimal G∗ is larger than that for GSM8K. This shift is expected, as the constants in (11) depend on the data and the model, and thus the optimal G∗ varies accordingly. These results suggest that larger models may benefit from a larger group size during training. 
+
+# 6 Discussion 
+
+We provide a rigorous theoretical analysis of GRPO, a cornerstone algorithm for enhancing the reasoning capabilities of large reasoning models. We show that GRPO is a statistically princi-pled policy gradient algorithm whose gradient estimator naturally forms a U-statistic (Lemma 1). Leveraging Hoeffding’s decomposition, we characterize its MSE (Theorem 2, Proposition 3) and establish both oracle (Corollary 4) and optimality (Corollary 5) properties. For policy optimization, we derive explicit bounds on GRPO’s suboptimality gap (Lemma 6), leading to a scaling law that informs the optimal choice of group size (Theorem 7). We characterize the asymptotic distribu-21 Table 2: Test accuracy of GRPO-fine-tuned models at the final training step. Each row reports accuracy as a function of the group size G ∈ 4, 8, 16 , 32 , 64 , 128 with a fixed sampling budget per prompt; the sampling budget varies across rows. Both training and evaluation are conducted on MATH. Due to the high computational cost of training a 7B model, results are reported from a single run, with the highest accuracy highlighted in bold. Sampling budget Group size G                       
+
+> 4816 32 64 128 1024 0.7677 0.7491 0.7753 0.7627 0.7817 0.7743 2048 0.7703 0.7679 0.7697 0.7793 0.7819 0.7665 4096 0.7691 0.7713 0.7701 0.7673 0.7703 0.7757
+
+tion of the suboptimality gap (Theorem 8), confirming GRPO’s oracle (Corollary 9) and optimality (Corollary 10) properties in policy learning. We further extend these results to practical settings by accommodating reward normalization, importance sampling, and KL-divergence penalties (Lemma 11, Theorem 12, Proposition 13). Finally, we empirically validate GRPO’s gradient estimator’s oracle and optimality properties (Figure 4), and verify our scaling law with respect to group size 
+
+G, demonstrating its universality across training iterations (Figure 5) and sampling budgets (Table 2). While our scaling law provides a principled formula for selecting the optimal group size, esti-mating its constants and further empirically evaluating the resulting estimated G are beyond the scope of this paper. We leave them for future research. 
+
+# References 
+
+Arash Ahmadian, Chris Cremer, Matthias Gall´ e, Marzieh Fadaee, Julia Kreutzer, Olivier Pietquin, Ahmet ¨Ust¨ un, and Sara Hooker. Back to basics: Revisiting reinforce-style optimization for learn-ing from human feedback in llms. In Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , pages 12248–12267, 2024. Gholamali Aminian, Amir R. Asadi, Idan Shenfeld, and Youssef Mroueh. Kl-regularized rlhf with multiple reference models: Exact solutions and sample complexity. In Advances in Neural Infor-mation Processing Systems (NeurIPS) , volume 38, 2025. URL https://neurips.cc/virtual/ 2025/poster/116496 .OpenAI: Marcin Andrychowicz, Bowen Baker, Maciek Chociej, Rafal Jozefowicz, Bob McGrew, Jakub Pachocki, Arthur Petron, Matthias Plappert, Glenn Powell, Alex Ray, et al. Learning dexterous in-hand manipulation. The International Journal of Robotics Research , 39(1):3–20, 2020. Stephen Boyd and Lieven Vandenberghe. Convex optimization . Cambridge university press, 2004. Tom Brown, Benjamin Mann, Nick Ryder, Melanie Subbiah, Jared D Kaplan, Prafulla Dhariwal, Arvind Neelakantan, Pranav Shyam, Girish Sastry, Amanda Askell, et al. Language models are few-shot learners. Advances in neural information processing systems , 33:1877–1901, 2020. 22 Bibhas Chakraborty and Erica E Moodie. Statistical methods for dynamic treatment regimes. 
+
+Springer-Verlag. doi , 10(978-1):4–1, 2013. Elynn Y Chen, Rui Song, and Michael I Jordan. Reinforcement learning in latent heterogeneous environments. Journal of the American Statistical Association , 119(548):3113–3126, 2024. Lili Chen, Kevin Lu, Aravind Rajeswaran, Kimin Lee, Aditya Grover, Michael Laskin, Pieter Abbeel, Aravind Srinivas, and Igor Mordatch. Decision transformer: Reinforcement learning via sequence modeling. In Advances in Neural Information Processing Systems , pages 15084–15097, 2021. Minghan Chen, Guikun Chen, Wenguan Wang, and Yi Yang. Seed-grpo: Semantic entropy en-hanced grpo for uncertainty-aware policy optimization. arXiv preprint arXiv:2505.12346 , 2025. Daixuan Cheng, Shaohan Huang, Xuekai Zhu, Bo Dai, Wayne Xin Zhao, Zhenliang Zhang, and Furu Wei. Reasoning with exploration: An entropy perspective. arXiv preprint arXiv:2506.14758 ,2025. Sayak Ray Chowdhury, Anush Kini, and Nagarajan Natarajan. Provably robust dpo: Aligning language models with noisy feedback. arXiv preprint arXiv:2403.00409 , 2024. Paul F Christiano, Jan Leike, Tom Brown, Milos Martic, Shane Legg, and Dario Amodei. Deep reinforcement learning from human preferences. In Advances in Neural Information Processing Systems , pages 4299–4307, 2017. Xiangxiang Chu, Hailang Huang, Xiao Zhang, Fei Wei, and Yong Wang. Gpg: A simple and strong reinforcement learning baseline for model reasoning. arXiv preprint arXiv:2504.02546 , 2025. Karl Cobbe, Vineet Kosaraju, Mohammad Bavarian, Mark Chen, Heewoo Jun, Lukasz Kaiser, Matthias Plappert, Jerry Tworek, Jacob Hilton, Reiichiro Nakano, et al. Training verifiers to solve math word problems. arXiv preprint arXiv:2110.14168 , 2021. Will Dabney, Mark Rowland, Marc Bellemare, and R´ emi Munos. Distributional reinforcement learning with quantile regression. In Proceedings of the AAAI conference on artificial intelligence ,volume 32, 2018. Muzhi Dai, Shixuan Liu, and Qingyi Si. Stable reinforcement learning for efficient reasoning. arXiv preprint arXiv:2505.18086 , 2025. Damek Davis and Benjamin Recht. What is the objective of reasoning with reinforcement learning? 
+
+arXiv preprint arXiv:2510.13651 , 2025. Zheng Ding and Weirui Ye. TreeGRPO: Tree-advantage GRPO for online RL post-training of diffusion models. In The Fourteenth International Conference on Learning Representations , 2026. URL https://openreview.net/forum?id=3rZdp4TmUb .Damien Ernst, Pierre Geurts, and Louis Wehenkel. Tree-based batch mode reinforcement learning. 
+
+Journal of Machine Learning Research , 6, 2005. Ashkan Ertefaie and Robert L Strawderman. Constructing dynamic treatment regimes over indef-inite time horizons. Biometrika , 105(4):963–977, 2018. 23 Caiyun Fan, Wenbin Lu, Rui Song, and Yong Zhou. Concordance-assisted learning for estimating optimal individualized treatment regimes. Journal of the Royal Statistical Society: Series B (Statistical Methodology) , 79(5):1565–1582, 2017. Jianqing Fan, Zhaoran Wang, Yuchen Xie, and Zhuoran Yang. A theoretical analysis of deep q-learning. In Learning for dynamics and control , pages 486–489. PMLR, 2020. Xingdong Feng, Yuling Jiao, Lican Kang, Baqun Zhang, and Fan Zhou. Over-parameterized deep nonparametric regression for dependent data with its applications to reinforcement learning. 
+
+Journal of Machine Learning Research , 24(383):1–40, 2023. Asim H Gazi, Yongyi Guo, Daiqi Gao, Ziping Xu, Kelly W Zhang, and Susan A Murphy. Statistical reinforcement learning in the real world: A survey of challenges and future directions. arXiv preprint arXiv:2601.15353 , 2026. Lin Ge, Hengrui Cai, Runzhe Wan, Yang Xu, and Rui Song. A review of causal decision making. 
+
+arXiv preprint arXiv:2502.16156 , 2025. Evan Greensmith, Peter L Bartlett, and Jonathan Baxter. Variance reduction techniques for gra-dient estimates in reinforcement learning. Journal of Machine Learning Research , 5(Nov):1471– 1530, 2004. Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song, Peiyi Wang, Qihao Zhu, Runxin Xu, Ruoyu Zhang, Shirong Ma, Xiao Bi, et al. Deepseek-r1 incentivizes reasoning in llms through reinforce-ment learning. Nature , 645(8081):633–638, 2025. Aaron K. Han. Non-parametric analysis of a generalized regression model: The maximum rank correlation estimator. Journal of Econometrics , 35(2):303–316, 1987. Yaru Hao, Li Dong, Xun Wu, Shaohan Huang, Zewen Chi, and Furu Wei. On-policy rl with optimal reward baseline. arXiv preprint arXiv:2505.23585 , 2025. Dan Hendrycks, Collin Burns, Saurav Kadavath, Akul Arora, Steven Basart, Eric Tang, Dawn Song, and Jacob Steinhardt. Measuring mathematical problem solving with the math dataset. In Thirty-fifth Conference on Neural Information Processing Systems Datasets and Benchmarks Track (Round 2) , 2021. Wassily Hoeffding. A class of statistics with asymptotically normal distribution. The Annals of Mathematical Statistics , 19(3):293–325, 1948. Jian Hu, Jason Klein Liu, and Wei Shen. Reinforce++: An efficient rlhf algorithm with robustness to both prompt and reward models. arXiv preprint arXiv:2501.03262 , 2025. Jiawei Huang, Jinglin Chen, Li Zhao, Tao Qin, Nan Jiang, and Tie-Yan Liu. Towards deployment-efficient reinforcement learning: Lower bound and optimality. In International Conference on Learning Representations , 2022. Aaron Jaech, Adam Kalai, Adam Lerer, Adam Richardson, Ahmed El-Kishky, Aiden Low, Alec Helyar, Aleksander Madry, Alex Beutel, Alex Carney, et al. Openai o1 system card. arXiv preprint arXiv:2412.16720 , 2024. 24 Thomas Jaksch, Ronald Ortner, and Peter Auer. Near-optimal regret bounds for reinforcement learning. Journal of Machine Learning Research , 11:1563–1600, 2010. Nan Jiang. A note on loss functions and error compounding in model-based reinforcement learning. 
+
+arXiv preprint arXiv:2404.09946 , 2024. Nan Jiang and Lihong Li. Doubly robust off-policy value evaluation for reinforcement learning. In 
+
+International conference on machine learning , pages 652–661. PMLR, 2016. Ying Jin, Zhuoran Yang, and Zhaoran Wang. Is pessimism provably efficient for offline rl? In 
+
+International conference on machine learning , pages 5084–5096. PMLR, 2021. Nathan Kallus and Masatoshi Uehara. Efficiently breaking the curse of horizon in off-policy eval-uation with double reinforcement learning. Operations Research , 70(6):3282–3302, 2022. Vijay Konda and John Tsitsiklis. Actor-critic algorithms. Advances in neural information processing systems , 12, 1999. Michael R Kosorok and Eric B Laber. Precision medicine. Annual review of statistics and its application , 6(1):263–286, 2019. Aviral Kumar, Justin Fu, Matthew Soh, George Tucker, and Sergey Levine. Stabilizing off-policy q-learning via bootstrapping error reduction. Advances in neural information processing systems ,32, 2019. Harold J Kushner and G George Yin. Stochastic approximation and recursive algorithms and applications . Springer, 2003. Tze Leung Lai and Herbert Robbins. Asymptotically efficient adaptive allocation rules. Advances in applied mathematics , 6(1):4–22, 1985. Nathan Lambert, Jacob Morrison, Valentina Pyatkin, Shengyi Huang, Hamish Ivison, Faeze Brah-man, Lester James Validad Miranda, Alisa Liu, Nouha Dziri, Xinxi Lyu, Yuling Gu, Saumya Malik, Victoria Graf, Jena D. Hwang, Jiangjiang Yang, Ronan Le Bras, Oyvind Tafjord, Christo-pher Wilhelm, Luca Soldaini, Noah A. Smith, Yizhong Wang, Pradeep Dasigi, and Hannaneh Hajishirzi. Tulu 3: Pushing frontiers in open language model post-training. In Second Conference on Language Modeling , 2025. URL https://openreview.net/forum?id=i1uGbfHHpH .Seong Jin Lee, Will Wei Sun, and Yufeng Liu. Low-rank contextual reinforcement learning from heterogeneous human feedback. arXiv preprint arXiv:2412.19436 , 2024. Sergey Levine, Aviral Kumar, George Tucker, and Justin Fu. Offline reinforcement learning: Tu-torial, review, and perspectives on open problems. arXiv preprint arXiv:2005.01643 , 2020. Gen Li, Laixi Shi, Yuxin Chen, Yuejie Chi, and Yuting Wei. Settling the sample complexity of model-based offline reinforcement learning. The Annals of Statistics , 52(1):233–260, 2024a. Siheng Li, Zhanhui Zhou, Wai Lam, Chao Yang, and Chaochao Lu. Repo: Replay-enhanced policy optimization. arXiv preprint arXiv:2506.09340 , 2025a. 25 Yuhan Li, Eugene Han, Yifan Hu, Zhengling Qi, Yifan Cui, and Ruoqing Zhu. Reinforcement learn-ing with continuous actions under unmeasured confounding. Journal of the American Statistical Association , To appear, 2025b. Zhen Li, Jie Chen, Eric Laber, Fang Liu, and Richard Baumgartner. Optimal treatment regimes: a review and empirical comparison. International Statistical Review , 91(3):427–463, 2023. Ziniu Li, Tian Xu, Yushun Zhang, Zhihang Lin, Yang Yu, Ruoyu Sun, and Zhi-Quan Luo. Remax: a simple, effective, and efficient reinforcement learning method for aligning large language models. In Proceedings of the 41st International Conference on Machine Learning , ICML’24. JMLR.org, 2024b. Shuhan Liang, Wenbin Lu, Rui Song, and Lan Wang. Sparse concordance-assisted learning for optimal treatment decision. Journal of Machine Learning Research , 18(202):1–26, 2018. Peng Liao, Zhengling Qi, Runzhe Wan, Predrag Klasnja, and Susan A Murphy. Batch policy learning in average reward markov decision processes. Annals of statistics , 50(6):3364, 2022. Zhihang Lin, Mingbao Lin, Yuan Xie, and Rongrong Ji. Cppo: Accelerating the training of group relative policy optimization-based reasoning models. arXiv preprint arXiv:2503.22342 , 2025. Kaizhao Liu, Qi Long, Zhekun Shi, Weijie J Su, and Jiancong Xiao. Statistical impossibility and possibility of aligning llms with human preferences: From condorcet paradox to nash equilibrium. 
+
+arXiv preprint arXiv:2503.10990 , 2025a. Lin Liu, Rajarshi Mukherjee, Whitney K Newey, and James M Robins. Semiparametric efficient empirical higher order influence function estimators. arXiv preprint arXiv:1705.07577 , 2017. Pangpang Liu, Chengchun Shi, and Will Wei Sun. Dual active learning for reinforcement learning from human feedback. arXiv preprint arXiv:2410.02504 , 2024. Pangpang Liu, Junwei Lu, and Will Wei Sun. Uncertainty quantification for large language model reward learning under heterogeneous human feedback. arXiv preprint arXiv:2512.03208 , 2025b. Qiang Liu, Lihong Li, Ziyang Tang, and Dengyong Zhou. Breaking the curse of horizon: Infinite-horizon off-policy estimation. In Advances in Neural Information Processing Systems (NeurIPS) ,volume 31, 2018. Zichen Liu, Changyu Chen, Wenjun Li, Penghui Qi, Tianyu Pang, Chao Du, Wee Sun Lee, and Min Lin. Understanding r1-zero-like training: A critical perspective. In Second Conference on Language Modeling , 2025c. Daniel J Luckett, Eric B Laber, Anna R Kahkoska, David M Maahs, Elizabeth Mayer-Davis, and Michael R Kosorok. Estimating dynamic treatment regimes in mobile health using v-learning. 
+
+Journal of the American Statistical Association , 115(530):692, 2020. Tao Ma, Jin Zhu, Hengrui Cai, Zhengling Qi, Yunxiao Chen, Chengchun Shi, and Eric B. Laber. Sequential knockoffs for variable selection in reinforcement learning. Journal of the American Statistical Association , accepted, 2025. 26 Volodymyr Mnih, Koray Kavukcuoglu, David Silver, Andrei A Rusu, Joel Veness, Marc G Belle-mare, Alex Graves, Martin Riedmiller, Andreas K Fidjeland, Georg Ostrovski, et al. Human-level control through deep reinforcement learning. nature , 518(7540):529–533, 2015. Volodymyr Mnih, Adria Puigdomenech Badia, Mehdi Mirza, Alex Graves, Timothy Lillicrap, Tim Harley, David Silver, and Koray Kavukcuoglu. Asynchronous methods for deep reinforcement learning. In International Conference on Machine Learning , pages 1928–1937. PMLR, 2016. R´ emi Munos, Michal Valko, Daniele Calandriello, Mohammad Gheshlaghi Azar, Mark Rowland, Zhaohan Daniel Guo, Yunhao Tang, Matthieu Geist, Thomas Mesnard, Andrea Michi, et al. Nash learning from human feedback. arXiv preprint arXiv:2312.00886 , 18, 2023. Susan A Murphy. Optimal dynamic treatment regimes. Journal of the Royal Statistical Society Series B: Statistical Methodology , 65(2):331–355, 2003. Yurii Nesterov. Introductory lectures on convex optimization: A basic course , volume 87. Springer Science & Business Media, 2013. Deborah Nolan and David Pollard. U-processes: Rates of convergence. The Annals of Statistics ,15(2):780–799, 1987. Long Ouyang, Jeffrey Wu, Xu Jiang, Diogo Almeida, Carroll Wainwright, Pamela Mishkin, Chong Zhang, Sandhini Agarwal, Katarina Slama, Alex Ray, et al. Training language models to follow instructions with human feedback. In Advances in neural information processing systems , pages 27730–27744, 2022. Lei Pang and Ruinan Jin. On the theory and practice of grpo: A trajectory-corrected approach with fast convergence. arXiv preprint arXiv:2508.02833 , 2025. Cheng Qian, Emre Can Acikgoz, Qi He, Hongru WANG, Xiusi Chen, Dilek Hakkani-T¨ ur, Gokhan Tur, and Heng Ji. ToolRL: Reward is all tool learning needs. In The Thirty-ninth Annual Conference on Neural Information Processing Systems , 2025. URL https://openreview.net/ forum?id=eOLdGbXT6t .Min Qian and Susan A Murphy. Performance guarantees for individualized treatment rules. Annals of statistics , 39(2):1180, 2011. Rafael Rafailov, Archit Sharma, Eric Mitchell, Christopher D Manning, Stefano Ermon, and Chelsea Finn. Direct preference optimization: Your language model is secretly a reward model. 
+
+Advances in Neural Information Processing Systems , 36:53728–53741, 2023. Paria Rashidinejad, Banghua Zhu, Cong Ma, Jiantao Jiao, and Stuart Russell. Bridging offline rein-forcement learning and imitation learning: A tale of pessimism. Advances in Neural Information Processing Systems , 34:11702–11716, 2021. Tao Ren, Jinyang Jiang, Hui Yang, Wan Tian, Minhao Zou, Guanghao Li, Zishi Zhang, Qinghao Wang, Shentao Qin, Yanjun Zhao, Rui Tao, Hui Shao, and Yijie Peng. RiskPO: Risk-based policy optimization with verifiable reward for LLM post-training. In The Fourteenth Interna-tional Conference on Learning Representations , 2026. URL https://openreview.net/forum? id=KjHB7rebQO .27 James M Robins. Optimal structural nested models for optimal sequential decisions. In Proceedings of the Second Seattle Symposium in Biostatistics: analysis of correlated data , pages 189–326. Springer, 2004. Johannes Schmidt-Hieber. Nonparametric regression using deep neural networks with relu activa-tion function. The Annals of Statistics , 48(4):1875, 2020. John Schulman, Sergey Levine, Pieter Abbeel, Michael Jordan, and Philipp Moritz. Trust region policy optimization. In International conference on machine learning , pages 1889–1897. PMLR, 2015. John Schulman, Filip Wolski, Prafulla Dhariwal, Alec Radford, and Oleg Klimov. Proximal policy optimization algorithms. arXiv preprint arXiv:1707.06347 , 2017. Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, YK Li, Yang Wu, et al. Deepseekmath: Pushing the limits of mathemat-ical reasoning in open language models. arXiv preprint arXiv:2402.03300 , 2024. Guohao Shen, Runpeng Dai, Guojun Wu, Shikai Luo, Chengchun Shi, and Hongtu Zhu. Deep distributional learning with non-crossing quantile network. arXiv preprint arXiv:2504.08215 ,2025. Guangming Sheng, Chi Zhang, Zilingfeng Ye, Xibin Wu, Wang Zhang, Ru Zhang, Yanghua Peng, Haibin Lin, and Chuan Wu. Hybridflow: A flexible and efficient rlhf framework. In Proceedings of the Twentieth European Conference on Computer Systems , pages 1279–1297, 2025. Robert P. Sherman. The limiting distribution of the maximum rank correlation estimator. Econo-metrica , 61(1):123–137, 1993. Chengchun Shi. Statistical inference in reinforcement learning: A selective survey. arXiv preprint arXiv:2502.16195 , 2025. Chengchun Shi, Alin Fan, Rui Song, and Wenbin Lu. High-dimensional a-learning for optimal dynamic treatment regimes. Annals of statistics , 46(3):925, 2018. Chengchun Shi, Shikai Luo, Yuan Le, Hongtu Zhu, and Rui Song. Statistically efficient advantage learning for offline reinforcement learning in infinite horizons. Journal of the American Statistical Association , 119(545):232–245, 2024a. Chengchun Shi, Zhengling Qi, Jianing Wang, and Fan Zhou. Value enhancement of reinforcement learning via efficient and robust trust region optimization. Journal of the American Statistical Association , 119(547):2011–2025, 2024b. David Silver, Aja Huang, Chris J Maddison, Arthur Guez, Laurent Sifre, George Van Den Driessche, Julian Schrittwieser, Ioannis Antonoglou, Veda Panneershelvam, Marc Lanctot, et al. Mastering the game of go with deep neural networks and tree search. nature , 529(7587):484–489, 2016. Rui Song, Weiwei Wang, Donglin Zeng, and Michael R Kosorok. Penalized q-learning for dynamic treatment regimens. Statistica Sinica , 25(3):901, 2015. 28 Ke Sun, Yingnan Zhao, Enze Shi, Yafei Wang, Xiaodong Yan, Bei Jiang, and Linglong Kong. Intrinsic benefits of categorical distributional loss: Uncertainty-aware regularized exploration in reinforcement learning. In The Thirty-ninth Annual Conference on Neural Information Process-ing Systems , 2025. Richard S Sutton and Andrew G Barto. Reinforcement Learning: An Introduction . A Bradford Book, 2018. Richard S Sutton, David McAllester, Satinder Singh, and Yishay Mansour. Policy gradient methods for reinforcement learning with function approximation. In Proceedings of the 12th International Conference on Neural Information Processing Systems , pages 1057–1063, 1999. Adith Swaminathan and Thorsten Joachims. Batch learning from logged bandit feedback through counterfactual risk minimization. The Journal of Machine Learning Research , 16(1):1731–1755, 2015a. Adith Swaminathan and Thorsten Joachims. The self-normalized estimator for counterfactual learning. In advances in neural information processing systems , volume 28, 2015b. Philip Thomas and Emma Brunskill. Data-efficient off-policy policy evaluation for reinforcement learning. In International Conference on Machine Learning , pages 2139–2148. PMLR, 2016. Philip Thomas, Georgios Theocharous, and Mohammad Ghavamzadeh. High-confidence off-policy evaluation. In Proceedings of the AAAI Conference on Artificial Intelligence , volume 29, 2015. Anastasios A Tsiatis, Marie Davidian, Shannon T Holloway, and Eric B Laber. Dynamic treatment regimes: Statistical methods for precision medicine . Chapman and Hall/CRC, 2019. Masatoshi Uehara and Wen Sun. Pessimistic model-based offline reinforcement learning under partial coverage. In International Conference on Learning Representations , 2022. Masatoshi Uehara, Chengchun Shi, and Nathan Kallus. A review of off-policy evaluation in rein-forcement learning. arXiv preprint arXiv:2212.06355 , 2022. Hado Van Hasselt, Arthur Guez, and David Silver. Deep reinforcement learning with double q-learning. In Proceedings of the AAAI conference on artificial intelligence , volume 30, 2016. Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N Gomez, Lukasz Kaiser, and Illia Polosukhin. Attention is all you need. In Advances in neural information processing systems , 2017. Milan Vojnovic and Se-Young Yun. What is the alignment objective of grpo? arXiv preprint arXiv:2502.18548 , 2025. Christopher JCH Watkins and Peter Dayan. Q-learning. Machine learning , 8(3):279–292, 1992. Jason Wei, Xuezhi Wang, Dale Schuurmans, Maarten Bosma, Fei Xia, Ed Chi, Quoc V Le, Denny Zhou, et al. Chain-of-thought prompting elicits reasoning in large language models. Advances in neural information processing systems , 35:24824–24837, 2022. 29 Ronald J Williams. Simple statistical gradient-following algorithms for connectionist reinforcement learning. Machine learning , 8(3):229–256, 1992. Siye Wu, Jian Xie, Yikai Zhang, Aili Chen, Kai Zhang, Yu Su, and Yanghua Xiao. ARM: Adaptive reasoning model. In The Thirty-ninth Annual Conference on Neural Information Processing Systems , 2025a. URL https://openreview.net/forum?id=z9oeQrcNh9 .Tianhao Wu, Banghua Zhu, Ruoyu Zhang, Zhaojin Wen, Kannan Ramchandran, and Jiantao Jiao. Pairwise proximal policy optimization: Language model alignment with comparative rl. In First Conference on Language Modeling , 2024. Yifan Wu, George Tucker, and Ofir Nachum. Behavior regularized offline reinforcement learning. 
+
+arXiv preprint arXiv:1911.11361 , 2019. Yue Wu, Zhiqing Sun, Huizhuo Yuan, Kaixuan Ji, Yiming Yang, and Quanquan Gu. Self-play pref-erence optimization for language model alignment. In The Thirteenth International Conference on Learning Representations (ICLR) , 2025b. URL https://arxiv.org/abs/2405.00675 .Changyi Xiao, Mengdi Zhang, and Yixin Cao. Bnpo: Beta normalization policy optimization. 
+
+arXiv preprint arXiv:2506.02864 , 2025a. Jiancong Xiao, Ziniu Li, Xingyu Xie, Emily Getzen, Cong Fang, Qi Long, and Weijie Su. On the algorithmic bias of aligning large language models with RLHF: Preference collapse and matching regularization. Journal of the American Statistical Association , 120(552):2154–2164, 2025b. Tengyang Xie, Yifei Ma, and Yu-Xiang Wang. Towards optimal off-policy evaluation for reinforce-ment learning with marginalized importance sampling. Advances in neural information processing systems , 32, 2019. Tengyang Xie, Ching-An Cheng, Nan Jiang, Paul Mineiro, and Alekh Agarwal. Bellman-consistent pessimism for offline reinforcement learning. Advances in neural information processing systems ,34:6683–6694, 2021. Wei Xiong, Jiarui Yao, Yuhui Xu, Bo Pang, Lei Wang, Doyen Sahoo, Junnan Li, Nan Jiang, Tong Zhang, Caiming Xiong, et al. A minimalist approach to llm reasoning: from rejection sampling to reinforce. arXiv preprint arXiv:2504.11343 , 2025. Erhan Xu, Kai Ye, Hongyi Zhou, Luhan Zhu, Francesco Quinzan, and Chengchun Shi. Doubly robust alignment for large language models. In Advances in Neural Information Processing Systems (NeurIPS) , 2025a. Yixuan Even Xu, Yash Savani, Fei Fang, and J Zico Kolter. Not all rollouts are useful: Down-sampling rollouts in llm reinforcement learning. arXiv preprint arXiv:2504.13818 , 2025b. Zhongwen Xu and Zihan Ding. Single-stream policy optimization. In The Fourteenth Interna-tional Conference on Learning Representations , 2026. URL https://openreview.net/forum? id=b61UW62K7W .Jianhao Yan, Yafu Li, Zican Hu, Zhi Wang, Ganqu Cui, Xiaoye Qu, Yu Cheng, and Yue Zhang. Learning to reason under off-policy guidance. In The Thirty-ninth Annual Conference on Neural Information Processing Systems , 2025. URL https://openreview.net/forum?id=vO8LLoNWWk .30 An Yang, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo Zheng, Bowen Yu, Chengyuan Li, Dayiheng Liu, Fei Huang, Haoran Wei, Huan Lin, Jian Yang, Jianhong Tu, Jianwei Zhang, Jianxin Yang, Jiaxi Yang, Jingren Zhou, Junyang Lin, Kai Dang, Keming Lu, Keqin Bao, Kexin Yang, Le Yu, Mei Li, Mingfeng Xue, Pei Zhang, Qin Zhu, Rui Men, Runji Lin, Tianhao Li, Tianyi Tang, Tingyu Xia, Xingzhang Ren, Xuancheng Ren, Yang Fan, Yang Su, Yichang Zhang, Yu Wan, Yuqiong Liu, Zeyu Cui, Zhenru Zhang, and Zihan Qiu. Qwen2.5 technical report, 2025. URL https://arxiv.org/abs/2412.15115 .Fengkai Yang, Zherui Chen, Xiaohan Wang, Xiaodong Lu, Jiajun Chai, Guojun Yin, Wei Lin, Shuai Ma, Fuzhen Zhuang, Deqing Wang, et al. Your group-relative advantage is biased. arXiv preprint arXiv:2601.08521 , 2026. Chaorui Yao, Yanxi Chen, Yuchang Sun, Yushuo Chen, Wenhao Zhang, Xuchen Pan, Yaliang Li, and Bolin Ding. Group-relative REINFORCE is secretly an off-policy algorithm: Demystify-ing some myths about GRPO and its friends. In The Fourteenth International Conference on Learning Representations , 2026. URL https://openreview.net/forum?id=7CFlXvCoN6 .Kai Ye, Hongyi Zhou, Jin Zhu, Francesco Quinzan, and Chengchun Shi. Robust reinforcement learn-ing from human feedback for large language models fine-tuning. arXiv preprint arXiv:2504.03784 ,2025. Qiying Yu, Zheng Zhang, Ruofei Zhu, Yufeng Yuan, Xiaochen Zuo, Yu Yue, Weinan Dai, Tiantian Fan, Gaohong Liu, Lingjun Liu, et al. Dapo: An open-source llm reinforcement learning system at scale. arXiv preprint arXiv:2503.14476 , 2025. Tianhe Yu, Garrett Thomas, Lantao Yu, Stefano Ermon, James Y Zou, Sergey Levine, Chelsea Finn, and Tengyu Ma. Mopo: Model-based offline policy optimization. Advances in Neural Information Processing Systems , 33:14129–14142, 2020. Guanning Zeng, Zhaoyi Zhou, Daman Arora, and Andrea Zanette. Shrinking the variance: Shrink-age baselines for reinforcement learning with verifiable rewards. arXiv preprint arXiv:2511.03710 ,2025. Y. Zeng, G. Liu, W. Ma, N. Yang, H. Zhang, and J. Wang. Token-level direct preference optimiza-tion. In International conference on machine learning , pages 58348–58365. PMLR, 2024. Runzhe Zhan, Yafu Li, Zhi Wang, Xiaoye Qu, Dongrui Liu, Jing Shao, Derek F. Wong, and Yu Cheng. ExGRPO: Learning to reason from prior successes. In The Fourteenth Interna-tional Conference on Learning Representations , 2026. URL https://openreview.net/forum? id=701tjQXWVk .Baqun Zhang, Anastasios A Tsiatis, Eric B Laber, and Marie Davidian. Robust estimation of optimal dynamic treatment regimes for sequential treatment decisions. Biometrika , 100(3):681– 694, 2013. Duzhen Zhang, Zhong-Zhi Li, Ming-Liang Zhang, Jiaxin Zhang, Zengyan Liu, Yuxuan Yao, Hao-tian Xu, Junhao Zheng, Xiuyi Chen, Yingying Zhang, et al. From system 1 to system 2: a survey of reasoning large language models. IEEE Transactions on Pattern Analysis and Machine Intel-ligence , 2025a. 31 Jixiao Zhang and Chunsheng Zuo. Grpo-lead: A difficulty-aware reinforcement learning approach for concise mathematical reasoning in language models. In Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing , pages 5642–5665, 2025. Li-Xin Zhang. Central limit theorems of a recursive stochastic algorithm with applications to adaptive designs. Annals of applied probability: an official journal of the Institute of Mathematical Statistics , 26(6):3630–3658, 2016. Qingyang Zhang, Haitao Wu, Changqing Zhang, Peilin Zhao, and Yatao Bian. Right question is already half the answer: Fully unsupervised LLM reasoning incentivization. In The Thirty-ninth Annual Conference on Neural Information Processing Systems , 2025b. URL https:// openreview.net/forum?id=k8Mim6RI5O .Xiaojiang Zhang, Jinghui Wang, Zifei Cheng, Wenhao Zhuang, Zheng Lin, Minglei Zhang, Shaojie Wang, Yinghan Cui, Chao Wang, Junyi Peng, et al. Srpo: A cross-domain implementation of large-scale reinforcement learning on llm. arXiv preprint arXiv:2504.14286 , 2025c. Yuheng Zhang, Dian Yu, Baolin Peng, Linfeng Song, Ye Tian, Mingyue Huo, Nan Jiang, Haitao Mi, and Dong Yu. Iterative nash policy optimization: Aligning LLMs with general preferences via no-regret learning. In The Thirteenth International Conference on Learning Representations ,2025d. URL https://openreview.net/forum?id=Pujt3ADZgI .Ying-Qi Zhao, Donglin Zeng, Eric B Laber, and Michael R Kosorok. New statistical learning methods for estimating optimal dynamic treatment regimes. Journal of the American Statistical Association , 110(510):583–598, 2015. Chujie Zheng, Shixuan Liu, Mingze Li, Xiong-Hui Chen, Bowen Yu, Chang Gao, Kai Dang, Yuqiong Liu, Rui Men, An Yang, et al. Group sequence policy optimization. arXiv preprint arXiv:2507.18071 , 2025a. Tong Zheng, Hongming Zhang, Wenhao Yu, Xiaoyang Wang, Runpeng Dai, Rui Liu, Huiwen Bao, Chengsong Huang, Heng Huang, and Dong Yu. Parallel-r1: Towards parallel thinking via reinforcement learning. arXiv preprint arXiv:2509.07980 , 2025b. Han Zhong, Xun Deng, Ethan X. Fang, Zhuoran Yang, Zhaoran Wang, and Runze Li. Risk-sensitive deep rl: Variance-constrained actor-critic provably finds globally optimal policy. Journal of the American Statistical Association , To appear, 2025. Huiying Zhong, Zhun Deng, Weijie J. Su, Zhiwei Steven Wu, and Linjun Zhang. Provable multi-party reinforcement learning with diverse human feedback. arXiv preprint arXiv:2403.05006 ,2024. Fan Zhou, Jianing Wang, and Xingdong Feng. Non-crossing quantile regression for distributional reinforcement learning. Advances in neural information processing systems , 33:15909–15919, 2020. Wenzhuo Zhou, Ruoqing Zhu, and Annie Qu. Estimating optimal infinite horizon dynamic treat-ment regimes via pt-learning. Journal of the American Statistical Association , 119(545):625–638, 2024. 32

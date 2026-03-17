@@ -1,0 +1,2549 @@
+Title: The Art of Efficient Reasoning: Data, Reward, and Optimization
+
+URL Source: https://arxiv.org/pdf/2602.20945v2
+
+Published Time: Thu, 26 Feb 2026 01:42:09 GMT
+
+Number of Pages: 21
+
+Markdown Content:
+February 26, 2026 
+
+## The Art of Efficient Reasoning: Data, Reward, and Optimization 
+
+Taiqiang Wu ♣♠ *, Zenan Xu ♠*, Bo Zhou ♠†, Ngai Wong ♣†
+
+> ♣
+
+The University of Hong Kong, ♠LLM Department, Tencent 
+
+chaysezhou@tencent.com, nwong@eee.hku.hk https://wutaiqiang.github.io/project/Art 
+
+Abstract 
+
+Large Language Models (LLMs) consistently benefit from scaled Chain-of-Thought (CoT) reasoning, but also suffer from heavy compu-tational overhead. To address this issue, ef-ficient reasoning aims to incentivize short yet accurate thinking trajectories, typically through reward shaping with Reinforcement Learning (RL). In this paper, we systematically investi-gate the mechanics of efficient reasoning for LLMs. For comprehensive evaluation, we ad-vocate for more fine-grained metrics, including length distribution conditioned on correctness and performance across a wide spectrum of to-ken budgets ranging from 2k to 32k. First, we reveal that the training process follows a two-stage paradigm: length adaptation and reason-ing refinement . After that, we conduct exten-sive experiments (about 0.2 million GPU hours) in a unified protocol, deconstructing training prompts and rollouts, reward shaping, and opti-mization strategies. In particular, a key finding is to train on relatively easier prompts, ensuring the density of positive reward signals and thus avoiding the length collapse. Meanwhile, the learned length bias can be generalized across domains. We distill all findings into valuable insights and practical guidelines , and further validate them across the Qwen3 series, ranging from 0.6B to 30B , demonstrating the robust-ness and generalization. 
+
+1 Introduction 
+
+Large language models (LLMs), such as Qwen3 (Yang et al., 2025) and DeepSeek-R1 (Guo et al., 2025), have revolutionized the field of natural language processing (NLP) due to their superior reasoning capabilities. One key insight for such success is the consistently scaled Chain-of-thought (CoT) thinking during inference (Snell et al., 2024). Despite the advancement, longer          
+
+> *Equal contributions.
+> †Corresponding authors. Prompt
+> Rollout #1
+> Rollout #2
+> Rollout #3
+> Rollout #4
+> Reward
+> Length &
+> Correctness
+> Optimization via Policy Gradient
+> LLM
+> Efficient Reasoning
+
+Figure 1: General pipeline for efficient reasoning via RL. The key is to promote short and accurate thinking trajectories via reward design. In this paper, we provide systematic insights ( ) considering data, reward, and optimization. 
+
+CoT also introduces significant trade-offs, such as high latency for real-world deployments (Sui et al., 2025; Wu et al., 2025a). To address this issue, one mainstream method is to incentivize efficient reasoning via Reinforce-ment Learning (RL) with reward shaping (Ma et al., 2024; Kimi et al., 2025; Liu et al., 2025). As shown in Figure 1, the core idea is to incentivize efficient reasoning by allocating the rewards based on roll-out length and correctness. For instance, one impor-tant principle is that shorter correct CoTs should re-ceive higher rewards than longer correct CoTs (Yeo et al., 2025). However, previous methods are al-most exclusively focused on reward design (Hou et al., 2025; Liu et al., 2025), while overlooking the broader training recipe, including data composition and optimization strategy. In this paper, we propose to systematically in-vestigate the mechanics of efficient reasoning in a unified experimental protocol. Our analysis re-veals that the training dynamics follow a two-stage paradigm, i.e., 1) length adaptation , where the model rapidly adapts to token constraints; and 2) 
+
+reasoning refinement , where it optimizes perfor-mance within the length scope. For comprehensive observations, we advocate for more fine-grained metrics. Specifically, we propose to compare the 
+
+> arXiv:2602.20945v2 [cs.CL] 25 Feb 2026
+
+length distribution conditioned on correctness for the training prompts. Meanwhile, for the down-stream benchmarks, we argue to record the perfor-mance across a wide spectrum of token budgets ranging from 2k to 32k. The effectiveness of dif-ferent strategies is budget-dependent, exhibiting distinct or even contradictory behaviors. Impor-tantly, we find that the learned length bias can be generalized across domains , i.e., training on mathematical prompts works well on the code task. Through extensive ablation studies, we further deconstruct the impact of data difficulty, rollout number, reward, and optimization strategies. No-tably, we find that training on relatively easier prompts provides a denser positive reward signal, which is essential for stable reasoning distillation. More rollouts contribute to better performance, but also bring heavier training costs. For the reward assignment, we compare the strategy to assign a negative reward or mask corresponding rollouts. Moreover, we further explore the off-policy strat-egy with different staleness to speed up the reason-ing refinement stage. We distill all the findings into valuable insights and practical guidelines, and eval-uate them on the Qwen3 series LLMs. In summary, our contributions are as follows: • We identify and characterize the two-stage paradigm for efficient reasoning, i.e., length adaptation followed by reasoning refinement. • We introduce fine-grained metrics, providing a more comprehensive understanding of train-ing dynamics. • We provide a systematic exploration of the training recipe, offering practical insights into data, reward, and optimization that signifi-cantly improve the efficiency of CoT models. 
+
+2 Preliminary 
+
+2.1 Experimental Setup Prompts. RL methods have been demonstrated as an effective way for reasoning. Given an input prompt x from a dataset D, the LLM policy πθ gen-erates a set of N reasoning trajectories (rollouts) 
+
+{y1, y 2, . . . , y N }. The objective is to update πθ us-ing policy gradients derived from reward signals upon rollouts. Data quality is critical for LLM rea-soning (Guo et al., 2025). Therefore, we employ the popular DeepScaleR as training prompts 1.
+
+> 1Dataset link
+
+Reward Engineering. In standard outcome-supervised RL, the reward function focuses solely on correctness. Let I(⋅) denote the indicator func-tion which returns 1 if the condition holds and 0 otherwise. The vanilla reward is defined as: 
+
+Rvanilla (x, y i) = I(yi is correct ). (1) To enforce efficient reasoning, we apply reward shaping to incentivize concise yet accurate rollouts. In this work, we select the truncation strategy as a baseline with 
+
+RT (x, y i) = I(yi is correct ) ⋅ I(L(yi) ≤ LT ),
+
+(2) where L(yi) denotes the token length of the i-th rollout, and LT represents the target length. We first compare this approach against various base-lines such as Kimi-1.5 (Kimi et al., 2025) and Laser (Liu et al., 2025). Further details are pro-vided in Appendix A. 
+
+Evaluation Protocol. To capture the nuances of efficient reasoning, we advocate for more fine-grained metrics as follows: • Training dynamics: We monitor the length distribution conditioned on correctness to vi-sualize how the model trades off verbosity for precision. • Budget-aware benchmarking: For down-stream tasks, we report performance across a wide spectrum of inference token budgets (B ∈ {2k, 4k, 8k, 16 k, 32 k}). We report Pass@8 and Mean@8 metrics across standard mathematical reasoning benchmarks: AIME’25 (AIME, 2025), AMC (AMC, 2025), MATH-500 (Hendrycks et al., 2021), Minerva Math (Lewkowycz et al., 2022), and Olympiad Bench (He et al., 2024). Additionally, we assess code generation capabilities using LiveCodeBench (LCB) (Jain et al., 2024). 
+
+Training Implementation. We use 
+
+DeepSeek-R1-Distill-Qwen-1.5B as the backbone model. RL training is performed using Group Relative Policy Optimization (GRPO) (Shao et al., 2024). The learning rate is set to 1 × 10 −6
+
+with a clip-high ratio of 0.28 following Yu et al. (2025). During the rollout phase, we use a batch size of 128 and sample N = 8 trajectories per prompt with a maximum length of 16k ( LR = 16 k). The target length LT is 4k. 0 200 400 600 800                                                 
+
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> 0.8
+> 0.9
+> 1.0
+> Policy Entropy
+> 0200 400 600 800
+> 1000
+> 2000
+> 3000
+> 4000
+> 5000
+> 6000
+> Rollout Length
+> 0200 400 600 800
+> 2000
+> 4000
+> 6000
+> 8000
+> 10000
+> Rollout Length (Negative)
+> 0200 400 600 800
+> 1000
+> 2000
+> 3000
+> 4000
+> 5000
+> 6000
+> Rollout Length (Positive)
+> 0200 400 600 800
+> 5000
+> 7500
+> 10000
+> 12500
+> 15000
+> 17500 AIME'25 Length
+> 0200 400 600 800
+> 0.00
+> 0.05
+> 0.10
+> 0.15
+> AIME'25 Mean@8 (2k)
+> 0200 400 600 800
+> 0.16
+> 0.18
+> 0.20
+> 0.22
+> 0.24
+> 0.26
+> 0.28
+> AIME'25 Mean@8 (8k)
+> 0200 400 600 800
+> 0.18
+> 0.20
+> 0.22
+> 0.24
+> 0.26
+> 0.28
+> AIME'25 Mean@8 (32k)
+> 0200 400 600 800
+> Steps
+> 1000
+> 2000
+> 3000
+> 4000
+> 5000
+> MATH-500 Length
+> 0200 400 600 800
+> Steps
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> MATH-500 Mean@8 (2k)
+> 0200 400 600 800
+> Steps
+> 0.65
+> 0.70
+> 0.75
+> 0.80
+> 0.85
+> MATH-500 Mean@8 (8k)
+> 0200 400 600 800
+> Steps
+> 0.65
+> 0.70
+> 0.75
+> 0.80
+> 0.85
+> MATH-500 Mean@8 (32k)
+> Truncate Kimi Laser Laser-D
+
+Figure 2: Training dynamics of various reward shaping methods on DeepSeek-R1-Distill-Qwen-1.5B . All of them follow the two-stage paradigm. The behaviors are distinct when evaluated under different token budgets. 
+
+2.2 Two-stage Paradigm 
+
+As illustrated in Figure 2, the training dynamics exhibit a two-stage paradigm: 
+
+Stage I: Length Adaptation. The optimization of constraint satisfaction dominates this initial phase. Driven by the length penalty, the model rapidly adjusts its output distribution to avoid zero-reward truncation. As shown in the Rollout Length 
+
+curves, the average token consumption undergoes a precipitous decline (e.g., from ∼6k to ∼2k), exhibit-ing an exponential decay pattern. Simultaneously, the Policy Entropy decreases significantly, indicat-ing that the model is converging towards a subspace of shorter and valid trajectories. 
+
+Stage II: Reasoning Refinement. Once the roll-out length stabilizes within the target budget, the training enters a stationary phase regarding length, shifting focus to performance optimization. In this stage, the length curves plateau, demonstrating that the model has successfully adapted to the hard con-straints on output length. Crucially, the perfor-mance metrics (e.g., Mean@8) continue to evolve or recover. At the same time, the Policy Entropy 
+
+increases with such exploration. This indicates that the model is learning to increase the information density of each token to improve accuracy without violating the length budget. 
+
+2.3 Distinct Behaviors across Token Budgets 
+
+Figure 2 also reveals that model behaviors are highly sensitive to the token constraints, exhibiting distinct and even contradictory trends. Under a strict budget (2k), performance is dom-inated by length adaptation. Aggressive penalties (e.g., Kimi) excel here by forcing the model to fit the narrow context window. However, under a gen-erous budget (32k), such a strategy suffers from a reasoning collapse issue. In contrast, Laser ex-hibits a U-shaped trajectory at 32k, which initially drops due to compression, but subsequently recov-ers through reasoning refinement. This decoupling phenomenon highlights a critical trade-off: over-optimizing for efficiency can severely harm the upper-bound reasoning capability, necessitating the multi-budget evaluation protocol (Qi et al., 2025). 0 500 1000 1500                                    
+
+> 0.05
+> 0.10
+> 0.15
+> 0.20
+> 0.25
+> AIME'25 Mean@8 (32k)
+> 0500 1000 1500
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> AIME'25 Pass@8 (32k)
+> 0500 1000 1500
+> 0.65
+> 0.70
+> 0.75
+> 0.80
+> 0.85
+> MATH-500 Mean@8 (32k)
+> 0500 1000 1500
+> 0.88
+> 0.90
+> 0.92
+> 0.94
+> 0.96
+> MATH-500 Pass@8 (32k)
+> 0500 1000 1500
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> AMC Mean@8 (32k)
+> 0500 1000 1500
+> 0.70
+> 0.75
+> 0.80
+> 0.85
+> 0.90
+> AMC Pass@8 (32k)
+> 0500 1000 1500
+> 0.225
+> 0.250
+> 0.275
+> 0.300
+> 0.325
+> 0.350
+> Minerva Mean@8 (32k)
+> 0500 1000 1500
+> 0.425
+> 0.450
+> 0.475
+> 0.500
+> 0.525
+> Minerva Pass@8 (32k)
+> 0500 1000 1500
+> Steps
+> 0.30
+> 0.35
+> 0.40
+> 0.45
+> 0.50
+> 0.55 Olympiad Mean@8 (32k)
+> 0500 1000 1500
+> Steps
+> 0.55
+> 0.60
+> 0.65
+> 0.70
+> 0.75
+> Olympiad Pass@8 (32k)
+> 0500 1000 1500
+> Steps
+> 0.25
+> 0.26
+> 0.27
+> 0.28
+> LCB Mean@8 (32k)
+> 0500 1000 1500
+> Steps
+> 0.30
+> 0.32
+> 0.34
+> LCB Pass@8 (32k)
+> Full Easy Hard
+
+Figure 3: Performance training on all prompts and easy/hard counterparts (rollout LR = 16 k, target LT = 4k). 
+
+2.4 Generalization across Domain 
+
+As detailed in Figures 8 and 9, the dynamic on code task (i.e., LiveCodeBench) is similar to other mathematical tasks, though the training prompts are math-related only. For example, on the LCB benchmark, the Kimi strategy performs best under a 2k budget but is comparable at larger budgets, which is similar to other benchmarks. The simi-larity proves that learned length bias can be gen-eralized across domains. Moreover, the following experiments, detailed in this paper, also show the same trend. 
+
+3 Experiments and Guidelines 
+
+In this section, we systematically investigate the impact of training prompts, reward assignments, and optimization strategies. Since the performance is comparable, we employ the truncation for the following analysis. 
+
+3.1 Data: Prompt and Rollout Impact of Prompt Difficulty. The difficulty of training prompts plays a pivotal role in determining the density of positive reward signals. To investi-gate this, we split DeepScaleR prompts based on the pass rate over N = 8 rollouts into DeepScaleR-Easy (pass rate > 0.5) and DeepScaleR-Hard (pass rate ≤ 0.5). As illustrated in Figure 3, the training dynamics exhibit stark differences. Training exclusively on hard prompts results in catastrophic failure. The policy entropy spikes drastically, and the rollout length collapses prematurely. Consequently, down-stream performance metrics (e.g., Mean@8 on AMC and Olympiad Bench) degrade significantly. This suggests that when the model struggles to gen-erate correct answers, the RL signal becomes domi-nated by the length penalty on incorrect rollouts, leading to reasoning collapse . We attribute such an issue to the sparsity of positive samples , which leads to the overfitting on short output length. Con-versely, training on the easier counterpart yields the most stable trajectory. The policy entropy re-mains low and stable, indicating consistent positive reinforcement. The rollout length adapts smoothly to the target budget. Crucially, despite training on easy prompts, the performance on relatively tough tasks (e.g., AIME’25) is comparable to (or even slightly exceeding) training on the full dataset. Please refer to Appendix B for results and analy-sis under more settings. Appendix D further indi-0 200 400 600 800                        
+
+> 2000
+> 3000
+> 4000
+> 5000
+> 6000
+> 7000
+> Minerva Length
+> 0200 400 600 800
+> 0.32
+> 0.33
+> 0.34
+> 0.35
+> 0.36
+> Minerva Mean@8 (32k)
+> 0200 400 600 800
+> 6000
+> 8000
+> 10000
+> 12000
+> 14000
+> LCB Length
+> 0200 400 600 800
+> 0.25
+> 0.26
+> 0.27
+> 0.28
+> 0.29
+> 0.30
+> LCB Mean@8 (32k)
+> 0200 400 600 800
+> Steps
+> 4000
+> 6000
+> 8000
+> 10000
+> 12000
+> Olympiad Length
+> 0200 400 600 800
+> Steps
+> 0.50
+> 0.51
+> 0.52
+> 0.53
+> 0.54
+> 0.55
+> 0.56
+> Olympiad Mean@8 (32k)
+> N=8 N=12 N=16 N=24
+
+Figure 4: Performance with various rollouts N using DeepScaleR-Easy. 
+
+cates cases for reasoning collapse from baselines and paradigm shift from our strategy. 
+
+Impact of Rollout Number N . Given that the density of valid reward signals is crucial, we further investigate the impact of the rollout number N .We set N ∈ {8, 12 , 16 , 24 } with a rollout limit 
+
+LR = 16 k and a target length LT = 4k on the DeepScaleR-Easy prompts. As shown in Figure 4, increasing N yields ob-servable benefits that significantly speed up the 
+
+Length Adaptation phase. With a larger N, it is easier to discover short and correct trajectories, pro-moting the length curve (e.g., N = 24 , red line) to decay faster than the baseline ( N = 8, blue line), though all settings converge to a similar length floor. Meanwhile, larger N leads to a more ro-bust Reasoning Refinement stage. In mathematical benchmarks, the model recovers its reasoning ca-pabilities faster and achieves a higher asymptotic Mean@8. However, this advantage is task-dependent. On the LiveCodeBench (LCB) coding task, the perfor-mance gap between N = 8 and N = 24 is marginal, suggesting that the complexity of code generation may require distinct exploration strategies beyond simply scaling N . It is worth noting that while increasing N improves performance, it also intro-duces heavier computational overhead. Please refer to Appendix C for results under more settings. 
+
+Insights towards Training Data : The key is to ensure sufficient and effective rewards. Training on easier prompts allows LLMs to focus on length reduction without com-promising performance. Larger rollout N
+
+would be better if computational resource allows. 
+
+3.2 Reward on Negative Rollouts Strategy Correct Incorrect Short Long Short Long 
+
+Vanilla 1 0 0 0-I 1 0 - --L&C 1 - 0 0-L&C-S&I 1 - - 0-L&C-L&I 1 - 0 -
+
+Table 1: Reward for different strategies on negative rollouts. − denotes masking out. 
+
+The art of RL is to utilize the negative signals. In the standard truncation strategy (denoted as Vanilla), both incorrect responses and overlong correct responses are treated as negative samples (R = 0). An alternative way is to mask these neg-ative samples rather than setting the reward to 0. To investigate this, we conduct a fine-grained abla-tion study by masking specific subsets of negative rollouts, as detailed in Table 1. As illustrated in Figure 5, the training dynamics reveal that different masking strategies exhibit dis-tinct behaviors. In short, improper strategies will lead to unintended consequences, categorized into three distinct failure modes: 
+
+1) The trap that short is correct (-I, -L&C-S&I). 
+
+When the correctness is coupled with length, the model will be misled by such incorrect causal rela-tionships. For masking all incorrect rollouts (-I), we only penalize overlong and correct rollouts. The training signal only contains a) short and correct rollouts with positive reward and b) overlong and correct rollouts with negative reward. In this way, the model would hack this bias to generate short output. 0 200 400 600 800                                                  
+
+> 1
+> 2
+> 3
+> 4
+> 5
+> Policy Entropy
+> 0200 400 600 800
+> 0
+> 2500
+> 5000
+> 7500
+> 10000
+> 12500
+> 15000
+> Rollout Length
+> 0200 400 600 800
+> 0
+> 2500
+> 5000
+> 7500
+> 10000
+> 12500
+> 15000
+> Rollout Length (Negative)
+> 0200 400 600 800
+> 500
+> 1000
+> 1500
+> 2000
+> 2500
+> 3000
+> Rollout Length (Positive)
+> 0200 400 600 800
+> 5000
+> 10000
+> 15000
+> AIME'25 Length
+> 0200 400 600 800
+> 0.05
+> 0.10
+> 0.15
+> 0.20
+> 0.25
+> AIME'25 Mean@8 (32k)
+> 0200 400 600 800
+> 4000
+> 6000
+> 8000
+> 10000
+> 12000
+> 14000
+> 16000
+> LCB Length
+> 0200 400 600 800
+> 0.24
+> 0.26
+> 0.28
+> 0.30
+> LCB Mean@8 (32k)
+> 0200 400 600 800
+> Steps
+> 2000
+> 4000
+> 6000
+> 8000
+> 10000
+> Minerva Length
+> 0200 400 600 800
+> Steps
+> 0.24
+> 0.26
+> 0.28
+> 0.30
+> 0.32
+> 0.34
+> 0.36
+> Minerva Mean@8 (32k)
+> 0200 400 600 800
+> Steps
+> 2000
+> 4000
+> 6000
+> 8000
+> 10000
+> 12000
+> Olympiad Length
+> 0200 400 600 800
+> Steps
+> 0.30
+> 0.35
+> 0.40
+> 0.45
+> 0.50
+> 0.55
+> Olympiad Mean@8 (32k)
+> Vanilla (16k->4k) -I -L&C -L&C-L&I -L&C-S&I Vanilla (4k->4k)
+
+Figure 5: Performance for various reward strategies on negative rollouts (rollout LR = 16 k, target LT = 4k,
+
+N = 24 ). We also visualize LR = 4k, LT = 4k for comparison. 
+
+As shown by the orange line, the policy entropy ex-plodes after 400 steps and rollout length collapses precipitously. The model abandons reasoning en-tirely to satisfy the length constraint. Meanwhile, when masking overlong correct and short incor-rect rollouts (-L&C-S&I), the dynamics are similar. The training signal only contains a) short and cor-rect rollouts with positive reward and b) overlong and incorrect rollouts with negative reward. 
+
+2) Short rollouts only. A particularly interest-ing phenomenon occurs in the strategy -L&C-L&I 
+
+(red line), where we mask all overlong trajectories. It means that the LLMs are optimized with short correct and short incorrect rollouts exclusively. In this setting, the overlong outputs are masked, with-out either positive or negative rewards. After 200 steps (reasoning refinement stage), the LLMs hack this and begin to generate overlong outputs. Inter-estingly, these outputs are almost incorrect, but the models do not collapse. 
+
+3) Do not penalize overlong but correct rollouts (-L&C). The -L&C strategy (green line) masks overlong but correct rollouts instead of penalizing them. On the downstream benchmarks, the LLMs will generate longer outputs and also outperform the vanilla baseline, indicating a trade-off for length control and performance. 
+
+Length of Negative Samples. Additionally, we compare these complex shaping strategies against a simple baseline sampling at target length (i.e., 
+
+LR = LT = 4k, brown line). Compared to Vanilla ( LR = 16 k, L T = 4k), the positive sam-ples are roughly the same (correct rollouts that are less than 4k) while the negative samples are much shorter (4k vs. 6k). We can observe that it achieves the optimal Pareto frontier. We attribute such suc-cess to avoiding the harmful explicit length bias trap that short is correct. Typically, the positive roll-outs are shorter than negative ones, which implictly encourges the model to be short yet accurate. 
+
+Insights towards Reward on Negative Rollouts : Not penalizing overlong correct rollouts leads to higher performance, but also slightly longer outputs. Sampling at target length ( LR = LT ) achieves a better trade-off via avoiding the length trap. 0 200 400 600 800                                                 
+
+> 2
+> 4
+> 6
+> Policy Entropy
+> 0200 400 600 800
+> 2000
+> 2500
+> 3000
+> 3500
+> Rollout Length
+> 0200 400 600 800
+> 2750
+> 3000
+> 3250
+> 3500
+> 3750
+> 4000
+> Rollout Length (Negative)
+> 0200 400 600 800
+> 1500
+> 1750
+> 2000
+> 2250
+> 2500
+> 2750
+> 3000
+> Rollout Length (Positive)
+> 0200 400 600 800
+> 4000
+> 6000
+> 8000
+> 10000
+> 12000
+> 14000
+> 16000
+> AIME'25 Length
+> 0200 400 600 800
+> 0.20
+> 0.22
+> 0.24
+> 0.26
+> 0.28
+> 0.30
+> AIME'25 Mean@8 (32k)
+> 0200 400 600 800
+> 6000
+> 8000
+> 10000
+> 12000
+> 14000
+> LCB Length
+> 0200 400 600 800
+> 0.25
+> 0.26
+> 0.27
+> 0.28
+> 0.29
+> 0.30
+> LCB Mean@8 (32k)
+> 0200 400 600 800
+> Steps
+> 2000
+> 3000
+> 4000
+> 5000
+> MATH-500 Length
+> 0200 400 600 800
+> Steps
+> 0.83
+> 0.84
+> 0.85
+> 0.86
+> 0.87
+> 0.88
+> 0.89
+> MATH-500 Mean@8 (32k)
+> 0200 400 600 800
+> Steps
+> 4000
+> 6000
+> 8000
+> 10000
+> AMC Length
+> 0200 400 600 800
+> Steps
+> 0.625
+> 0.650
+> 0.675
+> 0.700
+> 0.725
+> 0.750
+> AMC Mean@8 (32k)
+> On-policy Staleness=2 Staleness=4 Staleness=8 Staleness=16
+
+Figure 6: Performance for off-policy strategy with various staleness (i.e., 2,4,8,16). 
+
+3.3 Off-policy Optimization 
+
+Off-policy optimization via introducing staleness can significantly accelerate the training process but also introduces instability (Zheng et al., 2025; Huang et al., 2025). Meanwhile, we can observe that the performance keeps growing at the rea-soning refinement stage. Hence, we conduct ex-periments with varying staleness degrees S ∈
+
+{2, 4, 8, 16 } using the robust setting derived from our previous guidelines ( LR = LT = 4k, N = 24 ). As illustrated in Figure 6, the results reveal a trade-off between performance and stability. Firstly, the Length Adaptation stage is significantly shortened. As staleness increases, the rollout length decays more rapidly, allowing the model to satisfy the token budget earlier. After that, the model enters the Reasoning Refinement stage and learns quickly. As a result, performance on down-stream tasks shows that high-staleness models (e.g., 
+
+S = 16 ) achieve higher accuracy than the on-policy baseline. Contrary to findings that excessive off-policy updates lead to catastrophic model collapse, our experiments maintain high performance. We at-tribute this robustness to our optimized setup (easy prompts and large N ), which ensures sufficient and effective reward signals. However, larger staleness also introduces potential instability risks : i) En-tropy explosion: As shown in the Policy Entropy 
+
+subplot, high staleness (e.g., 16) causes a dramatic surge in entropy after 400 steps. For the on-policy baseline, the entropy remains almost the same as initialization. ii) Length rebound: The positive roll-out length on training prompts under high staleness begins to drift upwards again, indicating that the policy model is struggling to balance efficiency and effectiveness. 
+
+Insights towards Off-policy Optimiza-tion : Appropriate staleness can accelerate convergence without harming accuracy (be-fore 800 steps), but also introduces latent instability, manifested as rising entropy and uncontrolled length drift. We suggest the on-policy strategy, especially for larger LLMs, which are more fragile. 
+
+4 Extensive Analysis 
+
+4.1 Evaluated on More LLMs 
+
+To verify the universality of our derived guidelines, we extend our evaluation to Method Mean@8 ↑ Pass@8 ↑ Length ↓                                    
+
+> Qwen3-0.6B
+> Vanilla 13.33 26.67 14.9k Ours (step 640) 24.58 36.67 8.9k
+> Qwen3-1.7B
+> Vanilla 35.00 60.00 17.7k Ours (step 560) 38.75 60.00 11.2k
+> Qwen3-4B-Instruct-2507
+> Vanilla 45.42 66.67 9.1k Ours (step 1440) 46.67 70.00 4.8k
+> Qwen3-4B-Thinking-2507
+> Vanilla 75.83 90.00 20.9k Ours (step 200) 76.25 86.67 16.0k
+> Qwen3-8B
+> Vanilla 65.83 86.67 17.9k Ours (step 100) 67.08 83.33 12.8k
+> Qwen3-30B-A3B-Instruct-2507
+> Vanilla 60.83 83.33 6.9k Ours (step 600) 60.83 76.67 5.1k
+> Table 2: Performance on AIME’25 for Qwen3 models.
+
+the Qwen3 family, including Qwen3-0.6B ,
+
+Qwen3-1.7B , Qwen3-4B-Instruct-2507 ,
+
+Qwen3-4B-Thinking-2507 , Qwen3-8B , and 
+
+Qwen3-30B-A3B-Instruct-2507 . Based on our insights, we strictly align the roll-out limit with the target budget, including 
+
+LR = LT = 8k for Qwen3-0.6B , LR = LT = 10 k
+
+for Qwen3-1.7B , and LR = LT = 16 k
+
+for Qwen3-4B-Thinking-2507 . In par-ticular, we set LR = 8k, L T = 6k for 
+
+Qwen3-4B-Instruct-2507 and LR = 10 k, L T =
+
+8k for Qwen3-30B-A3B-Instruct-2507 , aiming to incentivize shorter outputs better since original rollouts are already short and concise. Crucially, we maintain a high reward density by sampling 
+
+N = 24 trajectories for each prompt from DeepScaleR-Easy. Also, we do not use the off-policy strategy due to the potential instability. The training batch sizes are 128, 128, 32, 32, 32, and 16, respectively. After training, we evaluate these compressed LLMs on AIME’25 (AIME, 2025). As shown in Table 2, the experimental re-sults demonstrate the robustness of our strategy across different model scales. Specifically, on the 
+
+Qwen3-0.6B , our method significantly boosts the Mean@8 from 13.33 to 24.58, while reducing the average response length from 14.9k to 8.9k. Mean-while, our approach improves the Pass@8 to 36.67 compared to the vanilla score of 26.67. A similar trend is observed in larger models. For instance, on Qwen3-4B-Instruct-2507 , our method main-tains a superior Pass@8 of 70.00 and increases the Mean@8 from 45.42 to 46.67, while drastically compressing the length from 9.1k to roughly 4.8k. 
+
+4.2 Case Study 
+
+To qualitatively validate the impact of our strategy, we compare the reasoning trajectories of the vanilla and optimized models. Please refer to Appendix D for detailed examples and analysis. In short, our method not only encourages short outputs but also incentivizes the model to reorganize its CoTs into a more streamlined and expert-like format. 
+
+5 Related Work 
+
+5.1 Efficient Reasoning 
+
+Efficient reasoning methods aim to mitigate the overthinking phenomenon (Wu et al., 2025b; Sui et al., 2025) and reduce the prohibitive inference costs associated with long-form CoT (Wu et al., 2025a; Cui et al., 2024). One prominent approach trains long CoTs to be short using SFT (Xia et al., 2025; Ma et al., 2025) or RL (Hou et al., 2025; Shen et al., 2025; Liu et al., 2025; Liang et al., 2025). Parallel research directions explore architec-tural innovations, such as reasoning within latent spaces (Hao et al., 2024; Su et al., 2025) or more ef-ficient decoding (Sun et al., 2024; Xu et al., 2025). We refer the readers to Feng et al. (2025) for more details. Unlike works that propose novel archi-tectures, we focus on the mechanics of RL-based 
+
+efficiency optimization. 
+
+5.2 Reward Shaping Methods 
+
+The philosophy for reward shaping is to incentivize short yet accurate rollouts via allocating training rewards (Weng, 2025). The first principle is to promote shorter responses and penalize longer re-sponses among correct ones (Kimi et al., 2025; Hou et al., 2025; Aggarwal and Welleck, 2025). Mean-while, we can also penalize longer for incorrect answers (Kimi et al., 2025). Contrary to that, Liu et al. (2025); Yeo et al. (2025) argue to promote longer incorrect rollouts to encourage exploration. Despite these advancements, existing studies often evaluate reward functions in isolation. In this pa-per, we select the simplest truncation strategy after comparison and conduct extensive experiments in a unified protocol. 
+
+6 Conclusion 
+
+In this work, we first reveal that the training dy-namics of efficient reasoning follow a two-stage paradigm. Meanwhile, we advocate for more fine-grained metrics. Based on these, we further decon-struct the impact of data difficulty, rollout number, reward on negative rollouts, and optimization strate-gies. All findings are distilled into valuable insights and practical guidelines. A key finding is to train on relatively easier prompts for sufficient and effec-tive rewards. The learned length bias for reasoning can be generalized across domains and difficulty levels. Evaluation of more LLMs up to 30B further demonstrates the robustness and generalization. 
+
+Limitation and Future Work 
+
+In this work, we systematically investigate the me-chanics of efficient reasoning. However, there are several limitations for future research. 
+
+Domain diversity. In this paper, we train on DeepScaleR, containing mathematical reasoning prompts, and validate on math and coding bench-marks. One future work is to evaluate on more domains, such as creative writing. Another inter-esting topic is whether training on more diverse prompts contributes to better performance. 
+
+Adaptive length. In this paper, we employ fixed rollout and target length (i.e., LR and LT ). One in-tuitive idea is to set the length adaptively based on the prompts and current LLMs. For target length 
+
+LT , we conduct experiments on a toy setting de-tailed in Appendix E. For adaptive rollout length 
+
+LR, we can pre-compute and set the rollout engine correspondingly. 
+
+Evaluate on larger models. In this paper, we conduct extensive experiments (about 0.2 million GPU hours) in a unified protocol on the DeepSeek-R1-Distill-Qwen-1.5B . More-over, we extend our evaluation to the Qwen3 family, such as Qwen3-30B-A3B-Instruct-2507 .However, due to the limited GPUs, we do not evaluate on extremely large LLMs such as 
+
+Qwen3-235B-A22B-Instruct-2507 . We leave it for future work. 
+
+More fine-grained supervision. In this paper, we focus on efficient reasoning via reward shaping-based RL training. The principle is to incentivize short yet accurate thinking trajectories. We do not apply fine-grained refinement to the CoTs. Mean-while, we humans simplify the previous experience by making and employing useful tools, such as a notebook and a calculator. Therefore, how to cre-ate useful tools and reuse them during reasoning remains a valuable topic. 
+
+References             
+
+> Pranjal Aggarwal and Sean Welleck. 2025. L1: Controlling how long a reasoning model thinks with reinforcement learning. arXiv preprint arXiv:2503.04697 .AIME. 2025. Aime. In American invitational mathe-matics examination .AMC. 2025. Amc. In American mathematics competi-tions .Anonymous. 2025. Deepscaler: Effective RL scaling of reasoning models via iterative context lengthening. In Submitted to The Fourteenth International Confer-ence on Learning Representations . Under review. Can Cui, Yunsheng Ma, Xu Cao, Wenqian Ye, Yang Zhou, Kaizhao Liang, Jintai Chen, Juanwu Lu, Zi-chong Yang, Kuei-Da Liao, and 1 others. 2024. A survey on multimodal large language models for au-tonomous driving. In Proceedings of the IEEE/CVF winter conference on applications of computer vision ,pages 958–979. Sicheng Feng, Gongfan Fang, Xinyin Ma, and Xinchao Wang. 2025. Efficient reasoning models: A survey.
+> arXiv preprint arXiv:2504.10903 .Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song, Peiyi Wang, Qihao Zhu, Runxin Xu, Ruoyu Zhang, Shirong Ma, Xiao Bi, and 1 others. 2025. Deepseek-r1 incentivizes reasoning in llms through reinforce-ment learning. Nature , 645(8081):633–638. Shibo Hao, Sainbayar Sukhbaatar, DiJia Su, Xian Li, Zhiting Hu, Jason Weston, and Yuandong Tian. 2024. Training large language models to reason in a contin-uous latent space. arXiv preprint arXiv:2412.06769 .Chaoqun He, Renjie Luo, Yuzhuo Bai, Shengding Hu, Zhen Thai, Junhao Shen, Jinyi Hu, Xu Han, Yujie Huang, Yuxiang Zhang, and 1 others. 2024. Olympiadbench: A challenging benchmark for pro-moting agi with olympiad-level bilingual multimodal scientific problems. In Proceedings of the 62nd An-nual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , pages 3828– 3850.
+
+Dan Hendrycks, Collin Burns, Saurav Kadavath, Akul Arora, Steven Basart, Eric Tang, Dawn Song, and Ja-cob Steinhardt. 2021. Measuring mathematical prob-lem solving with the math dataset. arXiv preprint arXiv:2103.03874 .Bairu Hou, Yang Zhang, Jiabao Ji, Yujian Liu, Kaizhi Qian, Jacob Andreas, and Shiyu Chang. 2025. Thinkprune: Pruning long chain-of-thought of llms via reinforcement learning. arXiv preprint arXiv:2504.01296 .Guanhua Huang, Tingqiang Xu, Mingze Wang, Qi Yi, Xue Gong, Siheng Li, Ruibin Xiong, Kejiao Li, Yuhao Jiang, and Bo Zhou. 2025. Low-probability tokens sustain exploration in reinforce-ment learning with verifiable reward. arXiv preprint arXiv:2510.03222 .Naman Jain, King Han, Alex Gu, Wen-Ding Li, Fanjia Yan, Tianjun Zhang, Sida Wang, Armando Solar-Lezama, Koushik Sen, and Ion Stoica. 2024. Live-codebench: Holistic and contamination free eval-uation of large language models for code. arXiv preprint arXiv:2403.07974 .Kimi, Angang Du, Bofei Gao, Bowei Xing, Changjiu Jiang, Cheng Chen, Cheng Li, Chenjun Xiao, Chen-zhuang Du, Chonghua Liao, and 1 others. 2025. Kimi k1. 5: Scaling reinforcement learning with llms. 
+
+arXiv preprint arXiv:2501.12599 .Aitor Lewkowycz, Anders Andreassen, David Dohan, Ethan Dyer, Henryk Michalewski, Vinay Ramasesh, Ambrose Slone, Cem Anil, Imanol Schlag, Theo Gutman-Solo, and 1 others. 2022. Solving quan-titative reasoning problems with language models. 
+
+Advances in neural information processing systems ,35:3843–3857. Tian Liang, Wenxiang Jiao, Zhiwei He, Jiahao Xu, Haitao Mi, and Dong Yu. 2025. Deepcompress: A dual reward strategy for dynamically exploring and compressing reasoning chains. arXiv preprint arXiv:2510.27419 .Wei Liu, Ruochen Zhou, Yiyun Deng, Yuzhen Huang, Junteng Liu, Yuntian Deng, Yizhe Zhang, and Junx-ian He. 2025. Learn to reason efficiently with adap-tive length-based reward shaping. arXiv preprint arXiv:2505.15612 .Haozhe Ma, Zhengding Luo, Thanh Vinh Vo, Kuankuan Sima, and Tze-Yun Leong. 2024. Highly efficient self-adaptive reward shaping for reinforcement learn-ing. arXiv preprint arXiv:2408.03029 .Xinyin Ma, Guangnian Wan, Runpeng Yu, Gongfan Fang, and Xinchao Wang. 2025. Cot-valve: Length-compressible chain-of-thought tuning. arXiv preprint arXiv:2502.09601 .Penghui Qi, Zi-Yan Liu, Tianyu Pang, Chao Du, Wee Sun Lee, and Min Lin. 2025. Optimizing any-time reasoning via budget relative policy optimiza-tion. ArXiv , abs/2505.13438. Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, YK Li, Yang Wu, and 1 others. 2024. Deepseekmath: Pushing the limits of mathematical reasoning in open language models. arXiv preprint arXiv:2402.03300 .Yi Shen, Jian Zhang, Jieyun Huang, Shuming Shi, Wen-jing Zhang, Jiangze Yan, Ning Wang, Kai Wang, Zhaoxiang Liu, and Shiguo Lian. 2025. Dast: Difficulty-adaptive slow-thinking for large reason-ing models. arXiv preprint arXiv:2503.04472 .Charlie Snell, Jaehoon Lee, Kelvin Xu, and Aviral Ku-mar. 2024. Scaling llm test-time compute optimally can be more effective than scaling model parameters. 
+
+arXiv preprint arXiv:2408.03314 .DiJia Su, Hanlin Zhu, Yingchen Xu, Jiantao Jiao, Yuandong Tian, and Qinqing Zheng. 2025. To-ken assorted: Mixing latent and text tokens for im-proved language model reasoning. arXiv preprint arXiv:2502.03275 .Yang Sui, Yu-Neng Chuang, Guanchu Wang, Jiamu Zhang, Tianyi Zhang, Jiayi Yuan, Hongyi Liu, An-drew Wen, Shaochen Zhong, Na Zou, and 1 others. 2025. Stop overthinking: A survey on efficient rea-soning for large language models. arXiv preprint arXiv:2503.16419 .Hanshi Sun, Momin Haider, Ruiqi Zhang, Huitao Yang, Jiahao Qiu, Ming Yin, Mengdi Wang, Peter Bartlett, and Andrea Zanette. 2024. Fast best-of-n decoding via speculative rejection. Advances in Neural Infor-mation Processing Systems , 37:32630–32652. Lilian Weng. 2025. Why we think. lilian-weng.github.io .Taiqiang Wu, Runming Yang, Tao Liu, Jiahao Wang, and Ngai Wong. 2025a. Revisiting model inter-polation for efficient reasoning. arXiv preprint arXiv:2510.10977 .Yuyang Wu, Yifei Wang, Ziyu Ye, Tianqi Du, Stefanie Jegelka, and Yisen Wang. 2025b. When more is less: Understanding chain-of-thought length in llms. 
+
+arXiv preprint arXiv:2502.07266 .Heming Xia, Chak Tou Leong, Wenjie Wang, Yongqi Li, and Wenjie Li. 2025. Tokenskip: Controllable chain-of-thought compression in llms. arXiv preprint arXiv:2502.12067 .Fangzhi Xu, Hang Yan, Chang Ma, Haiteng Zhao, Jun Liu, Qika Lin, and Zhiyong Wu. 2025. ϕ-decoding: Adaptive foresight sampling for balanced inference-time exploration and exploitation. arXiv preprint arXiv:2503.13288 .An Yang, Anfeng Li, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo Zheng, Bowen Yu, Chang Gao, Chengen Huang, Chenxu Lv, and 1 others. 2025. Qwen3 technical report. arXiv preprint arXiv:2505.09388 .Edward Yeo, Yuxuan Tong, Morry Niu, Graham Neu-big, and Xiang Yue. 2025. Demystifying long chain-of-thought reasoning in llms. arXiv preprint arXiv:2502.03373 .Qiying Yu, Zheng Zhang, Ruofei Zhu, Yufeng Yuan, Xiaochen Zuo, Yu Yue, Weinan Dai, Tiantian Fan, Gaohong Liu, Lingjun Liu, and 1 others. 2025. Dapo: An open-source llm reinforcement learning system at scale. arXiv preprint arXiv:2503.14476 .Haizhong Zheng, Jiawei Zhao, and Beidi Chen. 2025. Prosperity before collapse: How far can off-policy rl reach with stale data on llms? arXiv preprint arXiv:2510.01161 .Appendix A Detailed Results on Reward Engineering 
+
+For Kimi-1.5 (Kimi et al., 2025), they first define a normalized length term: 
+
+˜L(yi) = L(yi) − Lmin 
+
+Lmax − Lmin 
+
+, (3) where Lmax and Lmin are the maximum and mini-mum length within rollout group. Then the reward function can be rewritten as the sum of the correct reward and the incorrect penalty:                  
+
+> RKimi (x, y i)=I(yiis correct )⋅(1+α(0.5−˜L(yi)))
+> +I(yiis incorrect )⋅min (0, α (0.5−˜L(yi))) .(4)
+
+For Laser (Liu et al., 2025), it can be viewed as a base reward for correctness plus a bonus if the length condition is met:              
+
+> RLaser (x, y i)=I(yiis correct )⋅(1+α⋅I(L(yi)<LT)) .
+> (5)
+
+They also propose a variant to encourage explo-ration by adding an extra term to incentivize longer trajectories. Specifically, it adds an exploration bonus for incorrect rollouts:                       
+
+> RLaser-D (x, y i)=I(yiis correct )⋅(1+α⋅I(L(yi)<LT))
+> +I(yiis incorrect )⋅(α⋅I(L(yi)≥LT)) .
+> (6)
+
+In this paper, we set α to 0.4. Figures 8 and 9 present the training dynamics on additional bench-marks, including AIME’25, MATH-500, AMC (Figure 8), and Minerva Math, Olympiad Bench, LiveCodeBench (Figure 9). We can find that the training process strictly fol-lows a two-stage paradigm, i.e., the length adap-tation phase followed by the reasoning refinement 
+
+phase. The rollout length (top row) consistently decays before stabilizing. Meanwhile, the per-formance shows distinct behaviors across various token budgets. For instance, a more aggressive strategy Kimi often exhibits gains at stricter bud-gets (2k), but suffers from stagnation or collapse at generous budgets (32k), whereas the truncation baseline maintains a more balanced recovery. With-out results under larger token budgets, the observa-tions and conclusions will be biased. These exten-sive results reinforce the necessity of our proposed fine-grained evaluation protocol. 
+
+B Detailed Results for Data Selection 
+
+In the main paper, we demonstrate that training on easy prompts allows LLMs to focus on length re-duction without compromising performance, which is attributed to sufficient and effective rewards. Here, we provide details on all benchmarks and more settings. As illustrated in Figures 10 and 11, the results consistently validate our hypothesis regarding re-ward density under various settings. Across al-most all benchmarks, the model trained exclusively on DeepScaleR-Hard (green line) exhibits signif-icant instability. For instance, on AIME’25 and Olympiad Bench, the performance often fluctuates violently or collapses entirely after the initial adap-tation phase. Meanwhile, the model trained on DeepScaleR-Easy (orange line) consistently matches or rivals the performance of the model trained on the full dataset (blue line). Notably, on the relatively tough AIME’25 and LCB, the performance is also compa-rable and even better, though we train on high-pass prompts. In short, the learned length bias for rea-soning can be generalized across domain and difficulty .
+
+C Detailed Results for More Rollouts 
+
+Figures 12 and 13 indicate the results on more roll-outs under two different settings ( LR = 16 k, L T =
+
+4k and LR = 4k, L T = 4k). We observe three key phenomena: 
+
+1) Consistent benefits across settings. Regard-less of the rollout length ( LR), the advantage of scaling N remains consistent. Whether allowing for long-context exploration ( 16 k) or strictly con-straining the search space ( 4k), increasing N yields a positive effect on the convergence and asymptotic performance. It indicates that increasing the den-sity of the reward signal is a robust strategy for efficient reasoning. 
+
+2) Task-dependent sensitivity. The performance improvement varies significantly across datasets. On difficult benchmarks such as AIME’25 and LiveCodeBench (LCB), the performance gap be-tween N = 8 and N = 32 is relatively narrow. This suggests that for problems requiring complex multi-step reasoning or code synthesis, simply increasing the number of rollouts is insufficient if the base model lacks the fundamental capability to solve the problem. Conversely, on relatively easier or in-termediate tasks like AMC and MATH-500, larger 
+
+N leads to substantial performance separation on Mean@8. 
+
+3) Mean@8 vs. Pass@8. While Mean@8 shows significant improvement with larger N , the Pass@8 metric often remains stagnant or improves only marginally. Pass@k measures the ability to gener-ate at least one correct solution under k trials. It im-plies that scaling N does not necessarily enable the model to solve new problems that were previously unsolvable. Meanwhile, Mean@k measures the ex-pected correctness. The rise in Mean@8 indicates that scaling N effectively reduces the variance of the policy. In conclusion, increasing N for training prompts primarily acts as a stabilizer, reducing the variance of the policy on solvable problems rather than ex-panding the upper-bound. However, it also brings challenges, i.e., increased computing overheads. 
+
+D Case Study 
+
+Easy and hard prompts. Tables 3 and 4 indicate two examples with corresponding responses when trained on DeepScaleR-Easy and DeepScaleR-Hard. On DeepScaleR-Hard, the model suffers from the reasoning collapse issue, leading to over-short outputs. One behavior is to omit the double-checking process. We attribute such an issue to the sparsity of positive samples , which leads to the overfitting on length. Meanwhile, the group normalization also amplifies such an effect (larger advantage value). For instance, the advantage of positive samples in group {1, 0, 0, 0} is larger than group {1, 1, 1, 0}.
+
+Vanilla and our strategy. Tables 5 and 6 indi-cate two examples with corresponding responses from vanilla and our strategy. For our method, we set LR = LT = 4k, N = 24 with staleness of 16. As observed in the vanilla response, the model exhibits typical conversational redundancy: it fre-quently uses filler phrases (e.g., "Hmm," "Let me think"), re-states the problem premise unnecessar-ily, and performs verbose arithmetic decomposition. In contrast, the model trained with our efficient rea-soning strategy undergoes a fundamental stylistic shift. It eliminates conversational fluff and directly adopts a dense and mathematically formal structure. Reasoning transitions from a hesitant narrative to a precise symbolic derivation (e.g., integrating for-mulas such as V = 13 Bh directly into the calcu-lation flow). It demonstrates that our method not only encourages short outputs but also actively in-centivizes the model to reorganize its CoTs into a more streamlined and expert-like format. 
+
+E Adaptive Target Length LT0 200 400 600                                  
+
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> Policy Entropy
+> 0200 400 600
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> KL Divergence
+> 0200 400 600
+> 0.150
+> 0.175
+> 0.200
+> 0.225
+> 0.250
+> AIME'25 Mean@8 (32k)
+> 0200 400 600
+> 0.30
+> 0.35
+> 0.40
+> 0.45
+> 0.50
+> AIME'25 Pass@8 (32k)
+> 0200 400 600
+> 0.125
+> 0.150
+> 0.175
+> 0.200
+> 0.225
+> AIME'25 Mean@8 (16k)
+> 0200 400 600
+> 0.25
+> 0.30
+> 0.35
+> 0.40
+> 0.45
+> AIME'25 Pass@8 (16k)
+> 0200 400 600
+> Steps
+> 0.05
+> 0.10
+> 0.15
+> AIME'25 Mean@8 (4k)
+> 0200 400 600
+> Steps
+> 0.10
+> 0.15
+> 0.20
+> 0.25
+> 0.30
+> AIME'25 Pass@8 (4k)
+> LR=LT= 6 kLR=LT= 10 kLR= 10 k,LT=Q0.9
+
+Figure 7: Performance on Qwen3-0.6B when adaptively setting target length LT as 90-th qualities. 
+
+For adaptive target length, we set LT as the 90th quantile of correct rollouts. As shown in Figure 7, the strategy of adaptive target leads to short answers and thus better performance on 4k bud-get. We attribute it to a more negative signal since 10% of correct answers are always negative sam-ples. However, on a 32k budget, the performance is comparable or even worse. Also, there are lots of spikes on the KL divergence curve, indicating rapidly changing gradients and potential instabil-ity. We leave it for future work to explore more settings. 0 200 400 600 800 
+
+0.00 
+
+0.05 
+
+0.10 
+
+0.15 
+
+AIME'25 Mean@8 (2k) 
+
+0 200 400 600 800 
+
+0.10 
+
+0.12 
+
+0.14 
+
+0.16 
+
+0.18 
+
+0.20 
+
+0.22 
+
+0.24 AIME'25 Mean@8 (4k) 
+
+0 200 400 600 800 
+
+0.16 
+
+0.18 
+
+0.20 
+
+0.22 
+
+0.24 
+
+0.26 
+
+0.28 
+
+AIME'25 Mean@8 (8k) 
+
+0 200 400 600 800 
+
+0.18 
+
+0.20 
+
+0.22 
+
+0.24 
+
+0.26 
+
+0.28 
+
+AIME'25 Mean@8 (16k) 
+
+0 200 400 600 800 
+
+0.18 
+
+0.20 
+
+0.22 
+
+0.24 
+
+0.26 
+
+0.28 
+
+AIME'25 Mean@8 (32k) 
+
+0 200 400 600 800 
+
+0.00 
+
+0.05 
+
+0.10 
+
+0.15 
+
+0.20 
+
+0.25 
+
+AIME'25 Pass@8 (2k) 
+
+0 200 400 600 800 
+
+0.20 
+
+0.25 
+
+0.30 
+
+0.35 
+
+0.40 
+
+AIME'25 Pass@8 (4k) 
+
+0 200 400 600 800 
+
+0.25 
+
+0.30 
+
+0.35 
+
+0.40 
+
+0.45 
+
+0.50 
+
+AIME'25 Pass@8 (8k) 
+
+0 200 400 600 800 
+
+0.30 
+
+0.35 
+
+0.40 
+
+0.45 
+
+0.50 
+
+AIME'25 Pass@8 (16k) 
+
+0 200 400 600 800 
+
+0.30 
+
+0.35 
+
+0.40 
+
+0.45 
+
+0.50 
+
+AIME'25 Pass@8 (32k) 
+
+0 200 400 600 800 
+
+0.4 
+
+0.5 
+
+0.6 
+
+0.7 
+
+MATH-500 Mean@8 (2k) 
+
+0 200 400 600 800 
+
+0.65 
+
+0.70 
+
+0.75 
+
+0.80 
+
+0.85 
+
+MATH-500 Mean@8 (4k) 
+
+0 200 400 600 800 
+
+0.65 
+
+0.70 
+
+0.75 
+
+0.80 
+
+0.85 
+
+MATH-500 Mean@8 (8k) 
+
+0 200 400 600 800 
+
+0.65 
+
+0.70 
+
+0.75 
+
+0.80 
+
+0.85 
+
+MATH-500 Mean@8 (16k) 
+
+0 200 400 600 800 
+
+0.65 
+
+0.70 
+
+0.75 
+
+0.80 
+
+0.85 
+
+MATH-500 Mean@8 (32k) 
+
+0 200 400 600 800 
+
+0.60 
+
+0.65 
+
+0.70 
+
+0.75 
+
+0.80 
+
+0.85 
+
+0.90 
+
+MATH-500 Pass@8 (2k) 
+
+0 200 400 600 800 
+
+0.82 
+
+0.84 
+
+0.86 
+
+0.88 
+
+0.90 
+
+0.92 
+
+0.94 
+
+MATH-500 Pass@8 (4k) 
+
+0 200 400 600 800 
+
+0.86 
+
+0.88 
+
+0.90 
+
+0.92 
+
+0.94 
+
+0.96 
+
+MATH-500 Pass@8 (8k) 
+
+0 200 400 600 800 
+
+0.86 
+
+0.88 
+
+0.90 
+
+0.92 
+
+0.94 
+
+0.96 
+
+MATH-500 Pass@8 (16k) 
+
+0 200 400 600 800 
+
+0.86 
+
+0.88 
+
+0.90 
+
+0.92 
+
+0.94 
+
+0.96 
+
+MATH-500 Pass@8 (32k) 
+
+0 200 400 600 800 
+
+0.2 
+
+0.3 
+
+0.4 
+
+0.5 
+
+AMC Mean@8 (2k) 
+
+0 200 400 600 800 
+
+0.35 
+
+0.40 
+
+0.45 
+
+0.50 
+
+0.55 
+
+0.60 
+
+0.65 
+
+AMC Mean@8 (4k) 
+
+0 200 400 600 800 
+
+0.525 
+
+0.550 
+
+0.575 
+
+0.600 
+
+0.625 
+
+0.650 
+
+0.675 
+
+AMC Mean@8 (8k) 
+
+0 200 400 600 800 
+
+0.550 
+
+0.575 
+
+0.600 
+
+0.625 
+
+0.650 
+
+0.675 
+
+0.700 
+
+AMC Mean@8 (16k) 
+
+0 200 400 600 800 
+
+0.550 
+
+0.575 
+
+0.600 
+
+0.625 
+
+0.650 
+
+0.675 
+
+0.700 
+
+AMC Mean@8 (32k) 
+
+0 200 400 600 800 
+
+Steps 
+
+0.3 
+
+0.4 
+
+0.5 
+
+0.6 
+
+0.7 
+
+AMC Pass@8 (2k) 
+
+0 200 400 600 800 
+
+Steps 
+
+0.55 
+
+0.60 
+
+0.65 
+
+0.70 
+
+0.75 
+
+0.80 
+
+0.85 
+
+AMC Pass@8 (4k) 
+
+0 200 400 600 800 
+
+Steps 
+
+0.725 
+
+0.750 
+
+0.775 
+
+0.800 
+
+0.825 
+
+0.850 
+
+0.875 
+
+0.900 
+
+AMC Pass@8 (8k) 
+
+0 200 400 600 800 
+
+Steps 
+
+0.82 
+
+0.84 
+
+0.86 
+
+0.88 
+
+0.90 
+
+0.92 AMC Pass@8 (16k) 
+
+0 200 400 600 800 
+
+Steps 
+
+0.82 
+
+0.84 
+
+0.86 
+
+0.88 
+
+0.90 
+
+0.92 AMC Pass@8 (32k) 
+
+Truncate Kimi Laser Laser-D Figure 8: Training dynamics of various reward shaping methods on AIME’25, MATH-500, and AMC. 0 200 400 600 800 
+
+0.150 
+
+0.175 
+
+0.200 
+
+0.225 
+
+0.250 
+
+0.275 
+
+0.300 
+
+0.325 
+
+Minerva Mean@8 (2k) 
+
+0 200 400 600 800 
+
+0.24 
+
+0.26 
+
+0.28 
+
+0.30 
+
+0.32 
+
+0.34 
+
+Minerva Mean@8 (4k) 
+
+0 200 400 600 800 
+
+0.24 
+
+0.26 
+
+0.28 
+
+0.30 
+
+0.32 
+
+0.34 
+
+0.36 
+
+Minerva Mean@8 (8k) 
+
+0 200 400 600 800 
+
+0.24 
+
+0.26 
+
+0.28 
+
+0.30 
+
+0.32 
+
+0.34 
+
+0.36 
+
+Minerva Mean@8 (16k) 
+
+0 200 400 600 800 
+
+0.24 
+
+0.26 
+
+0.28 
+
+0.30 
+
+0.32 
+
+0.34 
+
+0.36 
+
+Minerva Mean@8 (32k) 
+
+0 200 400 600 800 
+
+0.300 
+
+0.325 
+
+0.350 
+
+0.375 
+
+0.400 
+
+0.425 
+
+0.450 
+
+0.475 
+
+Minerva Pass@8 (2k) 
+
+0 200 400 600 800 
+
+0.42 
+
+0.44 
+
+0.46 
+
+0.48 
+
+0.50 
+
+0.52 
+
+Minerva Pass@8 (4k) 
+
+0 200 400 600 800 
+
+0.42 
+
+0.44 
+
+0.46 
+
+0.48 
+
+0.50 
+
+0.52 
+
+Minerva Pass@8 (8k) 
+
+0 200 400 600 800 
+
+0.42 
+
+0.44 
+
+0.46 
+
+0.48 
+
+0.50 
+
+0.52 
+
+Minerva Pass@8 (16k) 
+
+0 200 400 600 800 
+
+0.42 
+
+0.44 
+
+0.46 
+
+0.48 
+
+0.50 
+
+0.52 
+
+Minerva Pass@8 (32k) 
+
+0 200 400 600 800 
+
+0.10 
+
+0.15 
+
+0.20 
+
+0.25 
+
+0.30 
+
+0.35 
+
+0.40 
+
+Olympiad Mean@8 (2k) 
+
+0 200 400 600 800 
+
+0.30 
+
+0.35 
+
+0.40 
+
+0.45 
+
+0.50 
+
+Olympiad Mean@8 (4k) 
+
+0 200 400 600 800 
+
+0.42 
+
+0.44 
+
+0.46 
+
+0.48 
+
+0.50 
+
+0.52 
+
+0.54 
+
+Olympiad Mean@8 (8k) 
+
+0 200 400 600 800 
+
+0.42 
+
+0.44 
+
+0.46 
+
+0.48 
+
+0.50 
+
+0.52 
+
+0.54 
+
+0.56 
+
+Olympiad Mean@8 (16k) 
+
+0 200 400 600 800 
+
+0.42 
+
+0.44 
+
+0.46 
+
+0.48 
+
+0.50 
+
+0.52 
+
+0.54 
+
+0.56 
+
+Olympiad Mean@8 (32k) 
+
+0 200 400 600 800 
+
+0.2 
+
+0.3 
+
+0.4 
+
+0.5 
+
+0.6 
+
+Olympiad Pass@8 (2k) 
+
+0 200 400 600 800 
+
+0.45 
+
+0.50 
+
+0.55 
+
+0.60 
+
+0.65 
+
+0.70 
+
+Olympiad Pass@8 (4k) 
+
+0 200 400 600 800 
+
+0.600 
+
+0.625 
+
+0.650 
+
+0.675 
+
+0.700 
+
+0.725 
+
+0.750 
+
+Olympiad Pass@8 (8k) 
+
+0 200 400 600 800 
+
+0.69 
+
+0.70 
+
+0.71 
+
+0.72 
+
+0.73 
+
+0.74 
+
+0.75 
+
+Olympiad Pass@8 (16k) 
+
+0 200 400 600 800 
+
+0.69 
+
+0.70 
+
+0.71 
+
+0.72 
+
+0.73 
+
+0.74 
+
+0.75 
+
+0.76 
+
+Olympiad Pass@8 (32k) 
+
+0 200 400 600 800 
+
+0.10 
+
+0.12 
+
+0.14 
+
+0.16 
+
+0.18 
+
+LCB Mean@8 (2k) 
+
+0 200 400 600 800 
+
+0.18 
+
+0.20 
+
+0.22 
+
+0.24 
+
+0.26 
+
+LCB Mean@8 (4k) 
+
+0 200 400 600 800 
+
+0.23 
+
+0.24 
+
+0.25 
+
+0.26 
+
+0.27 
+
+0.28 
+
+0.29 
+
+LCB Mean@8 (8k) 
+
+0 200 400 600 800 
+
+0.25 
+
+0.26 
+
+0.27 
+
+0.28 
+
+0.29 
+
+0.30 
+
+LCB Mean@8 (16k) 
+
+0 200 400 600 800 
+
+0.25 
+
+0.26 
+
+0.27 
+
+0.28 
+
+0.29 
+
+0.30 
+
+LCB Mean@8 (32k) 
+
+0 200 400 600 800 
+
+Steps 
+
+0.12 
+
+0.14 
+
+0.16 
+
+0.18 
+
+0.20 
+
+0.22 
+
+LCB Pass@8 (2k) 
+
+0 200 400 600 800 
+
+Steps 
+
+0.20 
+
+0.22 
+
+0.24 
+
+0.26 
+
+0.28 
+
+0.30 
+
+LCB Pass@8 (4k) 
+
+0 200 400 600 800 
+
+Steps 
+
+0.28 
+
+0.30 
+
+0.32 
+
+0.34 
+
+LCB Pass@8 (8k) 
+
+0 200 400 600 800 
+
+Steps 
+
+0.28 
+
+0.30 
+
+0.32 
+
+0.34 
+
+0.36 
+
+LCB Pass@8 (16k) 
+
+0 200 400 600 800 
+
+Steps 
+
+0.28 
+
+0.30 
+
+0.32 
+
+0.34 
+
+0.36 
+
+LCB Pass@8 (32k) 
+
+Truncate Kimi Laser Laser-D Figure 9: Training dynamics of various reward shaping methods on Minerva Math, Olympiad Bench, and Live-CodeBench. 0 500 1000 1500 
+
+0.10 
+
+0.15 
+
+0.20 
+
+0.25 
+
+AIME'25 Mean@8 (32k) 
+
+0 500 1000 1500 
+
+0.3 
+
+0.4 
+
+0.5 
+
+AIME'25 Pass@8 (32k) 
+
+0 500 1000 1500 
+
+0.70 
+
+0.75 
+
+0.80 
+
+0.85 
+
+MATH-500 Mean@8 (32k) 
+
+0 500 1000 1500 
+
+0.90 
+
+0.92 
+
+0.94 
+
+0.96 
+
+MATH-500 Pass@8 (32k) 
+
+0 500 1000 1500 
+
+0.5 
+
+0.6 
+
+0.7 
+
+AMC Mean@8 (32k) 
+
+0 500 1000 1500 
+
+0.75 
+
+0.80 
+
+0.85 
+
+0.90 
+
+AMC Pass@8 (32k) 
+
+0 500 1000 1500 
+
+0.250 
+
+0.275 
+
+0.300 
+
+0.325 
+
+0.350 
+
+Minerva Mean@8 (32k) 
+
+0 500 1000 1500 
+
+0.42 
+
+0.44 
+
+0.46 
+
+0.48 
+
+0.50 
+
+0.52 
+
+Minerva Pass@8 (32k) 
+
+0 500 1000 1500 
+
+Steps 
+
+0.35 
+
+0.40 
+
+0.45 
+
+0.50 
+
+0.55 
+
+Olympiad Mean@8 (32k) 
+
+0 500 1000 1500 
+
+Steps 
+
+0.60 
+
+0.65 
+
+0.70 
+
+0.75 
+
+Olympiad Pass@8 (32k) 
+
+0 500 1000 1500 
+
+Steps 
+
+0.25 
+
+0.26 
+
+0.27 
+
+0.28 
+
+0.29 
+
+LCB Mean@8 (32k) 
+
+0 500 1000 1500 
+
+Steps 
+
+0.28 
+
+0.30 
+
+0.32 
+
+0.34 
+
+0.36 
+
+LCB Pass@8 (32k) 
+
+Full Easy Hard Figure 10: Performance training on various training prompts (rollout LR = 16 k, target LT = 8k). 0 500 1000 1500 
+
+0.05 
+
+0.10 
+
+0.15 
+
+0.20 
+
+0.25 
+
+AIME'25 Mean@8 (32k) 
+
+0 500 1000 1500 
+
+0.1 
+
+0.2 
+
+0.3 
+
+0.4 
+
+0.5 
+
+AIME'25 Pass@8 (32k) 
+
+0 500 1000 1500 
+
+0.70 
+
+0.75 
+
+0.80 
+
+0.85 
+
+MATH-500 Mean@8 (32k) 
+
+0 500 1000 1500 
+
+0.88 
+
+0.90 
+
+0.92 
+
+0.94 
+
+0.96 
+
+MATH-500 Pass@8 (32k) 
+
+0 500 1000 1500 
+
+0.4 
+
+0.5 
+
+0.6 
+
+0.7 
+
+AMC Mean@8 (32k) 
+
+0 500 1000 1500 
+
+0.6 
+
+0.7 
+
+0.8 
+
+0.9 
+
+AMC Pass@8 (32k) 
+
+0 500 1000 1500 
+
+0.250 
+
+0.275 
+
+0.300 
+
+0.325 
+
+0.350 
+
+Minerva Mean@8 (32k) 
+
+0 500 1000 1500 
+
+0.44 
+
+0.46 
+
+0.48 
+
+0.50 
+
+0.52 
+
+Minerva Pass@8 (32k) 
+
+0 500 1000 1500 
+
+Steps 
+
+0.35 
+
+0.40 
+
+0.45 
+
+0.50 
+
+0.55 
+
+Olympiad Mean@8 (32k) 
+
+0 500 1000 1500 
+
+Steps 
+
+0.60 
+
+0.65 
+
+0.70 
+
+0.75 
+
+Olympiad Pass@8 (32k) 
+
+0 500 1000 1500 
+
+Steps 
+
+0.25 
+
+0.26 
+
+0.27 
+
+0.28 
+
+LCB Mean@8 (32k) 
+
+0 500 1000 1500 
+
+Steps 
+
+0.28 
+
+0.30 
+
+0.32 
+
+0.34 
+
+LCB Pass@8 (32k) 
+
+Full Easy Hard 
+
+Figure 11: Performance training on various training prompts (rollout LR = 4k, target LT = 4k). 0 200 400 600 800 
+
+0.175 
+
+0.200 
+
+0.225 
+
+0.250 
+
+0.275 
+
+AIME'25 Mean@8 (32k) 
+
+0 200 400 600 800 
+
+0.30 
+
+0.35 
+
+0.40 
+
+0.45 
+
+0.50 
+
+AIME'25 Pass@8 (32k) 
+
+0 200 400 600 800 
+
+0.83 
+
+0.84 
+
+0.85 
+
+0.86 
+
+0.87 
+
+MATH-500 Mean@8 (32k) 
+
+0 200 400 600 800 
+
+0.945 
+
+0.950 
+
+0.955 
+
+0.960 
+
+0.965 
+
+MATH-500 Pass@8 (32k) 
+
+0 200 400 600 800 
+
+0.625 
+
+0.650 
+
+0.675 
+
+0.700 
+
+0.725 
+
+AMC Mean@8 (32k) 
+
+0 200 400 600 800 
+
+0.84 
+
+0.86 
+
+0.88 
+
+0.90 
+
+AMC Pass@8 (32k) 
+
+0 200 400 600 800 
+
+0.32 
+
+0.33 
+
+0.34 
+
+0.35 
+
+0.36 
+
+Minerva Mean@8 (32k) 
+
+0 200 400 600 800 
+
+0.48 
+
+0.50 
+
+0.52 
+
+Minerva Pass@8 (32k) 
+
+0 200 400 600 800 
+
+Steps 
+
+0.50 
+
+0.52 
+
+0.54 
+
+0.56 
+
+Olympiad Mean@8 (32k) 
+
+0 200 400 600 800 
+
+Steps 
+
+0.71 
+
+0.72 
+
+0.73 
+
+0.74 
+
+0.75 
+
+0.76 
+
+Olympiad Pass@8 (32k) 
+
+0 200 400 600 800 
+
+Steps 
+
+0.25 
+
+0.26 
+
+0.27 
+
+0.28 
+
+0.29 
+
+0.30 
+
+LCB Mean@8 (32k) 
+
+0 200 400 600 800 
+
+Steps 
+
+0.28 
+
+0.30 
+
+0.32 
+
+0.34 
+
+0.36 
+
+0.38 
+
+LCB Pass@8 (32k) 
+
+N=8 N=12 N=16 N=24 Figure 12: Performance training on various rollouts N (LR = 16 k, LT = 4k). 0 200 400 600 800 
+
+0.20 
+
+0.22 
+
+0.24 
+
+0.26 
+
+0.28 
+
+AIME'25 Mean@8 (32k) 
+
+0 200 400 600 800 
+
+0.30 
+
+0.35 
+
+0.40 
+
+0.45 
+
+0.50 
+
+AIME'25 Pass@8 (32k) 
+
+0 200 400 600 800 
+
+0.83 
+
+0.84 
+
+0.85 
+
+0.86 
+
+0.87 
+
+MATH-500 Mean@8 (32k) 
+
+0 200 400 600 800 
+
+0.94 
+
+0.95 
+
+0.96 
+
+MATH-500 Pass@8 (32k) 
+
+0 200 400 600 800 
+
+0.62 
+
+0.64 
+
+0.66 
+
+0.68 
+
+0.70 
+
+AMC Mean@8 (32k) 
+
+0 200 400 600 800 
+
+0.82 
+
+0.84 
+
+0.86 
+
+0.88 
+
+0.90 
+
+0.92 AMC Pass@8 (32k) 
+
+0 200 400 600 800 
+
+0.32 
+
+0.33 
+
+0.34 
+
+0.35 
+
+0.36 
+
+0.37 
+
+Minerva Mean@8 (32k) 
+
+0 200 400 600 800 
+
+0.48 
+
+0.50 
+
+0.52 
+
+Minerva Pass@8 (32k) 
+
+0 200 400 600 800 
+
+Steps 
+
+0.50 
+
+0.52 
+
+0.54 
+
+0.56 
+
+Olympiad Mean@8 (32k) 
+
+0 200 400 600 800 
+
+Steps 
+
+0.71 
+
+0.72 
+
+0.73 
+
+0.74 
+
+0.75 Olympiad Pass@8 (32k) 
+
+0 200 400 600 800 
+
+Steps 
+
+0.25 
+
+0.26 
+
+0.27 
+
+0.28 
+
+0.29 
+
+0.30 
+
+LCB Mean@8 (32k) 
+
+0 200 400 600 800 
+
+Steps 
+
+0.28 
+
+0.30 
+
+0.32 
+
+0.34 
+
+0.36 
+
+LCB Pass@8 (32k) 
+
+N=8 N=12 N=16 N=24 N=32 
+
+Figure 13: Performance training on various rollouts N (LR = 4k, LT = 4k). Question Let R be the region in the complex plane consisting of all complex numbers z that can be written as the sum of complex numbers z1 and z2, where z1 lies on the segment with endpoints 3 and 4i, and z2 has magnitude at most 1.What integer is closest to the area of R? Let’s think step by step and output the final answer within \boxed{} 
+
+Hard To determine the area of the region R, I first identify the segments involved. The first segment runs from 3 to 4i,and the second segment encompasses all points within a unit circle centered at the origin. By translating these segments into the complex plane and applying appropriate transformations, I calculate the combined area as the sum of their respective areas. To find the area of the region R in the complex plane: Understanding the Components: Segment from 3 to 4i: This is a line segment in the complex plane with endpoints at 3 (which is (3, 0)) and 4i (which is (0, 4)). The length of this segment is √(3)2 + (4)2 = 5. Region defined by z2: This is a disk (or circle) centered at the origin with radius 1. Calculating the Area: The region R is the set of all points z = z1 + z2, where z1 lies on the segment from 3 to 4i and z2 lies within the unit disk. This effectively translates the unit disk to every point along the segment z1 and sums the areas. Since the unit disk has an area of π × (1)2 = π, the total area of R is π.Finding the Closest Integer: The area is approximately 3.1416, so the closest integer is 3. Final Answer: 3 (Incorrect) 
+
+Easy Okay, so I need to find the area of the region R in the complex plane. R consists of all complex numbers z that can be written as z = z1 + z2, where z1 lies on the segment with endpoints 3 and 4i, and z2 has magnitude at most 1. Then, I have to find the integer closest to this area. First, let me visualize this. The region R is the Minkowski sum of the segment from 3 to 4i and the disk of radius 1. So, if I think about it, R should be a rectangle with semicircles on both ends. But let me break it down step by step. The segment from 3 to 4i: In the complex plane, 3 is the point (3,0) and 4i is the point (0,4). So this is a straight line connecting (3,0) to (0,4). The length of this segment can be calculated, but maybe we don’t need it right away. z1 lies on this segment. So z1 can be parameterized. Let me define z1 as a point on the line segment between 3 and 4i. Let’s parameterize z1 with a parameter t from 0 to 1. So, z1(t) = (3 − 3t) + (4i − 4it ) = (3(1 − t), 4(1 − t)) .Wait, actually, in complex terms, if I let t vary from 0 to 1, when t=0, z1 = 3, and when t=1, z1 = 4i. Alternatively, z1 can be expressed as 3 + (4i − 3)i, where i is a parameter from 0 to 1. Hmm, maybe that’s more complicated. Alternatively, the equation of the line from (3,0) to (0,4). The slope is (4 − 0)/( 0 − 3) = −4/3.So equation is y = (−4/3)x + b. When x = 3, y = 0 ∶ 0 = (−4/3)( 3) + b => 0 = −4 + b => b = 4. So equation is y = (−4/3)x + 4. So, for any point z1 on the segment, z1 can be written as x + yi where x and y satisfy y = (−4/3)x + 4, and x ranges from 0 to 3? Wait, no, the segment goes from (3,0) to (0,4). So when x decreases from 3 to 0, y increases from 0 to 4. So, for any z1 on the segment, we can write z1 = (x, y )
+
+where y = (−4/3)x + 4, x ∈ [0, 3]. Alternatively, parametric equations: Let’s define t as a parameter from 0 to 1. z1(t) = (3 − 3t, 0 + 4t) because at t=0, we get (3,0), and at t=1, we get (0,4). So in complex terms, 
+
+z1 = (3 − 3t) + (4t)i. Then, z2 is a complex number with ∣z2∣ ≤ 1, which is a disk of radius 1 centered at the origin. Since R is the Minkowski sum of the segment and the disk, it is like sliding the disk along every point of the segment. So geometrically, it’s a rectangle with length equal to the length of the segment and width 2 (diameter of the disk). But with semicircular ends because the disk is only of radius 1. Wait, actually, no. The Minkowski sum of a line segment and a disk is called an "offset" of the disk by the segment. So it’s a rectangle with length equal to the segment length and width equal to twice the radius (since each end contributes a semicircle). But in this case, the radius is 1, so each end is a semicircle. Wait, but the segment is from (3,0) to (0,4), so the Minkowski sum would be the set of all points within distance 1 from the segment. So it’s like a rectangle with length equal to the segment length and width 2, but with semicircular ends of radius 1. Therefore, the area would be the area of the rectangle plus the area of the two semicircles. Area of rectangle: length * width. The length is the distance between 3 and 4i, which is √(3 + 4) = 5. The width is 2 (since radius is 1, diameter is 2). So area of rectangle is 5 ∗ 2 = 10 . Area of two semicircles: Each semicircle has area (1/2)π(1), so two of them is π. Therefore, total area is 10 + π ≈ 10 + 3.1416 ≈ 13 .1416 . So the area is approximately 13.1416, so the closest integer is 13. Wait, but let me verify again. The Minkowski sum of a line segment and a disk is indeed a rectangle with length equal to the segment’s length and width equal to 2r, and with two semicircular ends. So that’s correct. The length of the segment is 5, as calculated before. So area is 
+
+5 × 2 + π × (1)2 = 10 + π. So yes, the area is 10 + π ≈ 13 .1416 . Therefore, the integer closest to the area is 13. Final Answer 13 
+
+Double check: 
+
+The region R consists of all complex numbers (z) that can be written as z = z1 + z2, where z1 lies on the segment with endpoints (3) and (4i), and z2 has magnitude at most (1). The segment from (3) to (4i) in the complex plane is a straight line connecting the points ((3, 0)) and ((0, 4)). This line has a length of (5) (calculated using the distance formula). The region ( R) is the Minkowski sum of this segment and the disk of radius (1). This results in a shape that is a rectangle with length (5) and width (2) (since the radius of the disk is (1)), plus two semicircular ends each with radius (1). The area of the rectangle is ( 5 × 2 = 10 ). The area of the two semicircular ends is ( π × 12 = π). Therefore, the total area of ( R) is 10 + π ≈ 10 + 3.1416 ≈ 13 .1416 . The integer closest to the area of ( R) is 13 .(Correct) 
+
+Table 3: Case comparison when trained on DeepScaleR-Easy and DeepScaleR-Hard using truncation strategy. Question The volume of a cone is given by the formula V = 13 Bh , where B is the area of the base and h is the height. The area of the base of a cone is 30 square units, and its height is 6.5 units. What is the number of cubic units in its volume? Let’s think step by step and output the final answer within \boxed{} 
+
+Hard To find the volume of the cone, I’ll use the formula V = (1/3) * B * h. The area of the base, B, is 30 square units, and the height, h, is 6.5 units. First, I’ll calculate one-third of the base area: (1/3) * 30 = 10. Next, I’ll multiply this result by the height: 10 * 6.5 = 65. Therefore, the volume of the cone is 65 cubic units. To find the volume of the cone, we can use the formula: V = 13 × B × h Where: - ( B ) is the area of the base = 30 square units - ( h ) is the height = 6.5 units Plugging in the values: V = 13 × 30 × 6.5
+
+First, calculate one-third of 30: 13 × 30 = 10 
+
+Then multiply by 6.5: 10 × 6.5 = 65 
+
+Therefore, the volume of the cone is: 65 cubic units. (Correct) 
+
+Easy Okay, so I need to find the volume of a cone. The formula given is V = (1/3)Bh, where B is the area of the base and h is the height. Hmm, let me recall what each part means. First, the area of the base, which is B. The problem says the area of the base is 30 square units. So B is 30. Then, the height h is 6.5 units. Got that. So plugging these values into the formula: V = (1/3) * B * h. So that would be (1/3) * 30 * 6.5. Let me compute that step by step. First, I can compute 30 multiplied by 6.5. Let me do that: 30 * 6.5. Hmm, 30 * 6 is 180, and 30 * 0.5 is 15, so adding those together gives 195. So 30 * 6.5 is 195. Then, take that result and multiply by (1/3). So (1/3) * 195. Dividing 195 by 3. Well, 3 goes into 195 sixty-five times because 360 is 180, and 35 is 15, so 60 + 5 = 65. So (1/3)*195 is 65. So V = 65 cubic units. Let me just double-check that. Alternatively, maybe I can compute it differently. Since V = (1/3) * B * h, with B = 30 and h = 6.5. Compute B * h first: 30 * 6.5. As above, that’s 195. Then multiply by 1/3: 195 / 3 = 65. Yep, same result. So the volume is 65 cubic units. I think that’s correct. Final Answer The volume of the cone is 65 cubic units. 
+
+Double check: 
+
+The volume of a cone is given by the formula V = 13 Bh , where B is the area of the base and h is the height. The area of the base B is 30 square units, and the height h is 6.5 units. First, we compute the product of ( B ) and ( h ): 30 × 6.5 = 195 
+
+Next, we multiply this result by 13 : 13 × 195 = 65 
+
+Thus, the volume of the cone is 65 cubic units. (Correct) 
+
+Table 4: Case comparison when trained on DeepScaleR-Easy and DeepScaleR-Hard using truncation strategy. The model suffers from the reasoning collapse issue when trained on DeepScaleR-Hard, e.g., the double check part is skipped for shorter length. Question Compute (31 28 ). Let’s think step by step and output the final answer within \boxed{} 
+
+Vanilla Okay, so I need to compute the binomial coefficient ( (31 28 )). Hmm, binomial coefficients are those numbers that come up in combinations, right? They represent the number of ways to choose a subset of items from a larger set, disregarding the order. First, I remember that the formula for a binomial coefficient is ( (nk) = n! 
+
+> k!(n−k)!
+
+). So, in this case, (n = 31) and (k = 28). Let me write down the formula with these values: (31 28 ) = 31! 28! (31 −28 )! Simplifying the denominator: 31 - 28 = 3, so it becomes 31! 28!3! 
+
+Hmm, but calculating factorials for such large numbers seems tedious. Maybe there’s a way to simplify this without computing the entire factorials. I remember that sometimes, in binomial coefficients, you can simplify by canceling out terms in the numerator and denominator. Let me think about how to do that. Since (31! = 31 × 30 × 29 × 28! ), I can rewrite the numerator as: 31! = 31 × 30 × 29 × 28! 
+
+So substituting back into the equation: (31 28 ) = 31 ×30 ×29 ×28! 28! ×3! Oh, I see! The (28!) terms cancel out in numerator and denominator: = 31 ×30 ×29 3! Now, (3! = 3×2×1 = 6), so substituting that in: = 31 ×30 ×29 6
+
+Alright, now I need to compute this. Let me compute the numerator first: 31 multiplied by 30 is 930, and 930 multiplied by 29. Hmm, 930 times 29. Let me do that step by step: - 930 x 20 = 18,600 -930 x 9 = 8,370 Adding them together: 18,600 + 8,370 = 26,970 So the numerator is 26,970. The denominator is 6. So now, 26,970 divided by 6. Let’s do that: 26,970 ÷ 6. Dividing step by step: -6 goes into 26 four times (4x6=24), remainder 2. - Bring down the 9: 29. 6 goes into 29 four times (4x6=24), remainder 5. - Bring down the 7: 57. 6 goes into 57 nine times (9x6=54), remainder 3. -Bring down the 0: 30. 6 goes into 30 five times. So putting it all together: 4, 4, 9, 5. So it’s 4,495. Wait, let me double-check that division because I might have messed up the steps. Alternatively, I can write 26,970 ÷ 6 as (26,000 + 970) ÷ 6. 26,000/6 = 4,333.333... 970/6 ≈161.666... Adding them together: 4,333.333...+161.666... = 4,495. Yep, that matches. So the result is 4,495. Therefore, ( (31 28 ) = 4, 495 ). Final Answer The value of ((31 28 )) is \boxed4495. To compute the binomial coefficient ( (31 28 )), we use the formula: (nk) = n!
+
+> k!(n−k)!
+
+Substituting (n = 31) and (k = 28): (31 28 ) = 31! 28! (31 −28 )! = 31! 28!3! We simplify the factorials by recognizing that ( 31! = 31 × 30 × 29 × 28! ): (31 28 ) = 31 ×30 ×29 ×28! 28! ×3! = 31 ×30 ×29 3! 
+
+Since (3! = 6), we have: = 31 ×30 ×29 6 Calculating the numerator: 31 × 30 = 930 ][ 930 × 29 = 26970 
+
+Dividing by the denominator: 26970 6 = 4495 
+
+Thus, the value of ( (31 28 )) is ( 4495 ). 
+
+Ours To compute the binomial coefficient ( (31 28 )), I’ll start by recalling that the binomial coefficient formula is given by: (nk) = n! 
+
+> k!⋅(n−k)!
+
+Here, (n = 31) and (k = 28). Alternatively, since ( (nk) = ( nn − k)), perhaps I can simplify the expression by choosing the smaller (k) value to make calculation easier. Calculating (31 - 28 = 3), which means: (31 28 ) = (31 3 )
+
+Now compute ( (31 3 )): Using the formula: (31 3 ) = 31! 3! ⋅(31 −3)! = 31! 3! ⋅28! Simplifying, since ( 31! =
+
+31 × 30 × 29 × 28! ): 31 ×30 ×29 ×28! 3! ×28! = 31 ×30 ×29 3! Calculate the denominator (3! = 6): Therefore,  
+
+> 31 ×30 ×29 6
+
+Computing numerator: 31 × 30 = 930; 930 × 29 = ? Compute: 930 × 29: Breakdown: = 930 × (30 - 1) = 930 × 30 - 930 × 1 = 27900 - 930 = 26970 Then divide by 6: 26970 ÷ 6 = ? Calculate: 26970 ÷ 6 = 4495 Wait perhaps: 6 × 4495 = 26970, yes. Therefore, the value becomes 4495. Thus, 
+
+4495 To compute ( (31 28 )), we use the property ( (nk) = ( nn − k)): (31 28 ) = (31 3 ) Compute ( (31 3 )): Using the formula, (31 3 ) = 31! 3! ⋅(31 −3)! = 31 ×30 ×29 3×2×1 Calculating: 31 × 30 × 29 = 26970 Divide by (6) : 
+
+26970 /6 = 4495 Thus, 4495 
+
+Table 5: Case I for vanilla and our trained LLM. Both answers are correct. Question The volume of a cone is given by the formula V = 13 Bh , where B is the area of the base and h is the height. The area of the base of a cone is 30 square units, and its height is 6.5 units. What is the number of cubic units in its volume? Let’s think step by step and output the final answer within \boxed{} 
+
+Vanilla Okay, so I need to find the volume of a cone. The formula given is V = (1/3)Bh, where B is the area of the base and h is the height. Hmm, let’s break this down step by step. First, I know the area of the base is 30 square units. That’s B. Then, the height is 6.5 units, so h is 6.5. The formula is straightforward, but I should make sure I plug the values correctly. So, I can write it out as V = (1/3) * B * h. Substituting the given values, that becomes V = (1/3) * 30 * 6.5. Let me compute this step by step. First, let me calculate 1/3 of 30. Hmm, 30 divided by 3 is 10. So, 1/3 * 30 = 10. Now, I need to multiply that result by 6.5. So, 10 * 6.5. Let me think, 10 * 6 is 60, and 10 * 0.5 is 5, so 60 + 5 is 65. Therefore, 10 * 6.5 is 65. So, putting it all together, V = 65 cubic units. That should be the volume of the cone. Wait, let me double-check to make sure I didn’t make any calculation errors. 1/3 of 30 is indeed 10, correct. Then, 10 multiplied by 6.5. Yes, 6.5 is the same as 13/2, so 10(13/2) is (10/1)(13/2) = (10*13)/2 = 130/2 = 65. Yep, that’s right. So, I think I did that correctly. The volume is 65 cubic units. Final Answer The volume of the cone is 65 cubic units. The volume of a cone is given by the formula V = 13 Bh , where (B) is the area of the base and (h) is the height. Given: - The area of the base (B = 30) square units. - The height (h = 6.5) units. We substitute these values into the formula: 
+
+V = 13 × 30 × 6.5
+
+First, calculate 13 × 30 : 
+
+> 13
+
+× 30 = 10 
+
+Next, multiply the result by 6.5: 
+
+10 × 6.5 = 65 
+
+Thus, the volume of the cone is ( 65 ) cubic units. 
+
+Ours To find the volume of the cone, I’ll use the formula ( V = 13 Bh ). Given that the base area (B) is 30 square units and the height (h) is 6.5 units. First, multiply these values together: ( 30 × 6.5 = 195 )Then, take one-third of that product: ( 13 × 195 = 65 ) Therefore, the volume of the cone is 65 cubic units. Given: - Area of the base ((B)) = 30 square units - Height ((h)) = 6.5 units The formula for the volume (V) of a cone is: V = 13 Bh Plugging in the given values: V = 13 × 30 × 6.5
+
+Calculate: 30 × 6.5 = 195 Then, V = 195 3 = 65 Answer: ( 65 ) cubic units. 
+
+Table 6: Case II for vanilla and our trained LLM. Both answers are correct.

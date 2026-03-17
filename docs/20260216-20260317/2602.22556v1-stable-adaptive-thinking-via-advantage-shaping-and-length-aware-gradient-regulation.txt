@@ -1,0 +1,674 @@
+Title: Stable Adaptive Thinking via Advantage Shaping and Length-Aware Gradient Regulation
+
+URL Source: https://arxiv.org/pdf/2602.22556v1
+
+Published Time: Fri, 27 Feb 2026 01:22:50 GMT
+
+Number of Pages: 15
+
+Markdown Content:
+# Stable Adaptive Thinking via Advantage Shaping and Length-Aware Gradient Regulation 
+
+Zihang Xu *, Haozhi Xie *, Ziqi Miao *, Wuxuan Gong, Chen Qian, Lijun Li 
+
+Beihang University, Shanghai AI Laboratory, Beijing University of Posts and Telecommunications, Renmin University of China 
+
+Abstract 
+
+Large reasoning models (LRMs) achieve strong performance through extended reason-ing traces, but they often exhibit overthinking behavior for low-complexity queries. Existing efforts to mitigate this issue are fundamentally limited by unstable accuracy–efficiency trade-offs and poor robustness to heterogeneous rea-soning behaviors. To address these challenges, we propose a two-stage framework for stable adaptive thinking in LRMs. The framework first applies Hybrid Fine-Tuning to expose the model to both thinking and no-thinking be-haviors, establishing well-conditioned initial-ization. It then performs adaptive reinforce-ment learning with Correctness-Preserving Ad-vantage Shaping (CPAS) to avoid suppress-ing correct long-chain reasoning, and Length-Aware Gradient Regulation (LAGR) to sta-bilize optimization under severe reasoning-length heterogeneity. Extensive experiments on Qwen2.5-1.5B and 7B show consistent im-provements over strong baselines, achieving up to +3.7/+3.6 accuracy points while reduc-ing generated tokens by 40.6%/43.9%. Fur-ther analyses across varying problem difficul-ties and out-of-distribution tasks confirm the robustness and generalization of our approach. 
+
+1 Introduction 
+
+Recent advancements in large reasoning models (LRMs), such as OpenAI-o1 (OpenAI et al., 2024) and DeepSeek-R1 (DeepSeek-AI et al., 2025a), have demonstrated remarkable progress in solving complex tasks. By explicitly generating extended reasoning traces, these models exhibit strong rea-soning and generalization capabilities across a wide range of domains (Xu et al., 2025). Although long-form reasoning benefits challenging problems, ex-isting LRMs lack difficulty-aware control ability and thus often produce unnecessarily long reason-ing chains even for simple queries (Yue et al., 2025; 
+
+> *
+
+Equal contribution. Length     
+
+> Penalty
+> External
+> Router
+> Adaptive
+> Thinking
+> Ours
+> Accuracy
+> Decline
+> Annotation &
+> Deployment Cost
+> Accuracy Decline
+> & Mode Collapse
+> Stable Adaptive
+> Thinking
+> Thinking Model
+> No-Thinking Model
+> Thinking Mode
+> No-Thinking Mode
+> Length
+> Penalty
+> router
+> CPAS
+> LAGR
+> /think
+> /nothink
+> /think
+> /nothink
+
+Figure 1: Illustration of efficient reasoning methods. 
+
+Liu et al., 2025). This overthinking issue signif-icantly increases token usage and inference cost, posing a critical bottleneck for the practical effi-ciency of LRMs (Chen et al., 2024). To mitigate the efficiency issues arising from overthinking, recent studies have investigated sev-eral efficient reasoning strategies (Feng et al., 2025; Sui et al., 2025), as illustrated in Figure 1. Length-based penalties have been introduced to discourage excessively long reasoning chains (Luo et al., 2025a; Aggarwal and Welleck, 2025; Xia et al., 2025); however, these approaches operate within the thinking mode, and the additional con-straints in these approaches may limit the explo-ration space of LRMs. Routing-based methods reduce inference cost by selecting between reason-ing and non-reasoning models (Hu et al., 2024; Ong et al., 2024; OpenAI, 2025), but they typ-ically depend on external annotations for super-vision and the maintenance of multiple models, thereby increasing both training and deployment cost. More recently, reinforcement-learning-based 
+
+> arXiv:2602.22556v1 [cs.LG] 26 Feb 2026
+
+adaptive thinking methods aim to improve effi-ciency by encouraging shorter reasoning chains. ThinkLess (Fang et al., 2025) achieves this via a decoupled GRPO formulation, whereas Adap-Think (Zhang et al., 2025a) employs a PPO-based objective to promote short-chain reasoning. De-spite their effectiveness, these methods often face difficulties in achieving a stable balance between reasoning accuracy and efficiency during training. These observations highlight two key challenges in adaptive thinking. First, there is an inherent trade-off between efficiency and accuracy. While adaptive thinking aims to reduce computational costs, an excessive bias toward brevity may con-strain the model’s capacity for deep reasoning on complex tasks, ultimately degrading performance. Second, severe length heterogeneity during train-ing poses additional difficulties. Within a single rollout group, reasoning chains may range from a few hundred tokens to tens of thousands of to-kens, resulting in uneven optimization granularity and imbalanced gradient contributions, which may compromise training stability. To address these challenges, we propose Sta-ble Adaptive Thinking via Advantage Shaping and Length-Aware Gradient Regulation, a two-stage framework for stable and effective adaptive rea-soning in large reasoning models. The proposed approach enables the model to adjust its reason-ing depth according to input difficulty, improving efficiency on simple queries while preserving ac-curacy on complex ones. In the first stage, Hy-brid Fine-Tuning is employed to establish well-conditioned initialization by exposing the model to both short and long reasoning behaviors. In the sec-ond stage, adaptive thinking is optimized through reinforcement learning with two key mechanisms. 
+
+Correctness-Preserving Advantage Shaping , in contrast to prior approaches that directly reward short chains, introduces an advantage shaping strat-egy that avoids suppressing correct long-chain rea-soning trajectories when encouraging efficiency, thereby preserving the model’s exploration ca-pacity. Length-Aware Gradient Regulation ad-dresses optimization instability arising from the severe reasoning length heterogeneity by regulat-ing gradient allocation across different responses, while ensuring that control signals remain effective under long and heterogeneous reasoning sequences, leading to more stable training dynamics. These components provide a principled solution for stable adaptive thinking under efficiency–accuracy trade-offs. In general, the contributions of this paper can be summarized as follows: • We address key optimization challenges in adaptive thinking. Specifically, we focus on balancing computational efficiency with rea-soning accuracy, and on mitigating training instability arising from severe length hetero-geneity across different reasoning modes dur-ing reinforcement learning optimization. • We propose a two-stage framework for stable adaptive thinking. The framework integrates hybrid fine-tuning with adaptive reinforce-ment learning, while employing correctness-preserving advantage shaping and length-aware gradient regulation for stable training. • Extensive experiments on the Qwen2.5 series across multiple model scales and mathemati-cal benchmarks demonstrate that our approach consistently outperforms existing baselines, achieving up to +3.7/+3.6 accuracy improve-ments while reducing the number of gener-ated tokens by 40.6%/43.9%. Further anal-yses across varying problem difficulties and diverse tasks confirm the robustness and gen-eralization of our approach. 
+
+2 Preliminaries 
+
+2.1 Adaptive Thinking 
+
+Specifically, given an input problem x, the model produces an output y consisting of a chain-of-thought trajectory and a final answer: y = {S, a }.We introduce a control token to specify the think-ing mode m ∈ M = {/think , /no_think }:when the control token is /think , the model gen-erates a non-empty chain-of-thought trajectory S
+
+in the thinking mode; when the control token is 
+
+/no_think , the chain-of-thought is empty S = ∅
+
+and the model directly produces the final answer a.We implement adaptive thinking with a single policy model. Given input x ∼ D , the model first generates a control token m ∈ M , and then gener-ates the remaining output conditioned on m. Thus, the same parameters θ define both mode selection 
+
+πθ (the distribution of the first control token) and response generation Pθ(y | x, m ).
+
+2.2 Problem Statement 
+
+The goal of adaptive thinking is to reduce unneces-sary generation while preserving correctness. We Stage I: Hybrid Fine-Tuning (HFT)       
+
+> Stage II: RL - Stable Adaptive Thinking
+> Data Preparation
+> Thinking
+> Data
+> No-Thinking
+> Data
+> /think<think>…</think>
+> + Answer
+> /no_think<think></think>
+> +Answer
+> Mixed
+> Training Data
+> Trained SFT
+> HFT Base Model
+> (Dual Mode Capable)
+> Sampling & Grouping Advantage-Shaping (CPAS) Gradient Regulation (LAGR)
+> Query HFT Base
+> Model Group of
+> Trajectories
+> …
+> Filter
+> Correct & Short? Others
+> Length Re-weighting
+> Control Token Weighting RL
+> Update
+> …
+> /think
+> /nothink
+> Unified SFT
+> Stable
+> Adaptive Actor
+> Policy Model
+> long
+> short
+
+Figure 2: Overview of our two-stage training pipeline. Stage 1 performs Hybrid Fine-Tuning (HFT) on paired thinking and no-thinking formats to initialize a unified policy. Stage 2 applies GRPO-style reinforcement learning with correctness-preserving advantage shaping (CPAS) and length-aware gradient regulation (LAGR) to stabilize optimization under extreme length heterogeneity and to learn when to think. 
+
+define a utility function that trades off accuracy and efficiency. For an output y = {S, a }, we use an accuracy reward Racc (y | x) ∈ { 0, 1} indicating whether the final answer a is correct (verified by an automatic checker), and a length reward Rlen (y | x)
+
+that favors shorter outputs. The overall utility is 
+
+U (x, y ) = Racc (y | x) + γ R len (y | x)
+
+where γ > 0 controls the efficiency–accuracy trade-off. Our objective is to learn a policy that selects 
+
+m and generates y to maximize expected utility: 
+
+max  
+
+> θ
+
+Ex∼D 
+
+h
+
+Em∼πθ (·| x) Ey∼Pθ (·| x,m )
+
+U (x, y ) i
+
+.
+
+3 Methodologies 
+
+3.1 Overall Framework 
+
+We propose a novel framework for stable adap-tive thinking , which enables a single model to dy-namically regulate its thinking depth according to problem difficulty. The objective is to avoid un-necessary overthinking on simple queries while preserving strong deliberative capability on chal-lenging problems. Starting from a pretrained base language model, our framework adopts a two-stage training paradigm that comprises hybrid fine-tuning for capability warm-up and reinforcement learning for stable adaptive thinking. An overview of the training pipeline is illustrated in Figure 2. 
+
+Stage I: Hybrid Fine-Tuning. In the first stage, we perform hybrid fine-tuning on the base model using large-scale mathematical reasoning data with heterogeneous supervision, including long CoT solutions and short direct answers distilled from strong teacher models. This stage injects both thinking and no-thinking capabilities into a unified model and provides a stable warm-up for subse-quent reinforcement learning. 
+
+Stage II: Stable Adaptive thinking with Rein-forcement Learning. In the second stage, the model is further optimized with a modified GRPO algorithm, where it explores both thinking and no-thinking trajectories and learns when to think .To stabilize training under severe length hetero-geneity and prevent mode collapse, we intro-duce correctness-preserving advantage shaping and length-aware gradient regulation, which together facilitate effective exploration and robust training. 
+
+3.2 Hybrid Fine-Tuning for Warm-Up 
+
+Hybrid Fine-Tuning (HFT) is designed to provide a stable cold-start initialization for adaptive rein-forcement learning by exposing the base model to both thinking and no-thinking generation patterns in a unified and format-consistent manner. Unlike the subsequent stage, HFT does not aim to learn an adaptive decision policy; instead, it focuses on expanding the model’s solution space to support heterogeneous response behaviors. 
+
+Hybrid-Formatted Data Construction. The hy-brid fine-tuning dataset is constructed from large-scale open-source mathematical corpora. Each training instance is annotated with an explicit con-trol token that specifies the desired response mode. For thinking-mode examples, responses are dis-tilled from DeepSeek-R1-0528. Each response be-gins with the prefix /think and contains an explicit thinking block of the form <think>{thinking process}</think> , where the content enclosed by the <think> tags corresponds to the intermedi-ate thinking steps produced by the teacher model. The final answer is generated after the thinking block following a unified output structure. For no-thinking-mode examples, responses are distilled from DeepSeek-V3-0324. These re-sponses begin with the prefix /no_think and include an empty thinking block of the form 
+
+<think></think> , which explicitly indicates that no intermediate thinking is required and that a di-rect answer should be produced. 
+
+Optimization Objective. During HFT, the model is optimized using standard supervised learn-ing objectives over both response types, without imposing any explicit preference between think-ing and no-thinking outputs. Given the hybrid-formatted dataset DHFT = {(xi, y i)}Ni=1 , the model is optimized to maximize the conditional likelihood of the target response given the input: 
+
+LHFT = −E(x,y )∼D HFT 
+
+
+
+> |y|
+
+X
+
+> t=1
+
+log pθ(yt | x, y <t )
+
+ .
+
+Role of HFT. From a methodological perspec-tive, HFT defines the feasible action space for sub-sequent reinforcement learning by ensuring that both thinking and no-thinking trajectories are read-ily accessible to the policy. This hybrid-formatted warm-up substantially reduces exploration diffi-culty in the reinforcement learning stage and pro-vides a well-conditioned initialization. 
+
+3.3 Stable Adaptive thinking with Reinforcement Learning 
+
+After HFT, the model is further trained to acquire 
+
+adaptive thinking capability through reinforcement learning. While HFT equips the model with both thinking-mode and no-thinking-mode generation behaviors, it does not enable the model to au-tonomously decide which mode to adopt for a given query. This decision-making ability is learned in the reinforcement learning stage. Specifically, we build upon GRPO and train the model to explore both thinking and no-thinking trajectories for each query. In this setting, the pol-icy learns to decide whether to engage in explicit thinking by selecting between thinking-mode and no-thinking-mode responses. However, directly ap-plying vanilla GRPO often leads to training insta-bility and mode collapse. We identify two key chal-lenges that arise from GRPO under heterogeneous thinking trajectories, and introduce corresponding mechanisms to address them. 
+
+Correctness-Preserving Advantage Shaping. 
+
+Existing adaptive thinking approaches often dis-courage overthinking by assigning higher rewards to shorter thinking trajectories. Under GRPO-style group-wise optimization, advantages are computed via intra-group normalization across multiple tra-jectories sampled for the same input. Let {ri}Gi=1 
+
+denote the rewards of a rollout group G, and the cor-responding advantages be Ai = ri−M⅁⋉ (r) 
+
+> S≈ (r)
+
+. When shorter trajectories systematically receive higher rewards (Aggarwal and Welleck, 2025; Fang et al., 2025), this normalization induces a relative compar-ison bias: longer but correct thinking trajectories may satisfy 0 < r i < M⅁⋉ (r) and thus receive 
+
+Ai < 0. Consequently, valid thinking behaviors are actively suppressed during optimization, lim-iting exploration and potentially leading to mode collapse toward no-thinking responses. To alleviate this issue, we introduce Correctness-Preserving Advantage Shaping (CPAS), which re-shapes advantages for correct responses based on their thinking mode. Let AGRPO  
+
+> i
+
+denote the advan-tage computed by GRPO for response oi, and let 
+
+ri ∈ { 0, 1} denote the reward. The final advantage is defined as 
+
+Ai =
+
+(
+
+AGRPO  
+
+> i
+
++ δ, if ri = 1 and oi is short-chain ,AGRPO  
+
+> i
+
+, otherwise .
+
+where, δ > 0 is a small reward coefficient that provides additional encouragement for correct short-chain responses, while leaving correct long-chain responses unaffected. 
+
+Role of CPAS. By reshaping advantages for cor-rect responses, CPAS ensures that correct thinking trajectories receive non-negative advantage signals. This prevents correct long-chain responses from be-ing inadvertently penalized, thereby preserving the model’s exploration capacity. Consequently, CPAS contributes to more stable training dynamics and enhances the effectiveness of adaptive thinking. 
+
+Length-Aware Gradient Regulation. Under GRPO, policy optimization is performed by sam-pling a group G of responses {oi}Gi=1 for each query q and aggregating token-level policy gra-dients within each response. The response-level gradient contribution of oi can be written as 
+
+gGRPO  
+
+> i
+
+= 1
+
+|oi|
+
+> |oi|
+
+X
+
+> t=1
+
+ˆAi,t ∇θ log πθ(oi,t | q, o i,<t ),
+
+where |oi| denotes the response length and ˆAi,t is the token-level advantage. In adaptive thinking, rollout groups often exhibit severe length heterogeneity, ranging from short no-thinking responses to long thinking trajectories. The 1/|oi| normalization systematically attenuates gradient magnitudes for long responses, increases gradient variance, and biases optimization toward short trajectories, which may lead to premature collapse of thinking behaviors. To mitigate this imbalance, we propose Length-Aware Gradient Regulation , which explicitly reweights response-level gradient contributions ac-cording to response length. Specifically, LAGR employs a length-dependent weighting scheme: 
+
+gLAGR  
+
+> i
+
+= w(β)
+
+> i
+> |oi|
+
+X
+
+> t=1
+
+ˆAi,t ∇θ log πθ(oi,t | q, o i,<t ),w(β) 
+
+> i
+
+= 1
+
+M · |oi|−β
+
+PGj=1 |oj |−β , β ∈ [0 , 1] .
+
+where M is a constant scaling factor used to control the overall magnitude of the gradient. When β = 1 ,LAGR recovers the GRPO-like length-sensitive be-havior that favors short responses, while β = 0 
+
+assigns uniform weights across responses, thereby alleviating the suppression of long ones. By ad-justing β, LAGR provides a mechanism to balance optimization stability and thinking flexibility. While LAGR mitigates length-induced imbal-ance at the response level, adaptive thinking intro-duces an additional challenge at the token level. In practice, the decision of whether to engage in thinking is primarily encoded by the prefix con-trol token. However, when responses are long, the gradient signal of this control token can be diluted by the large number of subsequent tokens. To pre-serve this adaptive control signal, we further apply an explicit boosting to the control token. Let t = 0 
+
+denote the control token. The final response-level gradient under LAGR is given by 
+
+∇θJLAGR (θ) = ∇θ
+
+PGi=1 w(β)
+
+> i
+
+"
+
+λ min 
+
+
+
+ri, 0(θ) ˆAi, 0,
+
+clip  ri, 0(θ), 1 − ϵ, 1 + ϵ ˆAi, 0
+
+
+
++ P|oi|
+
+> t=1
+
+min 
+
+
+
+ri,t (θ) ˆAi,t , clip  ri,t (θ), 1 − ϵ, 1 + ϵ ˆAi,t 
+
+#
+
+.
+
+where λ is a control-token boosting factor that com-pensates for gradient dilution in long responses. 
+
+Role of LAGR. LAGR rebalances response-level policy gradients under length heterogeneity, miti-gating GRPO’s bias toward short trajectories. By preserving effective gradient signals for long think-ing chains and boosting the control token, LAGR prevents decision-signal dilution and supports sta-ble adaptive thinking. 
+
+4 Experiments 
+
+4.1 Experimental Settings Models. We adopt Qwen-2.5-1.5B-Base and Qwen-2.5-7B-Base as the initial policy mod-els (Qwen et al., 2025). Both are extensively pre-trained and serve as the foundation for jointly learn-ing thinking and no-thinking behaviors. 
+
+Dataset and Metrics. For HFT, we construct a large-scale training corpus from open-source math-ematics datasets that require advanced numerical reasoning and multi-step logical inference, includ-ing OpenR1-Math-220k (Hugging Face, 2025), DeepMath-103K (He et al., 2025b), and Numina-Math (LI et al., 2024), among others. Paired super-vision is obtained by distilling thinking-mode out-puts from DeepSeek-R1-0528 (DeepSeek-AI et al., 2025a) and no-thinking outputs from DeepSeek-V3-0324 (DeepSeek-AI et al., 2025b). In the RL stage, we primarily adopt the DeepScaleR (Luo et al., 2025b) dataset. For evaluation, we focus on standard mathematical reasoning benchmarks, in-cluding MATH-500 (Lightman et al., 2023), AIME-2024 (AI-MO, 2024), and AIME-2025 (AI-MO, 2025), and additionally employ GPQA (Rein et al., 2024) to assess out-of-distribution generalization. We report accuracy, average token length, and Table 1: Overall performance on MATH-500, AIME-2024, and AIME-2025 for Qwen2.5 series models. Len is the average number of generated tokens per example. Ratio N T denotes the fraction of examples solved in NoThinking mode. ∆Acc and ∆Len are computed relative to the always-Thinking baseline of the same base model.                                                                                                                                                                                               
+
+> Method MATH-500 AIME-2024 AIME-2025 Average Acc Len Ratio N T Acc Len Ratio N T Acc Len Ratio N T ∆Acc ∆Len Qwen-2.5-1.5B
+> Thinking 80.4 10441 0.0% 25.7 35829 0.0% 20.6 36977 0.0% 0.0 +0.0% No-Thinking 60.4 2320 100.0% 9.1 10751 100.0% 7.5 11150 100.0% -16.6 -70.9% HFT 72.3 7106 42.4% 16.8 23673 54.2% 14.5 25376 46.2% -7.4 -32.5% O1-Pruner 77.1 7043 0.0% 20.3 33417 0.0% 16.7 32185 0.0% -4.2 -12.7% RouteLLM 76.7 3862 81.6% 19.8 28305 30.8% 17.4 29973 27.8% -4.3 -25.4% AdaptThink 81.1 4341 69.4% 25.6 22819 4.2% 22.7 24187 3.3% +0.9 -38.3% Thinkless 78.5 4473 71.3% 24.5 25294 2.9% 19.3 26351 2.5% -1.5 -32.6%
+> Ours 84.6 4176 69.8% 28.1 23258 3.7% 25.2 22062 5.4% +3.7 -40.6% Qwen-2.5-7B
+> Thinking 90.6 8309 0.0% 65.6 29936 0.0% 59.3 35217 0.0% 0.0 +0.0% No-Thinking 75.1 1890 100.0% 25.5 10464 100.0% 20.2 9921 100.0% -31.6 -70.1% HFT 86.3 5619 45.2% 50.9 23484 42.5% 44.2 25017 40.4% -11.3 -27.3% O1-Pruner 87.9 5567 0.0% 62.4 25977 0.0% 57.5 32451 0.0% -2.6 -12.9% RouteLLM 88.2 3121 81.8% 55.3 24011 31.2% 51.7 28387 27.1% -6.8 -24.4% AdaptThink 91.1 3462 77.8% 65.2 18123 12.1% 59.1 22544 10.4% 0.0 -39.9% Thinkless 89.8 3302 78.6% 64.0 18172 13.8% 60.1 21463 12.5% -0.5 -41.6%
+> Ours 92.4 3403 77.6% 69.2 17762 12.5% 64.6 20060 9.6% +3.6 -43.9%
+
+no-thinking ratio to jointly measure model perfor-mance and inference efficiency. 
+
+Baselines. To ensure a comprehensive compar-ison, we evaluate our method on both 1.5B and 7B model scales and consider four categories of baselines. (1) Base Variants: thinking-only, no-thinking-only, and HFT hybrid models de-rived from the same base architectures. (2) Length-Penalization Methods: O1-Pruner (Luo et al., 2025a) encourages shorter thinking pro-cesses based on a thinking-only model under accuracy constraints. (3) Routing Methods: RouteLLM (Ong et al., 2024) trains a router to dynamically choose between long and short CoT using separate thinking and no-thinking models. (4) Adaptive Thinking Methods: ThinkLess (Fang et al., 2025) learns a hybrid thinking policy via a de-coupled GRPO strategy, while AdaptThink (Zhang et al., 2025a) promotes concise thinking using PPO-based optimization. Both are initialized from the HFT models. This ensures a fair comparison across methods with consistent base architectures and ap-propriate training settings. 
+
+Implementation Details. All experiments are conducted on 16 NVIDIA H100 GPUs. In the Hybrid Fine-Tuning stage, we set the maximum context length to 16K tokens, with overlong sam-ples truncated accordingly. The models are trained for 3 epochs using the LLaMA-Factory (Zheng et al., 2024) framework. Training is conducted with the AdamW optimizer, employing a 10% lin-ear warmup strategy followed by cosine learning rate decay, with the maximum learning rate set to 1e-4. In the reinforcement learning stage, the con-text length is extended to 24K tokens. Experiments are conducted using the VeRL (Sheng et al., 2025) framework, with the policy model optimized by AdamW at a constant learning rate of 1e-6. We use a batch size of 128 with a micro-batch size of 64, and sample 8 responses per query during rollout. For verification, we adopt the Math-Verify mod-ule to provide correctness-based feedback. More details can be found in the Appendix. 
+
+4.2 Main Results 
+
+In this section, we conduct a comprehensive eval-uation of different models on three mathematical reasoning benchmarks. As shown in Table 1, our method achieves consistent gains at both the 1.5B and 7B scales, improving performance by 3.7 and 3.6 points, respectively, while reducing token costs by 40.6% and 43.9%, demonstrating both accu-racy and efficiency improvements. Compared to MATH-500 AIME-2024 AIME-2025         
+
+> (a) Performance of Two Think Mode Across Datasets
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> Think Mode Ratio (%)
+> 77.6%
+> P@1=92.8
+> 22.4%
+> P@1=89.3
+> 12.5%
+> P@1=79.3
+> 87.5%
+> P@1=68.2
+> 9.5%
+> P@1=82.6
+> 90.5%
+> P@1=62.2
+> No-Thinking
+> Thinking
+> Level 1 Level 2 Level 3 Level 4 Level 5
+> (b) Ratio of Two Think Mode on MATH-500
+> 0
+> 20
+> 40
+> 60
+> 80
+> 100
+> Think Mode Ratio (%)
+> 95.3%
+> 4.7%
+> 91.1%
+> 8.9%
+> 85.7%
+> 14.3%
+> 80.5%
+> 19.5%
+> 53.7%
+> 46.3%
+> No-Thinking
+> Thinking
+> Level 1 Level 2 Level 3 Level 4 Level 5
+> (c) Accuracy Comparison on MATH-500
+> 50
+> 60
+> 70
+> 80
+> 90
+> 100
+> Accuracy (%)
+> Ours
+> Thinking
+> No-Thinking
+
+Figure 3: Difficulty-aware mode selection and performance. (a) Performance of Two Think Mode on MATH-500, AIME-2024, and AIME-2025. (b) Mode ratio across MATH-500 difficulty levels. (c) Accuracy across difficulty levels, comparing our adaptive policy with always-Thinking and always-No-Thinking baselines. 0 200 400 600 800              
+
+> Training Steps
+> 10
+> 12
+> 13
+> 15
+> 16
+> Average Length (K tokens)
+> Response Length Mean
+> Ours
+> w/o CPAS
+> 0200 400 600 800
+> Training Steps
+> 48
+> 56
+> 64
+> 72
+> Accuracy (%)
+> AIME-2024 Score Mean@1
+> Ours
+> w/o CPAS
+> 0
+> 20
+> 40
+> 60
+> 80
+> 100
+> 0
+> 20
+> 40
+> 60
+> 80
+> 100
+> Ratio NT  (%)
+> 00.2 0.4 0.6 0.8 1.0
+> 70
+> 75
+> 80
+> 85
+> 90
+> 95
+> 100
+> Accuracy (%)
+> Effect of
+> Accuracy
+> Ratio NT
+> 110 50 100
+> 70
+> 75
+> 80
+> 85
+> 90
+> 95
+> 100
+> Effect of
+> Accuracy
+> Ratio NT
+> (a) Ablation analysis on CPAS (b) Ablation analysis on LAGR
+
+Figure 4: Ablation and sensitivity analysis. (a) Training dynamics with/without CPAS: mean response length (left) and AIME-2024 accuracy (right). (b) Effect of the LAGR length-weight parameter β (left) and the control-token boost factor λ (right) on accuracy and the no-thinking ratio. 
+
+length-penalty methods, our approach leverages an explicit no-thinking mode that does not constrain exploration, thereby achieving lower token con-sumption and improved overall performance. Com-pared to external routing methods, our approach re-quires no additional annotated data or deployment overhead, and can more accurately select appropri-ate thinking modes based on the model’s capabil-ity. Finally, relative to existing adaptive thinking methods, the proposed correctness-preserving ad-vantage shaping and length-aware gradient regula-tion achieve significantly better performance under comparable generation lengths, enabling stable and effective adaptive thinking. 
+
+4.3 Analysis of Adaptive Thinking 
+
+We further analyze model behavior across problems of varying difficulty to evaluate the effectiveness of adaptive thinking. As shown in Figure 3(a), on the relatively easy MATH-500 benchmark, the pro-posed method selects the no-thinking mode for up to 77.6% of the queries, whereas on the more chal-lenging AIME-2024 and AIME-2025 benchmarks, it activates the thinking mode more frequently. No-tably, performance under the no-thinking mode con-sistently surpasses that under the thinking mode, indicating that the model learns to adaptively select the more appropriate strategy according to problem difficulty. Figures 3(b) and 3(c) further illustrate the model’s thinking behavior across different dif-ficulty levels within MATH-500. As the difficulty increases, the model progressively increases its re-liance on the thinking mode. Compared with the original model that exclusively uses either the think-ing or no-thinking mode, our method consistently achieves superior performance across all difficulty levels. These results demonstrate that the proposed approach attains a more favorable balance between reasoning efficiency and accuracy. 
+
+4.4 Ablation and Sensitivity Analysis Effect of CPAS. Figure 4(a) illustrates the train-ing dynamics with and without CPAS. Compared with the baseline, our method exhibits a faster increase in response length at early stages and reaches a higher peak, indicating earlier and deeper exploration. The length then gradually decreases and converges to a similar level, achieving sta-Table 2: OOD Performance on GPQA Dataset. 
+
+Method GPQA Acc Len Ratio N T ∆Len Thinking 47.5 24135 0.0% –No-Thinking 35.3 8031 100.0% -66.7% HFT 41.8 16849 44.1% -30.2% 
+
+Ours 50.4 11826 31.3% -51.0% ble adaptive thinking behavior. Evaluation on the AIME benchmarks further shows that our method consistently outperforms the baseline, demonstrat-ing a better balance between accuracy and effi-ciency, which confirms the effectiveness of CPAS. 
+
+Effect of LAGR. We analyze the impact of LAGR under different parameters. As shown in Figure 4(b) left, values of β closer to 1 encourage no-thinking chains, whereas values closer to 0 pro-mote the thinking exploration. An intermediate set-ting of β = 0 .4 provides the best trade-off between accuracy and efficiency. Figure 4(b) right exam-ines the effect of control-token weighting. When the weight is set to 1, the ratio between thinking and no-thinking modes remains largely unchanged, indicating that the control signal is diluted. Increas-ing the weight to 10 enables stable adaptive think-ing, while larger weights induce overly aggressive updates, prematurely assigning solvable samples to the thinking mode and reducing efficiency. 
+
+4.5 Generalization Analysis 
+
+We evaluate out-of-distribution (OOD) generaliza-tion on the GPQA benchmark, which consists of graduate-level multiple-choice questions spanning diverse scientific domains and differs from the train-ing data in both question format and content. As shown in Table 2, our method achieves the high-est accuracy while reducing the average response length by 51.0%. The model activates the no-thinking mode for 31.3% of the queries, yielding substantial efficiency gains without compromising performance. These results demonstrate that our approach generalizes effectively to OOD settings, enabling robust and efficient adaptive thinking. 
+
+5 Related Work 
+
+5.1 Large Reasoning Models 
+
+Large reasoning models (OpenAI et al., 2024; DeepSeek-AI et al., 2025a) have recently attracted substantial attention due to their superior perfor-mance. Enabled by scalable reinforcement learn-ing (He et al., 2025b; Yu et al., 2025a; Zheng et al., 2025), these models can generate long rea-soning chains using only outcome-based and for-mat rewards, leading to improved performance in complex reasoning tasks. To further generalize in various scenarios, previous work has explored re-inforcement learning with verifiable rewards (Yu et al., 2025b) and introduced explicit supervision over the reasoning process (Zhang et al., 2025b). However, most existing approaches overlook the ef-ficiency issues caused by long redundant reasoning chains, which increases the inference cost. Creat-ing efficient reasoning without sacrificing perfor-mance remains an open challenge. 
+
+5.2 Efficient Reasoning for LRMs 
+
+Efficient reasoning for LRMs aims to reduce over-thinking while preserving accuracy. One line of work focuses on compressing or regularizing rea-soning traces via prompting, supervised tuning with variable-length CoT, or length-regularized RL (Chen et al., 2024; Ma et al., 2025; Aggarwal and Welleck, 2025; Luo et al., 2025a). These meth-ods typically assume reasoning is always necessary and may restrict the exploration. Another line stud-ies hybrid thinking via routing, allocating compute by switching between thinking and no-thinking models based on task difficulty (He et al., 2025a; Liang et al., 2025; OpenAI, 2025), but it often re-quires external supervision and deployment costs. More recently, RL-based adaptive thinking learns when to think using explicit control tokens or re-wards for no-thinking behaviors (Fang et al., 2025; Jiang et al., 2025; Zhang et al., 2025a; Lou et al., 2025; Chen et al., 2025). However, achieving stable optimization under the efficiency–accuracy trade-off remains challenging, motivating our stability-oriented approach. 
+
+6 Conclusion 
+
+In this work, we address the training instability caused by heterogeneous reasoning lengths in ex-isting adaptive thinking methods, as well as the dif-ficulty of jointly optimizing reasoning accuracy and efficiency. We propose a novel two-stage frame-work for stable adaptive thinking. In Stage I, we adopt HFT to endow the model with both think-ing and no-thinking modes. In Stage II, CPAS pre-serves the model’s ability to explore long reasoning chains, while LAGR stabilizes reinforcement learn-ing training. Extensive experiments demonstrate that our approach achieves a better balance between performance and efficiency, underscoring the po-tential of our proposed advantage-based model op-timization strategy for reinforcement learning. 
+
+Limitations 
+
+In this section, we discuss several limitations of this work. First, due to computational constraints, our empirical evaluation is limited to models at the 1.5B and 7B scales. While consistent im-provements across these settings demonstrate the effectiveness of the proposed approach, experi-ments on larger models would be valuable for more thoroughly assessing its scalability. Second, our training primarily relies on mathematical reason-ing datasets, which offer reliable and verifiable reward signals. Although evaluations on GPQA in-dicate promising out-of-distribution generalization, extending training to more diverse domains with trustworthy verification mechanisms may further enhance robustness and applicability. 
+
+References 
+
+Pranjal Aggarwal and Sean Welleck. 2025. L1: Controlling how long a reasoning model thinks with reinforcement learning. arXiv preprint arXiv:2503.04697 .AI-MO. 2024. American invitational mathematics ex-amination (aime) 2024. AI-MO. 2025. American invitational mathematics ex-amination (aime) 2025. Qiguang Chen, Dengyun Peng, Jinhao Liu, HuiKang Su, Jiannan Guan, Libo Qin, and Wanxiang Che. 2025. Aware first, think less: Dynamic bound-ary self-awareness drives extreme reasoning effi-ciency in large language models. arXiv preprint arXiv:2508.11582 .Xingyu Chen, Jiahao Xu, Tian Liang, Zhiwei He, Jianhui Pang, Dian Yu, Linfeng Song, Qiuzhi Liu, Mengfei Zhou, Zhuosheng Zhang, Rui Wang, Zhaopeng Tu, Haitao Mi, and Dong Yu. 2024. Do not think that much for 2+ 3=? on the overthinking of o1-like llms. arXiv preprint arXiv:2412.21187 .DeepSeek-AI, Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song, Ruoyu Zhang, Runxin Xu, Qihao Zhu, Shirong Ma, Peiyi Wang, Xiao Bi, Xiaokang Zhang, Xingkai Yu, Yu Wu, Z. F. Wu, Zhibin Gou, Zhi-hong Shao, Zhuoshu Li, Ziyi Gao, and 181 others. 2025a. Deepseek-r1: Incentivizing reasoning capa-bility in llms via reinforcement learning. Preprint ,arXiv:2501.12948. DeepSeek-AI, Aixin Liu, Bei Feng, Bing Xue, Bingx-uan Wang, Bochao Wu, Chengda Lu, Chenggang Zhao, Chengqi Deng, Chenyu Zhang, Chong Ruan, Damai Dai, Daya Guo, Dejian Yang, Deli Chen, Dongjie Ji, Erhang Li, Fangyun Lin, Fucong Dai, and 181 others. 2025b. Deepseek-v3 technical report. 
+
+Preprint , arXiv:2412.19437. Gongfan Fang, Xinyin Ma, and Xinchao Wang. 2025. Thinkless: Llm learns when to think. arXiv preprint arXiv:2505.13379 .Sicheng Feng, Gongfan Fang, Xinyin Ma, and Xinchao Wang. 2025. Efficient reasoning models: A survey. 
+
+arXiv preprint arXiv:2504.10903 .Yang He, Xiao Ding, Bibo Cai, Yufei Zhang, Kai Xiong, Zhouhao Sun, Bing Qin, and Ting Liu. 2025a. Self-route: Automatic mode switching via capabil-ity estimation for efficient reasoning. arXiv preprint arXiv:2505.20664 .Zhiwei He, Tian Liang, Jiahao Xu, Qiuzhi Liu, Xingyu Chen, Yue Wang, Linfeng Song, Dian Yu, Zhen-wen Liang, Wenxuan Wang, Zhuosheng Zhang, Rui Wang, Zhaopeng Tu, Haitao Mi, and Dong Yu. 2025b. Deepmath-103k: A large-scale, challenging, decon-taminated, and verifiable mathematical dataset for advancing reasoning. Preprint , arXiv:2504.11456. Qitian Jason Hu, Jacob Bieker, Xiuyu Li, Nan Jiang, Benjamin Keigwin, Gaurav Ranganath, Kurt Keutzer, and Shriyash Kaustubh Upadhyay. 2024. Router-bench: A benchmark for multi-llm routing system. 
+
+arXiv preprint arXiv: 2403.12031 .Hugging Face. 2025. Open r1: A fully open reproduc-tion of deepseek-r1. Lingjie Jiang, Xun Wu, Shaohan Huang, Qingxiu Dong, Zewen Chi, Li Dong, Xingxing Zhang, Tengchao Lv, Lei Cui, and Furu Wei. 2025. Think only when you need with large hybrid-reasoning models. arXiv preprint arXiv:2505.14631 .Jia LI, Edward Beeching, Lewis Tunstall, Ben Lipkin, Roman Soletskyi, Shengyi Costa Huang, Kashif Ra-sul, Longhui Yu, Albert Jiang, Ziju Shen, Zihan Qin, Bin Dong, Li Zhou, Yann Fleureau, Guillaume Lam-ple, and Stanislas Polu. 2024. Numinamath. Hug-ging Face repository .Guosheng Liang, Longguang Zhong, Ziyi Yang, and Xiaojun Quan. 2025. Thinkswitcher: When to think hard, when to think fast. arXiv preprint arXiv:2505.14183 .Hunter Lightman, Vineet Kosaraju, Yuri Burda, Harri-son Edwards, Bowen Baker, Teddy Lee, Jan Leike, John Schulman, Ilya Sutskever, and Karl Cobbe. 2023. Let’s verify step by step. In The Twelfth Inter-national Conference on Learning Representations .Yue Liu, Jiaying Wu, Yufei He, Hongcheng Gao, Hongyu Chen, Baolong Bi, Jiaheng Zhang, Zhiqi Huang, and Bryan Hooi. 2025. Efficient infer-ence for large reasoning models: A survey. ArXiv ,abs/2503.23077. Chenwei Lou, Zewei Sun, Xinnian Liang, Meng Qu, Wei Shen, Wenqi Wang, Yuntao Li, Qingping Yang, and Shuangzhi Wu. 2025. Adacot: Pareto-optimal adaptive chain-of-thought triggering via reinforce-ment learning. arXiv preprint arXiv:2505.11896 .Haotian Luo, Li Shen, Haiying He, Yibo Wang, Shi-wei Liu, Wei Li, Naiqiang Tan, Xiaochun Cao, and Dacheng Tao. 2025a. O1-pruner: Length-harmonizing fine-tuning for o1-like reasoning prun-ing. arXiv preprint arXiv:2501.12570 .Michael Luo, Sijun Tan, Justin Wong, Xiaoxiang Shi, William Tang, Manan Roongta, Colin Cai, Jeffrey Luo, Tianjun Zhang, Erran Li, Raluca Ada Popa, and Ion Stoica. 2025b. Deepscaler: Surpassing o1-preview with a 1.5b model by scaling rl. Notion Blog. Xinyin Ma, Guangnian Wan, Runpeng Yu, Gongfan Fang, and Xinchao Wang. 2025. Cot-valve: Length-compressible chain-of-thought tuning. arXiv preprint arXiv:2502.09601 .Isaac Ong, Amjad Almahairi, Vincent Wu, Wei-Lin Chiang, Tianhao Wu, Joseph E Gonzalez, M Waleed Kadous, and Ion Stoica. 2024. Routellm: Learning to route llms with preference data. arXiv preprint arXiv:2406.18665 .OpenAI. 2025. Gpt-5 system card. Technical report, OpenAI. OpenAI, Aaron Jaech, Adam Kalai, Adam Lerer, Adam Richardson, Ahmed El-Kishky, Aiden Low, Alec Helyar, Aleksander Madry, Alex Beutel, Alex Carney, Alex Iftimie, Alex Karpenko, Alex Tachard Passos, Alexander Neitz, Alexander Prokofiev, Alexander Wei, Allison Tam, Ally Bennett, and 243 others. 2024. Openai o1 system card. Preprint , arXiv:2412.16720. Qwen, An Yang, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo Zheng, Bowen Yu, Chengyuan Li, Dayiheng Liu, Fei Huang, Haoran Wei, Huan Lin, Jian Yang, Jianhong Tu, Jianwei Zhang, Jianxin Yang, Jiaxi Yang, Jingren Zhou, Junyang Lin, and 24 others. 2025. Qwen2.5 technical report. Preprint ,arXiv:2412.15115. David Rein, Betty Li Hou, Asa Cooper Stickland, Jack-son Petty, Richard Yuanzhe Pang, Julien Dirani, Ju-lian Michael, and Samuel R Bowman. 2024. Gpqa: A graduate-level google-proof q&a benchmark. In 
+
+First Conference on Language Modeling .Guangming Sheng, Chi Zhang, Zilingfeng Ye, Xibin Wu, Wang Zhang, Ru Zhang, Yanghua Peng, Haibin Lin, and Chuan Wu. 2025. Hybridflow: A flexible and efficient rlhf framework. In Proceedings of the Twentieth European Conference on Computer Sys-tems , pages 1279–1297. Yang Sui, Yu-Neng Chuang, Guanchu Wang, Jiamu Zhang, Tianyi Zhang, Jiayi Yuan, Hongyi Liu, An-drew Wen, Shaochen Zhong, Na Zou, Hanjie Chen, and Xia Hu. 2025. Stop overthinking: A survey on efficient reasoning for large language models. arXiv preprint arXiv:2503.16419 .Heming Xia, Chak Tou Leong, Wenjie Wang, Yongqi Li, and Wenjie Li. 2025. TokenSkip: Controllable chain-of-thought compression in LLMs. In Proceedings of the 2025 Conference on Empirical Methods in Natu-ral Language Processing , pages 3351–3363, Suzhou, China. Association for Computational Linguistics. Fengli Xu, Qianyue Hao, Chenyang Shao, Zefang Zong, Yu Li, Jingwei Wang, Yunke Zhang, Jingyi Wang, Xiaochong Lan, Jiahui Gong, Tianjian Ouyang, Fan-jin Meng, Yuwei Yan, Qinglong Yang, Yiwen Song, Sijian Ren, Xinyuan Hu, Jie Feng, Chen Gao, and Yong Li. 2025. Toward large reasoning models: A survey of reinforced reasoning with large language models. Patterns , 6(10):101370. Qiying Yu, Zheng Zhang, Ruofei Zhu, Yufeng Yuan, Xiaochen Zuo, Yu Yue, Weinan Dai, Tiantian Fan, Gaohong Liu, Lingjun Liu, Xin Liu, Haibin Lin, Zhiqi Lin, Bole Ma, Guangming Sheng, Yuxuan Tong, Chi Zhang, Mofan Zhang, Wang Zhang, and 16 others. 2025a. Dapo: An open-source llm rein-forcement learning system at scale. arXiv preprint arXiv:2503.14476 .Tianyu Yu, Bo Ji, Shouli Wang, Shu Yao, Zefan Wang, Ganqu Cui, Lifan Yuan, Ning Ding, Yuan Yao, Zhiyuan Liu, Maosong Sun, and Tat-Seng Chua. 2025b. Rlpr: Extrapolating rlvr to general domains without verifiers. arXiv preprint arXiv:2506.18254 .Linan Yue, Yichao Du, Yizhi Wang, Weibo Gao, Fangzhou Yao, Li Wang, Ye Liu, Ziyu Xu, Qi Liu, Shimin Di, and Min-Ling Zhang. 2025. Don’t over-think it: A survey of efficient r1-style large reasoning models. ArXiv , abs/2508.02120. Jiajie Zhang, Nianyi Lin, Lei Hou, Ling Feng, and Juanzi Li. 2025a. Adaptthink: Reasoning mod-els can learn when to think. arXiv preprint arXiv:2505.13417 .Zhenru Zhang, Chujie Zheng, Yangzhen Wu, Beichen Zhang, Runji Lin, Bowen Yu, Dayiheng Liu, Jin-gren Zhou, and Junyang Lin. 2025b. The lessons of developing process reward models in mathematical reasoning. arXiv preprint arXiv:2501.07301 .Chujie Zheng, Shixuan Liu, Mingze Li, Xiong-Hui Chen, Bowen Yu, Chang Gao, Kai Dang, Yuqiong Liu, Rui Men, An Yang, Jingren Zhou, and Jun-yang Lin. 2025. Group sequence policy optimization. 
+
+arXiv preprint arXiv:2507.18071 .Yaowei Zheng, Richong Zhang, Junhao Zhang, Yan-han Ye, Zheyan Luo, Zhangchi Feng, and Yongqiang Ma. 2024. Llamafactory: Unified efficient fine-tuning of 100+ language models. arXiv preprint arXiv:2403.13372 .Appendix A Experimental Details 
+
+A.1 Data Construction 
+
+To initialize both thinking and no-thinking behav-iors in a unified policy, we construct a hybrid-formatted training corpus that explicitly contains paired supervision for the two reasoning modes. 
+
+Data Sources. The HFT dataset is built from large-scale public mathematical corpora, includ-ing OpenR1-Math, DeepMath-103K, and Numina-Math, which cover diverse problem types requiring numerical computation and multi-step reasoning. 
+
+Hybrid Supervision Construction. For each problem, we construct paired supervision corre-sponding to two reasoning modes: • Thinking mode. Long-form trajectories are distilled from DeepSeek-R1-0528, prefixed with the control token /think and contain-ing an explicit reasoning block <think>... </think> followed by the final answer. • No-thinking mode. Short direct-answer re-sponses are distilled from DeepSeek-V3-0324, prefixed with /no_think and including an empty reasoning block <think></think> .The two types of supervision are balanced with a 1:1 ratio to avoid introducing bias toward either reasoning mode during supervised warm-up. 
+
+Verification. All constructed responses are ver-ified using the Math-Verify module, and samples that fail verification are discarded. This step en-sures correctness and reliability of both thinking and no-thinking supervision. Overall, after verification and filtering, we obtain a hybrid corpus consisting of approximately 600K thinking samples and 600K no-thinking samples, providing clean, balanced supervision for initializ-ing adaptive thinking policies. 
+
+A.2 Baselines 
+
+To comprehensively evaluate the effectiveness of the proposed approach, we compare against a di-verse set of baselines that represent different strate-gies for controlling reasoning length and inference efficiency. All baselines are evaluated under the same experimental settings and verification proto-cols unless otherwise specified. 
+
+Base Variants. We first consider several variants derived from the same base language model to iso-late the effect of reasoning behaviors: • Thinking-only. The model always operates in the thinking mode, generating explicit chain-of-thought reasoning for every input. This variant provides the deepest level of reasoning but incurs substantial token overhead. • No-thinking-only. The model always gener-ates direct answers without intermediate rea-soning. While this variant is computationally efficient, it typically suffers from degraded performance on complex problems. • HFT. The hybrid fine-tuned model trained with both thinking and no-thinking supervi-sion, as described in Appendix A.1. This model possesses both capabilities but does not autonomously decide which mode to use. 
+
+Length-Penalization Methods. We include methods that discourage excessively long reason-ing chains by explicitly penalizing output length: • O1-Pruner (Luo et al., 2025a). This approach introduces length-aware constraints during fine-tuning to prune redundant reasoning steps while maintaining correctness. It operates ex-clusively within the thinking mode and does not support explicit no-thinking behavior. 
+
+Routing-Based Methods. Routing approaches aim to reduce inference cost by dynamically select-ing between different reasoning strategies: • RouteLLM (Ong et al., 2024). This method trains an external router to select between a thinking model and a no-thinking model at inference time. While effective in reducing token usage, it relies on additional supervision for router training and requires maintaining multiple models during deployment. 
+
+Adaptive Thinking Methods. We further com-pare against recent reinforcement-learning-based adaptive thinking approaches: • ThinkLess (Fang et al., 2025). This method adopts a decoupled GRPO formulation to en-courage shorter chains, learning a hybrid pol-icy over thinking and no-thinking behaviors. Table 3: Appendix Results on Diverse Model Sizes and Architectures.                                                                                                                        
+
+> Method MATH-500 AIME-2024 AIME-2025 Acc Len Ratio N T Acc Len Ratio N T Acc Len Ratio N T
+> Qwen-2.5-1.5B Thinking 80.4 10441 0.0% 25.7 35829 0.0% 20.6 36977 0.0% No-Thinking 60.4 2320 100.0% 9.1 10751 100.0% 7.5 11150 100.0% HFT 72.3 7106 42.4% 16.8 23673 54.2% 14.5 25376 46.2% Ours 84.6 4176 69.8% 28.1 23258 3.7% 25.2 22062 5.4% Qwen-2.5-7B Thinking 90.6 8309 0.0% 65.6 29936 0.0% 59.3 35217 0.0% No-Thinking 75.1 1890 100.0% 25.5 10464 100.0% 20.2 9921 100.0% HFT 86.3 5619 45.2% 50.9 23484 42.5% 44.2 25017 40.4% Ours 92.4 3403 77.6% 69.2 17762 12.5% 64.6 20060 9.6% Llama3.1-8B Thinking 89.8 9046 100.0% 63.3 31294 100.0% 55.7 34801 100.0% No-Thinking 72.1 2423 0.0% 20.6 9112 0.0% 17.5 10905 0.0% HFT 82.2 5619 48.8% 44.7 22388 46.3% 37.1 22938 49.2% Ours 90.8 3618 75.5% 66.7 19089 10.1% 60.4 21084 8.7%
+
+• AdaptThink (Zhang et al., 2025a). This ap-proach employs a PPO-based objective that explicitly promotes concise reasoning by in-creasing the likelihood of short chains. Both ThinkLess and AdaptThink share the same HFT initialization as our method, ensuring fair comparison and controlled base model capacity. 
+
+Evaluation Protocol. All methods are evaluated using the same datasets, verification module (Math-Verify 1), and decoding settings. We report ac-curacy, average generation length, and the no-thinking ratio to jointly measure reasoning perfor-mance and efficiency. For MATH-500, all reported results are averaged over 4 independent runs. For AIME-2024 and AIME-2025, results are averaged over 32 independent runs to reduce variance. 
+
+A.3 Implementation Details 
+
+All experiments are conducted on 16 NVIDIA H100 GPUs. We implement the Hybrid Fine-Tuning (HFT) stage using LLaMA-Factory 2 and the reinforcement learning stage using VeRL 3.
+
+HFT. In the HFT stage, the maximum context length is set to 16K tokens, with overlong samples truncated. Models are trained for 3 epochs with the AdamW optimizer, using a 10% linear warmup 
+
+> 1https://github.com/huggingface/Math-Verify
+> 2https://github.com/hiyouga/LlamaFactory
+> 3https://github.com/volcengine/verl
+
+followed by cosine learning rate decay, and a peak learning rate of 1 × 10 −4.
+
+Reinforcement Learning. In the RL stage, the context length is extended to 24K tokens. The pol-icy model is optimized with AdamW using a con-stant learning rate of 1 × 10 −6. We use a batch size of 128 with a micro-batch size of 64, and sample 
+
+G=8 responses per query during rollout. 
+
+B Additional Experimental Results 
+
+To further assess the generality of our approach, we conduct additional experiments beyond the Qwen2.5 series. Specifically, we apply the same training pipeline to LLaMA 3.1-8B Base, which adopts a different architecture and pretraining recipe. All training and optimization procedures strictly follow the HFT and RL settings described in Appendix A.3, with only minimal hyperparam-eter adjustments for model size. No architecture-specific modifications are introduced. As shown in Table 3, our method consistently improves reasoning accuracy while substantially reducing the average generation length under the LLaMA architecture. These results demonstrate that the proposed correctness-preserving advantage shaping and length-aware gradient regulation are not specific to a particular backbone, but instead generalize well across different model families. 
+
+C Case Study Question (MATH500) : Convert the point (0 , 3) in rectangular coordinates to polar coordinates. Enter your answer in the form (r, θ ), where r > 0 and 0 ≤ θ < 2π. Format your response as follows: “The correct answer is boxed{insert answer here}.” 
+
+Ô Thinking :
+
+<think> I need to convert the point (0 , 3) from rectangular coordinates to polar coordinates. Polar coordinates are given as (r, θ ), where r is the distance from the origin to the point, and θ is the angle from the positive x-axis. First, recall the formulas for converting from rectangular to polar coordinates. The formulas are: r = px2 + y2 and θ = tan −1(y/x ). [...]( omit ) which is not the same point. So, only θ = π/ 2 is correct. I could use θ = π/ 2 + 2 kπ , but within 0 to 2π, only π/ 2.
+
+2π would be 5π/ 2, which is greater than 2π, so no. So, I think (3 , π/ 2) is the answer. The problem says “enter your answer in the form (r, θ )”, and “boxed”. So, I need to write it as (3 , π 
+
+> 2
+
+) in the box. The instruction says: “output the final answer within \boxed{} ” and “enter your answer as (r, θ )”, so, probably (3 , π 
+
+> 2
+
+). But let me make sure the format. Sometimes they write it as a pair. I think that’s fine. Is there any other representation? For example, could r be negative? But the problem specifies r > 0,so no. Or θ could be different, but no. Another thing: when x = 0 and y > 0, it’s unambiguously 
+
+π/ 2. If it were (0 , −3) , it would be 3π/ 2 or −π/ 2, but since it’s positive, it’s fine. So, I think that’s it. The point is (0 , 3) , which is on the y-axis, so θ = 90 degrees, which is π/ 2 radians. Yes. So, final answer. </think> Final Answer: To convert the point (0 , 3) from rectangular coordinates to polar coordinates (r, θ ) with r > 0 and 0 ≤ θ < 2π, calculate r = px2 + y2 = √02 + 3 2 = 3 . Since 
+
+x = 0 and y > 0, the point lies on the positive y-axis, so θ = π/ 2, and π/ 2 ∈ [0 , 2π). Thus, the polar coordinates are (3 , π/ 2) , i.e., the correct answer is 
+
+
+
+3, π
+
+2
+
+
+
+. (3272 tokens) 
+
+Ô Ours :
+
+/nothink <think></think> To convert the rectangular coordinates ((0 , 3)) to polar coordinates 
+
+(r, θ ), follow these steps: 1. Calculate r (the distance from the origin to the point): The formula for 
+
+r is: r = px2 + y2 Substituting x = 0 and y = 3 : r = √02 + 3 2 = √9 = 3 2. Determine θ (the angle with the positive x-axis): Since the point ((0 , 3)) lies on the positive y-axis, the angle θ is: 
+
+θ = π 
+
+> 2
+
+This is because the positive y-axis corresponds to 90 ◦ or   π
+
+> 2
+
+ radians in the range 0 ≤ θ < 2π.3. Combine the results: The polar coordinates are: (3 , π 
+
+> 2
+
+) Final Answer: 
+
+
+
+3, π
+
+2
+
+
+
+(713 tokens)   
+
+> Figure 5: For an example from MATH-500, the Thinking baseline generates a long chain-of-thought with redundant intermediate steps. In contrast, our method chooses NoThinking and directly produces a concise final solution, using 713 tokens in total.
+
+Question (AIME) : Find the largest possible real part of (75 + 117 i) z + 96 + 144 iz where z is a complex number with |z| = 4 .
+
+Ô Thinking :
+
+<think> I need to find the largest possible real part of (75 + 117 i)z + 96+144 iz where z is a complex number with magnitude 4. Since |z| = 4 , I can write z = 4 eiθ for some real θ, or equivalently, 
+
+z = 4(cos θ + i sin θ). Let me denote the expression as w = (75 + 117 i)z + 96+144 iz . I need the real part of w, and maximize it. Since z is on the circle of radius 4, I could set z = x + iy with 
+
+x2 + y2 = 16 , but that might get messy with the algebra. Notice that the expression involves both z
+
+and 1/z , and since |z| = 4 , |1/z | = 1 /4. Also, the coefficients are complex numbers, so I need to handle that. Let me simplify the coefficients. [...](omit) So real part is Re( (r + i s)/4 * (cos θ - i sin θ)) = (1/4) Re( (r + i s)(cos θ - i sin θ) ) = (1/4) [ r cos θ - r i sin θ + i s cos θ - i2 s sin θ ] = (1/4) [ r cos 
+
+θ + s sin θ + i ( -r sin θ + s cos θ ) ] So real part is (1/4)(r cos θ + s sin θ) Similarly, from first term: 4 [ (p + i q)(cos θ + i sin θ) ] = 4 [ p cos θ - q sin θ + i (p sin θ + q cos θ) ], so real part 4(p cos θ - q sin 
+
+θ) Thus total real part Re(w) = 4( p cos θ − q sin θ) + 14 (r cos θ + s sin θ) Now plug in p=75, q=117, r=96, s=144. So Re(w) = 4(75 cos θ − 117 sin θ) + 14 (96 cos θ + 144 sin θ) Compute: 4*75=300, 4*(-117)= -468, so 300 cos θ - 468 sin θ Then 14 ∗ 96 = 24 , 14 ∗ 144 = 36 , so +24 cos θ + 36 sin θ
+
+Thus total: (300 + 24) cos θ + (-468 + 36) sin θ = 324 cos θ - 432 sin θ, same as before. So no mistake. Thus maximum is p324 2 + ( −432) 2 = √104976 + 186624 = √291600 = 540 . So the largest possible real part is 540. Therefore, the answer is 540. But the problem says "real part", and I got it, so I think that’s it. </think> To find the largest possible real part of (75 + 117 i)z + 96+144 iz
+
+where z is a complex number with |z| = 4 , express z in polar form as z = 4 eiθ for some real 
+
+θ. This gives z = 4(cos θ + i sin θ). Define the expression as w = (75 + 117 i)z + 96+144 iz .Substitute z: w = (75 + 117 i) · 4(cos θ + i sin θ) + 96+144 i    
+
+> 4(cos θ+isin θ)
+
+. Simplify the second term:     
+
+> 96+144 i
+> 4(cos θ+isin θ)
+
+= 96+144 i 
+
+> 4
+
+· 1cos θ+i sin θ = (24 + 36 i) · cos θ−i sin θ 
+
+> 1
+
+, since 1cos θ+i sin θ = cos θ − i sin θ for 
+
+|z| = 4 . [...](omit) This maximum is achieved for some θ, such as when cos θ = 35 and sin θ = − 45 ,giving Re( w) = 540 . Since the function is continuous and the circle |z| = 4 is compact, the maximum value is attained. Thus, the largest possible real part is 540. (22383 tokens) 
+
+Ô Ours :
+
+/nothink <think></think> Alright, I have this problem: Find the largest possible real part of 
+
+(75 + 117 i)z + 96+144 iz where z is a complex number with |z| = 4 . Understanding the Problem First, I need to understand what’s being asked. We have a complex expression in terms of z, and z is a complex number with magnitude 4. The goal is to find the maximum real part of this expression. Step 1: Represent z in a Convenient Form Since z is a complex number with |z| = 4 , it can be written in polar form as: z = 4 eiθ where θ is the argument of z. But before jumping into polar form, maybe it’s easier to think of z in terms of its real and imaginary parts: z = x + iy where 
+
+x, y are real numbers, and x2 + y2 = 16 because |z| = 4 . Step 2: Rewrite the Expression The expression is: [...](omit) x = 35 × 4 = 12 5 y = −45 × 4 = −16 5 Now, plug these into (81 x − 108 y):
+
+81 × 12 5 − 108 × −16 5 = 972 5 + 1728 5 = 972+1728 5 = 2700 5 = 540 This matches our previous result. Conclusion The largest possible real part of the given expression is 540 . (2977 tokens)   
+
+> Figure 6: For an example from AIME, the Thinking baseline generates a long chain-of-thought with redundant intermediate steps. In contrast, our method chooses NoThinking and directly produces a concise final solution, using 2977 tokens in total.
+
+Question (GPQA) : Answer the following multiple choice question. The last line of your response should be of the following format: ’Answer: $LETTER’ (without quotes) where LETTER is one of ABCD. Think step by step before answering. "Oh, I know you," the ribonucleoprotein particle says to the nascent chain as they meet. "Pause there for a minute. Let me show you in; you really need some sugar." "It seems somewhat rough. I guess this is goodbye; I need to be on my way", the chain replies. Where did they meet, and where is the chain heading? A) Golgi to the mitochon-drion B) membrane to the nucleus C) cytosol to the extracellular space D) ribosome to the proteasome. 
+
+Ô Thinking :
+
+<think> I need to figure out where the ribonucleoprotein particle and the nascent chain meet, and where the chain is heading. The options are: A) Golgi to the mitochondrion B) membrane to the nucleus C) ribosome to the proteasome D) cytosol to the extracellular space First, I recall that the ribonucleoprotein particle (RNP) is involved in transporting nucleotides into cells. Nucleotides are the building blocks of DNA and RNA. The nascent chain is probably a nascent protein, which is a protein that’s being synthesized by the ribosome. [...](omit) So, option D. Perhaps in some contexts, "cytosol" is used for the cell membrane. I think I’ll go with D. But let’s see if there’s a better fit. Option A: "Golgi to the mitochondrion" – if the chain is heading to the Golgi, but why would it be at "Golgi to mitochondrion". Perhaps for a protein that is going to the mitochondrion, but the question is about a general nascent chain needing nucleotides, not necessarily for a specific location. So, unlikely. Perhaps in this case, after meeting, it’s heading to the Golgi, and the meeting is at the cytoplasm, but not specified. I think D is the most plausible. Perhaps B: "membrane to the nucleus" – for a protein that is being integrated, but again, not for nucleotide entry. I think D is the answer. So, I’ll say D. But let’s confirm. Final answer. </think> The ribonucleoprotein particle (RNP) shuttles nucleotides (Sugar) into cells, and the nascent chain (a protein being synthesized) is present in the cytoplasm. [...](omit) - B) Membrane to the nucleus: Incorrect, as this is typically for secreted proteins that integrate into the nucleus, but the chain needs nucleotides for assembly, not nuclear integration. - C) Ribosome to the proteasome: Incorrect, as the ribosome and proteasome are locations for different processes; the ribosome assembles the protein, while proteasomal degradation occurs later. - D) Cytosol to extracellular space: Correct, as the meeting occurs at the cell membrane (boundary of cytoplasm and extracellular space), and the chain heads to the extracellular space after receiving the nucleotides. Thus, they meet at the cell membrane (described as "cytosol to extracellular space"), and the chain is heading to the extracellular space. (22149 tokens) 
+
+Ô Ours :
+
+/nothink <think></think> Let’s think step by step to answer the question. Understanding the Question: The question is a multiple-choice question about the meeting place and destination of a nascent (newly synthesized) protein chain. The options are: - A) Golgi to the mitochondrion 
+
+[...](omit) This fits because the cytoplasm (where the ribonucleoprotein is located) processes the protein, and the processed protein then exits the cell to the extracellular space. - D) Ribosome to the proteasome: The ribosome is where protein synthesis occurs, and the proteasome is involved in protein degradation. The described process is not about moving from the ribosome to the proteasome but about processing and exiting. Conclusion: The correct answer is C) cytosol to the extracellular space, as the ribonucleoprotein processes the nascent protein in the cytoplasm, and the processed protein is then released into the extracellular space. (2197 tokens)

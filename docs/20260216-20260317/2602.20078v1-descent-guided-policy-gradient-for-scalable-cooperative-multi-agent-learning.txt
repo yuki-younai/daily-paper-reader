@@ -1,0 +1,1816 @@
+Title: Descent-Guided Policy Gradient for Scalable Cooperative Multi-Agent Learning
+
+URL Source: https://arxiv.org/pdf/2602.20078v1
+
+Published Time: Tue, 24 Feb 2026 03:06:45 GMT
+
+Number of Pages: 26
+
+Markdown Content:
+# Descent-Guided Policy Gradient for Scalable Cooperative Multi-Agent Learning 
+
+Shan Yang 1 Yang Liu 2 1 
+
+## Abstract 
+
+Scaling cooperative multi-agent reinforcement learning (MARL) is fundamentally limited by cross-agent noise: when agents share a common reward, the actions of all N agents jointly deter-mine each agent’s learning signal, so cross-agent noise grows with N . In the policy gradient set-ting, per-agent gradient estimate variance scales as Θ( N ), yielding sample complexity O(N/ϵ ).We observe that many domains—cloud comput-ing, transportation, power systems—have differ-entiable analytical models that prescribe efficient system states. In this work, we propose Descent-Guided Policy Gradient (DG-PG), a framework that constructs noise-free per-agent guidance gra-dients from these analytical models, decoupling each agent’s gradient from the actions of all oth-ers. We prove that DG-PG reduces gradient vari-ance from Θ( N ) to O(1) , preserves the equilib-ria of the cooperative game, and achieves agent-independent sample complexity O(1 /ϵ ). On a heterogeneous cloud scheduling task with up to 200 agents, DG-PG converges within 10 episodes at every tested scale—from N =5 to N =200 —directly confirming the predicted scale-invariant complexity, while MAPPO and IPPO fail to con-verge under identical architectures. 
+
+## 1. Introduction 
+
+Multi-agent reinforcement learning (MARL) has demon-strated remarkable success across a wide range of domains, from game playing (Yu et al., 2022) to cloud resource scheduling (Mao et al., 2019) and transportation manage-ment (El-Tantawy et al., 2013). In many of these applica-tions, agents share a common objective and must coordi-nate their behavior—a setting known as cooperative MARL. 
+
+> 1
+
+Department of Industrial Systems Engineering and Manage-ment, National University of Singapore, Singapore 2Department of Civil and Environmental Engineering, National University of Singapore, Singapore. Correspondence to: Yang Shan 
+
+<yang shan@u.nus.edu >, Liu Yang <ceelya@nus.edu.sg >.
+
+Preprint. February 24, 2026. 
+
+However, scaling cooperative MARL remains a fundamen-tal challenge: performance degrades sharply as the number of agents grows. The root of this difficulty is multi-agent credit assignment : when all agents share a single reward signal, it becomes increasingly hard to determine how much each agent’s action contributed to the observed outcome, and this ambiguity worsens with every additional agent. Concretely, any optimization signal in cooperative MARL— a policy gradient, a Q-value, or an advantage estimate— must be derived from a shared return that aggregates the actions of all N agents, introducing cross-agent noise that grows linearly with N . Kuba et al. (2021) formalize this in the policy gradient setting, showing that the variance of each agent’s gradient estimate scales as Θ( N )—implying sample complexity O(N/ϵ ) and a signal-to-noise ratio that decays as 1/√N . The central bottleneck in scaling cooperative MARL is thus the cross-agent noise inherent to learning from shared rewards. Existing approaches address cross-agent noise through two broad strategies. The first is credit decomposition : extract-ing per-agent contributions from the shared return via coun-terfactual baselines (Foerster et al., 2018), value factoriza-tion (Rashid et al., 2020; Wang et al., 2021a), or marginal contribution estimation (Wolpert & Tumer, 2001). These methods can reduce but not eliminate cross-agent noise, as they remain dependent on the shared return. The sec-ond strategy uses pre-designed controllers as base policies (Levine & Koltun, 2013; Johannink et al., 2019), but con-strains the learned policy to remain near the base controller, potentially biasing it away from the true optimum. Neither approach provides per-agent learning signals that are both noise-free and unbiased. An alternative source of noise-free per-agent signals does exist: many cooperative problems—cloud scheduling, traf-fic routing, power dispatch—have differentiable analytical models developed over decades in operations research and control theory. These models typically rely on simplifying assumptions and global system information, and thus cannot be directly translated into executable policies for individual agents. However, their differentiable structure can provide each agent with a noise-free guidance gradient that depends only on the agent’s own influence on the system state. Building on this insight, we propose Descent-Guided Policy 1
+
+> arXiv:2602.20078v1 [cs.MA] 23 Feb 2026 Descent-Guided Policy Gradient
+
+Gradient (DG-PG), a framework that integrates such analyt-ical models into cooperative policy optimization. Our key contributions are: • Framework. We augment the cooperative objective with a guidance term derived from analytical models. The resulting gradient decomposes into a standard pol-icy gradient term and a per-agent guidance gradient computed directly from the analytical model; because this term depends only on each agent’s own influence on the system state, it is free of cross-agent noise. The framework requires no architectural changes to existing actor-critic methods. • Theoretical guarantees. We prove three properties under mild structural assumptions: (i) the augmented objective preserves the stationary points of the origi-nal cooperative game (Nash invariance, Theorem 4.1); (ii) the per-agent gradient estimate variance reduces from Θ( N ) to O(1) , independent of the number of agents (Theorem 4.2); and (iii) the sample complexity to reach an ϵ-optimal solution is O(1 /ϵ ), also indepen-dent of N (Theorem 4.3). • Empirical validation. We evaluate DG-PG on hetero-geneous cloud resource scheduling with up to N =200 
+
+agents, where standard multi-agent policy gradient methods fail to converge. DG-PG achieves stable learning across all scales, consistently outperforming MAPPO and IPPO with significantly fewer training episodes. 
+
+## 2. Preliminaries 
+
+We consider a fully cooperative MARL setting, formal-ized as a Cooperative Markov Game (equivalently, a Dec-POMDP) (Oliehoek & Amato, 2016). The game is de-fined by the tuple M = ⟨N , S, A, P, r, γ ⟩, where N =
+
+{1, . . . , N } denotes the set of N agents, S is the global state space, and A = ×i∈N Ai is the joint action space with Ai representing the action space for agent i. At each timestep t, the system is in state st ∈ S . Each agent i
+
+receives a local observation oit (derived from st) and se-lects an action ait ∈ A i according to its policy πθi (ait|oit),parameterized by θi. The environment then transitions to state st+1 according to the dynamics P (st+1 |st, at), where 
+
+at = ( a1 
+
+> t
+
+, . . . , a Nt ) denotes the joint action. 
+
+2.1. Cooperative Objective and Policy Gradient 
+
+In the cooperative setting, all agents share a common global reward function r(st, at). The shared objective is to maxi-mize the expected discounted cumulative reward: 
+
+J(θ) = Eπ
+
+" ∞X
+
+> t=0
+
+γtr(st, at)
+
+#
+
+, (1) where γ ∈ [0 , 1) is the discount factor and π denotes the joint policy. Standard policy gradient methods perform gradient ascent on J(θ). For agent i, the gradient with respect to its parameters θi is given by the Policy Gradient Theorem (Sutton et al., 1999): 
+
+∇θi J(θ) = Eπ
+
+" ∞X
+
+> t=0
+
+γt∇θi log πθi (ait|oit) Gt
+
+#
+
+, (2) where Gt = P∞ 
+
+> k=0
+
+γkrt+k is the sampled return from time 
+
+t.
+
+2.2. The Variance Explosion Problem 
+
+While Equation 2 provides an unbiased gradient estimator, its variance poses a critical challenge in large-scale settings. Because the estimator relies on sampled returns that depend on the joint action at of all N agents, each agent’s gradient estimate carries noise from every other agent’s sampled actions. Following Kuba et al. (2021), this variance can be decomposed as: Var (ˆ gi) ≈ σ2
+
+> self
+
+|{z} 
+
+> Own Exploration
+
++ ( N − 1) σ2
+
+> others
+
+| {z }
+
+> Cross-Agent Noise
+
+. (3) The second term represents the noise from sampling other agents’ actions. As N increases, this term dominates, caus-ing the total estimation variance to scale as Θ( N ). This linear scaling implies that maintaining a constant estima-tion error requires the batch size to grow linearly with N ,rendering standard multi-agent policy gradient methods sample-inefficient for large-scale systems .Existing variance reduction techniques, such as state-value baselines V (s) or counterfactual baselines like COMA (Fo-erster et al., 2018), primarily target the self-exploration term 
+
+σ2
+
+> self
+
+. While effective in smaller settings, their ability to mitigate the Θ( N ) cross-agent noise term diminishes in large-scale systems without incurring significant computa-tional overhead. Similarly, mean-field methods (Yang et al., 2018) offer scalability but require agents to be exchange-able and homogeneous—assumptions that do not hold in domains such as cloud scheduling, power grids, and traffic networks, where agents have heterogeneous capacities and 
+
+structured coupling constraints .
+
+## 3. Method: Descent-Guided Policy Gradient 
+
+In this section, we present DG-PG, a framework that ad-dresses the variance explosion problem by exploiting the analytical models available in many cooperative domains. We first introduce a reference state —an efficient system state prescribed by analytical models—and the conditions under which it yields a valid guidance gradient (Section 3.1). We then construct an augmented objective whose gradient 2Descent-Guided Policy Gradient 
+
+decomposes into a standard policy gradient term and a noise-free, per-agent guidance gradient derived from the reference (Section 3.2). Under mild assumptions, this formulation preserves the stationary points of the original cooperative objective while substantially reducing gradient estimate vari-ance. 
+
+3.1. Leveraging Analytical Priors: System State and Reference 
+
+In many cooperative domains, analytical models from op-erations research and control theory—such as fluid-limit approximations for queueing systems, equilibrium analysis for traffic networks, or convex optimization for resource al-location—provide principled characterizations of desirable system behavior. While not executable under real-world stochasticity, these models offer something valuable: a ref-erence that describes what efficient system operation looks like under given conditions. Our key observation is that such a reference, if properly defined, can supply each agent with a clear, directed signal for policy improvement—one that is far more informative than the noisy scalar reward rt
+
+aggregated over all agents. As noted above, domain-specific models can prescribe ef-ficient system states—but these states must be expressed in a concrete representational space. We define a system state xt ∈ Rd as the vector of system-level quantities jointly determined by agents’ actions—for example, per-server re-source utilization, per-link flow, or queue lengths. The ref-erence state ˜xt ∈ Rd is the efficient state that the analytical model yields under current conditions, computed indepen-dently of the learned policies. A key structural property of xt is that each agent’s action typically affects only spe-cific dimensions of this vector, preserving the locality of the problem—a property we exploit in the gradient computation (Section 3.2). For the reference to yield a valid guidance signal, it should ideally satisfy two conditions: 
+
+Assumption 3.1 (Exogeneity) . The reference trajectory ˜xt
+
+is non-adaptive with respect to the policy parameters: 
+
+∇θ ˜xt = 0. (4) 
+
+Assumption 3.2 (Descent-Aligned Reference) . Moving the system state toward the reference improves system perfor-mance. Formally, for any xt̸ = ˜ xt:
+
+⟨∇ xJ(xt), ˜xt − xt⟩ > 0. (5) When both conditions hold, the reference provides a stable, directionally correct target: it does not shift as policies up-date (Assumption 3.1), and approaching it is expected to improve the cooperative objective (Assumption 3.2). This means that any mechanism that steers the system state to-ward ˜xt is aligned with the original optimization goal—a property we exploit in the next subsection to construct a low-variance gradient estimator. Both assumptions are broadly satisfied in structured cooperative domains and can be ap-proximately verified in practice; we demonstrate this con-cretely for the cloud scheduling setting in Appendix C. Importantly, ˜xt need not be reachable by the agents—it may arise from idealized fluid-limit or steady-state models. DG-PG uses ˜xt only to define a descent direction, not as a target to be attained exactly. 
+
+3.2. Descent-Guided Formulation 
+
+Given a reference ˜xt satisfying Assumptions 3.1–3.2, we know that steering the system toward ˜xt is directionally aligned with improving J. The challenge is to incorporate this reference into the learning process in a way that (i) does not alter the optimal policies of the original cooperative game, (ii) reduces the Θ( N ) gradient variance identified in Section 2.2, and (iii) provides each agent with a local-ized signal about its own contribution. We achieve all three by augmenting the objective with a differentiable guidance functional and exploiting its structure in the gradient com-putation. 
+
+Augmented Objective. We define a guidance functional G
+
+that measures deviation from the reference: 
+
+G(π) ≜ Eτ ∼π
+
+" ∞X
+
+> t=0
+
+γtd(xt, ˜xt)
+
+#
+
+, (6) with d(xt, ˜xt) = 12 ∥xt − ˜xt∥2. By Assumption 3.2, mini-mizing G is directionally consistent with maximizing the co-operative return J, so we combine them into an augmented objective: 
+
+max  
+
+> π
+
+Jα(π) ≜ (1 − α)J(π) − αG(π), (7) where α ∈ (0 , 1) controls the balance. By linearity of expectation, this is equivalent to optimizing a shaped per-step reward 
+
+raug  
+
+> t
+
+= (1 − α) rt − α · d(xt, ˜xt)
+
+with any standard policy gradient method. However, naively using raug  
+
+> t
+
+as a shaped reward would still estimate the gra-dient via ∇ log π · raug  
+
+> t
+
+: since raug  
+
+> t
+
+depends on all agents’ actions, the estimator variance remains Θ( N ).Instead, DG-PG exploits the differentiable structure of G
+
+directly: as we show next, its gradient decomposes into per-agent terms that can be computed analytically, without relying on sampled returns. Moreover, the augmentation preserves the original stationary points because the guidance gradient vanishes at optimality (Theorem 4.1). 3Descent-Guided Policy Gradient 
+
+Gradient Decomposition. The gradient of Jα separates into two terms: 
+
+∇θ Jα = (1 − α)∇θ J − α∇θ G. (8) The first term is the standard policy gradient, whose coef-ficient Gt aggregates the stochastic effects of all N agents and must be estimated via Monte Carlo rollouts, yielding 
+
+Θ( N ) variance. The second term, however, admits an en-tirely different estimation strategy. Because d(xt, ˜xt) is a known, differentiable function of the system state with gradient ∇xd = xt − ˜xt, we can differentiate through xt di-rectly via the chain rule, without relying on sampled returns. Applying this for agent i:
+
+∇θi G = Eπ
+
+" ∞X
+
+> t=0
+
+γt
+
+
+
+∇xd(xt, ˜xt), ∂xt
+
+∂a it
+
+
+
+∇θi log πi(ait|oit)
+
+#
+
+= Eπ
+
+" ∞X
+
+> t=0
+
+γt⟨xt − ˜xt, zit⟩∇ θi log πi(ait|oit)
+
+#
+
+,
+
+(9) where zit = ∂xt
+
+> ∂a it
+
+is agent i’s local influence vector —the Jacobian of the system state with respect to its action. The concrete form of zit depends on the domain; we derive it for cloud scheduling in Appendix D. Intuitively, the guidance coefficient ⟨xt − ˜xt, zit⟩ measures the system deviation projected onto the dimensions that agent i actually influences. Unlike Gt, this coefficient does not depend on other agents’ actions: xt is observed, ˜xt is exogenous, and zit captures only agent i’s own influence on the system state. As α increases, the estimator shifts weight from the stochastic policy gradient term toward this deter-ministic guidance term, reducing variance. We formalize this in Section 4. 
+
+Gradient Estimator. Combining both terms, the complete DG-PG gradient estimator for agent i is: 
+
+ˆgi 
+
+> DG
+
+= (1 − α) ˆ giJ
+
+− α
+
+> T
+
+X
+
+> t=0
+
+γt⟨xt − ˜xt, zit⟩ ∇ θi log πi(ait|oit). (10) 
+
+3.3. Implementation Integration with MAPPO. DG-PG can be integrated into the MAPPO framework (Yu et al., 2022) by modifying the advantage estimator. After collecting trajectories and computing the standard GAE advantages ˆAiGAE (t), they are augmented with the guidance term: 
+
+ˆAiDG (t) = (1 − α) ˆAiGAE (t) − α · ⟨ xt − ˜xt, zit⟩, (11) The policy and critic are then updated using standard PPO objectives with the modified advantages. The computational overhead is negligible: the reference trajectory {˜xt} is com-puted once per batch from the analytical model, and in the common case where actions affect the system state linearly, the guidance coefficient reduces to a simple inner product computable in O(d) time. 
+
+Comparison with Existing Methods. Unlike counterfac-tual methods (e.g., COMA (Foerster et al., 2018)) that require training N separate critics to marginalize each agent’s action, or value decomposition methods (e.g., QMIX (Rashid et al., 2020)) that need additional mixing networks, DG-PG requires no architectural changes to the actor-critic framework. The entire modification amounts to a single line adjusting the advantage estimator. This simplicity is en-abled by our analytical gradient computation (Section 3.2), which directly provides per-agent credit assignment without requiring learned components. 
+
+## 4. Theoretical Guarantees 
+
+In this section, we establish the theoretical foundations of DG-PG. Our central result is that the DG-PG gradient esti-mator achieves agent-independent variance (Theorem 4.2), breaking the Θ( N ) scaling barrier of standard policy gradi-ents. We complement this with two supporting guarantees: (1) consistency (Theorem 4.1), ensuring that the augmented objective preserves the stationary points of the original game; and (2) sample complexity (Theorem 4.3), show-ing that the variance reduction yields agent-independent convergence rates under standard regularity assumptions (the complete dependency structure is given in Table 3, Ap-pendix B). 
+
+4.1. Consistency (Nash Invariance) 
+
+A primary concern when optimizing the augmented objec-tive Jα = (1 − α)J − αG is whether it biases the optimiza-tion landscape. We prove that under our assumptions, the stationary points of the original objective are preserved. 
+
+Theorem 4.1 (Nash Invariance) . Let θ∗ be a station-ary point of the original cooperative objective, satisfying 
+
+∇θ J(θ∗) = 0. Under Assumptions 3.1–3.2, θ∗ remains a stationary point of the augmented objective: 
+
+∇θ J(θ∗) = 0 =⇒ ∇ θ Jα(θ∗) = 0, ∀α ∈ (0 , 1) .
+
+(12) This result guarantees the safety of DG-PG: optimizing Jα
+
+does not introduce spurious equilibria, ensuring that any optimal policy for the original objective remains optimal under the augmented objective. 
+
+Proof Sketch. If ∇θ G(θ∗)̸ = 0 at a stationary point of J,then x(θ∗)̸ = ˜x (otherwise G is minimized). Assump-tion 3.2 then forces ∇xJ̸ = 0, and sufficient policy expres-4Descent-Guided Policy Gradient 
+
+siveness lifts this to ∇θ J̸ = 0, contradicting stationarity. The detailed proof is in Appendix E. 
+
+4.2. Variance Reduction 
+
+Having established that the augmented objective preserves the stationary points of J (Theorem 4.1), we now for-malize the variance properties of the DG-PG gradient es-timator. The key structural difference between the two gradient terms lies in their coefficients: Gt depends on all N agents’ stochastic actions, whereas the guidance coefficient ⟨xt − ˜xt, zit⟩ depends only on observed and agent-local quantities (Section 3.2). This yields fundamen-tally different variance scaling: Var(ˆ giJ ) = Θ( N ), while 
+
+Var(ˆ gi 
+
+> G
+
+) = O(1) , independent of N .Since the DG-PG estimator is a convex combination of ˆgiJ
+
+and ˆgi 
+
+> G
+
+, the combined variance depends on their correlation 
+
+ρ = Corr(ˆ giJ , ˆgi 
+
+> G
+
+). Under Assumption 3.2, the two gradi-ents are positively correlated ( ρ > 0) since both directions improve J; they are imperfectly correlated ( ρ < 1) because 
+
+ˆgiJ additionally carries cross-agent noise absent from ˆgi 
+
+> G
+
+.The following theorem characterizes the optimal variance as a function of ρ and the individual variances. 
+
+Theorem 4.2 (Agent-Independent Variance Bound) . Under Assumptions 3.1–3.2, let σ2 
+
+> J
+
+≜ Var(ˆ giJ ), σ2 
+
+> G
+
+≜ Var(ˆ gi 
+
+> G
+
+),and ρ ≜ Corr(ˆ giJ , ˆgi 
+
+> G
+
+) ∈ (0 , 1) . The optimally weighted combined estimator achieves: 
+
+min  
+
+> α∈(0 ,1)
+
+Var(ˆ gi
+
+> DG
+
+) = σ2 
+
+> J
+
+σ2 
+
+> G
+
+(1 − ρ2)
+
+σ2 
+
+> J
+
++ σ2 
+
+> G
+
++ 2 ρ σ J σG
+
+. (13) 
+
+Since σ2 
+
+> J
+
+= Θ( N ) and σ2 
+
+> G
+
+= O(1) (established above), the minimum variance converges to σ2 
+
+> G
+
+(1 − ρ2) = O(1) as 
+
+N → ∞ , independent of the number of agents. Proof Sketch. The variance of ˆgi 
+
+> DG
+
+= (1 − α)ˆ giJ − αˆgi 
+
+> G
+
+is a convex quadratic in α. Minimizing in closed form and sub-stituting σ2 
+
+> J
+
+= Θ( N ), σ2 
+
+> G
+
+= O(1) yields the O(1) bound. Since σ2 
+
+> G
+
+/σ 2 
+
+> J
+
+= O(1 /N ), the optimal mixing coefficient satisfies α∗ → 1 as N → ∞ , indicating that large sys-tems should rely primarily on the guidance signal. The full derivation is provided in Appendix F. 
+
+The role of α. Although α∗ → 1 is optimal in the large-
+
+N limit, two practical factors prevent setting α close to 1.First, the guidance variance σ2 
+
+> G
+
+persists—the score func-tion ∇ log πi introduces irreducible stochasticity that does not vanish with N . Second, in many practical domains, Assumptions 3.1–3.2 may not hold exactly, in which case the augmented objective Jα may no longer share the same optima as J. Consequently, the choice of α must balance variance reduction against fidelity to the original objective. We investigate the sensitivity to α and the effect of schedul-ing strategies empirically in Section 6. 
+
+4.3. Convergence Rate 
+
+The variance reduction in Theorem 4.2, combined with standard regularity assumptions, yields agent-independent sample complexity. 
+
+Theorem 4.3 (Sample Complexity) . Assume Jα is L-smooth and satisfies the Polyak-Łojasiewicz (PL) condi-tion with parameter μ > 0 (see Assumption G.1 in Ap-pendix G). Under the variance bound from Theorem 4.2, DG-PG achieves an ϵ-suboptimal solution in: 
+
+T = O
+
+ Lμϵ 
+
+
+
+(14) 
+
+iterations. This bound is independent of the number of agents N .
+
+In contrast, standard multi-agent policy gradient methods require T = O(N/ϵ ) iterations to compensate for Θ( N )
+
+variance—the required number of iterations grows linearly in N , whereas DG-PG’s iteration count remains unchanged. 
+
+Proof Sketch. Under Assumption G.1, standard stochastic gradient ascent converges at a rate governed by the gradient variance σ2. Substituting σ2 = O(1) from Theorem 4.2 yields the N -independent bound. The full derivation is provided in Appendix G. 
+
+Summary. Theorems 4.1–4.3 collectively establish that DG-PG is (1) scalable—variance does not grow with 
+
+N ; (2) safe—it preserves optimal solutions; and (3) effi-cient—sample complexity is agent-independent. 
+
+## 5. Related Work 
+
+Credit Assignment in Cooperative MARL. Credit decom-position methods attempt to extract per-agent contributions from the shared return. Difference Rewards (Wolpert & Tumer, 2001) isolate each agent’s marginal contribution via counterfactual simulation, but require access to the reward function or a simulator. Value decomposition methods— VDN (Sunehag et al., 2017), QMIX (Rashid et al., 2020), QPLEX (Wang et al., 2021a)—factorize the joint Q-function into per-agent terms under structural assumptions (additivity, monotonicity), avoiding gradient estimation but restricting the class of representable objectives. COMA (Foerster et al., 2018) trains a centralized critic to compute counterfactual baselines that marginalize each agent’s action, but the critic must condition on the joint action space and becomes dif-ficult to train as N grows. All these methods ultimately derive their training signal from the shared return, so the cross-agent noise that grows with N persists. 
+
+Variance Reduction in Multi-Agent Policy Gradients. 
+
+Standard variance reduction techniques—value function 5Descent-Guided Policy Gradient 
+
+baselines (Sutton & Barto, 1998) and GAE (Schulman et al., 2016)—primarily reduce temporal variance from an agent’s own stochasticity. In the multi-agent setting, HAPPO (Kuba et al., 2022) reduces cross-agent noise by updating agents sequentially, conditioning each agent’s update on the pre-vious agents’ new policies. This is effective but sacrifices parallel execution, as each agent must wait for all preced-ing updates. Agent-specific baselines can reduce the self-exploration component of variance but do not explicitly target the cross-agent noise that dominates in large-scale settings. Mean-Field MARL (Yang et al., 2018) takes a different approach, replacing the N -agent interaction with a population-level approximation that simplifies each agent’s optimization problem. This achieves scalability but requires agent homogeneity, precluding application to heterogeneous settings. 
+
+Reward Shaping. Like DG-PG, Potential-Based Reward Shaping (PBRS) (Ng et al., 1999) augments the objective while preserving optimal policies, so a natural question is how the two differ. PBRS reshapes the reward via a poten-tial function to provide denser temporal feedback, accelerat-ing single-agent exploration; it does not decompose across agents and therefore does not target cross-agent noise. DG-PG’s augmentation serves a different purpose: its gradient decomposes into per-agent terms that can each be computed deterministically from the system state and each agent’s own action, directly reducing the multi-agent noise in gradient estimation. 
+
+Structural Priors in RL. Guided Policy Search (Levine & Koltun, 2013) and Residual RL (Johannink et al., 2019) incorporate domain knowledge by using pre-computed con-trollers as base policies or supervisory signals, but this cou-ples the learned policy to the quality of the prior and can bias the solution. In MARL, graph-based communication (Jiang et al., 2020) and role decomposition (Wang et al., 2021b) use structural knowledge as architectural inductive biases to reduce the search space, though they do not directly ad-dress the cross-agent noise in gradient estimation. DG-PG uses analytical models differently: to construct noise-free per-agent guidance gradients that reduce gradient estimate variance without altering the optimization landscape. Asystematic comparison is provided in Table 2 (Appendix A). 
+
+## 6. Experiments 
+
+We evaluate DG-PG on heterogeneous cloud scheduling across scales from N =5 to N =200 , a challenging domain where queueing-theoretic priors are readily available and the cross-agent noise problem is particularly acute. Our experi-ments address three questions: (1) sensitivity to the guidance weight α; (2) controlled comparison against MAPPO and IPPO under identical training configurations; (3) scalability to large agent populations where standard methods fail. 0 5
+
+CPU Requirement 
+
+> 0
+> 1
+> 2
+> 3
+> Density
+
+(a) Bimodal Workload   
+
+> CPU-heavy
+> Mem-heavy
+> 0.50 0.75 1.00
+
+CPU Efficiency 
+
+> m4.8xl
+> t3.2xl
+> t3a.2xl
+> m5.8xl
+> c5.18xl
+> c5.12xl
+> r5.8xl
+> r5.6xl
+> m5n.12xl
+> m6i.8xl
+> c5n.18xl
+> c6i.32xl
+
+(b) Server Heterogeneity     
+
+> Gen1
+> Gen2
+> Gen3
+> 0500 1000 1500 2000
+
+Time Step 
+
+> 0.0
+> 0.5
+> 1.0
+> 1.5
+> Arrival Rate  (t)/
+
+(c) Non-stationary Arrivals 
+
+Figure 1. Environment characteristics. (a) Bimodal workload dis-tribution: CPU-intensive jobs (60%, Pareto α=1 .7) and memory-intensive jobs (40%, Pareto α=2 .2) with heavy tails. (b) Server heterogeneity across three hardware generations with CPU effi-ciency spanning 0.70 –1.08 . (c) Non-stationary job arrival rate with tidal fluctuation (period = 1000 steps) and Gaussian noise. 
+
+6.1. Setup Environment. We evaluate on a heterogeneous cloud scheduling simulator with N servers whose configurations are based on AWS instance types. The environment com-bines three sources of complexity—heterogeneous server efficiency, bimodal workloads with heavy tails, and non-stationary arrivals—that jointly violate the stationarity as-sumptions of the queueing-theoretic prior, testing robust-ness to model mismatch. The reward balances two com-peting objectives: latency (queue minimization) and en-ergy efficiency (preferring high-ηCPU servers), which can-not be simultaneously optimized by simple heuristics. Fig-ure 1 illustrates these characteristics. We evaluate at scales 
+
+N ∈ {5, 10 , 20 , 50 , 100 , 200 }; for each scale, we pre-generate 200 training scenarios and 40 held-out test sce-narios with randomized server configurations and workload patterns. Full specifications are in Appendix H. 
+
+Baselines. We compare against (1) MAPPO (Yu et al., 2022), multi-agent PPO with a centralized value function (CTDE), and (2) IPPO , independent PPO with local value functions. Both share the same actor-critic backbone as DG-PG and execute decentrally from local observations; any performance gap therefore isolates the effect of gradient guidance. We additionally report (3) Best-Fit , a resource-6Descent-Guided Policy Gradient 0 40 80 120 160 200 
+
+Episode 
+
+> 70
+> 60
+> 50
+> 40
+> Average Reward
+
+Guidance Weight Sensitivity ( N = 50 )
+
+> = 0.2
+> = 0.4
+> = 0.6
+> = 0.8
+
+Figure 2. Hyperparameter sensitivity. Training reward at N =50 
+
+for varying guidance weight α ∈ { 0.2, 0.4, 0.6, 0.8}. All values converge rapidly and achieve similar final performance, confirming robustness to α.
+
+aware greedy heuristic that operates with full global state, as a centralized upper reference, and (4) Random as a lower reference. Mean-Field methods (Yang et al., 2018) are excluded because they assume agent homogeneity, which is violated by our heterogeneous server setting. Training hyperparameters for all methods are detailed in Appendix I. 
+
+6.2. Hyperparameter Selection 
+
+The guidance weight α ∈ (0 , 1) controls the bias-variance trade-off in DG-PG: larger α reduces gradient variance by relying more heavily on the analytical prior, while smaller α maintains closer alignment with the true re-ward signal. We conduct a systematic grid search over 
+
+α ∈ { 0.2, 0.4, 0.6, 0.8} at N = 50 using NN models, with validation at N = 20 .
+
+Results. Figure 2 shows training curves at N =50 for all tested α values. We observe a clear trade-off: larger α
+
+accelerates early convergence, while smaller α achieves marginally superior final performance . By episode 200, 
+
+α=0 .2 achieves the best mean training reward of −40 .3,while α=0 .8 reaches −40 .8—a gap of less than 1%. This trend is consistent at N =20 , where α=0 .2 achieves −39 .9.The narrow spread across α values demonstrates that DG-PG is robust to the choice of α: the RL gradient compensates for model inaccuracy while benefiting from variance reduc-tion at any tested setting. 
+
+Selected Hyperparameters. Based on the observed trade-off, we adopt a dynamic α scheduling strategy : initialize with α=0 .9 for the first 10% of training to leverage fast early convergence, then linearly decay to α=0 .2 over the next 40% of training, and maintain α=0 .2 for the remainder. This exploits the strong guidance signal for rapid initial progress while preserving the policy’s capacity for fine-0 100 200 300 400 500                 
+
+> Episode
+> 100
+> 80
+> 60
+> 40
+> 20
+> Training Reward
+> N= 2
+> 0100 200 300 400 500
+> Episode
+> 150
+> 125
+> 100
+> 75
+> 50
+> 25
+> 0
+> N= 5
+> 0100 200 300 400 500
+> Episode
+> 200
+> 150
+> 100
+> 50
+> 0
+> N= 10
+> DG-PG MAPPO IPPO Best-Fit
+
+Figure 3. Controlled comparison. Training reward for N ∈{2, 5, 10 }. DG-PG (200 episodes, red) converges rapidly to the Best-Fit reference (dashed). MAPPO and IPPO (500 episodes) remain far below despite 2.5× more training. 
+
+tuning. All subsequent experiments use this schedule. 
+
+6.3. Controlled Comparison 
+
+To isolate the effect of gradient guidance, all three methods are compared under identical core training configurations (Appendix I). MAPPO and IPPO additionally receive 2.5×
+
+more training (500 vs. 200 episodes) and individually tuned entropy coefficients to enhance their convergence stability. We restrict this comparison to small scales N ∈ { 2, 5, 10 },where gradient variance is lowest and MAPPO and IPPO have the best chance of producing meaningful learning progress. 
+
+Learning Curves. Figure 3 compares training dynamics at N ∈ { 2, 5, 10 }. At N =2 , DG-PG converges to near-Best-Fit performance within 5 episodes and remains stable, while MAPPO and IPPO briefly approach similar levels but subsequently deteriorate. At N =5 , the advantage be-comes more pronounced: DG-PG achieves a mean reward of 
+
+−14 .2 (close to Best-Fit’s −12 .6), while MAPPO ( −34 .1)and IPPO ( −39 .8) plateau at 2–3× worse performance. At 
+
+N =10 , IPPO deteriorates sharply ( −49 .3), confirming that independent learning fails as coordination demands grow. In contrast, DG-PG reaches −11 .7, surpassing the Best-Fit heuristic through temporal strategies unavailable to the single-step greedy policy. These results confirm that gradi-ent guidance is the decisive factor; the natural next question is whether this advantage persists at larger scales. 
+
+6.4. Scalability 
+
+We next evaluate DG-PG at scales from N =5 to N =200 ,comparing against heuristic baselines on 40 held-out test scenarios. MAPPO and IPPO are excluded as they fail to converge at any tested scale despite extensive tuning (Appendix J). 
+
+Best Checkpoint Performance. Figure 4 and Table 1 summarize best checkpoint performance (mean ± std over 40 test scenarios). DG-PG matches or exceeds the Best-Fit 7Descent-Guided Policy Gradient 5 10 20 50 100 200 
+
+Number of Agents ( N)
+
+> 120
+> 100
+> 80
+> 60
+> 40
+> Test Reward (Best Checkpoint)
+
+Scalability: N = 5 to N = 200 
+
+> DG-PG
+> Best-Fit
+> Random
+
+Figure 4. Scalability. Best checkpoint test reward vs. number of agents N . DG-PG closely tracks the Best-Fit heuristic across all scales, while Random degrades with N .
+
+Table 1. Best checkpoint reward on 40 test scenarios (mean ± std). MAPPO and IPPO fail to converge at any scale and are excluded.                              
+
+> N=5 N=10 N=20 N=50 N=100 N=200
+> DG-PG (ours) −44 .9±9.8−43 .5±8.2−40 .5±4.7−41 .7±4.5−41 .5±3.2−46 .4±3.3
+> Best-Fit −46 .3±10 .7−43 .7±7.8−41 .9±4.2−41 .1±3.4−40 .7±2.4−41 .0±1.9
+> Random −84 .2±49 .2−78 .7±35 .8−80 .0±22 .2−66 .8±14 .1−60 .5±7.7−60 .0±5.7
+
+heuristic at scales N ≤ 100 , demonstrating that the learned policy captures coordination strategies beyond the greedy single-step assignment. At N =200 , a modest gap emerges (−46 .4 vs. −41 .0), which we attribute to the growing gra-dient variance at large N ; scale-adaptive α scheduling is a promising direction to close this gap. 
+
+Scale-Invariant Convergence. Figure 5 overlays DG-PG’s training curves across all scales. A striking finding emerges: DG-PG converges to within 10% of its best ob-served reward in ≤10 episodes at every scale—from N =5 
+
+to N =200 . The near-perfect alignment of the six curves pro-vides direct empirical confirmation of the agent-independent sample complexity predicted by Theorem 4.3: the number of episodes required for convergence does not grow with N .
+
+Computational Cost. The rapid convergence (≤10 episodes) translates to practical training times even on con-sumer hardware. On a single laptop CPU (Apple M1, no GPU), DG-PG converges within ∼1 minute at N =5 , ∼3minutes at N =20 , and ∼35 minutes at N =200 . Complete training (200 episodes) takes ∼12 hours at the largest scale. Detailed per-scale timing and breakdown are provided in Appendix K. DG-PG’s rapid convergence produces policies that gener-alize well beyond training. Performance remains stable as 
+
+α decays from 0.9 to 0.2, indicating that agents internalize effective coordination patterns early and do not depend on the guidance signal to maintain them. Unlike residual pol-0 40 80 120 160 200 
+
+Episode 
+
+> 90
+> 80
+> 70
+> 60
+> 50
+> 40
+> Training Reward
+
+DG-PG Convergence Across Scales       
+
+> N= 5
+> N= 10
+> N= 20
+> N= 50
+> N= 100
+> N= 200
+
+Figure 5. Scale-invariant convergence. DG-PG training reward across N ∈ { 5, 10 , 20 , 50 , 100 , 200 }. All scales converge within 
+
+∼10 episodes, empirically confirming O(1) sample complexity. 
+
+icy methods, which require the base controller to remain online at deployment, DG-PG uses the analytical reference only during training; at test time the policy runs indepen-dently. On 40 held-out test scenarios—where the guidance signal is entirely absent—the resulting decentralized policy matches or exceeds Best-Fit, a centralized heuristic with ac-cess to full global state, across the majority of tested scales (Table 1). 
+
+## 7. Conclusion 
+
+In this work, we identified cross-agent noise—the interfer-ence that each agent’s learning signal receives from the stochastic exploration of all other agents—as the central bottleneck in scaling cooperative MARL. DG-PG addresses this by deriving a per-agent guidance signal from a domain-specific analytical reference and using it to reshape the pol-icy gradient. This reduces gradient variance from Θ( N ) to 
+
+O(1) while preserving the Nash equilibria of the original game. Experiments on a heterogeneous cloud scheduling benchmark confirm that DG-PG scales cooperative learning to 200 agents, a regime where MAPPO and IPPO cannot learn. More broadly, DG-PG requires only that the analytical ref-erence provide informative gradient directions, not that it be accurate enough to serve as a deployable policy. This makes the approach applicable to any cooperative domain where approximate analytical models are available, such as traffic networks and supply chains. 
+
+Limitations and future work. DG-PG is applicable to cooperative domains where an analytical model with infor-mative gradients is available; problems without such struc-ture need alternative approaches. The guidance weight α
+
+follows a fixed schedule independent of N ; scale-adaptive scheduling that increases guidance at larger N is a promis-8Descent-Guided Policy Gradient 
+
+ing direction to close the remaining gap at N =200 .
+
+## References 
+
+Bertsekas, D. and Gallager, R. Data networks . Athena Scientific, 2021. Cortez, E., Bonde, A., Muzio, A., Russinovich, M., Fon-toura, M., and Bianchini, R. Resource central: Under-standing and predicting workloads for improved resource management in large cloud platforms. In Proceedings of the 26th Symposium on Operating Systems Principles , pp. 153–167, 2017. Delimitrou, C. and Kozyrakis, C. Quasar: Resource-efficient and QoS-aware cluster management. In Proceed-ings of the 19th International Conference on Architectural Support for Programming Languages and Operating Sys-tems (ASPLOS) , pp. 127–144, 2014. El-Tantawy, S., Abdulhai, B., and Abdelgawad, H. Multi-agent reinforcement learning for integrated network of adaptive traffic signal controllers (marlin-atsc): Method-ology and large-scale application on downtown toronto. 
+
+IEEE transactions on Intelligent transportation systems ,14(3):1140–1150, 2013. Foerster, J., Farquhar, G., Afouras, T., Nardelli, N., and Whiteson, S. Counterfactual multi-agent policy gradi-ents. In Proceedings of the AAAI conference on artificial intelligence , volume 32, 2018. Ghodsi, A., Zaharia, M., Hindman, B., Konwinski, A., Shenker, S., and Stoica, I. Dominant resource fairness: Fair allocation of multiple resource types. In 8th USENIX symposium on networked systems design and implemen-tation (NSDI 11) , 2011. Jiang, J., Dun, C., Huang, T., and Lu, Z. Graph convolu-tional reinforcement learning. In International Confer-ence on Learning Representations , 2020. Johannink, T., Bahl, S., Nair, A., Luo, J., Kumar, A., Loskyll, M., Ojea, J. A., Solowjow, E., and Levine, S. Residual reinforcement learning for robot control. In 
+
+2019 international conference on robotics and automa-tion (ICRA) , pp. 6023–6029. IEEE, 2019. Karimi, H., Nutini, J., and Schmidt, M. Linear conver-gence of gradient and proximal-gradient methods under the polyak-łojasiewicz condition. In Joint European con-ference on machine learning and knowledge discovery in databases , pp. 795–811. Springer, 2016. Kelly, F. P., Maulloo, A. K., and Tan, D. K. H. Rate con-trol for communication networks: shadow prices, propor-tional fairness and stability. Journal of the Operational Research society , 49(3):237–252, 1998. Kuba, J. G., Wen, M., Meng, L., Zhang, H., Mguni, D., Wang, J., and Yang, Y. Settling the variance of multi-agent policy gradients. Advances in Neural Information Processing Systems , 34:13458–13470, 2021. Kuba, J. G., Chen, R., Wen, M., Wen, Y., Sun, F., Wang, J., and Yang, Y. Trust region policy optimisation in multi-agent reinforcement learning. In International Confer-ence on Learning Representations , 2022. Kurtz, T. G. Approximation of population processes . SIAM, 1981. Levine, S. and Koltun, V. Guided policy search. In Interna-tional conference on machine learning , pp. 1–9. PMLR, 2013. Mao, H., Schwarzkopf, M., Venkatakrishnan, S. B., Meng, Z., and Alizadeh, M. Learning scheduling algorithms for data processing clusters. In Proceedings of the ACM Special Interest Group on Data Communication (SIG-COMM) , pp. 270–288, 2019. Ng, A. Y., Harada, D., and Russell, S. Policy invariance under reward transformations: Theory and application to reward shaping. In International Conference on Machine Learning , pp. 278–287, 1999. Oliehoek, F. A. and Amato, C. A concise introduction to decentralized POMDPs . Springer, 2016. Raissi, M., Perdikaris, P., and Karniadakis, G. E. Physics-informed neural networks: A deep learning framework for solving forward and inverse problems involving nonlinear partial differential equations. Journal of Computational physics , 378:686–707, 2019. Rashid, T., Samvelyan, M., De Witt, C. S., Farquhar, G., Foerster, J., and Whiteson, S. Monotonic value function factorisation for deep multi-agent reinforcement learning. 
+
+Journal of Machine Learning Research , 21(178):1–51, 2020. Reiss, C., Wilkes, J., and Hellerstein, J. L. Google cluster-usage traces: format+ schema. Google Inc., White Paper ,1:1–14, 2011. Reiss, C., Tumanov, A., Ganger, G. R., Katz, R. H., and Kozuch, M. A. Heterogeneity and dynamicity of clouds at scale: Google trace analysis. In Proceedings of the third ACM symposium on cloud computing , pp. 1–13, 2012. Schulman, J., Moritz, P., Levine, S., Jordan, M. I., and Abbeel, P. High-dimensional continuous control using generalized advantage estimation. In International Con-ference on Learning Representations , 2016. 9Descent-Guided Policy Gradient 
+
+Sunehag, P., Lever, G., Gruslys, A., Czarnecki, W. M., Zam-baldi, V., Jaderberg, M., Lanctot, M., Sonnerat, N., Leibo, J. Z., Tuyls, K., et al. Value-decomposition networks for cooperative multi-agent learning. arXiv preprint arXiv:1706.05296 , 2017. Sutton, R. S. and Barto, A. G. Reinforcement learning: An introduction . MIT press Cambridge, 1998. Sutton, R. S., McAllester, D., Singh, S., and Mansour, Y. Policy gradient methods for reinforcement learning with function approximation. Advances in neural information processing systems , 12, 1999. Wang, J., Ren, Z., Liu, T., Yu, Y., and Zhang, C. Qplex: Duplex dueling multi-agent q-learning. In International Conference on Learning Representations , 2021a. Wang, T., Gupta, T., Mahajan, A., Peng, B., Whiteson, S., and Zhang, C. Rode: Learning roles to decompose multi-agent tasks. In International Conference on Learning Representations , 2021b. Wardrop, J. G. Road paper. some theoretical aspects of road traffic research. Proceedings of the institution of civil engineers , 1(3):325–362, 1952. Wolpert, D. H. and Tumer, K. Optimal payoff functions for members of collectives. Advances in Complex Systems , 4 (02n03):265–279, 2001. Wood, A. J., Wollenberg, B. F., and Shebl ´e, G. B. Power generation, operation, and control . John wiley & sons, 2013. Yang, Y., Luo, R., Li, M., Zhou, M., Zhang, W., and Wang, J. Mean field multi-agent reinforcement learning. In 
+
+International conference on machine learning , pp. 5571– 5580. PMLR, 2018. Yu, C., Velu, A., Vinitsky, E., Gao, J., Wang, Y., Bayen, A., and Wu, Y. The surprising effectiveness of ppo in cooper-ative multi-agent games. Advances in neural information processing systems , 35:24611–24624, 2022. 10 Descent-Guided Policy Gradient 
+
+## A. Comparison with Existing Methods 
+
+Table 2 provides a systematic comparison of DG-PG with representative methods from major paradigms in cooperative MARL. We evaluate methods across key dimensions: gradient variance scaling, sample complexity, support for heteroge-neous policies, parallel updates, architectural overhead, and domain knowledge requirements. The comparison highlights DG-PG’s unique position as the only method that simultaneously achieves O(1) gradient variance, supports heterogeneous agent policies with parallel updates, and requires no additional learned components beyond a standard centralized critic. 
+
+Table 2. Systematic comparison of cooperative MARL methods across key architectural and algorithmic dimensions. DG-PG is the only method that simultaneously achieves O(1) variance, O(1 /ϵ ) sample complexity, full heterogeneity support, parallel updates, and zero extra learned components.                                                                                       
+
+> Method Approach Variance Scaling Sample Complexity Heterog. Policies Parallel Updates Extra Learned Components Assumption / Requirement
+> Policy Gradient Methods
+> MAPPO (Yu et al., 2022) Centralized PG Θ( N)O(N/ϵ )✓✓None None IPPO (Yu et al., 2022) Independent PG Θ( N)O(N/ϵ )✓✓None None HAPPO (Kuba et al., 2022) Sequential PG O(1) †O(N/ϵ )†✓×None None COMA (Foerster et al., 2018) Counterfactual Θ( N)‡O(N/ϵ )✓✓Ncritic heads None
+> Value Decomposition Methods
+> QMIX (Rashid et al., 2020) Mixing Network N/A (Value) —✓✓Mixing net Monotonicity VDN (Sunehag et al., 2017) Additive N/A (Value) —✓✓None Additivity QPLEX (Wang et al., 2021a) Attention N/A (Value) —✓✓Attn mixer, O(N2)Dueling struct.
+> Mean-Field Approximation
+> Mean-Field (Yang et al., 2018) Neighbor Avg. O(1) §O(1 /ϵ )§×✓None Exchangeability
+> Reward Modification Methods
+> PBRS (Ng et al., 1999) Potential Shaping Θ( N)O(N/ϵ )✓✓None Potential func. Diff. Rewards (Wolpert & Tumer, 2001) Counterfactual O(1) ∗O(1 /ϵ )∗✓✓None Exact simulator
+> Gradient Guidance (Proposed)
+> DG-PG (Ours) Analytic Guide O(1) O(1 /ϵ )✓✓None Analytical model
+
+Notes: “Variance Scaling” = per-agent gradient variance w.r.t. N ; “Sample Complexity” = number of iterations to reach ϵ-optimality (proven bounds for PG methods); “Extra Learned Components” = trainable modules beyond standard actor-critic; “—” = not directly comparable (value-based methods lack explicit PG complexity bounds). 
+
+> †
+
+HAPPO reduces per-agent variance via sequential updates with trust-region constraints, but sacrifices parallelism: wall-clock time per iteration scales as O(N ), yielding effective sample complexity O(N/ϵ ) in wall-clock time. 
+
+> ‡
+
+COMA requires N separate critic heads to compute counterfactual baselines. Reduces own-action variance σ2 
+
+> self
+
+but does not suppress cross-agent noise (N − 1) σ2
+
+> others
+
+.
+
+> ∗
+
+Difference Rewards achieve O(1) variance in principle but require an exact reward function or high-fidelity simulator to compute 
+
+r(s, a) − r(s, a−i) for each agent, which is often intractable at scale. 
+
+> §
+
+Mean-Field results hold under the mean-field approximation (agent exchangeability). Convergence is to the mean-field equilibrium, which may differ from the Nash equilibrium of the original N -agent game. 
+
+Key Insights from the Comparison 1. Every existing method sacrifices at least one critical property. For large-scale cooperative MARL, we identify five desirable properties: O(1) variance, O(1 /ϵ ) sample complexity, heterogeneous policies, parallel updates, and zero extra learned components. No prior method achieves all five: • MAPPO / IPPO : Θ( N ) variance ⇒ O (N/ϵ ) sample complexity. • HAPPO : sequential updates ⇒ O (N ) wall-clock cost per iteration. • Mean-Field : requires agent exchangeability ⇒ no heterogeneous policies. • QMIX / QPLEX : extra mixing networks or O(N 2) attention layers. • Diff. Rewards : requires an exact simulator, often intractable at scale. DG-PG satisfies all five simultaneously (Theorems 4.2–4.3), with only a minimal modification to the advantage computation in standard MAPPO. 11 Descent-Guided Policy Gradient 
+
+2. Leveraging analytical models without sacrificing optimality. All other methods in Table 2 are purely model-free: they either impose no assumptions at all (MAPPO, IPPO, HAPPO, COMA) or encode structural constraints into the architecture (QMIX, VDN, Mean-Field). DG-PG is unique in leveraging an external analytical model to reduce variance while remaining model-free in its convergence guarantees. This distinguishes it from other knowledge-informed learning paradigms: Physics-Informed Neural Networks (Raissi et al., 2019) embed governing equations directly into the loss, requiring exact PDEs; Residual RL (Johannink et al., 2019) uses a hand-designed controller as a permanent base policy, inheriting its biases; Guided Policy Search (Levine & Koltun, 2013) relies on trajectory optimization with known dynamics. In contrast, DG-PG treats the analytical model purely as a control variate —its gradient contribution is subtracted out in expectation, so model inaccuracies affect only variance, not the stationary points of the objective (Theorem 4.1). The adjustable α further allows practitioners to tune the degree of reliance based on model fidelity. 
+
+## B. Theoretical Assumptions and Dependencies 
+
+For reviewer convenience, Table 3 summarizes the dependency structure between our theoretical results and the assumptions they rely upon.                   
+
+> Table 3. Dependency of theoretical results on assumptions. “ ✓” indicates that the result requires the corresponding assumption. All assumptions are stated in the main text (Section 3.1) and Appendix G.
+> Result Exogeneity (Asm. 3.1) Alignment (Asm. 3.2) Smoothness & PL (Asm. G.1) Bounded Variance Role of Assumptions
+> Thm. 4.1 (Nash Invariance) ✓✓Exogeneity ensures reference does not shift; Alignment ensures guidance vanishes at optimal-ity. Thm. 4.2 (Variance Bound) ✓✓Exogeneity makes reference deterministic; Align-ment ensures positive correlation ρ > 0.Thm. 4.3 (Sample Complexity) ✓✓✓✓Smoothness enables descent lemma; PL condi-tion yields linear convergence rate; O(1) variance from Thm. 4.2. Prop. 1 in App. C.3 (Cloud Verification) Standalone verification that Alignment holds for cloud scheduling via Cauchy-Schwarz on the load imbalance functional.
+
+Discussion of Assumption Strength. 
+
+• Assumption 3.1 (Exogeneity) is a design choice rather than a restrictive condition: it is satisfied by construction when the reference is computed from exogenous system parameters (e.g., server capacities, total workload) and treated as a fixed target during gradient computation via the stop-gradient operator ⊥(·).• Assumption 3.2 (Descent-Aligned Reference) is the core structural requirement. It holds when the analytical model captures the dominant performance drivers of the cooperative objective. We verify this rigorously for cloud scheduling in Appendix C.3 and outline verification templates for traffic, communication, and power grid domains. • Assumption G.1 (Smoothness & PL) is standard in the stochastic optimization literature and is required only for the convergence rate result (Theorem 4.3). The variance reduction (Theorem 4.2) and Nash invariance (Theorem 4.1) hold without these regularity conditions. 
+
+## C. Case Study: Verification of Structural Assumptions 
+
+In this appendix, we provide a detailed verification that the structural Assumptions 3.1 and 3.2 hold for the cloud resource scheduling task used in our experiments. This serves as a representative case study demonstrating how domain-specific priors can be systematically validated within the DG-PG framework. 12 Descent-Guided Policy Gradient 
+
+Applicability to Other Domains. While we focus on cloud scheduling, similar verification procedures apply to other control problems where analytical priors are available: • Communication networks : Network utility maximization theory provides proportional fairness as a natural reference allocation (Kelly et al., 1998). • Power grids : DC optimal power flow and economic dispatch yield reference generation schedules (Wood et al., 2013). • Traffic systems : Wardrop equilibrium and system-optimal routing define reference flow distributions (Wardrop, 1952). In each case, the key requirement is that the prior defines a descent direction aligned with the cooperative objective—a property we formally verify below for the cloud scheduling domain using fluid-limit analysis from queueing theory (Kurtz, 1981). 
+
+C.1. System Model and Objective Approximation System Setup. We study a cooperative multi-agent system for task scheduling in a heterogeneous cluster of N servers. Tasks are characterized by multi-dimensional resource requirements (e.g., CPU, memory), and servers possess heterogeneous capacities across these dimensions. Let K denote the number of resource types. We model the system state using the full resource utilization vector. Specifically, let xit = ( xi, 1 
+
+> t
+
+, . . . , x i,K t )⊤ ∈ RK 
+
+> ≥0
+
+denote the resource utilization vector on server i at time t, where xi,k t is the load on the k-th resource dimension. The server capacities are given by μi = ( μi, 1, . . . , μ i,K )⊤, where μi,k is the maximum processing rate of server i on resource dimension k. This generalization captures the coupling between resources, avoiding the information loss associated with scalar bottleneck abstractions. The total workload pressure in the system on dimension k, denoted as Ck, is conserved under task assignment decisions: 
+
+> N
+
+X
+
+> i=1
+
+xi,k t = Ck, xi,k t ≥ 0, ∀t, ∀k. 
+
+Surrogate Objective via Queueing Theory. To construct the reference state ˜X, we need an analytically tractable objective whose minimizer serves as the guidance target. The cooperative RL objective J itself is intractable—it aggregates queueing delay, energy efficiency, and fairness through complex, non-separable interactions. However, queueing theory reveals that improving each of these criteria reduces to a common structural condition: • Queueing delay is a convex function of server utilization, scaling as 1/(μ − x) near capacity (Bertsekas & Gallager, 2021). By Jensen’s inequality, total delay is minimized when utilization is equalized across servers. • Energy cost in heterogeneous clusters with varying μi,k is minimized by capacity-proportional allocation, which avoids overloading low-efficiency machines. • Fairness improves as utilization variance decreases, reducing service-level violations on congested servers. All three criteria improve when server utilization is balanced proportionally to capacity. We formalize this shared structure as the load imbalance functional :
+
+Jload (X) ≜
+
+> K
+
+X
+
+> k=1
+> N
+
+X
+
+> i=1
+
+1
+
+μi,k (xi,k )2, (15) where X = {x1, . . . , xN } is the global system state. The gradient ∂Jload  
+
+> ∂x i,k
+
+= 2xi,k  
+
+> μi,k
+
+is proportional to the utilization rate of resource k on server i, so minimizing Jload drives the system toward capacity-proportional allocation. Crucially, Jload is convex and separable across resource dimensions, admitting a closed-form minimizer. This tractability also enables rigorous verification of Assumption 3.2, which would be intractable for the composite objective J directly. 13 Descent-Guided Policy Gradient 
+
+Optimal Reference via Load Balancing. To construct the reference state ˜X, we solve the constrained optimization problem of minimizing Jload under workload conservation. For each resource dimension k, this reduces to: 
+
+min 
+
+> X
+> N
+
+X
+
+> i=1
+
+1
+
+μi,k (xi,k )2 subject to 
+
+> N
+
+X
+
+> i=1
+
+xi,k = Ck.
+
+This is a classical convex optimization problem whose solution is well-established in queueing theory and resource allocation (Bertsekas & Gallager, 2021; Ghodsi et al., 2011). Constructing the Lagrangian for dimension k:
+
+Lk
+
+> Lag
+
+(x·,k , λ k) = 
+
+> N
+
+X
+
+> i=1
+
+1
+
+μi,k (xi,k )2 − λk
+
+> N
+
+X
+
+> i=1
+
+xi,k − Ck
+
+!
+
+,
+
+and taking the first-order optimality condition: 
+
+∂Lk
+
+> Lag
+
+∂x i,k = 2xi,k 
+
+μi,k − λk = 0 =⇒ xi,k = λkμi,k 
+
+2 .
+
+This shows that at the optimum, load is allocated proportionally to capacity: xi,k ∝ μi,k . Applying the workload constraint P 
+
+> i
+
+xi,k = Ck yields: 
+
+x∗,i,k = μi,k 
+
+P 
+
+> j
+
+μj,k · Ck.
+
+Equivalently, the optimal state satisfies the utilization balancing condition : the utilization rate xi,k /μ i,k is equalized across all servers for each resource type k:
+
+x1,k 
+
+μ1,k = x2,k 
+
+μ2,k = · · · = xN,k 
+
+μN,k , ∀k ∈ { 1, . . . , K }.
+
+This principle is fundamental to heterogeneous resource allocation and aligns with dominant resource fairness (DRF) in multi-dimensional scheduling systems. 
+
+Theory-Guided Reference State. Based on the optimal solution derived above, we define the capacity-weighted load-balancing equilibrium as our theory-guided reference: 
+
+˜xi,k t = μi,k 
+
+PNj=1 μj,k · Ck, ∀i, k. (16) By construction, ˜Xt = {˜x1 
+
+> t
+
+, . . . , ˜xNt } is the unique global minimizer of Jload (X) under the workload constraints. Note that ˜Xt is derived from a continuous (fluid) optimization and may not be exactly reachable under discrete task assignments; however, this does not affect the verification below. We now verify that this reference satisfies Assumptions 3.1 and 3.2; specifically, in Appendix C.3, we prove that ( ˜X − X) is aligned with the descent direction of Jload , guaranteeing that moving toward the reference reduces load imbalance. 
+
+C.2. Verification of Assumption 3.1 (Exogeneity) 
+
+The reference state ˜Xt is computed deterministically from the current aggregate system workload Ck but is treated as a fixed constant during the policy gradient computation step. Specifically, for each server i and resource k, we define: 
+
+˜xi,k t := ⊥ μi,k 
+
+PNj=1 μj,k · Ck
+
+!
+
+.
+
+Here, ⊥ denotes the stop-gradient operator. Since ˜Xt depends only on the current state information (total load) and not on the immediate action at selected by the policy πθ , we have ∇θ ˜Xt = 0, ensuring that no gradient flows back through the reference target. This satisfies Assumption 3.1. 14 Descent-Guided Policy Gradient 
+
+C.3. Verification of Assumption 3.2 (Directional Alignment) 
+
+Assumption 3.2 requires that the direction ( ˜X − X) is a descent direction for the cooperative objective J. Since Jload is a surrogate for J justified by queueing theory (Section C), it suffices to show that ( ˜X − X) is a descent direction for Jload .
+
+Proposition C.1 (Alignment with Load Imbalance Reduction) . For any feasible state X̸ = ˜X satisfying the workload constraints, the direction ( ˜X − X) is aligned with the descent direction of the load imbalance functional: 
+
+⟨∇ X Jload (X), ˜X − X⟩ < 0.
+
+That is, moving towards ˜X reduces load imbalance. Proof. Using the definition of the load imbalance functional in Equation 15, we compute the inner product between its gradient and the guidance vector. Since Jload is separable across resource dimensions, the total inner product decomposes as a sum over resource types k:
+
+⟨∇ X Jload , ˜X − X⟩ =
+
+> K
+
+X
+
+> k=1
+> N
+
+X
+
+> i=1
+
+∂Jload 
+
+∂x i,k (˜ xi,k − xi,k )=
+
+> K
+
+X
+
+> k=1
+> N
+
+X
+
+> i=1
+
+2xi,k 
+
+μi,k (˜ xi,k − xi,k )
+
+| {z }
+
+> Ik
+
+.
+
+To establish that the total inner product is negative, it suffices to show that each component Ik ≤ 0. We analyze a fixed resource dimension k. First, observe that by the equilibrium definition in Equation 16, the reference utilization rate is constant across all servers: ˜xi,k 
+
+μi,k = Ck
+
+PNj=1 μj,k .
+
+Substituting this constant ratio into the expression for Ik:
+
+Ik = 2 
+
+> N
+
+X
+
+> i=1
+
+xi,k 
+
+ ˜xi,k 
+
+μki
+
+− xi,k 
+
+μki
+
+
+
+= 2 Ck
+
+PNj=1 μkj
+
+! NX
+
+> i=1
+
+xi,k − 2
+
+> N
+
+X
+
+> i=1
+
+(xi,k )2
+
+μi,k 
+
+= 2( Ck)2
+
+PNj=1 μj,k − 2
+
+> N
+
+X
+
+> i=1
+
+(xi,k )2
+
+μi,k .
+
+To determine the sign of Ik, we apply the Cauchy-Schwarz inequality to vectors u = ( xi,k 
+
+√μi,k )i and v = ( pμi,k )i:
+
+> N
+
+X
+
+> i=1
+
+uivi
+
+!2
+
+≤
+
+> N
+
+X
+
+> i=1
+
+u2
+
+> i
+
+! NX
+
+> i=1
+
+v2
+
+> i
+
+!
+
+.
+
+Substituting the definitions of ui and vi:
+
+> N
+
+X
+
+> i=1
+
+xi,k 
+
+!2
+
+≤
+
+> N
+
+X
+
+> i=1
+
+(xi,k )2
+
+μi,k 
+
+! NX
+
+> i=1
+
+μi,k 
+
+!
+
+.
+
+Rearranging terms and using P xi,k = Ck:
+
+> N
+
+X
+
+> i=1
+
+(xi,k )2
+
+μi,k ≥ (Ck)2
+
+PNj=1 μj,k .
+
+15 Descent-Guided Policy Gradient 
+
+Comparing this with the expression for Ik, we see that the second term (actual variance) is always greater than or equal to the first term (minimal variance). Thus, Ik ≤ 0 for all k, with strict inequality if the system is unbalanced. Summing over all dimensions implies: 
+
+⟨∇ X Jload (X), ˜X − X⟩ =
+
+> K
+
+X
+
+> k=1
+
+Ik < 0.
+
+This confirms that the direction toward the reference ˜X is aligned with the descent direction of the load imbalance functional, thereby verifying Assumption 3.2. 
+
+Generalization to Other Domains. The verification procedure demonstrated above—constructing a convex surrogate objec-tive, deriving its optimal solution as the reference, and proving descent alignment via first-order optimality conditions—serves as a template for applying DG-PG to other systems. As outlined in the main text, domains such as communication networks (proportional fairness), power grids (economic dispatch), and traffic systems (Wardrop equilibrium) all admit analytical priors with similar structural properties. In each case, the key steps are: (1) identify a domain-specific performance metric with known convexity properties; (2) derive the reference state as its constrained optimum; (3) verify that the reference defines a descent direction using tools from convex analysis or variational inequalities. This case study establishes the feasibility and rigor of such verification, providing a blueprint for extending DG-PG beyond cloud scheduling. 
+
+Robustness to Approximate Satisfaction. In practice, the structural assumptions may not hold exactly. For instance, the fluid-limit approximation underlying the reference state assumes Poisson arrivals and homogeneous service times, which are often violated in real systems due to heavy-tailed workloads and temporal fluctuations. However, DG-PG remains effective as long as the assumptions hold approximately —that is, the reference captures the dominant performance drivers even if the analytical model is idealized. The adjustable guidance weight α provides a natural mechanism for handling model inaccuracies: when the prior is less accurate, reducing α diminishes its influence while preserving the variance reduction benefits. Our experiments (Section 6.2) demonstrate that DG-PG is robust across a range of α values, confirming that directional correctness, rather than exact model fidelity, is sufficient for effective guidance. 
+
+## D. Derivation of Local Influence Vector 
+
+In this appendix, we derive the local influence vector zit = ∂xt
+
+> ∂a it
+
+for the cloud resource scheduling example. This derivation generalizes to other domains with similar additive structure. We use the notation established in Appendix C: N servers, K resource dimensions, global utilization vector xt ∈ RN K , and per-server utilization xjt ∈ RK . Each agent i holds a task with resource requirement vector wi = ( wi, 1, . . . , w i,K )⊤ ∈ RK ,where wi,k is the demand on resource dimension k (e.g., CPU cores, memory). Agent i selects a target server ait = j,updating server j’s utilization as: 
+
+xjt+1 = xjt + wi · I(ait = j).
+
+Since only server j’s utilization changes, differentiating with respect to ait yields a sparse influence vector: 
+
+zit = ( 0, . . . , wi
+
+|{z}  
+
+> server j
+
+, . . . , 0)⊤.
+
+That is, assigning task i to server j increases server j’s load by exactly wi across all resource types, while leaving all other servers unaffected. 
+
+Projected coefficient. In the DG-PG update (Equations 9–10), each agent’s guidance signal is scaled by a coefficient 
+
+cit = ⟨xt − ˜xt, zit⟩ that measures how much agent i’s action contributes to the system’s deviation from the reference. Substituting zit yields: 
+
+cit =
+
+> K
+
+X
+
+> k=1
+
+wi,k · (xj,k t − ˜xj,k t ).
+
+Each term measures how overloaded server j is on resource k, weighted by the task’s own demand wi,k —so resource types that the task consumes most heavily dominate the signal. Importantly, cit is a gradient signal that provides a direction for policy improvement, not a hard constraint that forces convergence to ˜X—the actual system trajectory is determined by the learned policy interacting with the environment. 16 Descent-Guided Policy Gradient 
+
+D.1. General Applicability 
+
+The key requirement is that the influence vector zit captures the marginal effect of an action on the system state. This structure arises naturally in many multi-agent systems: • Traffic routing : xt as link flows, actions as path selections; zit indicates which links are used. • Inventory management : xt as stock levels, actions as replenishment orders; zit adds to specific stock dimensions. • Communication networks : xt as channel interference levels, actions as power allocations. In each case, zit enables the projection-based variance reduction by isolating the relevant components of the global state deviation. 
+
+## E. Detailed Proof of Nash Invariance (Theorem 4.1) 
+
+In this appendix, we provide the detailed proof for Theorem 4.1, establishing that our DG-PG framework preserves the stationary points of the original cooperative game. 
+
+Theorem 4.1 (Restated). Let θ∗ be a stationary point of the original cooperative objective, satisfying ∇θ J(θ∗) = 0. Under Assumptions 3.1 and 3.2, θ∗ remains a stationary point of the regularized objective Jα for any α ∈ (0 , 1) .
+
+To prove this theorem, we first establish a key lemma stating that the guidance gradient vanishes at any stationary point of the original objective. 
+
+E.1. Lemma: Guidance Consistency Lemma E.1. Under Assumptions 3.1 and 3.2, if ∇θ J(θ∗) = 0, then ∇θ G(θ∗) = 0.Proof. We proceed by contradiction. Let x∗ ≜ x(θ∗) denote the system state induced by the stationary point θ∗, and suppose ∇θ G(θ∗)̸ = 0.
+
+Step 1. If x∗ = ˜ x, then G(θ∗) = E[P 
+
+> t
+
+γt 12 ∥˜xt − ˜xt∥2] = 0 , which is the global minimum of G, and hence ∇θ G(θ∗) = 0—contradicting our assumption. Therefore x∗̸ = ˜ x.
+
+Step 2. By Assumption 3.2, for any state not equal to the reference: 
+
+x∗̸ = ˜ x =⇒ ⟨∇ xJ(x∗), ˜x − x∗⟩ > 0.
+
+The right-hand side is strictly positive, and ˜x − x∗̸ = 0, so ∇xJ(x∗)̸ = 0.
+
+Step 3. Under sufficient policy expressiveness (see Remark below), a non-zero state-space gradient lifts to a non-zero parameter-space gradient: ∇xJ(x∗)̸ = 0 implies ∇θ J(θ∗)̸ = 0. This contradicts the premise ∇θ J(θ∗) = 0.Therefore ∇θ G(θ∗) = 0.
+
+Remark E.2 (Sufficient Expressiveness) . The proof requires the Jacobian ∇θ x to have full row rank, ensuring that every non-zero state-space gradient ∇xJ lifts to a non-zero parameter-space gradient ∇θ J. This is a standard condition for overparameterized neural network policies ( p ≫ d) and holds generically in the absence of degenerate symmetries. 
+
+E.2. Proof of Theorem 4.1 
+
+Proof. At a stationary point θ∗ of J, we have ∇θ J(θ∗) = 0. By Lemma E.1, ∇θ G(θ∗) = 0. Therefore: 
+
+∇θ Jα(θ∗) = (1 − α)∇θ J(θ∗) − α∇θ G(θ∗) = 0,
+
+confirming that every stationary point of the original objective J is also a stationary point of the regularized objective 
+
+Jα.17 Descent-Guided Policy Gradient 
+
+## F. Variance Decomposition and Reduction Analysis (Theorem 4.2) 
+
+In this appendix, we prove that the DG-PG estimator achieves agent-independent variance scaling. As established in Section 4.2, the standard policy gradient estimator has variance σ2 
+
+> J
+
+= Θ( N ) due to cross-agent exploration noise (Kuba et al., 2021), while the guidance gradient estimator has variance σ2 
+
+> G
+
+= O(1) since its coefficient depends only on deterministic quantities given a realized trajectory. 
+
+Theorem 4.2 (Restated). Under Assumptions 3.1–3.2, the DG-PG estimator achieves σ2 
+
+> DG
+
+= O(1) at the optimal mixing coefficient, independent of the number of agents N .
+
+F.1. Proof of Theorem 4.2 
+
+Proof. For the combined estimator ˆgi 
+
+> DG
+
+= (1 − α)ˆ giJ − αˆgi 
+
+> G
+
+, the variance is: 
+
+σ2
+
+> DG
+
+(α) = (1 − α)2σ2 
+
+> J
+
++ α2σ2 
+
+> G
+
+− 2α(1 − α)ρσ J σG ,
+
+where ρ = Corr (ˆ giJ , ˆgi 
+
+> G
+
+). By Assumption 3.2, the guidance direction is aligned with improving J, ensuring 0 < |ρ| < 1.Since σ2
+
+> DG
+
+(α) is a convex quadratic in α, setting ddα σ2 
+
+> DG
+
+= 0 yields the optimal mixing coefficient: 
+
+α∗ = σ2 
+
+> J
+
++ ρ σ J σG
+
+σ2 
+
+> J
+
++ σ2 
+
+> G
+
++ 2 ρ σ J σG
+
+.
+
+Substituting α∗ back into σ2
+
+> DG
+
+(α), the minimum variance is: 
+
+σ2 
+
+> DG ,min
+
+= σ2 
+
+> J
+
+σ2 
+
+> G
+
+(1 − ρ2)
+
+σ2 
+
+> J
+
++ σ2 
+
+> G
+
++ 2 ρσ J σG
+
+.
+
+As N → ∞ , we have σ2 
+
+> J
+
+= Θ( N ) and σ2 
+
+> G
+
+= O(1) . Dividing numerator and denominator by σ2 
+
+> J
+
+:
+
+σ2 
+
+> DG ,min
+
+= σ2 
+
+> G
+
+(1 − ρ2)1 + O(N −1) 
+
+> N→∞
+
+−−−−→ σ2 
+
+> G
+
+(1 − ρ2) = O(1) .
+
+Remark F.1 . The optimal mixing coefficient α∗ → 1 as N → ∞ , indicating that large-scale systems should rely primarily on the guidance signal to suppress cross-agent variance. In practice, we adopt a dynamic α schedule—starting with a large 
+
+α for fast early convergence and decaying to a smaller value to allow the RL signal to fine-tune beyond the reference (see Section 6). 
+
+## G. Convergence Rate and Sample Complexity (Theorem 4.3) 
+
+We establish the sample complexity of DG-PG under standard regularity conditions. 
+
+Theorem 4.3 (Restated). Under the smoothness and PL conditions (Assumption G.1 below) and with σ2 
+
+> DG
+
+= O(1) from Theorem 4.2, DG-PG achieves an ϵ-optimal policy in T = O(L/ (μϵ )) iterations, independent of N .
+
+Assumption G.1 (Smoothness and PL Condition) . The regularized objective Jα(θ) is L-smooth and satisfies the Polyak-Łojasiewicz condition with parameter μ > 0:
+
+12 ∥∇ Jα(θ)∥2 ≥ μ(J∗ 
+
+> α
+
+− Jα(θ)) .
+
+These conditions are standard in the stochastic optimization literature (Karimi et al., 2016); they are needed only to convert the O(1) variance bound (Theorem 4.2)—which holds unconditionally—into an explicit iteration complexity. Under weaker regularity (e.g., smoothness without PL), the rate changes but the N -independence is preserved. 18 Descent-Guided Policy Gradient 
+
+G.1. Proof of Theorem 4.3 
+
+Proof. The following analysis holds for a fixed mixing parameter α ∈ (0 , 1) , so that Jα is a fixed objective with well-defined smoothness and PL constants. When α is varied dynamically in practice, the convergence guarantee applies to each phase as a snapshot analysis. Let σ2 
+
+> DG
+
+≜ Var(ˆ gDG ) = O(1) by Theorem 4.2. Consider the stochastic gradient ascent update 
+
+θk+1 = θk + ηˆgDG (θk)
+
+with step size η ≤ 1 
+
+> L
+
+.By L-smoothness of Jα:
+
+Jα(θk+1 ) ≥ Jα(θk) + ⟨∇ Jα(θk), θk+1 − θk⟩ − L
+
+2 ∥θk+1 − θk∥2.
+
+Substituting θk+1 − θk = ηˆgDG (θk) and taking the conditional expectation Ek[·] ≜ E[· | θk]:
+
+Ek[Jα(θk+1 )] ≥ Jα(θk) + η⟨∇ Jα(θk), Ek[ˆ gDG ]⟩ − Lη 2
+
+2 Ek[∥ˆgDG ∥2].
+
+Since ˆgDG is an unbiased estimator of ∇Jα, we have Ek[ˆ gDG ] = ∇Jα(θk) and Ek[∥ˆgDG ∥2] = ∥∇ Jα(θk)∥2 + σ2
+
+> DG
+
+.Substituting: 
+
+Ek[Jα(θk+1 )] ≥ Jα(θk) + η∥∇ Jα(θk)∥2 − Lη 2
+
+2
+
+ ∥∇ Jα(θk)∥2 + σ2
+
+> DG
+
+
+
+= Jα(θk) + 
+
+
+
+η − Lη 2
+
+2
+
+
+
+∥∇ Jα(θk)∥2 − Lη 2
+
+2 σ2
+
+> DG
+
+.
+
+Since η ≤ 1 
+
+> L
+
+, we have η − Lη 2 
+
+> 2
+
+≥ η 
+
+> 2
+
+, giving: 
+
+Ek[Jα(θk+1 )] ≥ Jα(θk) + η
+
+2 ∥∇ Jα(θk)∥2 − Lη 2
+
+2 σ2
+
+> DG
+
+.
+
+Subtracting both sides of the above inequality from J∗ 
+
+> α
+
+and taking full expectation flips the direction: 
+
+J∗ 
+
+> α
+
+− E[Jα(θk+1 )] ≤ J∗ 
+
+> α
+
+− Jα(θk) − η
+
+2 ∥∇ Jα(θk)∥2 + Lη 2
+
+2 σ2
+
+> DG
+
+.
+
+Let ∆k ≜ E[J∗ 
+
+> α
+
+− Jα(θk)] denote the expected optimality gap. In terms of ∆k:
+
+∆k+1 ≤ ∆k − η
+
+2 ∥∇ Jα(θk)∥2 + Lη 2
+
+2 σ2
+
+> DG
+
+.
+
+By the PL condition (Assumption G.1), ∥∇ Jα(θk)∥2 ≥ 2μ(J∗ 
+
+> α
+
+− Jα(θk)) = 2 μ∆k. Substituting: 
+
+∆k+1 ≤ ∆k − η
+
+2 · 2μ∆k + Lη 2
+
+2 σ2
+
+> DG
+
+= (1 − μη )∆ k + Lη 2
+
+2 σ2
+
+> DG
+
+.
+
+Unrolling the recurrence for T iterations: 
+
+∆T ≤ (1 − μη )T ∆0 + Lη 
+
+2μ σ2
+
+> DG
+
+.
+
+To achieve ∆T ≤ ϵ, it suffices to make each term at most ϵ/ 2.19 Descent-Guided Policy Gradient 
+
+Steady-state term. Requiring Lη  
+
+> 2μ
+
+σ2 
+
+> DG
+
+≤ ϵ 
+
+> 2
+
+gives the constraint η ≤ μϵ Lσ 2
+
+> DG
+
+. We set η = μϵ Lσ 2
+
+> DG
+
+(the largest admissible step size, which minimizes the number of iterations needed). 
+
+Transient term. Requiring (1 − μη )T ∆0 ≤ ϵ 
+
+> 2
+
+and using log(1 − x) ≤ − x, we need T ≥ 1 
+
+> μη
+
+log 2∆ 0 
+
+> ϵ
+
+. Substituting η = μϵ Lσ 2
+
+> DG
+
+:
+
+T ≥ 1
+
+μ · μϵ Lσ 2
+
+> DG
+
+log 2∆ 0
+
+ϵ = Lσ 2
+
+> DG
+
+μ2ϵ log 2∆ 0
+
+ϵ .
+
+By Theorem 4.2, σ2 
+
+> DG
+
+= O(1) (independent of N ), so the sample complexity is: 
+
+T = O
+
+ Lμ2ϵ log 1
+
+ϵ
+
+
+
+.
+
+Since neither L, μ, nor σ2 
+
+> DG
+
+depends on the number of agents N , the sample complexity T = O(1 /ϵ ) is independent of N ,completing the proof. 
+
+## H. Cloud Scheduling Environment 
+
+We provide complete specifications of the cloud scheduling environment used in all experiments. 
+
+H.1. Physical Environment Cluster Configuration. The cluster consists of N servers drawn from 12 heterogeneous instance types spanning three hardware generations, with configurations based on AWS instance types. Table 4 details the full configuration.  
+
+> Table 4. Server instance types used in the simulation, based on AWS instance configurations.
+
+Gen. Instance Type vCPUs Memory (GB) ηCPU ηMem Weight 
+
+Gen-1 m4.8xlarge 32 128 0.70 0.68 10% t3.2xlarge 16 64 0.72 0.70 3% t3a.2xlarge 16 64 0.75 0.72 2% Gen-2 m5.8xlarge 32 128 0.95 0.93 20% c5.18xlarge 64 128 0.98 0.93 10% c5.12xlarge 48 96 0.97 0.93 8% r5.8xlarge 32 256 0.87 0.92 9% r5.6xlarge 24 192 0.84 0.93 7% m5n.12xlarge 48 192 0.96 0.92 6% Gen-3 m6i.8xlarge 32 128 1.06 0.95 15% c5n.18xlarge 64 256 1.08 0.95 8% c6i.32xlarge 96 384 1.08 0.96 2% The efficiency parameters ηCPU and ηMem model performance-per-watt differences across hardware generations: Gen-1 instances (circa 2015) have ηCPU ∈ [0 .70 , 0.75] , Gen-2 (circa 2017) have ηCPU ∈ [0 .84 , 0.98] , and Gen-3 (circa 2020+) have 
+
+ηCPU ∈ [1 .06 , 1.08] . Job completion time scales as duration /η CPU , making high-efficiency servers more productive. Server types are sampled according to the specified weights and randomly shuffled across indices at scenario generation to prevent agents from exploiting positional patterns. 
+
+Workload Generation. We employ a bimodal task distribution reflecting real-world workload diversity: • CPU-intensive tasks (∼60% of arrivals): CPU requirement drawn from Pareto( α = 1 .7, xm = 0 .6), clipped to 
+
+[0 .5, 20] cores; memory requirement m = c · U (1 .5, 3.0) , clipped to [0 .5, 64] GB (low memory-to-CPU ratio). • Memory-intensive tasks (∼40% of arrivals): CPU requirement drawn from Pareto( α = 2 .2, xm = 0 .4), clipped to 
+
+[0 .2, 8] cores; memory requirement m = c · U (6 , 12) , clipped to [1 , 128] GB (high memory-to-CPU ratio). 20 Descent-Guided Policy Gradient 
+
+All tasks share the same duration distribution: Log-normal( μ = 3 .0, σ = 0 .5), clipped to [5 , 150] timesteps, yielding mean duration ∼20 timesteps with high variance. The Pareto shape parameter α ∈ [1 .7, 2.2] is calibrated to match the heavy-tailed resource demand distributions observed in the Google cluster trace (Reiss et al., 2011), where a small fraction of jobs consume disproportionate resources. The log-normal duration distribution is consistent with empirical observations from production clusters (Reiss et al., 2012). The bimodal CPU-to-memory ratio reflects the coexistence of compute-intensive (e.g., batch analytics) and memory-intensive (e.g., in-memory databases) workloads in modern data centers (Delimitrou & Kozyrakis, 2014). 
+
+Arrival Process. Jobs arrive according to a non-homogeneous Poisson process with time-varying intensity: 
+
+λ(t) = ¯λ · max 
+
+
+
+0.1, 1 + 0 .3 sin 
+
+ 2πt 
+
+1000 
+
+
+
++ ϵt
+
+
+
+, ϵt ∼ N (0 , 0.1) 
+
+where the base rate ¯λ is calibrated via a capacity-aware formula to achieve target utilization ρ ∈ [0 .80 , 0.85] across all scales. The sinusoidal term introduces a 1000-step tidal period, capturing the diurnal traffic patterns observed in production systems (Cortez et al., 2017), while ϵt adds stochastic perturbation. 
+
+H.2. Agent Interface 
+
+Each arriving job is handled by a dedicated agent whose decision is to select a target server for placement. At each timestep, multiple agents act concurrently, one per arriving job. The system has N servers, and we evaluate seven scales from N =2 to 
+
+N =200 .
+
+Scale Configurations. Table 5 summarizes the experimental configurations. Each scale is defined by the number of servers 
+
+N , the number of action-space clusters K, the number of servers per cluster S = N/K , and the target cluster utilization ρ
+
+used to calibrate the arrival rate ¯λ (see Arrival Process above). Each episode consists of 3000 timesteps, with job arrivals during the first 2000 and the remaining 1000 reserved as a drain period.  
+
+> Table 5. Scale configurations for experimental evaluation. All scales use 200 training scenarios and 40 held-out test scenarios.
+
+Scale Servers (N ) Clusters (K) Servers/Cluster (S) Episode Length Target Util. (ρ)tiny 2 2 1 3000 [0 .80 , 0.85] 
+
+small 5 5 1 3000 [0 .80 , 0.85] 
+
+compact 10 10 1 3000 [0 .80 , 0.85] 
+
+standard 20 20 1 3000 [0 .80 , 0.85] 
+
+medium 50 25 2 3000 [0 .80 , 0.85] 
+
+heavy 100 25 4 3000 [0 .80 , 0.85] 
+
+xlarge 200 40 5 3000 [0 .80 , 0.85] 
+
+Action Space. At small scales ( N ≤ 20 ), each agent directly selects one of the N servers ( K = N , S = 1 ). At larger scales ( N ≥ 50 ), the action space grows prohibitively, so we partition servers into K < N clusters of S = N/K servers each, sorted by capacity (cCPU  
+
+> k
+
+, c Mem  
+
+> k
+
+) so that servers within each cluster have similar profiles. Each agent selects a cluster 
+
+(action space of size K), and a deterministic Best-Fit heuristic assigns the job within the selected cluster to the server with the highest current utilization that still has sufficient free resources. If no server can accommodate the job, it is queued on the least-loaded server. 
+
+Observation Space. For scales N ≤ 100 , each agent receives a (7 N + 2 Nagents + 4) -dimensional observation consisting of: • Global server state (7N dims): For each server k ∈ { 1, . . . , N }, we include normalized CPU utilization, memory utilization, local queue length (clipped at 50), CPU efficiency, memory efficiency, CPU capacity, and memory capacity. • All task information (2Nagents dims): Normalized CPU and memory requirements for all concurrently dispatched jobs (CTDE-style global information). 21 Descent-Guided Policy Gradient 
+
+• Job features (2 dims): Normalized CPU and memory requirements of this agent’s assigned job. • Temporal feature (1 dim): Normalized timestep t/T max .• Agent identifier (1 dim): Normalized agent index, used with a learnable embedding (see below). 
+
+Observation Compression ( N ≥ 200 ). Since the agent’s action selects a cluster rather than a specific server, per-server detail is unnecessary at large scales. For N ≥ 200 (cluster size S = N/K ≥ 5), we compress per-server states into 
+
+cluster-level sufficient statistics : each cluster is represented by a 28-dimensional vector comprising CPU utilization quantiles (min, Q25, median, Q75, max, mean, std), memory utilization quantiles (7 dims), CPU-memory joint distribution features (correlation, fraction CPU-/memory-heavy/balanced; 4 dims), queue congestion statistics (total, max, mean, std, fraction non-empty; 5 dims), and capacity-efficiency features (free CPU/memory fractions, mean efficiency, cluster size, overloaded fraction; 5 dims). Task information is similarly compressed to 6 dimensions (mean, std, max for CPU and memory demands). The total observation dimension becomes 28 K + 10 , achieving up to 6.4× reduction compared to the raw representation while preserving all scheduling-relevant information. The DG-PG guidance signal is always computed on raw server states and is unaffected by this compression. 
+
+Agent ID Embedding. To enable parameter sharing across heterogeneous agents, we embed each agent’s normalized index via a learnable nn.Embedding layer (dimension 16), which is concatenated with the remaining observation features before the first hidden layer. This allows a single shared network to learn agent-specific behaviors. 
+
+H.3. Reward Function 
+
+The shared reward signal is a weighted combination of two objectives: 
+
+rt = −
+
+w1 · Qglobal (t) + PNk=1 Qk(t)
+
+N| {z }
+
+> Queue Penalty (Latency)
+
++w2 ·
+
+PNk=1  
+
+> Lk(t)
+> ηk
+
+Ctotal 
+
+| {z }
+
+> Energy Penalty
+
+
+
+where Qglobal (t) is the global buffer size, Qk(t) is the local queue at server k, Lk(t) is the workload (CPU + memory) at server k, ηk is the server’s efficiency, and Ctotal is the total cluster capacity. We set w1 = 1 and w2 = 20 so that both penalties contribute comparably to the reward: the queue penalty typically ranges in [0 , 20] , whereas the normalized energy ratio remains below 1. Load-balancing (utilization variance) is handled entirely by the DG-PG guidance signal and is therefore excluded from the reward. 
+
+## I. Training Configuration 
+
+All methods are trained with PPO using parameter sharing across agents. We use two model classes: neural network (NN) models for DG-PG, and linear models for the three-way comparison, because MAPPO and IPPO cannot converge with NN models in our environment (Section J). For the hyperparameter selection (Section 6.2) and scalability experiments (Section 6.4), DG-PG is trained with NN models covering N =5 to N =200 . We initially attempted to train MAPPO and IPPO with the same NN architecture, but they failed to converge across ∼20 configurations at N =5 and N =2 (Section J). To enable a fair comparison despite this failure, the controlled comparison (Section 6.3) uses linear models for all three methods at N ∈ { 2, 5, 10 }. Linear models (π(a|s) = softmax (W s + b), V (s) = w⊤s + b) cannot overfit and have a convex critic loss, making split-epoch training (see below) effective where it failed with NN. DG-PG also uses linear models in this comparison, so any performance difference is attributable solely to the guidance signal. 
+
+I.1. Shared Hyperparameters 
+
+The following parameters are identical across all methods and both model classes: • Discount factor: γ = 0 .99 
+
+• GAE parameter: λ = 0 .95 
+
+22 Descent-Guided Policy Gradient 
+
+• PPO clipping ratio: ϵ = 0 .2 (except NN at N ≥ 50 ; see below) • Optimizer: Adam with separated actor-critic updates and independent gradient clipping • Value loss: Huber loss ( δ = 10 .0) instead of MSE, reducing sensitivity to reward outliers • Return normalization: target returns standardized (zero mean, unit variance) per minibatch • Learning rate decay: linear decay to 1% of the initial value over 90–95% of training 
+
+I.2. Linear Models (Controlled Comparison) 
+
+For the controlled comparison at N ∈ { 2, 5, 10 }, all three methods share the same linear architecture and the same core training parameters. Table 6 lists the full configuration.  
+
+> Table 6. Hyperparameters for linear model experiments (Section 6.3). Parameters above the midline are shared across all methods; those below differ.
+
+Parameter Value 
+
+Model class Linear (single layer, no hidden units) Learning rate 1 × 10 −3 (linear decay to 1% )Discount factor γ 0.99 
+
+GAE λ 0.95 
+
+PPO clipping ϵ 0.2
+
+Critic epochs / Actor epochs 20 / 3 (split-epoch) Mini-batch size 10,000 Gradient clipping max norm 10 .0
+
+Huber loss δ 10 .0
+
+Parallel environments 4Rollouts per episode 24 DG-PG entropy coefficient 0.01 (exponential decay to 10 −4)MAPPO / IPPO entropy coefficient 0.005 (fixed, no decay) DG-PG training episodes 200 MAPPO / IPPO training episodes 500 DG-PG α schedule Same as NN ( 0.9 → 0.2)Several shared parameters above the midline were set to stabilize MAPPO and IPPO, based on the tuning documented in Section J: • Split-epoch training (critic 20 epochs, actor 3 epochs): MAPPO and IPPO require a well-trained critic before the actor receives meaningful advantage signals. A single linear layer needs many gradient steps to fit the value function; without this asymmetric schedule, advantage estimates are too noisy for stable policy updates. • Large mini-batch (10,000) and high rollout count (24): With smaller batches (e.g., 256–1,024), MAPPO and IPPO exhibit wildly oscillating rewards that never converge. The high gradient variance of multi-agent policy gradients in this environment—heterogeneous servers, bimodal workloads, and non-stationary arrivals—requires large batches to average over noise. These measures build on the official MAPPO configuration (Yu et al., 2022) with further stabilization. DG-PG uses the same settings for fair comparison. The remaining differences below the midline each favor the baselines: • Entropy : MAPPO/IPPO use a fixed coefficient ( 0.005 ) rather than decay, because entropy decay caused premature policy collapse in our tuning. The fixed value was selected as the best-performing setting across grid search. • Training length : MAPPO/IPPO are trained for 500 episodes ( 2.5× longer than DG-PG’s 200), providing additional convergence time. 23 Descent-Guided Policy Gradient 
+
+I.3. Neural Network Models (DG-PG) 
+
+The NN architecture consists of a 2-layer MLP with Tanh activations for both actor and critic, plus a learnable agent-ID embedding (dimension 16) concatenated with the observation. This configuration is shared by the hyperparameter selection (Section 6.2) and scalability experiments (Section 6.4). 
+
+DG-PG Hyperparameters. 
+
+• Learning rate: 3 × 10 −4 (exponential decay) • Initial entropy coefficient: 0.02 (exponential decay to 10 −4)• PPO update epochs: K = 4 (unified for actor and critic) • Training episodes: 200 
+
+• Gradient clipping: max norm 0.5
+
+• Guidance weight α: dynamic three-phase schedule (Section 6.2): α = 0 .9 for the first 10% of training, linear decay 
+
+0.9 → 0.2 from 10% to 50%, and α = 0 .2 thereafter • Signal normalization: running mean and variance (momentum 0.99 ), clipped to [−3, 3] 
+
+Scale-Specific Settings. Network capacity and mini-batch sizes are scaled with problem size. At large scales ( N ≥ 50 ), we widen the PPO clipping ratio to ϵ = 0 .4 because the larger number of parameters makes the model robust to more aggressive updates. Table 7 provides the complete settings.  
+
+> Table 7. Scale-specific hyperparameters for NN models (DG-PG only).
+
+Servers (N ) Hidden Dim Mini-batch Rollouts Parallel Envs ϵ
+
+5 128 256 12 4 0.2 10 128 512 12 4 0.2 20 128 512 12 4 0.2 50 256 1024 8 4 0.4 100 512 2048 6 2 0.4 200 1024 2048 4 1 0.4 
+
+Training Stability. The guidance signal fundamentally changes DG-PG’s training dynamics. By reducing gradient variance (Theorem 4.2), it eliminates the need for the stabilization measures that MAPPO and IPPO require. Batch size and rollouts : DG-PG trains with mini-batches of 256–2048 and 4–12 rollouts—an order of magnitude smaller than the linear experiments—yet its actor-critic updates remain stable without split-epoch scheduling or large-batch averaging. α schedule :when α is large (early training), the strong guidance drives rapid convergence; when α is small (late training), the inherently stable updates allow the critic to continue learning effectively, without the actor-critic oscillation observed in MAPPO and IPPO. No return normalization : DG-PG trains stably without return normalization, which also preserves the meaningful reward differences across scenarios (e.g., −80 vs. −100 ) that normalization would otherwise collapse. 
+
+## J. Baseline Failure Analysis 
+
+MAPPO and IPPO fail to learn competitive policies with neural network models due to a fundamental actor-critic update frequency dilemma : the actor and critic have conflicting requirements for gradient update frequency, and no configuration resolves both simultaneously. We verified this across ∼20 training runs at N =5 and N =2 , varying batch size, update epochs, entropy coefficient, value normalization, gradient clipping, and model architecture (NN and linear). Table 8 lists the representative runs at N =5 with a 2-layer MLP (128 hidden units). 24 Descent-Guided Policy Gradient                                                                                              
+
+> Table 8. Representative NN MAPPO runs at N=5 . “Steps/ep” = total gradient updates per episode.
+> Run Key Change Batch K-epochs Steps/ep cent Eps Best Rew Failure Mode
+> 0DG-PG defaults 256 43,064 0.02 (decay) 726 −87 Entropy collapse ( 1.59 →0.26 )1+ValueNorm 256 10 7,660 0.01 58 −78 Entropy collapse ( 1.60 →0.88 )2K:10 →4256 43,064 0.01 73 −80 Slow entropy collapse ( 1.54 →1.36 )3cent :0.01 →0.03 256 43,064 0.03 176 −92 Entropy bonus drowns advantage 4Align to official 50,000 10 40 0.01 170 −71 Critic too slow (ExplVar ≤0.30 )5Batch: 50 K→20 K 20,000 15 150 0.01 95 −77 Critic still insufficient 6Batch: 20 K→10 K 10,000 15 300 0.01 1,000 −57 No convergence; eval −198
+> 7+PBRS shaping 10,000 15 300 0.01 164 −80 Shaping signal <0.001% of reward
+
+J.1. The Update Frequency Dilemma 
+
+The table reveals three regimes, each failing for a different reason: • High frequency (Runs 0–3; 3,000+ steps/ep): The critic learns well (explained variance reaches 0.7), but the actor undergoes entropy collapse—the policy collapses to a near-deterministic, suboptimal action within 50–70 episodes, after which performance degrades irreversibly. • Low frequency (Runs 4–5; 40–150 steps/ep): Entropy remains stable, but the critic receives too few updates to learn accurate value estimates (explained variance ≤ 0.30 ), leaving the actor with uninformative advantages. • Intermediate frequency (Run 6; 300 steps/ep): The best compromise—entropy stable, critic explained variance reaching 0.35–0.49—but training rewards oscillate between −57 and −135 over 1,000 episodes with no convergence trend. Evaluation on 40 held-out scenarios yields −198 , far worse than the Random baseline ( −84 .2). 
+
+J.2. Attempts to Break the Dilemma 
+
+We tested four structural modifications, none of which resolved the fundamental conflict: 
+
+ValueNorm (Yu et al., 2022). Exponential moving average statistics ( β=0 .99999 ) improved critic learning (explained variance from 0.0 to 0.7) but did not prevent entropy collapse at high frequencies or slow critic convergence at low frequencies. 
+
+Official MAPPO alignment (Run 4). We aligned 7 hyperparameters with the official implementation (Yu et al., 2022): mini-batch size ( 256 → 50 ,000 ), value loss coefficient ( 0.5 → 1.0), Huber δ (1.0 → 10 .0), gradient clipping ( 0.5 → 10 .0), fixed entropy, and increased rollouts ( 12 → 24 ). This eliminated entropy collapse by reducing gradient steps from 3,064 to 40 per episode, but made the critic too slow. 
+
+Potential-based reward shaping (Run 7). PBRS with Φ( s) = −Var (utilization ) produced negligible shaping signals: 
+
+|γΦ( s′) − Φ( s)| ≈ 0.0003 versus rewards of magnitude 60 –140 . The bottleneck is gradient variance (cross-agent credit assignment), not temporal credit assignment. 
+
+Asynchronous actor-critic ( N =2 ). Separate critic-then-actor optimization at the smallest scale showed near-zero KL divergence and 0% PPO clipping, confirming that the gradient signal is too noisy for meaningful policy updates even with only 2 agents. 
+
+J.3. Transition to Linear Models 
+
+The dilemma is fundamentally harder for neural networks: a high-capacity critic can memorize recent scenarios but fails to generalize, while the actor’s non-convex loss landscape makes it prone to entropy collapse. Linear models (π(a|s) = softmax (W s + b), V (s) = w⊤s + b; ∼70 parameters) resolve this: they cannot overfit, and their convex critic 25 Descent-Guided Policy Gradient 
+
+loss permits more update epochs without instability. Even so, MAPPO and IPPO still require additional stabilization—split-epoch training, large mini-batches, and elevated rollout counts—as detailed in Section I. This isolates gradient variance as the sole remaining variable, providing the strictest test of DG-PG’s contribution. These failures are consistent with the Θ( N ) gradient variance scaling analyzed in Section 2. Three environment-specific factors further amplify the difficulty: • Server heterogeneity (ηCPU ∈ [0 .70 , 1.08] ): The optimal policy changes substantially across scenarios, preventing the critic from learning a single value function that generalizes. • Non-stationary arrivals : Poisson processes with time-varying rates make each episode structurally different, so the critic cannot rely on patterns from previous episodes. • Bimodal workloads : Jobs arrive with two distinct resource profiles, producing multimodal reward distributions that further increase gradient variance per sample. Together, these factors compound the Θ( N ) variance scaling and make this environment particularly challenging for standard multi-agent policy gradient methods. 
+
+## K. Computational Resources 
+
+All experiments were conducted on a single Apple M1 chip (8-core CPU, 16 GB unified memory, circa 2021) using CPU-only computation, without any GPU acceleration. 
+
+Convergence speed. A key practical advantage of DG-PG is its rapid convergence. As shown in Table 9, DG-PG reaches near-optimal performance within approximately 10 episodes across all scales, after which further training yields only marginal refinement.  
+
+> Table 9. DG-PG convergence analysis on Apple M1 (CPU-only). “Convergence” is defined as the episode at which reward first reaches within 10% of the best observed reward.
+
+Agents (N ) Converge Ep Converge Time Per-Episode Total (200 ep) 
+
+5 ≤5 ∼45 s ∼9 s ∼0.5 hr 10 ≤5 ∼1 min ∼12 s ∼0.7 hr 20 ≤10 ∼3 min ∼20 s ∼1.1 hr 100 ≤10 ∼25 min ∼2.5 min ∼8 hr 200 ≤10 ∼35 min ∼3.5 min ∼12 hr 
+
+Time breakdown. Each training episode consists of two phases: environment rollout (simulating N agents for 3000 timesteps) and policy optimization (gradient updates on the collected experience buffer of N × 3000 transitions). As 
+
+N grows, the optimization phase increasingly dominates wall-clock time, rising from 42% at N =5 to 66% at N =100 ,because the buffer size scales linearly with N . All timing results were obtained on consumer-grade hardware without GPU acceleration; wall-clock times would decrease significantly with GPU-based batch gradient computation. 26

@@ -1,0 +1,791 @@
+Title: CLIPO: Contrastive Learning in Policy Optimization Generalizes RLVR
+
+URL Source: https://arxiv.org/pdf/2603.10101v1
+
+Published Time: Thu, 12 Mar 2026 00:07:27 GMT
+
+Number of Pages: 22
+
+Markdown Content:
+# CLIPO: Contrastive Learning in Policy Optimization Generalizes RLVR 
+
+Sijia Cui ∗1,2 , Pengyu Cheng †1, Jiajun Song 1, Yongbo Gai 1, Guojun Zhang 1, Zhechao Yu 1, Jianhe Lin 1, Xiaoxi Jiang 1 and Guanjun Jiang 1  
+
+> 1Qwen Large Model Application Team, Alibaba, 2Institute of Automation, Chinese Academy of Sciences
+> *Work done during an internship at Alibaba. †Corresponding author.
+
+Reinforcement Learning with Verifiable Rewards (RLVR) has significantly advanced the reasoning ca-pacity of Large Language Models (LLMs). However, RLVR solely relies on final answers as outcome rewards, neglecting the correctness of intermediate reasoning steps. Training on these process-wrong but outcome-correct rollouts can lead to hallucination and answer-copying, severely undermining the model’s generalization and robustness. To address this, we incorporate a Contrastive Learning mechanism into the 
+
+Policy Optimization (CLIPO) to generalize the RLVR process. By optimizing a contrastive loss over success-ful rollouts, CLIPO steers the LLM to capture the invariant structure shared across correct reasoning paths. This provides a more robust cross-trajectory regularization than the original single-path supervision in RLVR, effectively mitigating step-level reasoning inconsistencies and suppressing hallucinatory artifacts. In experiments, CLIPO consistently improves multiple RLVR baselines across diverse reasoning benchmarks, demonstrating uniform improvements in generalization and robustness for policy optimization of LLMs. Our code and training recipes are available at https://github.com/Qwen-Applications/CLIPO .
+
+“Happy families are all alike; every unhappy family is unhappy in its own way.” 
+
+— Leo Tolstoy, Anna Karenina 
+
+# 1. Introduction Question 
+
+> Overlap of Successful Reasoning Paths
+> Maximize Similarity
+> Minimize Similarity
+> Rollout Reasoning Paths
+> Correct Step Incorrect Step
+
+Figure 1 | Intuition of CLIPO. Standard RLVR only relies on out-comes, neglecting the quality of intermediate reasoning steps. CLIPO addresses this limitation by maximizing similarity between successful reasoning trajectories. By aligning multiple positive roll-outs, CLIPO identifies the invariant reasoning structure, i.e. , the “overlap” of successful paths, implicitly eliminating incorrect and hallucinative reasoning steps. Reinforcement learning with verifiable re-wards (RLVR) has recently emerged as a mainstream paradigm for improving the reasoning capabilities of Large Lan-guage Models (LLMs) (Jaech et al., 2024; Guo et al., 2025; Team et al., 2025). Un-like Reinforcement Learning from Hu-man Feedback (RLHF) (Ouyang et al., 2022; Cheng et al., 2024; Li et al., 2026), which incurs substantial human annota-tion costs and suffers from inconsistent human judgment, RLVR leverages exter-nal environments ( e.g. , mathematical ver-ifiers or code compilers) to provide objec-tive, explicit, and consistent feedback. To train LLMs via RLVR, group-based policy optimization methods, such as Group Rel-ative Policy Optimization (GRPO) (Shao et al., 2024), estimate relative advan-tages within a set of sampled responses and have demonstrated strong empirical performance across a wide range of rea-soning tasks, including mathematics (Yu et al., 2025; Zheng et al., 2025a; Zhao et al., 2025; Gao et al., 2025a), coding (Zhoubian et al., 2025; Dai 
+
+> arXiv:2603.10101v1 [cs.LG] 10 Mar 2026 CLIPO: Contrastive Learning in Policy Optimization Generalizes RLVR
+
+et al., 2026), deep search (Jin et al., 2025; Lu et al., 2026; Wang et al., 2025a; Sun et al., 2025; Zheng et al., 2025c) and agents (Chen et al., 2025a; Gao et al., 2025b; Dong et al., 2026). However, RLVR faces ongoing doubts about its generalization capabilities (Alam & Rastogi, 2025; Chen et al., 2026), for it relies on outcome-based rewards without verifying intermediate reasoning steps, in which models are prone to overfitting by memorizing ground-truth answers (Wu et al., 2025; Ruan et al., 2025; Yan et al., 2026). Such a coarse and binary rewarding scheme fails to distinguish between logically sound and spurious reasoning, as it collapses diverse reasoning paths sharing the same outcome into identical reward signals. To address this weakness, a series of recent works have explored process reward models (PRMs) that provide finer-grained supervision by identifying errors during the reasoning process (Lightman et al., 2023; Wang et al., 2024; Luo et al., 2024; Zheng et al., 2025b; Zhang et al., 2025b). The critical challenge for PRM methods lies in the substantial human annotation required to collect high-quality process reward data, making it costly and difficult to scale (Zhang et al., 2025b). Alternatively, some works leverage token-level entropy to provide fine-grained training guidance and enhance exploration (Chen et al., 2025b; Zhang et al., 2025a; Tan et al., 2025; Jiang et al., 2025; Wang et al., 2025c; Huang et al., 2026). Nevertheless, such methods primarily reflect distributional uncertainty rather than semantic logical importance. Furthermore, their effectiveness is highly dependent on model capacity, often failing to provide reliable exploration signals as model scale varies (Cui et al., 2025; Wang et al., 2025b). On the other hand, contrastive learning (Chen et al., 2020; He et al., 2020; Radford et al., 2021) has been widely recognized as an unsupervised training scheme with strong generalization performance (Saunshi et al., 2019; Krishna et al., 2022; Castricato et al., 2022), in which models learn informative representations by maximizing similarity between positive pairs and minimizing it between negatives. Since RLVR methods intrinsically utilize binary outcome rewards and target at enlarging the reward gap between positive (successful) and negative (failed) rollouts, an interesting question naturally arises: “Can contrastive learning enhance the generalization of RLVR?” By designating successful and failed trajectories as positive and negative instances, contrastive learning can be seamlessly integrated into RLVR. Our insight, illustrated in Figure 1, is that successful reasoning paths share a consistent underlying logic, whereas intermediate errors/hallucinations manifest as sporadic, uncorrelated noise. By enforcing proximity among successful trajectories in the embedding space, contrastive learning acts as a denoising mechanism: it amplifies the invariant logical flow while suppressing non-systematic reasoning failures and hallucinations, ultimately leading to more robust generalization. Based on this analysis, we propose Contrastive Learning in Policy Optimization (CLIPO), a novel framework that integrates contrastive learning into group-based policy optimization. In CLIPO, a lightweight auxiliary head projects reasoning trajectories into an embedding space, where an InfoNCE objective (Oord et al., 2018) is applied within each rollout group. This objective serves a dual purpose: it maximizes consistency among correct trajectories (positives) while enforcing a margin from erroneous ones (negatives). This alignment process compels the model to distill a shared logical essence across diverse successful rollouts, effectively disentangling it from faulty reasoning paths. The resulting contrastive loss is repurposed as a dense, auxiliary reward signal that complements the sparse, outcome-based feedback, providing a more informative gradient for policy optimization. We validate the effectiveness of CLIPO through two experimental tracks of increasing complexity. In the first track, models are trained on the GSM8K dataset (Cobbe et al., 2021) and evaluated across 8 diverse benchmarks. The second track involves training on MATH 7.5K (Hendrycks et al., 2021b), and evaluating on 6 challenging competition-level mathematics benchmarks. Across both tracks, CLIPO consistently outperforms standard RLVR baselines. Notably, our method shows substantial performance gains on perturbed and symbolic tasks, highlighting its robustness and generalization. 
+
+# 2. Preliminary 
+
+2.1. Reinforcement Learning with Verifiable Rewards 
+
+Unlike traditional reinforcement learning from human feedback (RLHF) relying on a learned reward model, RLVR (Jaech et al., 2024; Guo et al., 2025; Team et al., 2025) directly leverages deterministic environment feedback (e.g., unit tests for coding, or equivalence checkers for mathematics) to provide binary reward outcomes. Formally, given a prompt 𝒙 ∈ X , the policy model 𝜋 𝜃 (·| 𝒙 ) generates a response 𝒚 ∈ Y . The objective of RLVR is to maximize the expected verifiable reward: 
+
+𝔼 𝒙 ∼X ,𝒚 ∼𝜋 𝜃 (· | 𝒙 )
+
+𝑟 (𝒙 , 𝒚 ) − 𝛽 KL [𝜋 𝜃 ∥𝜋 ref ], (1) 
+
+> 2CLIPO: Contrastive Learning in Policy Optimization Generalizes RLVR
+
+where 𝜋 ref is a reference model and usually set as the initial checkpoint of 𝜋 𝜃 , KL [𝜋 𝜃 ∥𝜋 ref ] is the KL divergence between the policy and reference model to maintain the training stability, and 𝛽 > 0 is the coefficient for the KL penalty. Without loss of generality, we simplify the objective by omitting the KL penalty term in the following sections. The input 𝒙 is associated with a ground-truth answer 𝒂 ∗, and the verifiable reward 𝑟 (𝒙 , 𝒚 ) directly check if 𝒂 ∗ and the predicted answer 𝒂 = A ( 𝒚 ) is equivalent: 𝑟 (𝒙 , 𝒚 ) = 1{A ( 𝒚 ) = 𝒂 ∗ }, where 1{·} is a binary indictor, and A (·) represents the predicted reasoning answer from the response 𝒚 .To optimize the above RLVR objective, policy gradient methods, such as Proximal Policy Optimization (PPO) (Schulman et al., 2017) and Group Relative Policy Optimization (GRPO) (Shao et al., 2024), dominate as the main solution. Generally, policy optimization methods estimate the gradient of equation 1 with the REIN-FORCE estimator (Williams, 1992): 𝔼 𝒙 ∼X ,𝒚 ∼𝜋 𝜃 (· | 𝒙 )
+
+h Í| 𝒚 | 
+
+> 𝑡 =1
+
+∇𝜃 log (𝜋 𝜃 ( 𝑦 𝑡 | 𝒚 <𝑡 , 𝒙 ) · ˆ𝐴 𝑡 
+
+i
+
+, where 𝒚 <𝑡 = ( 𝑦 1, 𝑦 2, . . . , 𝑦 𝑡 −1)
+
+is the length-𝑡 prefix of the token sequence 𝒚 , and ˆ𝐴 𝑡 is estimated advantage of the 𝑡 -th token 𝑦 𝑡 based on the outcome reward 𝑟 (𝒙 , 𝒚 ). PPO deploys a critic model to predict each token’s value and calculate the advantage ˆ𝐴 𝑡 
+
+with Generalized Advantage Estimation (GAE) (Schulman et al., 2015). GRPO eliminates the need for the addi-tional critic model by estimating the baseline within a group of sampled responses G = { 𝒚 1, 𝒚 2, . . . , 𝒚 𝐺 } ∼ 𝜋 𝜃 (·| 𝒙 )
+
+and their corresponding rewards {𝑟 𝑖 = 𝑟 (𝒙 , 𝒚 𝑖 )} 𝐺 𝑖 =1. GRPO assumes all tokens within one rollout have the same advantage, which is computed by normalization over the rollout group: ˆ𝐴 𝑡 𝑖 = 𝑟 𝑖 −Mean (𝑟 1,𝑟 2,...,𝑟 𝐺 )  
+
+> Std (𝑟 1,𝑟 2,...,𝑟 𝐺 )
+
+. Therefore, the overall policy gradient for GRPO is: 
+
+𝔼 𝒙 ∼X 
+
+h 1
+
+𝐺 
+
+> 𝐺
+
+∑︁ 
+
+> 𝑖 =1
+
+h | 𝒚 𝑖 |∑︁ 
+
+> 𝑡 =1
+
+∇𝜃 log (𝜋 𝜃 ( 𝑦 𝑡 𝑖 | 𝒚 <𝑡 𝑖 , 𝒙 ) · ˆ𝐴 𝑡 𝑖 
+
+i i 
+
+. (2) To further improve GRPO’s stability and scalability, Group Sequence Policy Optimization (GSPO) (Zheng et al., 2025a) shifts optimization from token-level importance weighting to the sequence level, effectively mitigating variance in large-scale training. Meanwhile, Decoupled Clip and Dynamic sAmpling Policy Optimization (DAPO) (Yu et al., 2025) introduces asymmetric clipping bounds and dynamic sampling to maintain effective gradients in sparse reward environments. Despite these algorithmic refinements, existing RLVR methods primarily rely on sparse, binary feedback from verifiers, which lacks the resolution to distinguish the quality of intermediate reasoning steps. 
+
+2.2. Contrastive Learning 
+
+Contrastive learning (CL) has emerged as a powerful paradigm for self-supervised representation learning, aiming to map data points into a latent space where semantically similar samples are clustered together while dissimilar ones are pushed apart (Oord et al., 2018; Frosst et al., 2019; Khosla et al., 2020; Chen et al., 2020). A cornerstone of CL methods is the InfoNCE objective (Oord et al., 2018): Formally, given a group of pairwise instances {( 𝒙 𝑖 , 𝒚 𝑖 )} 𝑁 𝑖 , CL seeks to optimize the embedding model as a representation function 𝑓 (·) such that it minimizes the distance between each 𝒙 𝑖 and its positive counterpart 𝒚 𝑖 , while simultaneously maximizing 
+
+𝒙 𝑖 ’s distance from a set of negative samples { 𝒚 𝑗 } 𝑗 ≠𝑖 . A widely adopted approach to realize this objective is the InfoNCE loss (Oord et al., 2018), which frames the representation learning task as a multi-class categorical classification problem: 
+
+LInfoNCE := −𝔼 𝑝 (𝒙 ,𝒚 )
+
+h 1
+
+𝑁 
+
+> 𝑁
+
+∑︁ 
+
+> 𝑖 =1
+
+log exp ( 𝑓 (𝒙 𝑖 , 𝒚 𝑖 )) 
+
+Í𝑁 𝑗 =1 exp ( 𝑓 (𝒙 𝑖 , 𝒚 𝑗 )) 
+
+i
+
+, (3) which frames the learning process as a multi-class categorical cross-entropy task to identify a positive sample among a set of noise contrastive samples. Theoretically, the negative InfoNCE loss is equivalent to a lower-bound estimator of the mutual information (MI) I(𝒙 ; 𝒚 ) between the two variables (𝒙 , 𝒚 ) with samples {( 𝒙 𝑖 , 𝒚 𝑖 )} 𝑁 𝑖 =1 (Poole et al., 2019): 
+
+I(𝒙 ; 𝒚 ) := 𝔼 𝑝 (𝒙 ,𝒚 )
+
+h
+
+log 𝑝 (𝒙 , 𝒚 )
+
+𝑝 (𝒙 ) 𝑝 ( 𝒚 )
+
+i
+
+≥ log (𝑁 ) − L InfoNCE , (4) where 𝑝 (𝒙 , 𝒚 ) is the joint distribution of (𝒙 , 𝒚 ), and 𝑝 (𝒙 ) and 𝑝 ( 𝒚 ) are the marginal distribution of 𝒙 and 𝒚 
+
+respectively. Hence, by minimizing the InfoNCE loss, one can enlarge the information overlap between the two learnable features or embeddings, thereby distilling the underlying semantic invariants. Specifically, the loss encourages the representations of positive pairs to be close in the embedding space while pushing negative pairs apart, effectively capturing the shared features across similar instances. 
+
+> 3CLIPO: Contrastive Learning in Policy Optimization Generalizes RLVR Hidden State 1 RLVR Reward 1 Contrastive Head Semantic Embedding 1 Contrastive Reward 1 CLIPO Reward 1
+> Rollout 1
+> Hidden State 2 RLVR Reward 2 Contrastive Head Semantic Embedding 2 Contrastive Reward 2 CLIPO Reward 2
+> Rollout 2
+> Hidden State G RLVR Reward G Contrastive Head Semantic Embedding G Contrastive Reward G CLIPO Reward G
+> Rollout G
+> Policy Model
+
+Figure 2 | Framework of CLIPO. For each input prompt 𝒙 , policy optimization methods generate a group of rollouts { 𝒚 1, 𝒚 2, . . . , 𝒚 𝐺 } then calculate corresponding RLVR rewards {𝑟 1, 𝑟 2, . . . , 𝑟 𝐺 }. CLIPO applies a contrastive head on the top of the last hidden states {𝒉 1, 𝒉 2, . . . , 𝒉 𝐺 } of the rollout group and outputs trajectory-level semantic embeddings {𝒆 1, 𝒆 2, . . . , 𝒆 𝐺 }. The contrastive rewards {𝑟 CL  
+
+> 1
+
+, 𝑟 CL  
+
+> 2
+
+, . . . , 𝑟 CL  
+
+> 𝐺
+
+} are computed across the semantic embedding group to provide the similarity of successful and failed trajectories. The final CLIPO reward for the 𝑖 -th rollout is 𝑟 ′ 
+
+> 𝑖
+
+= 𝑟 𝑖 + 𝑟 CL  
+
+> 𝑖
+
+.
+
+# 3. Methodology 
+
+We propose Contrastive Learning in Policy Optimization (CLIPO), a framework designed to enhance the reasoning capabilities of LLMs by exploiting the latent semantic consistency among successful reasoning trajectories. As illustrated in Figure 2, CLIPO integrates an intra-group contrastive reward into standard policy optimization. Instead of relying solely on sparse, outcome-based feedback, we augment the reward signal with a dense contrastive component derived from a latent embedding space that promotes alignment among correct reasoning paths and encourages separation from erroneous ones. Specifically, we append a lightweight contrastive head to the LLM backbone, which extracts trajectory-level representations from the hidden states. During training, we compute a contrastive loss within each rollout group, using correct responses as positive anchors and incorrect ones as negatives. This loss is subsequently repurposed as a dense auxiliary reward, providing the model with a more informative signal to guide policy updates. We formalize the CLIPO objective in Section 3.1 and detail our implementation strategy in Section 3.2. 
+
+3.1. CLIPO Objective 
+
+Suppose we have a binary reward function 𝑟 : X × Y → { 0, 1} where 𝑟 (𝒙 , 𝒚 ) = 1 if the model response 𝒚 is correct, and 𝑟 (𝒙 , 𝒚 ) = 0 if the model response is incorrect. The mainstream reinforcement learning with variable rewards (RLVR) aims to optimize the policy optimization objective in equation 1. As discussed in Figure 1, we expect the policy model 𝜋 𝜃 ( 𝒚 |𝒙 ) to identify the commonalities among the correct rollout samples during the RLVR process, i.e. , to maximize the mutual information (as in equation 4) among the positive rollouts: 
+
+max   
+
+> 𝒚 ,¯𝒚 ∼𝜋 𝜃 (· | 𝒙 )
+
+I
+
+
+
+𝒚 ; ¯ 𝒚 𝑟 (𝒙 , 𝒚 ) = 1, 𝑟 (𝒙 , ¯𝒚 ) = 1
+
+
+
+. (5) Note that the mutual information calculation is conditioned on the event P𝒚 ,¯𝒚 := {𝑟 (𝒙 , 𝒚 ) = 1, 𝑟 (𝒙 , ¯𝒚 ) = 1},where 𝒚 and ¯𝒚 correctly obtain positive rewards. By maximizing equation 5, the policy model 𝜋 𝜃 is required to seek the commonalities among positive rollouts, obtaining more robust experiences of successes for policy optimization. Therefore, the overall learning objective for CLIPO is: 
+
+max   
+
+> 𝒚 ,¯𝒚 ∼𝜋 𝜃 (· | 𝒙 )
+
+𝔼 𝑟 (𝒙 , 𝒚 ) + 𝜆 · I 𝒚 ; ¯ 𝒚 𝒙 , P𝒚 ,¯𝒚 
+
+. (6) By maximizing the mutual information among positive rollouts, we enforce semantic proximity among successful reasoning paths. This regularization provides a dense, informative signal that guides the policy toward logically coherent reasoning, effectively compensating for the limitations of sparse outcome-based verifiers of RLVR. 
+
+> 4CLIPO: Contrastive Learning in Policy Optimization Generalizes RLVR
+
+Pracitically, the exact MI value I 𝒚 ; ¯𝒚 𝒙 , P𝒚 ,¯𝒚 
+
+ is challenging to compute, for the joint distribution 𝑝 ( 𝒚 , ¯𝒚 |𝒙 , P𝒚 ,¯𝒚 )
+
+is intractable (Cheng et al., 2020). Fortunately, in each policy optimization step, we obtain a group of rollouts 
+
+G = { 𝒚 1, 𝒚 2, . . . , 𝒚 𝐺 } ∼ 𝜋 𝜃 (·| 𝒙 ), where we can use a sample-based MI estimator to approximate the ground-truth value of I 𝒚 ; ¯𝒚 𝒙 , P𝒚 ,¯𝒚 
+
+. More specifically, we select the InfoNCE (Oord et al., 2018) as the lower bound approximation for MI maximization, i.e. , for each 𝒙 , I 𝒚 ; ¯ 𝒚 𝒙 , P𝒚 ,¯𝒚 
+
+ ≥
+
+log (𝐺 ) + 1
+
+|P | ∑︁ 𝒚 ,¯𝒚 ∈ P 
+
+log exp ( 𝑓 ( 𝒚 , ¯𝒚 )) 
+
+Í𝐺 𝑖 =1 exp ( 𝑓 ( 𝒚 , 𝒚 𝑖 )) 
+
+!
+
+= log (𝐺 ) − L CL (𝒙 ), (7) where P = { 𝒚 𝑖 ∈ G : 𝑟 (𝒙 , 𝒚 𝑖 ) = 1} denotes the rollout subset with successful outcome. For each positive rollout 
+
+𝒚 , we uniformly sample another positive rollout ¯𝒚 ∈ P to make up the positive pair ( 𝒚 , ¯𝒚 ), and use the remaining rollouts in group as the negatives {( 𝒚 , 𝒚 𝑖 )} | 𝒚 𝑖 ∈ G , 𝒚 𝑖 ≠ ¯𝒚 }. Then the InfoNCE loss is computed as the log-ratio of the positive pair score to the mean score of negative pairs in a contrastive learning scheme. The score function 𝑓 ( 𝒚 , ¯𝒚 ) measures the semantic similarity between 𝒚 and ¯𝒚 , which we implement as the inner product of embeddings, following the design from SimCLR (Chen et al., 2020): 
+
+𝑓 ( 𝒚 , ¯𝒚 ) = 𝑔 𝜙 (𝒉 𝜃 ( 𝒚 )) T𝑔 𝜙 (𝒉 𝜃 ( ¯𝒚 ))/ 𝜏, (8) where 𝒉 𝜃 ( 𝒚 ) is the last hidden state output by the policy model 𝜋 𝜃 (·| 𝒙 )’s transformer backbone, and 𝑔 𝜙 (·) is a learnable contrastive head to extract core semantic information from the last hidden state of the transformer. 
+
+𝜏 > 0 is the temperature hyper-parameter. Note that the contrastive loss in equation 7 is inapplicable when 
+
+|P | ≤ 1 (unable to provide positive pairs) or |P | = 𝐺 (no failures). Therefore, we only apply the CLIPO loss on samples satisfying 1 < |P | < 𝐺 to avoid these degenerate cases. 
+
+3.2. CLIPO Implementation Sentence-Level Representation. For each response 𝒚 , the policy model 𝜋 𝜃 (·| 𝒙 ) produces token-level hidden states ¯𝒉 𝜃 ( 𝒚 ) ∈ ℝ𝑇 ×𝐷 , where 𝑇 is the length of the response token sequence and 𝐷 is the dimension of hidden states. To derive a sentence-level representation from the token-level hidden states, we apply a mean pooling operation of all response hidden states across the sequence dimension: 
+
+𝒉 𝜃 ( 𝒚 ) = 1
+
+𝑇 
+
+> 𝑇
+
+∑︁ 
+
+> 𝑡 =1
+
+¯𝒉 𝜃 ( 𝒚 )𝑡 , (9) obtaining 𝒉 𝜃 ( 𝒚 ) ∈ ℝ𝐷 that encapsulates the overall semantic content of the response. This pooled representation is then passed through the contrastive head 𝑔 𝜙 : ℝ𝐷 → ℝ𝑑 to obtain the semantic embedding: 𝒆 ( 𝒚 ) = 𝑔 𝜙 (𝒉 𝜃 ( 𝒚 )) ,
+
+where 𝒆 ( 𝒚 ) ∈ ℝ𝑑 is used for similarity calculation in contrastive loss computation. 
+
+Contrastive Head Optimization. The contrastive head 𝑔 𝜙 typically is a simple linear layer 𝑊 ∈ ℝ𝑑 ×𝐷 , designed to project the pooled representation into a latent space suitable for contrastive learning (Chen et al., 2020). Then the contrastive loss for each correct response 𝒚 𝑖 in the group G is: 
+
+LCL (𝒙 , 𝒚 𝑖 ) = − log exp ( 𝑓 ( 𝒚 𝑖 , ¯𝒚 𝑖 )) 
+
+Í𝐺 𝑗 =1 exp ( 𝑓 ( 𝒚 𝑖 , 𝒚 𝑗 )) 
+
+!
+
+, (10) where ¯𝒚 𝑖 is a uniformly sampled positive sample from the set of other correct responses in the group G. The contrastive head is updated jointly with the policy model during training, and its parameters 𝜙 are optimized to minimize the average contrastive loss across all valid anchors in the batch. The anchor with no positive pair in the group is considered invalid and excluded from loss computation. 
+
+Contrastive Reward Integration. The total reward 𝑟 ′ 
+
+> 𝑖
+
+for a given response 𝑦 𝑖 is formulated as the sum of the original verifiable reward 𝑟 𝑖 and the contrastive reward 𝑟 CL  
+
+> 𝑖
+
+:
+
+𝑟 ′ 
+
+> 𝑖
+
+= 𝑟 𝑖 + 𝑟 CL  
+
+> 𝑖
+
+, (11) To prevent the auxiliary signal from dominating the verifiable objective, we scale it by the re-weighting parameter 𝜆 > 0 in equation 6 and clip it with a lower threshold: 
+
+𝑟 CL  
+
+> 𝑖
+
+= max (− 𝜆 · L CL (𝒙 , 𝒚 𝑖 ), −0.5), (12) 
+
+> 5CLIPO: Contrastive Learning in Policy Optimization Generalizes RLVR
+
+where LCL (𝒙 , 𝒚 𝑖 ) is the contrastive loss in equation 10. By incorporating 𝑟 CL  
+
+> 𝑖
+
+, we move beyond the limitations of sparse, binary feedback of RLVR. This mechanism provides granular guidance even among multiple correct responses by prioritizing those that converge within the “consensus” region of the solution space. Consequently, the model is compelled to refine its reasoning strategies toward more consistent and robust trajectories, rather than merely satisfying the verification threshold. 
+
+# 4. Experiments 
+
+4.1. Experimental Setup Datasets. To rigorously evaluate the effectiveness of our proposed method, we construct two separate experimental tracks using training sets of varying difficulty levels. 
+
+• Track I: Grade-School and General Reasoning. In the first setup, we fine-tune our model on the GSM8K dataset, which comprises approximately 8,000 high-school-level mathematical word problems. We evaluate it on the GSM8K test set, as well as mathematical benchmarks including GSM8K-Symbolic, GSM8K-P1, GSM8K-P2 (Mirzadeh et al., 2025). These variants introduce different levels of complexity and distribu-tion shifts to assess the model’s generalization capabilities. Furthermore, we assess its broader reasoning and general knowledge capabilities across diverse benchmarks such as CommonsenseQA (Talmor et al., 2019), TruthfulQA (Lin et al., 2022), TheoremQA (Chen et al., 2023), and the MMLU (Hendrycks et al., 2021a) suite. We use SYM, P1, P2, cQA, tQA, thrmQA to denote GSM8K-Symbolic, GSM8K-P1, GSM8K-P2, CommonsenseQA, TruthfulQA, TheoremQA datasets respectively. 
+
+• Track II: Competition-Level Mathematical Reasoning. To further investigate the impact of task diffi-culty on model performance, we conduct an additional set of experiments by training on the MATH 7.5k dataset (Hendrycks et al., 2021b). The evaluation datasets include MATH500 (Hendrycks et al., 2021b), Math-Perturb (Huang et al., 2025) (covering simple and hard variants), which further test robustness to problem perturbations. Meanwhile, we also assess performance on competition-level challenges such as AMC23, AIME and AIME25, which feature problems of significantly higher complexity. We use Math, Math_S, Math_H to denote MATH500, Math-Perturb Simple, Math-Perturb Hard datasets respectively. 
+
+Metrics. We report Pass@1 (Dai et al., 2025) as our primary evaluation metric. In Track I, we generate a single response using a temperature of 0.6. In Track II, given the higher difficulty and limited size of the datasets, we sample 16 responses per question with the same temperature of 0.6. 
+
+Models. For experiments on Track I, we utilize Qwen2.5-3B-Instruct as the base model. For the more challenging MATH7.5k dataset, we evaluate our method across Qwen2.5-7B-Instruct, Llama3.1-8B-Instruct, and reasoning DeepSeek-R1-Distill-Qwen-7B. 
+
+Baselines. We compare CLIPO against several state-of-the-art group-based RLVR baselines, including: 
+
+• Base Model : The original models without any additional training. 
+
+• GRPO (Shao et al., 2024): An efficient and effective algorithm that eliminates the need for a separate critic model. It estimates the baseline by averaging rewards from a group of responses for the same prompt. 
+
+• GSPO (Zheng et al., 2025a): An extension of group-based optimization that shifts focus from token-level to sequence-level likelihood and clipping. 
+
+• DAPO (Yu et al., 2025): It introduces techniques such as decoupled clipping ranges and dynamic sampling. 
+
+• GMPO (Zhao et al., 2025): A variant of RLVR that maximizes the geometric mean of reward-weighted policy ratios instead of the arithmetic mean. 
+
+Contrastive Head Designs. We implement the contrastive head using a Linear layer, following designs from prior work (Chen et al., 2020; Khosla et al., 2020). The input dimension 𝐷 of the contrastive head matches the hidden size of the respective base model. For track I, the output dimensionality 𝑑 = 512 . For track II, we increase the output size to 2048 to provide the higher representational capacity required for complex mathematical reasoning steps. The final embeddings are obtained via 𝐿 2-normalization. The head is optimized using AdamW with a learning rate of 1 × 10 −3 and a weight decay of 0.01 . We experiment with various contrastive loss functions, including InfoNCE loss (Oord et al., 2018; Chen et al., 2020), SupCon loss (Khosla et al., 2020) and Soft Nearest Neighbor loss (Salakhutdinov & Hinton, 2007; Frosst et al., 2019). In all configurations, we use the coefficient 𝜆 = 0.2 for InfoNCE and SupCon, and 𝜆 = 1 for SoftNN loss. 
+
+> 6CLIPO: Contrastive Learning in Policy Optimization Generalizes RLVR
+
+Implementation. Our training pipeline is implemented using the VERL framework (Sheng et al., 2024). For track I, we use a global batch size of 512. The models are trained for 5 epochs, before which we perform a 1-epoch warmup for the contrastive head. The maximum response length is restricted to 2048 tokens, with default 16 rollouts per prompt. For track II, we use a batch size of 128, extending the training to 8 epochs, with a similar early warmup for the head. To accommodate the complexity of the problems, the maximum response length is increased to 4096 tokens. For most mathematical reasoning datasets (e.g., GSM8K, MATH, AMC, AIME, AIME2025, TheoremQA, and their variants), we adopt the following instruction: Let’s think step by step and output the final answer within \boxed{}. For multiple-choice datasets (e.g., MMLU, TruthfulQA, CommonsenseQA), we further specify the expected answer format by including the available options. For example, for MMLU: Let’s think step by step and output the final answer (e.g., A, B, C, D) within \boxed{}. These setting is consistent across all baselines to ensure fair comparisons. Appendix A.1 provides further details. Table 1 | Performance comparison of different RLVR methods on Track I(GSM8K and General Reasoning). ‘Avg.’ represents the average performance across all datasets, and ‘M-Avg.’ represents the average performance on math-related datasets. ‘G-Avg.’ represents the average performance on general and QA tasks. ‘ Δ’ represents the improvement after using our method, with light green indicating improvement and light red indicating decline. The best results are highlighted in bold , and the second-best results are underlined.                                                                                                                                                          
+
+> Methods GSM8K SYM P1 P2 cQA tQA thrmQA MMLU M-Avg. G-Avg. Avg.
+> Base Model 86 .05 82 .40 70 .90 47 .96 73 .63 29 .99 24 .90 68 .09 71 .83 49 .15 60 .49
+> GRPO 87 .79 84 .04 73 .12 50 .80 74 .94 30 .48 27.71 68 .19 73 .94 50 .33 62 .13
+> GSPO 87 .19 83 .94 73 .28 51 .36 74 .86 30 .23 27 .38 67 .68 73 .94 50 .04 61 .99
+> DAPO 87 .41 84 .56 74.70 52 .32 76 .00 31 .58 27 .11 69.00 74 .75 50 .92 62 .84
+> GMPO 86 .81 84 .02 73 .90 49 .80 76 .33 30 .97 26 .57 68 .49 73 .63 50 .59 62 .11
+> GRPO+CLIPO 88.02 84 .62 74 .60 54.16 76.90 31 .52 27.58 68.64 75.35 51.16 63.26
+> Δ0.23 0.58 1.48 3.36 1.97 1.04 −0.13 0.46 1.41 0.83 1.12
+> GSPO+CLIPO 87.95 83 .98 74 .54 52 .92 75 .92 32.19 26 .10 67 .48 74 .85 50 .42 62 .63
+> Δ0.76 0.04 1.26 1.56 1.06 1.96 −1.27 −0.20 0.90 0.39 0.65
+> DAPO+CLIPO 87 .57 84.66 74 .54 53.12 77.07 31 .40 27 .44 67 .93 74.97 50.96 62.97
+> Δ0.15 0.10 −0.16 0.80 1.06 −0.18 0.33 −1.06 0.22 0.04 0.13
+> GMPO+CLIPO 87 .64 85.52 75.52 50 .92 75 .35 31.95 27.58 67 .63 74 .90 50 .63 62 .76
+> Δ0.83 1.50 1.62 1.12 −0.98 0.98 1.00 −0.86 1.27 0.03 0.65
+
+4.2. Main Results 
+
+Tables 1 and 2 summarize the performance of our method compared to several state-of-the-art RLVR baselines. Since CLIPO is compatible with group-based methods, we denote ‘method+CLIPO’ or ‘CLIPO (method)’ as the version of method augmented with CLIPO. We use GRPO as the default base method, and Δ indicates the relative improvement brought by CLIPO. 
+
+Results on GSM8K and General Reasoning. As shown in Table 1, GRPO+CLIPO achieves the highest overall average score of 63.26, consistently outperforming all baselines. Our method shows significant improvements on the more challenging variants of GSM8K. Specifically, GRPO+CLIPO improves GSM8K-P1 and GSM8K-P2 by +1.48 and +3.36 points, respectively, and achieves the highest math-average score of 75 .35 . These results indicate that contrastive reward signals are particularly beneficial for enhancing robustness under distribution shifts and more challenging compositional reasoning settings. Beyond mathematics, CLIPO exhibits strong cross-domain generalization. CLIPO attains either the best or second-best performance across all four general reasoning benchmarks. This indicates that the contrastive auxiliary reward enhances the model’s general reasoning capabilities without sacrificing its general knowledge or linguistic capabilities. 
+
+Results on Competition-Level Reasoning. Table 2 presents the results for competition-level mathemat-ical reasoning tasks. DAPO+CLIPO achieves the highest average score of 44.05, surpassing all baselines. GMPO+CLIPO attains the second-best score of 43.76. Specifically, integrating CLIPO leads to performance gains across GRPO, GSPO, DAPO, and GMPO in overall average scores by +1.35 , +0.80 , +1.20 , and +0.83 
+
+respectively. On specific datasets such as MATH500, Math-Perturb Simple, and Math-Perturb Hard, CLIPO 
+
+> 7CLIPO: Contrastive Learning in Policy Optimization Generalizes RLVR
+
+Table 2 | Performance comparison on Track II(Competition-Level Reasoning). ‘M-Avg.’ represents the average performance on Math, Math_S, Math_H. ‘C-Avg.’ represents the average performance on competition-level datasets including AMC, AIME, and AIME25. 
+
+Methods Math Math_S Math_H AMC AIME AIME25 M-Avg. C-Avg. Avg. 
+
+Base Model 75 .35 59 .24 35 .31 44 .13 10 .63 6.25 56 .63 20 .33 38 .48 
+
+GRPO 76 .46 64 .83 37 .86 46 .84 17 .92 9.58 59 .72 24 .78 42 .25 
+
+GSPO 77.58 64 .56 38 .36 50.08 16 .25 10 .42 60 .17 25 .58 42 .87 
+
+DAPO 76 .03 66 .08 39.94 47 .36 19 .79 7.92 60 .68 25 .02 42 .85 
+
+GMPO 78.47 64 .27 37 .25 48 .42 19 .58 9.58 60 .00 25 .86 42 .93 
+
+GRPO+CLIPO 77 .49 67.21 38 .97 49 .17 18 .13 10 .63 61 .22 25 .97 43 .60  
+
+> Δ
+
+1.03 2.38 1.11 2.33 0.21 1.04 1.50 1.19 1.35 
+
+GSPO+CLIPO 77 .16 66 .69 37 .66 50.53 20.63 9.38 60 .50 26.84 43 .67  
+
+> Δ
+
+−0.41 2.13 −0.70 0.45 4.38 −1.04 0.34 1.26 0.80 
+
+DAPO+CLIPO 77 .43 66 .55 39.82 48 .42 18 .75 13.33 61.27 26.83 44.05  
+
+> Δ
+
+1.40 0.48 −0.11 1.05 −1.04 5.42 0.59 1.81 1.20 
+
+GMPO+CLIPO 77 .87 67.14 38 .83 47 .67 19.38 11.67 61.28 26 .24 43.76  
+
+> Δ
+
+−0.60 2.88 1.58 −0.75 −0.21 2.08 1.28 0.37 0.83 
+
+yields average improvements of +1.50 , +0.34 , +0.59 , and +1.28 respectively, demonstrating the effectiveness in enhancing reasoning capabilities under perturbations and distribution shifts. This highlights the efficacy of the contrastive head in improving the model’s generalization abilities. On competition-level mathematical datasets, CLIPO achieves average improvements of +1.19 , +1.26 , +1.81 , and +0.37 across the four different RLVR methods, respectively. This demonstrates the effectiveness of CLIPO in high-difficulty reasoning tasks. Overall, all of CLIPO outperform their respective baselines, demonstrating the universality of the contrastive reward mechanism in enhancing reasoning capabilities and generalizability. Across both tracks, the gains of CLIPO are consistent, especially on more challenging or distribution-shifted mathematical benchmarks. In out-of-distribution settings such as perturbation and symbolic reasoning tasks, CLIPO demonstrates enhanced robustness and generalization capabilities. These results validate our hypothesis that contrastive rewards, which encourage clustering of high-quality solutions in the representation space while pushing away low-quality ones, provide more informative and fine-grained learning signals than binary outcome-based feedback alone. Importantly, this enhancement is largely orthogonal to the underlying RLVR algorithm, offering complementary signals that capture fine-grained distinctions among trajectories. 
+
+4.3. Ablation Studies and Analysis Contrastive Head Analysis. CLIPO introduces a contrastive head that maps the LLM’s hidden states into a new embedding space, thereby learning a novel geometric structure. To validate the effectiveness of the contrastive head, we conduct an ablation where the contrastive head is fixed and not updated during training (denoted as CLIPO-fixed). As shown in Table 3, freezing the head leads to consistent performance drops across all benchmarks in both tracks. In Track I, CLIPO-fixed results in decreases of −0.62 , −0.92 , and −0.77 
+
+Table 3 | Comparison between CLIPO with and without fixed head on Track I and Track II. Metric 1 and Metric 2 represent M-Avg., G-Avg. for Track I, and M-Avg., C-Avg. for Track II, respectively. Δ indicates the performance drop when using fixed head. 
+
+Track Methods Metric 1 Metric 2 Avg. 
+
+Track I CLIPO 75.35 51.16 63.26 CLIPO-fixed 74.73 50.24 62.48  
+
+> Δ
+
+-0.62 -0.92 -0.77 Track II CLIPO 61.22 25.97 43.60 CLIPO-fixed 60.19 25.06 42.63  
+
+> Δ
+
+-1.03 -0.91 -0.97 
+
+> 8CLIPO: Contrastive Learning in Policy Optimization Generalizes RLVR
+
+in math-average, general-average, and overall-average scores, respectively. In Track II, CLIPO-fixed yields reductions of −1.03 , −0.91 , and −0.97 in there scores, respectively. These results highlight the importance of jointly optimizing the contrastive head with the base model. By allowing the head to adapt during training, the model can learn more effective representations that better capture the nuances of high-quality versus low-quality solutions, thereby enhancing the overall learning process. The complete experimental results, along with a visualization analysis of the semantic embeddings, are presented in Appendix A.2. Table 4 | Comparison among contrastive loss variants. Here, 𝑠 𝑖𝑎 denotes the similarity between 𝑖 and 𝑎 , while 
+
+𝑃 is the set of positive examples for 𝑖 and 𝑝 ∗ is a single sampled positive example. 
+
+Loss Formulation Positive Aggregation 
+
+InfoNCE − log 𝑒 𝑠 𝑖𝑝 ∗  
+
+> Í𝑎 𝑒 𝑠 𝑖𝑎
+
+Single Positive SupCon − 1  
+
+> |𝑃 |
+
+Í𝑝 log 𝑒 𝑠 𝑖𝑝   
+
+> Í𝑎 𝑒 𝑠 𝑖𝑎
+
+Mean Positives SoftNN − log    
+
+> Í𝑝 𝑒 𝑠 𝑖𝑝
+> Í𝑎 𝑒 𝑠 𝑖𝑎
+
+Sum Positives M-Avg. G-Avg. Avg.    
+
+> 0.00
+> 0.25
+> 0.50
+> 0.75
+> 1.00
+> 1.25
+> 1.50
+> Score vs Base Method (GRPO)
+> +1.41
+> +0.83
+> +1.13
+> +0.55 +0.57 +0.56
+> +1.01
+> -0.04
+> +0.49
+> CLIPO-InfoNCE
+> CLIPO-SupCon
+> CLIPO-SoftNN
+
+Figure 3 | Performance Gain Across Different Losses. 
+
+Contrastive Loss Variants. Except for the InfoNCE loss, we also experiment with two contrastive loss functions, SupCon loss (Khosla et al., 2020) and SoftNN loss (Salakhutdinov & Hinton, 2007; Frosst et al., 2019). The main differences among these loss functions are summarized in Table 4. Specifically, the difference lies in the strategy for selecting positives. InfoNCE samples a single correct response as the positive, SupCon loss considers all correct responses as positives and computes the average outside the logarithm, whereas SoftNN loss also uses all correct responses but computes their sum inside the logarithm. As shown in Figure 3, all three contrastive loss variants yield notable performance improvements over the base GRPO method on Track I. InfoNCE loss achieves the highest gains(+1.13) across three average scores, followed closely by SupCon loss(+0.56). SoftNN shows insufficiently stable improvements; however, it still exceeds the baseline by +0.49 on the overall average. More detailed results, as well as experiments on Track II, can be found in Appendix A.3. These results suggest that while the specific choice of contrastive loss can influence performance, the overall benefit of incorporating contrastive rewards is robust across different formulations. Table 5 | Effect of different contrastive learning tem-perature 𝜏 on CLIPO performance. It can be observed that lower temperature coefficients lead to better per-formance improvements; however, excessively low tem-perature may result in degraded performance. 
+
+𝜏 Math-Avg. Comp-Avg. Avg. 
+
+0.2 59.90 24.36 42.13 
+
+0.1 59.76 26.81 43.28 
+
+0.05 61.28 24.85 43.07 
+
+0.02 61.22 25.97 43.60 
+
+0.015 60.64 25.19 42.91 
+
+Contrastive Temperature 𝜏 Analysis. The temper-ature parameter 𝜏 plays a crucial role in contrastive learning. We conduct experiments to evaluate the impact of varying temperature values on training effectiveness. The results are presented in Table 5. From the table, it is evident that lower temperature values generally yield better performance improve-ments. Specifically, reducing 𝜏 from 0.2 to 0.02 improves the overall average score from 42.13 to 43.60, indicating that sharper similarity scaling ben-efits representation learning in our setting. This is attributed to the model’s increased focus on hard negatives, which enhances its discriminative capa-bilities, aligning with findings from Wang & Isola (2020); Wang & Liu (2021). Meanwhile, higher temperature settings (e.g., 0.2) lead to performance degradation. To analyze this phenomenon, we plot the average cosine similarity of positive pairs within the same group during training, as shown in Appendix A.4. We observe that higher temperature in greater fluctuations in the similarity of positive pairs, indicating that the model struggles to consistently push positive pairs together during training. Our findings suggest that lower temperatures are more effective for contrastive learning in our context. One possible explanation is that our setting involves a significant number of hard negatives, and a lower temperature enhances the model’s discriminative power, leading to better training outcomes (Wang & Isola, 2020). 
+
+> 9CLIPO: Contrastive Learning in Policy Optimization Generalizes RLVR
+
+Table 6 | Effect of different group sizes on CLIPO performance. Larger group sizes lead to better performance improvements. The best results are highlighted in bold. It can be observed that larger group sizes generally lead to better performance improvements across Avg. metrics. 
+
+GroupSize Math Math_S Math_H AMC AIME AIME25 M-Avg. C-Avg. Avg. 
+
+|𝐺 | = 8 77 .41 64 .90 38 .49 47 .67 15 .42 8.54 60 .27 23 .87 42 .07 
+
+|𝐺 | = 16 77.49 67.21 38 .97 49 .17 18 .13 10.63 61.22 25 .97 43 .60 
+
+|𝐺 | = 32 77 .26 66 .03 39.89 50.45 20.83 8.33 61 .06 26.54 43.80 
+
+Group Size Analysis. The effectiveness of CLIPO relies on group-based policy optimization, where the group size (i.e., the number of rollouts) can significantly influence contrastive learning outcomes. A larger number of rollouts results in more non-trivial groups, providing denser reward signals. Additionally, more rollouts offer a richer and more diverse set of positive and negative samples for contrastive learning. We conduct experiments to evaluate the impact of varying the number of rollouts. The results are presented in Table 6. These results indicate that increasing the number of rollouts generally leads to improved performance, highlighting the importance of group size in enhancing the effectiveness of contrastive rewards. In the Comp-Avg. metric, as expected, the performance gradually improves with an increasing number of rollouts. Group size of 32 achieves the highest Comp-Avg. score of 26.54, indicating that larger groups provide more diverse and informative samples for the model to learn from. We also conduct ablation studies on group size with different temperature settings, yielding similar results. Additional results and details are provided in Appendix A.5. Table 7 | Performance comparison on diverse models.                       
+
+> Model Method Math-Avg. Comp-Avg. Avg.
+> DS-7B GRPO 79.39 45.38 62.38 +CLIPO 79.28 46.54 62.91
+> Δ-0.11 1.17 0.53 Llama-8B GRPO 34.84 11.42 23.13 +CLIPO 37.10 11.79 24.44
+> Δ2.25 0.37 1.31
+
+Base Model Variations. To further validate the gen-eralizability of our proposed method across different architectures, we conduct additional experiments using various base models, including DeepSeek-R1-Distill-Qwen-7B (DS-7B), and Llama3.1-8B (Llama-8B). As presented in Table 7, we observe that both DS-7B and Llama-8B exhibit similar performance improvements upon integrating CLIPO. Specifically, DS-7B shows an increase of +0.53 in average score, while Llama-8B achieves a notable gain of +1.31. These results underscore the versatility and effec-tiveness of our approach in enhancing reasoning capabilities across diverse language model architectures. Notably, there is a slight decrease of -0.11 in Math-Avg. for DS-7B. We speculate that DS-7B has already undergone extensive fine-tuning on mathematical tasks, achiev-ing a high level of performance. When trained for the same number of epochs as other base models, it may experience overfitting, leading to a slight decrease in performance on certain tasks. The detailed experimental results based on different models are presented in Appendix A.6. 
+
+# 5. Conclusions 
+
+We introduced CLIPO, a contrastive learning augmented framework that generalizes RLVR beyond coarse, outcome-based supervision. Specifically, we employ a lightweight contrastive head with an InfoNCE objective to align the representations of successful reasoning trajectories while enforcing separation from erroneous ones. This design effectively distills the latent semantic consistency among successful rollouts into a dense contrastive reward, which complements standard verifier feedback. By reshaping the reward landscape from sparse and binary to informative and relational, CLIPO facilitates more stable policy optimization without requiring external process annotations or additional supervision. Extensive experiments across diverse mathematical benchmarks validate the efficacy of our approach: notably, consistent gains on symbolic, perturbed, and out-of-distribution tasks demonstrate that contrastive reward shaping fosters more robust and generalizable reasoning. Ultimately, this work highlights a promising paradigm for advancing RLVR, that leveraging the inherent relational structure among successful reasoning solutions as a principled and scalable learning signal. Beyond mathematical reasoning, CLIPO is broadly applicable to other structured domains like code generation and agent planning, paving the way for more reliable and generalized reasoning intelligence. 
+
+> 10 CLIPO: Contrastive Learning in Policy Optimization Generalizes RLVR
+
+# References 
+
+Pranjal Aggarwal and Sean Welleck. L1: Controlling how long a reasoning model thinks with reinforcement learning, 2025. URL https://arxiv.org/abs/2503.04697 .Md Tanvirul Alam and Nidhi Rastogi. Limits of generalization in RLVR: Two case studies in mathematical reasoning. In The 5th Workshop on Mathematical Reasoning and AI at NeurIPS 2025 , 2025. URL https: //openreview.net/forum?id=EwHz7cUHBE .Louis Castricato, Alexander Havrilla, Shahbuland Matiana, Michael Pieler, Anbang Ye, Ian Yang, Spencer Frazier, and Mark Riedl. Robust preference learning for storytelling via contrastive reinforcement learning. 
+
+arXiv preprint arXiv:2210.07792 , 2022. Kevin Chen, Marco Cusumano-Towner, Brody Huval, Aleksei Petrenko, Jackson Hamburger, Vladlen Koltun, and Philipp Krähenbühl. Reinforcement learning for long-horizon interactive llm agents. arXiv preprint arXiv:2502.01600 , 2025a. Minghan Chen, Guikun Chen, Wenguan Wang, and Yi Yang. Seed-grpo: Semantic entropy enhanced grpo for uncertainty-aware policy optimization. arXiv preprint arXiv:2505.12346 , 2025b. Peter Chen, Xiaopeng Li, Ziniu Li, Wotao Yin, Xi Chen, and Tianyi Lin. Exploration vs exploitation: Rethinking RLVR through clipping, entropy, and spurious reward. In The Fourteenth International Conference on Learning Representations , 2026. URL https://openreview.net/forum?id=sE8DCSJTzd .Ting Chen, Simon Kornblith, Mohammad Norouzi, and Geoffrey Hinton. A simple framework for contrastive learning of visual representations. In International conference on machine learning , pp. 1597–1607. PMLR, 2020. Wenhu Chen, Ming Yin, Max Ku, Pan Lu, Yixin Wan, Xueguang Ma, Jianyu Xu, Xinyi Wang, and Tony Xia. Theoremqa: A theorem-driven question answering dataset. In EMNLP , pp. 7889–7901, 2023. URL 
+
+https://doi.org/10.18653/v1/2023.emnlp-main.489 .Pengyu Cheng, Weituo Hao, Shuyang Dai, Jiachang Liu, Zhe Gan, and Lawrence Carin. Club: A contrastive log-ratio upper bound of mutual information. In International conference on machine learning , pp. 1779–1788. PMLR, 2020. Pengyu Cheng, Yifan Yang, Jian Li, Yong Dai, Tianhao Hu, Peixin Cao, Nan Du, and Xiaolong Li. Adversarial preference optimization: Enhancing your alignment via rm-llm game. In Findings of the Association for Computational Linguistics: ACL 2024 , pp. 3705–3716, 2024. Karl Cobbe, Vineet Kosaraju, Mohammad Bavarian, Mark Chen, Heewoo Jun, Lukasz Kaiser, Matthias Plappert, Jerry Tworek, Jacob Hilton, Reiichiro Nakano, et al. Training verifiers to solve math word problems. arXiv preprint arXiv:2110.14168 , 2021. Ganqu Cui, Yuchen Zhang, Jiacheng Chen, Lifan Yuan, Zhi Wang, Yuxin Zuo, Haozhan Li, Yuchen Fan, Huayu Chen, Weize Chen, et al. The entropy mechanism of reinforcement learning for reasoning language models. 
+
+arXiv preprint arXiv:2505.22617 , 2025. Mz Dai, Chenxu Yang, and Qingyi Si. S-GRPO: Early exit via reinforcement learning in reasoning models. In The Thirty-ninth Annual Conference on Neural Information Processing Systems , 2025. URL https:// openreview.net/forum?id=wNMK5o0Vfg .Silong Dai, Haolun Wu, Huanran Zheng, Tao Ji, Yuanbin Wu, Junchi Yan, Dell Zhang, Xiaoling Wang, Xuelong Li, and Changzhi Sun. Group verification-based policy optimization for interactive coding agents. In The Fourteenth International Conference on Learning Representations , 2026. URL https://openreview.net/ forum?id=RY47Tq0VsV .Guanting Dong, Hangyu Mao, Kai Ma, Licheng Bao, Yifei Chen, Zhongyuan Wang, Zhongxia Chen, Jiazhen Du, Huiyang Wang, Fuzheng Zhang, Guorui Zhou, Yutao Zhu, Ji-Rong Wen, and Zhicheng Dou. Agentic reinforced policy optimization. In The Fourteenth International Conference on Learning Representations , 2026. URL https://openreview.net/forum?id=TX4k7BF6aO .
+
+> 11 CLIPO: Contrastive Learning in Policy Optimization Generalizes RLVR
+
+Nicholas Frosst, Nicolas Papernot, and Geoffrey Hinton. Analyzing and improving representations with the soft nearest neighbor loss. In International conference on machine learning , pp. 2012–2020. PMLR, 2019. Chang Gao, Chujie Zheng, Xiong-Hui Chen, Kai Dang, Shixuan Liu, Bowen Yu, An Yang, Shuai Bai, Jingren Zhou, and Junyang Lin. Soft adaptive policy optimization. arXiv preprint arXiv:2511.20347 , 2025a. Jiaxuan Gao, Wei Fu, Minyang Xie, Shusheng Xu, Chuyi He, Zhiyu Mei, Banghua Zhu, and Yi Wu. Be-yond ten turns: Unlocking long-horizon agentic search with large-scale asynchronous rl. arXiv preprint arXiv:2508.07976 , 2025b. Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song, Ruoyu Zhang, Runxin Xu, Qihao Zhu, Shirong Ma, Peiyi Wang, Xiao Bi, et al. Deepseek-r1: Incentivizing reasoning capability in llms via reinforcement learning. 
+
+arXiv preprint arXiv:2501.12948 , 2025. Kaiming He, Haoqi Fan, Yuxin Wu, Saining Xie, and Ross Girshick. Momentum contrast for unsupervised visual representation learning. In Proceedings of the IEEE/CVF conference on computer vision and pattern recognition ,pp. 9729–9738, 2020. Dan Hendrycks, Collin Burns, Steven Basart, Andy Zou, Mantas Mazeika, Dawn Song, and Jacob Steinhardt. Measuring massive multitask language understanding. In International Conference on Learning Representations ,2021a. URL https://openreview.net/forum?id=d7KBjmI3GmQ .Dan Hendrycks, Collin Burns, Saurav Kadavath, Akul Arora, Steven Basart, Eric Tang, Dawn Song, and Jacob Steinhardt. Measuring mathematical problem solving with the MATH dataset. In Thirty-fifth Conference on Neural Information Processing Systems Datasets and Benchmarks Track (Round 2) , 2021b. URL https: //openreview.net/forum?id=7Bywt2mQsCe .Kaixuan Huang, Jiacheng Guo, Zihao Li, Xiang Ji, Jiawei Ge, Wenzhe Li, Yingqing Guo, Tianle Cai, Hui Yuan, Runzhe Wang, Yue Wu, Ming Yin, Shange Tang, Yangsibo Huang, Chi Jin, Xinyun Chen, Chiyuan Zhang, and Mengdi Wang. MATH-perturb: Benchmarking LLMs’ math reasoning abilities against hard perturbations. In Forty-second International Conference on Machine Learning , 2025. URL https://openreview.net/ forum?id=OZy70UggXr .Siyuan Huang, Xiaoye Qu, Yafu Li, Yun Luo, Zefeng He, Daizong Liu, and Yu Cheng. Spotlight on token perception for multimodal reinforcement learning. In The Fourteenth International Conference on Learning Representations , 2026. URL https://openreview.net/forum?id=bRA4lVWJVQ .Aaron Jaech, Adam Kalai, Adam Lerer, Adam Richardson, Ahmed El-Kishky, Aiden Low, Alec Helyar, Aleksander Madry, Alex Beutel, Alex Carney, et al. Openai o1 system card. arXiv preprint arXiv:2412.16720 , 2024. Yuxian Jiang, Yafu Li, Guanxu Chen, Dongrui Liu, Yu Cheng, and Jing Shao. Rethinking entropy regularization in large reasoning models. arXiv preprint arXiv:2509.25133 , 2025. Bowen Jin, Hansi Zeng, Zhenrui Yue, Jinsung Yoon, Sercan O Arik, Dong Wang, Hamed Zamani, and Jiawei Han. Search-r1: Training LLMs to reason and leverage search engines with reinforcement learning. In Second Conference on Language Modeling , 2025. URL https://openreview.net/forum?id=Rwhi91ideu .Prannay Khosla, Piotr Teterwak, Chen Wang, Aaron Sarna, Yonglong Tian, Phillip Isola, Aaron Maschinot, Ce Liu, and Dilip Krishnan. Supervised contrastive learning. Advances in neural information processing systems ,33:18661–18673, 2020. Kalpesh Krishna, Yapei Chang, John Wieting, and Mohit Iyyer. Rankgen: Improving text generation with large ranking models. In Proceedings of the 2022 Conference on Empirical Methods in Natural Language Processing ,pp. 199–232, 2022. Zhuo Li, Pengyu Cheng, Zhechao Yu, Feifei Tong, Anningzhe Gao, Tsung-Hui Chang, Xiang Wan, Erchao Zhao, Xiaoxi Jiang, and Guanjun Jiang. Eliminating inductive bias in reward models with information-theoretic guidance. In International Conference on Learning Representations , 2026. Hunter Lightman, Vineet Kosaraju, Yuri Burda, Harrison Edwards, Bowen Baker, Teddy Lee, Jan Leike, John Schulman, Ilya Sutskever, and Karl Cobbe. Let’s verify step by step. In The Twelfth International Conference on Learning Representations , 2023. 
+
+> 12 CLIPO: Contrastive Learning in Policy Optimization Generalizes RLVR
+
+Stephanie Lin, Jacob Hilton, and Owain Evans. Truthfulqa: Measuring how models mimic human falsehoods. In Proceedings of the 60th annual meeting of the association for computational linguistics (volume 1: long papers) , pp. 3214–3252, 2022. Hongliang Lu, Yuhang Wen, Pengyu Cheng, Ruijin Ding, Jiaqi Guo, Haotian Xu, Chutian Wang, Haonan Chen, Xiaoxi Jiang, and Guanjun Jiang. Search self-play: Pushing the frontier of agent capability without supervision. In International Conference on Learning Representations , 2026. Liangchen Luo, Yinxiao Liu, Rosanne Liu, Samrat Phatale, Meiqi Guo, Harsh Lara, Yunxuan Li, Lei Shu, Yun Zhu, Lei Meng, et al. Improve mathematical reasoning in language models by automated process supervision. 
+
+arXiv preprint arXiv:2406.06592 , 2024. Seyed Iman Mirzadeh, Keivan Alizadeh, Hooman Shahrokhi, Oncel Tuzel, Samy Bengio, and Mehrdad Farajtabar. GSM-symbolic: Understanding the limitations of mathematical reasoning in large language models. In The Thirteenth International Conference on Learning Representations , 2025. URL https://openreview.net/ forum?id=AjXkRZIvjB .Aaron van den Oord, Yazhe Li, and Oriol Vinyals. Representation learning with contrastive predictive coding. 
+
+arXiv preprint arXiv:1807.03748 , 2018. Long Ouyang, Jeffrey Wu, Xu Jiang, Diogo Almeida, Carroll Wainwright, Pamela Mishkin, Chong Zhang, Sandhini Agarwal, Katarina Slama, Alex Ray, et al. Training language models to follow instructions with human feedback. Advances in neural information processing systems , 35:27730–27744, 2022. Ben Poole, Sherjil Ozair, Aaron Van Den Oord, Alex Alemi, and George Tucker. On variational bounds of mutual information. In International conference on machine learning , pp. 5171–5180. PMLR, 2019. Alec Radford, Jong Wook Kim, Chris Hallacy, Aditya Ramesh, Gabriel Goh, Sandhini Agarwal, Girish Sastry, Amanda Askell, Pamela Mishkin, Jack Clark, et al. Learning transferable visual models from natural language supervision. In International conference on machine learning , pp. 8748–8763. PMLR, 2021. Zhiwen Ruan, Yun Chen, Yutao Hou, Peng Li, Yang Liu, and Guanhua Chen. Unveiling over-memorization in finetuning llms for reasoning tasks. arXiv preprint arXiv:2508.04117 , 2025. Ruslan Salakhutdinov and Geoff Hinton. Learning a nonlinear embedding by preserving class neighbourhood structure. In Marina Meila and Xiaotong Shen (eds.), Proceedings of the Eleventh International Conference on Artificial Intelligence and Statistics , volume 2 of Proceedings of Machine Learning Research , pp. 412– 419, San Juan, Puerto Rico, 21–24 Mar 2007. PMLR. URL https://proceedings.mlr.press/v2/ salakhutdinov07a.html .Nikunj Saunshi, Orestis Plevrakis, Sanjeev Arora, Mikhail Khodak, and Hrishikesh Khandeparkar. A theoretical analysis of contrastive unsupervised representation learning. In International conference on machine learning ,pp. 5628–5637. PMLR, 2019. John Schulman, Philipp Moritz, Sergey Levine, Michael Jordan, and Pieter Abbeel. High-dimensional continuous control using generalized advantage estimation. arXiv preprint arXiv:1506.02438 , 2015. John Schulman, Filip Wolski, Prafulla Dhariwal, Alec Radford, and Oleg Klimov. Proximal policy optimization algorithms. arXiv preprint arXiv:1707.06347 , 2017. Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, YK Li, Yang Wu, et al. Deepseekmath: Pushing the limits of mathematical reasoning in open language models. 
+
+arXiv preprint arXiv:2402.03300 , 2024. Guangming Sheng, Chi Zhang, Zilingfeng Ye, Xibin Wu, Wang Zhang, Ru Zhang, Yanghua Peng, Haibin Lin, and Chuan Wu. Hybridflow: A flexible and efficient rlhf framework. arXiv preprint arXiv: 2409.19256 , 2024. Hao Sun, Zile Qiao, Jiayan Guo, Xuanbo Fan, Yingyan Hou, Yong Jiang, Pengjun Xie, Yan Zhang, Fei Huang, and Jingren Zhou. Zerosearch: Incentivize the search capability of llms without searching. arXiv preprint arXiv:2505.04588 , 2025. 
+
+> 13 CLIPO: Contrastive Learning in Policy Optimization Generalizes RLVR
+
+Alon Talmor, Jonathan Herzig, Nicholas Lourie, and Jonathan Berant. Commonsenseqa: A question answering challenge targeting commonsense knowledge. In Proceedings of the 2019 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies, Volume 1 (Long and Short Papers) , pp. 4149–4158, 2019. Hongze Tan, Jianfei Pan, Jinghao Lin, Tao Chen, Zhihang Zheng, Zhihao Tang, and Haihua Yang. Gtpo and grpo-s: Token and sequence-level reward shaping with policy entropy. arXiv preprint arXiv:2508.04349 ,2025. Kimi Team, Angang Du, Bofei Gao, Bowei Xing, Changjiu Jiang, Cheng Chen, Cheng Li, Chenjun Xiao, Chenzhuang Du, Chonghua Liao, et al. Kimi k1. 5: Scaling reinforcement learning with llms. arXiv preprint arXiv:2501.12599 , 2025. Feng Wang and Huaping Liu. Understanding the behaviour of contrastive loss. In Proceedings of the IEEE/CVF conference on computer vision and pattern recognition , pp. 2495–2504, 2021. Peiyi Wang, Lei Li, Zhihong Shao, Runxin Xu, Damai Dai, Yifei Li, Deli Chen, Yu Wu, and Zhifang Sui. Math-shepherd: Verify and reinforce llms step-by-step without human annotations. In Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , pp. 9426–9439, 2024. Qiuchen Wang, Ruixue Ding, Yu Zeng, Zehui Chen, Lin Chen, Shihang Wang, Pengjun Xie, Fei Huang, and Feng Zhao. Vrag-rl: Empower vision-perception-based rag for visually rich information understanding via iterative reasoning with reinforcement learning. arXiv preprint arXiv:2505.22019 , 2025a. Shenzhi Wang, Le Yu, Chang Gao, Chujie Zheng, Shixuan Liu, Rui Lu, Kai Dang, Xiong-Hui Chen, Jianxin Yang, Zhenru Zhang, Yuqiong Liu, An Yang, Andrew Zhao, Yang Yue, Shiji Song, Bowen Yu, Gao Huang, and Junyang Lin. Beyond the 80/20 rule: High-entropy minority tokens drive effective reinforcement learning for LLM reasoning. In The Thirty-ninth Annual Conference on Neural Information Processing Systems , 2025b. URL https://openreview.net/forum?id=yfcpdY4gMP .Tongzhou Wang and Phillip Isola. Understanding contrastive representation learning through alignment and uniformity on the hypersphere. In International conference on machine learning , pp. 9929–9939. PMLR, 2020. Yining Wang, Jinman Zhao, Chuangxin Zhao, Shuhao Guan, Gerald Penn, and Shinan Liu. 𝜆 -grpo: Unifying the grpo frameworks with learnable token preferences. arXiv preprint arXiv:2510.06870 , 2025c. Ronald J Williams. Simple statistical gradient-following algorithms for connectionist reinforcement learning. 
+
+Machine learning , 8(3):229–256, 1992. Mingqi Wu, Zhihao Zhang, Qiaole Dong, Zhiheng Xi, Jun Zhao, Senjie Jin, Xiaoran Fan, Yuhao Zhou, Huijie Lv, Ming Zhang, et al. Reasoning or memorization? unreliable results of reinforcement learning due to data contamination. arXiv preprint arXiv:2507.10532 , 2025. Lecheng Yan, Ruizhe Li, Guanhua Chen, Qing Li, Jiahui Geng, Wenxi Li, Vincent Wang, and Chris Lee. Spurious rewards paradox: Mechanistically understanding how rlvr activates memorization shortcuts in llms. arXiv preprint arXiv:2601.11061 , 2026. Qiying Yu, Zheng Zhang, Ruofei Zhu, Yufeng Yuan, Xiaochen Zuo, Yu Yue, Weinan Dai, Tiantian Fan, Gaohong Liu, Lingjun Liu, et al. Dapo: An open-source llm reinforcement learning system at scale. arXiv preprint arXiv:2503.14476 , 2025. Xingjian Zhang, Siwei Wen, Wenjun Wu, and Lei Huang. Edge-grpo: Entropy-driven grpo with guided error correction for advantage diversity. arXiv preprint arXiv:2507.21848 , 2025a. Zhenru Zhang, Chujie Zheng, Yangzhen Wu, Beichen Zhang, Runji Lin, Bowen Yu, Dayiheng Liu, Jingren Zhou, and Junyang Lin. The lessons of developing process reward models in mathematical reasoning. In Wanxiang Che, Joyce Nabende, Ekaterina Shutova, and Mohammad Taher Pilehvar (eds.), Findings of the Association for Computational Linguistics: ACL 2025 , pp. 10495–10516, Vienna, Austria, July 2025b. Association for Computational Linguistics. ISBN 979-8-89176-256-5. doi: 10.18653/v1/2025.findings-acl.547. URL 
+
+https://aclanthology.org/2025.findings-acl.547/ .
+
+> 14 CLIPO: Contrastive Learning in Policy Optimization Generalizes RLVR
+
+Yuzhong Zhao, Yue Liu, Junpeng Liu, Jingye Chen, Xun Wu, Yaru Hao, Tengchao Lv, Shaohan Huang, Lei Cui, Qixiang Ye, et al. Geometric-mean policy optimization. arXiv preprint arXiv:2507.20673 , 2025. Chujie Zheng, Shixuan Liu, Mingze Li, Xiong-Hui Chen, Bowen Yu, Chang Gao, Kai Dang, Yuqiong Liu, Rui Men, An Yang, et al. Group sequence policy optimization. arXiv preprint arXiv:2507.18071 , 2025a. Chujie Zheng, Zhenru Zhang, Beichen Zhang, Runji Lin, Keming Lu, Bowen Yu, Dayiheng Liu, Jingren Zhou, and Junyang Lin. Processbench: Identifying process errors in mathematical reasoning. In Proceedings of the 63rd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , pp. 1009–1024, 2025b. Yuxiang Zheng, Dayuan Fu, Xiangkun Hu, Xiaojie Cai, Lyumanshan Ye, Pengrui Lu, and Pengfei Liu. Deepre-searcher: Scaling deep research via reinforcement learning in real-world environments. In Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing , pp. 414–431, 2025c. Sining Zhoubian, Dan Zhang, and Jie Tang. Rest-rl: Achieving accurate code reasoning of llms with optimized self-training and decoding. arXiv preprint arXiv:2508.19576 , 2025. 
+
+> 15 CLIPO: Contrastive Learning in Policy Optimization Generalizes RLVR
+
+# A. Appendix 
+
+A.1. Implementation Details 
+
+A.1.1. Baseline Implementations 
+
+We reproduce GRPO, GSPO, DAPO, GMPO, using the public verl framework (Sheng et al., 2024). All baselines share identical data, backbone initialization, sampling strategy, batch configuration, optimization strategy, and distributed training settings; the only differences arise from their respective policy objectives and advantage aggregation schemes. We summarize the key distinctions below. Table 8 | Default Training Hyperparameters and Configuration on Track I and Track II. 
+
+Category Parameter Track I Track II General Settings 
+
+Total epochs total_epochs 6 9Critic warmup epochs critic_warmup 14 step(1 epoch) 58 step(1 epoch) 
+
+Data and Sequence Lengths 
+
+Training batch size train_batch_size 512 128 PPO mini-batch size ppo_mini_batch_size 256 128 Micro batch size / GPU micro_batch_size 32 16 Max prompt length max_prompt_length 512 512 Max response length max_response_length 2048 4096 Prompt overlength handling filter_overlong_prompts True True Truncation policy truncation error error 
+
+Actor and PPO Optimization 
+
+Actor learning rate actor.optim.lr 1 × 10 −6 1 × 10 −6
+
+Dynamic batch size use_dynamic_bsz True True Gradient checkpointing enable_gradient_checkpointing True True 
+
+Rollout and Inference 
+
+Rollout backend rollout.name sglang sglang Rollout samples ( 𝑛 ) rollout.n 16 16 Validation rollouts val_rollout 1 16 Sampling during eval do_sample False True Temperature (eval) temperature 0.6 0.6 Top-𝑝 (eval) top_p 0.95 0.95 
+
+Distributed Training 
+
+GPUs per node n_gpus_per_node 8 8Number of nodes nnodes 1 1Tensor model parallel size tensor_model_parallel_size 1 1FSDP parameter offload (actor) fsdp.param_offload False False FSDP optimizer offload (actor) fsdp.optimizer_offload False False FSDP parameter offload (ref) ref.fsdp.param_offload True False 
+
+GRPO. GRPO follows a PPO-style clipped surrogate objective while incorporating an explicit KL penalty as a separate loss term. In our implementation, reward shaping does not include KL divergence, whereas an auxiliary KL loss with a fixed coefficient is enabled: 
+
+LGRPO = 𝔼 [clip (𝜌 𝑡 , 1 − 𝜖, 1 + 𝜖 ) 𝐴 𝑡 ] − 𝛽 KL (𝜋 ∥ 𝜋 ref ).
+
+The corresponding configuration sets use_kl_loss=True , and kl_loss_coef=0.001 . Advantage aggrega-tion is performed via token averaging, specified by loss_agg_mode=token-mean , with a symmetric clipping factor of 𝜖 = 0.2.
+
+GSPO. GSPO replaces token-wise advantages with group-wise preference signals and adopts a very narrow clipping interval, as recommended by the original paper (Zheng et al., 2025a). The loss employs a sequence-level aggregation. In our setup, we configure loss_mode=gspo , loss_agg_mode=seq-mean-token-mean ,and use clip _ratio _low = 3 × 10 −4 and clip _ratio _high = 4 × 10 −4, aligning with the suggested hyperparameters. 
+
+> 16 CLIPO: Contrastive Learning in Policy Optimization Generalizes RLVR
+
+DAPO. DAPO maintains a PPO-like update but introduces an asymmetric clipping interval: 
+
+LDAPO = 𝔼 [clip (𝜌 𝑡 , 1 − 𝜖 𝑙 , 1 + 𝜖 ℎ) 𝐴 𝑡 ]
+
+We set 𝜖 𝑙 = 0.2 and 𝜖 ℎ = 0.28 , following the original recommendations (Yu et al., 2025). Both KL reward shaping and KL loss regularization are disabled ( use_kl_in_reward=False and use_kl_loss=False ). 
+
+GMPO. GMPO adopts a geometric-mean policy objective in place of additive advantage accumulation, which promotes multiplicative update dynamics and mitigates domination by outlier advantages. GMPO uses a single symmetric clipping factor with 𝜖 = 0.4, enforced by setting clip_ratio_low=clip_ratio_high=0.4 ,and applies token-level advantage aggregation via loss_agg_mode=token-mean .
+
+Shared Training Protocol. All baselines are trained under a unified protocol, sharing identical hyperparam-eters for learning rate, rollout sampling configuration (temperature, top-p, number of rollouts), batch size, sequence length, and distributed memory optimization settings. This ensures that performance differences can be attributed solely to the distinct policy objectives and advantage aggregation methods employed by each algorithm. The complete set of shared training hyperparameters is detailed in Table 8. 
+
+Contrastive Head Parameters We detail the architecture and hyperparameters of the Contrastive Head in Table 9. Table 9 | Default Contrastive Head Parameters on Track I and Track II.                     
+
+> Parameter Track I Track II Contrastive LM Head Settings
+> Loss type infonce_loss infonce_loss Distance measure cosine_distance cosine_distance Head type linear linear Output size 512 2048 Contrastive temperature 0.05 0.05 Learning rate 0.001 0.001 Weight decay 0.01 0.01
+> 𝜆 0.2 0.2 Negative Selection group_level group_level
+
+A.1.2. Prompt Construction 
+
+For all datasets, each training and evaluation example is converted into a unified instruction-following format. Given an original problem statement 𝑞 from dataset 𝑑 , we construct the user prompt as 
+
+Prompt (𝑞, 𝑑 ) = 𝑞 ∥ Instruction (𝑑 ), (13) where ∥ denotes string concatenation with a newline separator. The dataset-specific instruction Instruction (𝑑 ) is appended to explicitly encourage step-by-step reasoning and constrain the answer format. All prompts are assigned the user role and no system or assistant messages are used. 
+
+Instruction Templates. For most mathematical reasoning datasets, including GSM8K, MATH, AMC, AIME, and their variants, we use the following instruction: 
+
+Let’s think step by step and output the final answer within \boxed{}. 
+
+For multiple-choice datasets, the instruction additionally specifies the expected answer type. For example, for MMLU: 
+
+Let’s think step by step and output the final answer (eg, A, B, C, D) within \boxed{}. 
+
+We summarize the complete set of dataset-specific prompt instructions in Table 10. 
+
+> 17 CLIPO: Contrastive Learning in Policy Optimization Generalizes RLVR
+
+Table 10 | Prompt Construction and Instruction Templates        
+
+> Dataset Instruction Template
+> GSM8K / GSM-P1 / GSM-P2 / GSM-Symbolic Let’s think step by step and output the final answer within \boxed{}. MATH / AMC / AIME / AIME2025 Let’s think step by step and output the final answer within \boxed{}. TheoremQA Let’s think step by step and output the final answer within \boxed{}. MMLU Let’s think step by step and output the final answer (eg, A, B, C, D) within \boxed{}. TruthfulQA Let’s think step by step and output the final answer (eg, A, B, C, D, ...) within \boxed{}. CommonsenseQA Let’s think step by step and output the final answer (eg, A, B, C, D, E) within \boxed{}.
+
+A.1.3. Verifiable Reward Models 
+
+Following prior work (Shao et al., 2024; Aggarwal & Welleck, 2025), we employ rule-based verifiable reward models to compute rewards based on the final answers generated by the LLM. Specifically, we extract the final answer enclosed within the \boxed{} delimiters. This extracted answer, denoted as LLM pred , is then compared against the ground truth answer GT to determine correctness. The reward 𝑟 is 0 for incorrect answers and 1 for correct answers. 
+
+A.2. Contrastive Head Representation and Ablation 
+
+To gain insights into the representations learned by the contrastive head, we conduct a qualitative analysis of the semantic embeddings it produces. We randomly sample a set of responses generated during training and compute their embeddings using the contrastive head. 
+
+Figure 4 | The t-SNE visualization of semantic embeddings produced by the contrastive head at the start of training (left) and after 3 epochs of training (right). Green points represent embeddings from correct rollouts, while red points correspond to incorrect ones. After training, correct responses cluster closely together, forming more distinct group clusters. Within these clusters, correct and incorrect responses also exhibit some separation. As illustrated in Figure 4, the embeddings exhibit no clear separation: correct and incorrect trajectories are mixed and lack coherent structure at the start of training. After contrastive training, the embeddings exhibit a clear clustering structure. Embeddings corresponding to correct rollouts tend to cluster closely together, while those from incorrect rollouts are relatively separated. This structure aligns with the goal of the contrastive reward, which encourages higher-quality solutions to be close in representation space while pushing away suboptimal ones. Importantly, this signal is more fine-grained than binary reward feedback, since embeddings reflect relative similarity of trajectories even when they share the same correctness outcome. 
+
+> 18 CLIPO: Contrastive Learning in Policy Optimization Generalizes RLVR
+
+This observation further suggests that the contrastive head is not merely serving as an auxiliary regression module, but is shaping a semantic manifold for mathematical reasoning trajectories. The emergence of such a manifold provides a meaningful inductive bias for group-based policy optimization: candidate solutions that share intermediate reasoning states or substructures are more likely to benefit from shared credit assignment. To validate that the learned geometry is not solely inherited from the pretrained LLM backbone, we conduct an ablation where the contrastive head is fixed and not updated during training (denoted as CLIPO-fixed). Table 11 | Performance comparison of fixed-head ablation on Track I. CLIPO-fixed shows performance drops compared to CLIPO across most benchmarks.                                             
+
+> Methods GSM8K SYM P1 P2 cQA tQA thrmQA MMLU M-Avg. G-Avg. Avg.
+> CLIPO 88.02 84.62 74.60 54.16 76.90 31.52 27.58 68.64 75.35 51.16 63.26 CLIPO-fixed 88.63 85.12 73.48 51.68 75.59 30.11 26.77 68.49 74.73 50.24 62.48
+> Δ0.61 0.50 -1.12 -2.48 -1.31 -1.41 -0.80 -0.15 -0.62 -0.92 -0.77
+
+Table 12 | Performance comparison of fixed-head ablation on Track II. CLIPO-fixed shows performance drops compared to CLIPO across most benchmarks. 
+
+Methods Math Math_S Math_H AMC AIME AIME25 M-Avg. C-Avg. Avg. 
+
+CLIPO 77.49 67.21 38.97 49.17 18.13 10.63 61.22 25.97 43.60 CLIPO-fixed 76.76 64.83 38.99 49.77 17.92 7.50 60.19 25.06 42.63 
+
+Δ -0.73 -2.38 0.02 0.60 -0.21 -3.13 -1.03 -0.91 -0.97 As shown in Table 11, freezing the head leads to consistent performance drops across all three average metrics, particularly on distribution-shifted and perturbed datasets (P1, P2), with decreases of -1.12 and -2.48, respectively. Table 12 shows a similar trend, where fixing the head results in overall performance degradation, with decreases of -1.03, -0.91, and -0.97 on M-Avg, C-Avg, and Avg, respectively. These results highlight that the mapping learned by the contrastive head is non-trivial and contributes useful inductive structure. Together, these analyses indicate that the contrastive head learns a structured embedding space that encodes trajectory quality, enabling more informative credit assignment and yielding improved generalization, particularly under distribution shifts and perturbations. Table 13 | Performance comparison of Contrastive Loss Variants on Track I. The improvements ( Δ) over base method(GRPO) are indicated with positive (green) and negative (red) colors.                                                                                        
+
+> Methods GSM8K SYM P1 P2 cQA tQA thrmQA MMLU M-Avg. G-Avg. Avg.
+> GRPO 87 .79 84 .04 73 .12 50 .80 74 .94 30 .48 27 .71 68 .19 73 .94 50 .33 62 .13
+> CLIPO-InfoNCE 88 .02 84 .62 74 .60 54 .16 76 .90 31 .52 27 .58 68 .64 75 .35 51 .16 63 .26
+> Δ0.23 0.58 1.48 3.36 1.97 1.04 −0.13 0.46 1.41 0.83 1.12
+> CLIPO-SupCon 87 .79 85 .04 74 .00 51 .12 77 .07 30 .23 27 .04 69 .25 74 .49 50 .90 62 .69
+> Δ0.00 1.00 0.88 0.32 2.13 −0.24 −0.67 1.06 0.55 0.57 0.56
+> CLIPO-SoftNN 87 .11 84 .70 74 .06 53 .92 75 .27 29 .99 27 .31 68 .59 74 .95 50 .29 62 .62
+> Δ−0.68 0.66 0.94 3.12 0.33 −0.49 −0.40 0.41 1.01 −0.04 0.48
+
+A.3. Contrastive Loss Variants 
+
+We have also implemented additional loss functions for the Contrastive LM Head, including Soft Nearest Neighbor (SoftNN) loss and Supervised Contrastive (SupCon) loss. We refer to the corresponding methods as CLIPO-SoftNN and CLIPO-SupCon, respectively. The main experimental results for these methods on GSM8K and MATH datasets are presented in Tables 13 and 14. One observation is that SoftNN exhibits a performance drop on G-Avg. To further investigate this phe-nomenon, we conduct additional ablation experiments using SoftNN loss across different base methods. The complete experimental results are presented in Table 15. 
+
+> 19 CLIPO: Contrastive Learning in Policy Optimization Generalizes RLVR
+
+Table 14 | Performance comparison of Contrastive Loss Variants on Track II. The improvements ( Δ) over base method(GRPO) are indicated with positive (green) and negative (red) colors. 
+
+Methods Math Math_S Math_H AMC AIME AIME25 M-Avg. C-Avg. Avg. 
+
+GRPO 76 .46 64 .83 37 .86 46 .84 17 .92 9.58 59 .72 24 .78 42 .25 
+
+CLIPO-InfoNCE 77 .49 67 .21 38 .97 49 .17 18 .13 10 .63 61 .22 25 .97 43 .60  
+
+> Δ
+
+1.03 2.38 1.11 2.33 0.21 1.04 1.50 1.19 1.35 
+
+CLIPO-SupCon 78 .18 65 .90 38 .97 48 .42 17 .71 6.88 61 .01 24 .33 42 .67  
+
+> Δ
+
+1.72 1.06 1.11 1.58 −0.21 −2.71 1.30 −0.45 0.43 
+
+CLIPO-SoftNN 78 .17 65 .78 38 .02 49 .85 20 .21 9.58 60 .66 26 .55 43 .60  
+
+> Δ
+
+1.71 0.95 0.16 3.01 2.29 0.00 0.94 1.77 1.35 
+
+Table 15 | Performance comparison of different RLVR methods. CLIPO-SoftNN improves the average performance based on four baseline methods, with the main improvements in M-Avg. tasks, while the improvements in G-Avg. tasks are limited, and even some decreases. 
+
+Methods GSM SYM P1 P2 cQA tQA thrmQA MMLU M-Avg. G-Avg. Avg. 
+
+Base 86 .05 82 .40 70 .90 47 .96 73 .63 29 .99 24 .90 68 .09 71 .83 49 .15 60 .49 
+
+GRPO 87 .79 84 .04 73 .12 50 .80 74 .94 30 .48 27 .71 68 .19 73 .94 50 .33 62 .13 
+
+CLIPO-SoftNN 87 .11 84 .70 74 .06 53 .92 75 .27 29 .99 27 .31 68 .59 74 .95 50 .29 62 .62  
+
+> Δ
+
+−0.68 0.66 0.94 3.12 0.33 −0.49 −0.40 0.41 1.01 −0.04 0.48 
+
+GSPO 87 .19 83 .94 73 .28 51 .36 74 .86 30 .23 27 .38 67 .68 73 .94 50 .04 61 .99 
+
+CLIPO-SoftNN 87 .87 83 .92 75 .14 51 .60 76 .33 30 .97 27 .64 68 .44 74 .63 50 .85 62 .74  
+
+> Δ
+
+0.68 −0.02 1.86 0.24 1.47 0.73 0.27 0.76 0.69 0.81 0.75 
+
+DAPO 87 .41 84 .56 74 .70 52 .32 76 .00 31 .58 27 .11 69 .00 74 .75 50 .92 62 .84 
+
+CLIPO-SoftNN 88 .25 84 .48 76 .10 53 .52 75 .84 31 .82 27 .24 67 .68 75 .59 50 .65 63 .12  
+
+> Δ
+
+0.83 −0.08 1.40 1.20 −0.16 0.24 0.13 −1.32 0.84 −0.28 0.28 
+
+GMPO 86 .81 84 .02 73 .90 49 .80 76 .33 30 .97 26 .57 68 .49 73 .63 50 .59 62 .11 
+
+CLIPO-SoftNN 87 .87 84 .14 73 .94 51 .32 75 .84 31 .52 26 .24 67 .63 74 .32 50 .31 62 .31  
+
+> Δ
+
+1.06 0.12 0.04 1.52 −0.49 0.55 −0.33 −0.86 0.69 −0.28 0.20 
+
+A.4. Temperature Results 
+
+The complete experimental results across different temperature settings are presented in Table 16 and 17. Figure 5 visualizes the average cosine similarity of positive pairs within the same group during training, under different temperature settings. The plot illustrates that higher temperature values lead to greater fluctuations in the similarity of positive pairs, indicating increased instability in distinguishing positive and negative examples. 
+
+A.5. Group Size Results 
+
+The complete experimental results across different group size settings are presented in Table 18. From the results, we observe that larger group sizes consistently lead to better performance improvements across different temperature settings. This trend suggests that increasing the number of candidate solutions within each group enhances the contrastive signal, providing richer information for credit assignment and ultimately improving the model’s reasoning capabilities. 
+
+A.6. Base Model Variants 
+
+Beyond Qwen2.5, we also validate the effectiveness of CLIPO on other base models, including DS-7B and Llama-8B. The results are presented in Table 19. 
+
+> 20 CLIPO: Contrastive Learning in Policy Optimization Generalizes RLVR
+
+Table 16 | Performance comparison of different temperature settings on Track I. 
+
+𝜏 GSM8K SYM P1 P2 cQA tQA thrmQA MMLU M-Avg. G-Avg. Avg. 
+
+0.2 87 .34 84 .58 73 .42 50 .48 76.33 32.74 29.38 67 .73 73 .95 51.55 62 .75 
+
+0.1 88.02 85 .38 74 .50 49 .64 75 .92 31 .95 27 .91 68 .14 74 .39 50 .98 62 .68 
+
+0.05 87 .41 85.44 74 .86 53 .16 75 .18 30 .42 27 .71 68.79 75 .22 50 .53 62.87 
+
+0.02 87 .26 85 .00 75.64 54.00 75 .10 30 .17 27 .31 68 .34 75.48 50 .23 62 .85 
+
+Table 17 | Performance comparison of different temperature settings on Track II. 
+
+𝜏 Math Math_S Math_H AMC AIME AIME25 M-Avg. C-Avg. Avg. 
+
+0.2 77 .13 66 .12 36 .44 47 .67 17 .92 7.50 59 .90 24 .36 42 .13 
+
+0.1 76 .90 65 .01 37 .36 51.05 18.75 10.63 59 .76 26.81 43 .28 
+
+0.05 77 .18 67 .14 39.53 48 .72 16 .04 9.79 61.28 24 .85 43 .07 
+
+0.02 77.49 67.21 38 .97 49 .17 18 .13 10.63 61 .22 25 .97 43.60 
+
+0.015 76 .79 66 .42 38 .72 50 .15 17 .71 7.71 60 .64 25 .19 42 .91 
+
+Figure 5 | The plot illustrates the average cosine similarity of positive pairs within the same group during training, under different temperature settings. We observe that higher temperature values lead to greater fluctuations in the similarity of positive pairs. Table 18 | Performance comparison of different group size.  
+
+> 𝜏
+
+GroupSize Math Math_S Math_H AMC AIME AIME25 M-Avg. C-Avg. Avg. 
+
+0.05 
+
+|𝐺 | = 8 76 .56 64 .92 38 .09 46 .69 17 .50 10.00 59 .86 24 .73 42 .29 
+
+|𝐺 | = 16 77 .18 67.14 39.53 48 .72 16 .04 9.79 61.28 24 .85 43 .07 
+
+|𝐺 | = 32 77.92 64 .90 39 .37 49.55 21.04 7.08 60 .73 25.89 43.31 
+
+0.02 
+
+|𝐺 | = 8 77 .41 64 .90 38 .49 47 .67 15 .42 8.54 60 .27 23 .87 42 .07 
+
+|𝐺 | = 16 77.49 67.21 38 .97 49 .17 18 .13 10.63 61.22 25 .97 43 .60 
+
+|𝐺 | = 32 77 .26 66 .03 39.89 50.45 20.83 8.33 61 .06 26.54 43.80 
+
+> 21 CLIPO: Contrastive Learning in Policy Optimization Generalizes RLVR
+
+Table 19 | Performance comparison on various base models. 
+
+Methods Math Math_S Math_H AMC AIME AIME25 M-Avg. C-Avg. Avg. DeepSeek-R1-Distill-Qwen-7B 
+
+GRPO 89.70 83.98 64.48 72.59 36.88 26.67 79.39 45.38 62.38 CLIPO 90.08 83.94 63.83 73.80 39.38 26.46 79.28 46.54 62.91 
+
+Δ 0.38 -0.05 -0.65 1.20 2.50 -0.21 -0.11 1.17 0.53 
+
+Llama3.1-8B-Instruct 
+
+GRPO 52.04 40.10 12.39 23.64 10.63 0.00 34.84 11.42 23.13 CLIPO 54.14 42.87 14.28 25.38 9.79 0.21 37.10 11.79 24.44 
+
+Δ 2.10 2.76 1.90 1.73 -0.83 0.21 2.25 0.37 1.31

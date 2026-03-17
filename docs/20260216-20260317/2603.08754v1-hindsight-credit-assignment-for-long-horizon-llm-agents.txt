@@ -1,0 +1,749 @@
+Title: Hindsight Credit Assignment for Long-Horizon LLM Agents
+
+URL Source: https://arxiv.org/pdf/2603.08754v1
+
+Published Time: Wed, 11 Mar 2026 00:01:24 GMT
+
+Number of Pages: 16
+
+Markdown Content:
+# Hindsight Credit Assignment for Long-Horizon LLM Agents 
+
+Hui-Ze Tan* 1 2 Xiao-Wen Yang* 1 2 Hao Chen* 3 Jie-Jing Shao 1 Yi Wen 3 4 Yuteng Shen 3 Weihong Luo 3
+
+Xiku Du 3 Lan-Zhe Guo 1 5 Yu-Feng Li 1 2 
+
+## Abstract 
+
+Large Language Model (LLM) agents often face significant credit assignment challenges in long-horizon, multi-step tasks due to sparse rewards. Existing value-free methods, such as Group Rel-ative Policy Optimization (GRPO), encounter two fundamental bottlenecks: inaccurate step-level Q-value estimation and misaligned value baselines for intermediate states. To address these limitations, we introduce HCAPO , the first framework to integrate hindsight credit assign-ment into LLM agents. HCAPO leverages the LLM itself as a post-hoc critic to refine step-level 
+
+Q-values through hindsight reasoning. Further-more, HCAPO’s multi-scale advantage mecha-nism effectively supplements the inaccurate value baselines at critical decision states. Evalua-tions across three challenging benchmarks, in-cluding WebShop and ALFWorld, demonstrate that HCAPO consistently outperforms state-of-the-art RL methods. Notably, HCAPO achieves a 7.7% improvement in success rate on WebShop and a 13.8% on ALFWorld over GRPO using the Qwen2.5-7B-Instruct model. These results indicate that HCAPO significantly enhances ex-ploration efficiency, promotes concise decision-making, and ensures scalability in complex, long-horizon tasks. 
+
+## 1. Introduction 
+
+In recent years, Large Language Model (LLM)-based au-tonomous agents have demonstrated remarkable advance-ments in reasoning and decision-making within open en-vironments (Gur et al., 2023; Jin et al., 2025; Liu et al., 
+
+> 1
+
+State Key Laboratory of Novel Software Technology, Nanjing University, China 2School of Artificial Intelligence, Nanjing Uni-versity, China 3FiT, Tencent, Shenzhen, China 4School of Data Sci-ence, City University of Hong Kong, Hong Kong, China 5School of Intelligence Science and Technology, Nanjing University, China. Correspondence to: Weihong Luo <lobbyluo@tencent.com >, Yu-Feng Li <liyf@nju.edu.cn >.
+
+Preprint. March 11, 2026. Key Step                
+
+> �>1
+> Step1
+> �<1
+> Step2
+> �=1
+> Step3
+> �<1
+> Step4
+> �>1
+> Step5
+> Noisy Step Common Noisy Step Key Step
+> �=1
+> Outcome
+> Reward
+> Interaction Trajectory
+> GRPO Value
+> Hindsight Credit Assignment
+> Step Level
+> Q-Value
+> low action prob
+> high action prob
+> Noisy Step
+> Key Step
+> Outcome
+
+Figure 1. From trajectory-level to step-level: hindsight credit assignment for long-horizon agents. ρ is the hindsight ratio. 
+
+2024; Zhang et al., 2024). These agents exhibit signifi-cant potential in addressing long-horizon planning tasks, including embodied planning (Shridhar et al., 2020), web navigation (Yao et al., 2022a), deep search, and multi-step travel planning (Xie et al., 2024; Shao et al., 2024a). Despite these advancements, a fundamental bottleneck per-sists in the application of reinforcement learning (RL) (Sut-ton et al., 1998; 1999) for agent optimization: the inherent sparsity of outcome-based rewards. Since most tasks pro-vide only a scalar reward upon reaching a terminal state, intermediate actions within the decision-making process lack timely or granular feedback. This leads to a critical 
+
+credit assignment problem, where it becomes difficult to accurately attribute a sparse terminal reward to the specific, pivotal decisions that led to the final outcome. This chal-lenge is further aggravated by the extended reasoning chains and vast action spaces of LLMs. To be more specific, we identify two fundamental bot-tlenecks in applying current value-free methods like GRPO (Shao et al., 2024b; Guo et al., 2025) to agent tasks. First, the inaccuracy of step-level Q-value estimation : since these methods rely on a single Monte Carlo sample (the terminal reward) for the entire trajectory, they fail to discern the specific contribution of individual actions. Second, the 
+
+misalignment of the value baseline : GRPO typically utilizes the mean reward from the initial state as a universal baseline, failing to account for the evolving state values as the agent progresses through a long sequence of interactions. To mitigate this challenge, existing research has sought 1
+
+> arXiv:2603.08754v1 [cs.LG] 7 Mar 2026 Hindsight Credit Assignment for Long-Horizon LLM Agents
+
+to construct dense reward signals by incorporating task-specific priors or leveraging external models. For instance, GIGPO (Feng et al., 2025) utilizes anchor states to cate-gorize trajectories, thereby optimizing advantage estima-tion, while EMPG (Wang et al., 2025) formulates intrinsic, action-level rewards based on dynamic entropy. Further-more, several approaches have integrated Process Reward Models (PRMs) to provide fine-grained, step-by-step feed-back (Lightman et al., 2023; Xi et al., 2025). However, the development of PRMs relies heavily on costly human annotations and is susceptible to noise, which limits their generalization capabilities in out-of-distribution scenarios. More crucially, current methods predominantly focus on a unidirectional forward process (from initial to goal states), while overlooking the retrospective causal link between spe-cific intermediate actions and the final outcome. In classical RL, hindsight methods offer a promising alter-native by leveraging information available after an episode concludes, especially for long-horizon tasks (Harutyunyan et al., 2019; Andrychowicz et al., 2017). The intuition is powerful: once we know a trajectory succeeded, we can look back and ask, “Given this successful outcome, how necessary was each action?” If an action aligns strongly with the path to success, it deserves amplified credit; if it appears irrelevant or suboptimal in hindsight, its credit should be suppressed. This approach helps uncover causal relation-ships between intermediate decisions and final outcomes. However, effectively implementing this intuition within the unique constraints of LLM agents, where the action space is combinatorial natural language and the policy is a generative model, remains an open challenge. In this paper, we introduce Hindsight Credit Assignment Policy Optimization (HCAPO), a novel, value-free frame-work designed to address sparse-reward training for long-horizon LLM agents (see Figure 1). Our key contributions are summarized as follows: • A Principled Hindsight Framework: We introduce HCAPO, the first framework to integrate hindsight credit assignment into LLM agents. We propose Generative Verification, which leverages the LLM itself as a post-hoc critic to evaluate instrumental actions by conditioning on successful outcomes. We further introduce a self-normalized importance ratio estimation that bypasses the need for external models. By refining step-level Q-values, HCAPO effectively mitigates the issues of credit assign-ment in current value-free methods like GRPO. • Theoretical Insights into Multi-Scale Advantages: We provide a formal analysis for HCAPO’s composite advan-tage mechanism. We demonstrate that HCAPO addresses two fundamental limitations of standard group optimiza-tion: the coarse estimation of step-level Q-values and the misalignment of value estimation for intermediate states. Our analysis shows that by refining Q-values and employing multi-scale advantage integration, HCAPO provides an accurate value estimate specifically at critical bottleneck nodes, while leveraging robust trajectory-level signals to maintain global training stability. • Empirical Superiority and Scalability: Evaluations across ALFWorld, WebShop, and Search-augmented QA show that HCAPO consistently outperforms state-of-the-art RL methods. We benchmark HCAPO against the strong value-free baseline GRPO on both ALFWorld and WebShop.On WebShop, HCAPO raises the 7B-model success rate from 66.1% → 73.8% ( +7.7%).On ALF-World, the gain is larger: 77.6% → 91.4% ( +13.8%), and with temporal smoothing the same model reaches 96.9%, near-perfect. 
+
+## 2. Related Work 
+
+LLMs as Autonomous Agents. LLMs have demonstrated significant potential as autonomous agents capable of rea-soning, planning, and interacting with diverse environments (Yao et al., 2022b; Shinn et al., 2023; Schick et al., 2023; Zhang et al., 2025a). By leveraging their vast world knowl-edge, these agents can solve complex, multi-step tasks such as web navigation (Yao et al., 2022a) and embodied plan-ning (Shridhar et al., 2020). However, as the task horizon extends, agents often struggle with error accumulation and the lack of intermediate guidance, necessitating more effec-tive optimization strategies beyond simple prompting. 
+
+Reinforcement Learning for LLM Agents. RL has be-come a pivotal paradigm for aligning LLMs with complex objectives (Ouyang et al., 2022; Ziegler et al., 2019; Sti-ennon et al., 2020). While PPO (Schulman et al., 2017) is a standard, its reliance on a learned Critic incurs signif-icant memory overhead. Consequently, value-free meth-ods like RLOO (Ahmadian et al., 2024), GRPO (Shao et al., 2024b) and other methods (Yu et al., 2025; Liu et al., 2025b; Lin et al., 2025) have emerged to estimate advan-tages via group statistics. However, these methods primarily focus on trajectory-level feedback, which is often too coarse for long-horizon tasks where success hinges on pivotal ac-tions.What’s more, global baselines from initial states do not adapt to intermediate states, providing poor signals. 
+
+Reward Shaping and Process Supervision. To address the sparse reward challenge, various methods have been proposed to tackle the credit assignment problem in LLM-based RL (Zhang et al., 2025b; Liu et al., 2025a; Li et al., 2025; Dong et al., 2025; Zhou et al., 2024). Specifically, Process Reward Models (PRMs) (Lightman et al., 2023) provide step-level supervision but require expensive human annotations. Alternatively, intrinsic reward mechanisms such as EMPG (Wang et al., 2025) utilize dynamic entropy for exploration. More recently, GiGPO (Feng et al., 2025) 2Hindsight Credit Assignment for Long-Horizon LLM Agents 
+
+introduced state-based anchors to categorize trajectories and refine advantages. Unlike these methods, HCAPO requires no manual anchor rules or external models, instead leverag-ing the LLM’s intrinsic reasoning for credit assignment. 
+
+## 3. Preliminaries 
+
+3.1. RL Framework for LLM Agent Tasks 
+
+We formalize interactive decision-making tasks as a Partially Observable Markov Decision Process (POMDP) (Spaan, 2012). At each time step t, the agent receives an observation 
+
+ot (e.g., HTML source code), which, combined with the action history, constitutes the current state st. The agent then generates an action at (e.g., clicking a button or issu-ing a search query) according to a policy πθ (at|st). This interaction results in a trajectory of length T , denoted as 
+
+τ = ( s1, a 1, . . . , s T , a T ).These tasks are typically characterized by sparse rewards. The environment provides a scalar reward R(τ ) only at the end of the task ( t = T ) based on the completion status 
+
+J(πθ ) = Eτ ∼πθ [R(τ )] (1) 
+
+3.2. Value-Free Group Policy Optimization 
+
+Direct optimization of the above objective typically relies on policy gradient methods. The standard gradient estimate takes the form: 
+
+∇θ J(πθ ) = Eτ ∼πθ
+
+" TX
+
+> t=0
+
+At∇θ log πθ (at|st)
+
+#
+
+(2) where At is the advantage function measuring the relative quality of action at. In traditional RL, At is often estimated using a learned value network (Critic) V (s) to reduce vari-ance (Mnih et al., 2015; Schulman et al., 2015). However, in the context of Large Language Models (LLMs), training a Critic of comparable size to the Policy incurs significant memory overhead and training instability. Moreover, value estimation suffers from high bias in long-horizon, sparse-reward settings. Consequently, value-free methods (Kool et al., 2019; Rafailov et al., 2023; Li et al., 2023) have emerged as an efficient paradigm. 
+
+Group Relative Policy Optimization (GRPO) (Shao et al., 2024b) exemplifies this paradigm. Instead of train-ing a Critic, GRPO samples a group of G trajectories 
+
+{τ1, . . . , τ G} for each input query using the current pol-icy. It utilizes group statistics as a baseline to compute the advantage: 
+
+AGRPO  
+
+> i
+
+= R(τi) − μR
+
+σR
+
+(3) where μR and σR are the group statistics of outcome re-wards.This approach effectively reduces gradient variance through intra-group comparison without requiring addi-tional value network parameters. However, GRPO and related value-free methods encounter fundamental limitations for credit assignments in long-horizon agent tasks. First, because the advantage AGRPO  
+
+> i
+
+is derived solely from the terminal return R(τi) of a complete trajectory, these methods lack the granularity for accurate step-level Q-value estimation, failing to distinguish criti-cal actions from irrelevant ones. Second, the reliance on a global baseline from the initial state results in a misalign-ment with the evolving state values during extended interac-tions. Consequently, establishing precise step-level credit assignment remains a pivotal challenge for optimizing LLM agents in environments with sparse rewards. 
+
+3.3. Hindsight Credit Assignment 
+
+HCA (Harutyunyan et al., 2019) addresses this limitation by leveraging future outcome information to disentangle the contribution of individual steps. Its core idea is to introduce a hypothetical hindsight distribution conditioned on the realized outcome. Formally, let π(at|st) denote the behavior policy used dur-ing sampling. We define a future-state-conditional distribu-tion h(at|st, s k), which represents the probability of taking action at at state st, given that the trajectory eventually visits the future state sk.According to HCA theory (Harutyunyan et al., 2019), we can construct an unbiased estimate of the Q-value. This es-timate re-weights future returns using the importance ratio between the hindsight distribution and the policy distribu-tion: 
+
+Q(st, a ) ≈ ˆr(st, a ) +  
+
+> T−1
+
+X
+
+> k=t+1
+
+γk−t h(a|st, s k)
+
+π(a|st) Rk
+
++ γT −t h(a|st, s T )
+
+π(a|st) V (sT )
+
+(4) where ˆr is an estimate of the immediate reward, Rk is the reward at step k, γ is the discount factor and V is the state-value function. While classical HCA requires training a separate parame-terized model to estimate h via supervised learning, in the context of LLM-based agents, we can leverage the inherent reasoning capabilities of the agent itself. Instead of explicit training, we simulate the hindsight distribution by injecting the realized outcome (posterior information) directly into the agent’s input context via prompting. By conditioning the LLM on the future state, the model can effectively ap-proximate the posterior probability P (at|st, s k), using its world knowledge to identify critical actions that causally lead to the observed outcome. 3Hindsight Credit Assignment for Long-Horizon LLM Agents 
+
+## 4. HCAPO 
+
+We introduce Hindsight Credit Assignment Policy Opti-mization (HCAPO) , a value-free reinforcement learning framework designed to resolve the sparse-reward bottle-neck in long-horizon LLM agent tasks. HCAPO refines the coarse trajectory-level feedback into a fine-grained, step-level advantage signal by leveraging the agent’s intrinsic reasoning capabilities. The overall framework is illustrated in Figure 2. 
+
+4.1. Refined Hindsight Q-Value for Sparse Rewards 
+
+Standard value-free methods like GRPO (Shao et al., 2024b) suffer from credit assignment challenges in long-horizon tasks, as they uniformly assign the terminal reward R(τi)
+
+to every action in the trajectory. This fails to distinguish pivotal state-action pairs from redundant steps. To resolve this, we derive a refined Hindsight Q-value grounded in HCA theory. In tasks characterized by sparse terminal rewards (where in-termediate rewards rt<T = 0 ), the HCA formulation (Haru-tyunyan et al., 2019) simplifies significantly. We define the refined Q-value for action at at state st as: 
+
+QH 
+
+> i,t
+
+= ρi,t · Gi,t ,ρi,t = h(at | st, s final )
+
+π(at | st)
+
+(5) Here, Gi,t = γT −tR(τi) represents the discounted future return, and ρi,t is the hindsight importance ratio. This ratio acts as a “causal filter”: if the action’s probability increases when conditioned on the successful outcome, its credit is amplified ( ρi,t > 1); if it decreases, its credit is suppressed (ρi,t < 1). This mechanism effectively amplifies the credit for actions that are significantly more likely to occur given the knowledge of the successful outcome ( sfinal ). 
+
+4.2. Generative Verification and Ratio Estimation 
+
+Implementing the hindsight importance ratio ρ = h/π in LLM agents faces two major obstacles. First, the prior policy π(at|st) is intractable due to the vast, combinatorial nature of natural language action spaces. Second, classical HCA theory (Harutyunyan et al., 2019) requires training a separate parameterized model to approximate the hindsight distribution h.We resolve the two obstacles by leveraging the LLM’s inher-ent reasoning capabilities through Generative Verification. Instead of training a new model, we“simulate” the hind-sight distribution by injecting the successful outcome sfinal 
+
+directly into the model’s prompt. To estimate the ratio ρ
+
+without explicit knowledge of the action space, we establish a link through a Bayesian lens. By the Law of Total Proba-bility, the prior is the marginalization of the posterior over all potential outcomes: π(at|st) = Esfinal [π(at | st, s final )] .Specifically, let action at consist of tokens (y1, . . . , y |at|).We first compute πhind (at) as the exponential of the mean log-probabilities, conditioned on the successful state: 
+
+πhind (at) = exp 
+
+ 1
+
+Ttemp |at|
+
+> |at|
+
+X
+
+> j=1
+
+log πθ (yj | y<j , s t, s final )
+
+
+
+(6) where Ttemp is a sharpening temperature. By the Law of Total Probability, the prior policy is the marginalization of the posterior over all possible outcomes: π(at|st) = 
+
+Esfinal [π(at | st, s final )] . Since this marginalization is in-tractable, we approximate it using the empirical mean of hindsight scores within a trajectory, ¯πhind , which serves as a robust surrogate for the prior. This leads to a self-normalized importance ratio estimator: 
+
+ρt =clip 
+
+ πhind (at)¯πhind 
+
+, C min , C max 
+
+
+
+,
+
+¯πhind = 1
+
+T
+
+> T
+
+X
+
+> k=1
+
+πhind (ak)
+
+(7) This self-normalized approach transforms the intractable posterior estimation into a tractable scoring task. In long-horizon agent tasks such as ALFWorld, critical decision nodes may involve multiple consecutive actions; the intra-trajectory normalization over ¯πhind provides a meaningful local reference, akin to group-normalization across actions within the same episode. This enables efficient credit as-signment without external models. 
+
+4.3. Multi-Scale Optimization 
+
+HCAPO integrates two complementary scales of feedback: a macro-scale outcome signal for global stability and a 
+
+micro-scale hindsight signal for local precision. The final composite advantage for the i-th trajectory in a group of size G is: 
+
+AHCAPO  
+
+> i,t
+
+= R(τi) − μR
+
+σR
+
+| {z }
+
+> Macro (GRPO)
+
++ω · QH 
+
+> i,t
+
+− μH
+
+σH
+
+| {z }
+
+> Micro (Hindsight)
+
+(8) where μH and σH are the group statistics of QH at time step t.We argue that this cross-state normalization is theoretically sound for bottleneck learning in Section 5. Specifically, we apply a “do-no-harm” protective mask to zero out negative hindsight signals in successful trials. The policy πθ is optimized using the PPO (Schulman et al., 2017) surrogate objective (Eq. 9). 4Hindsight Credit Assignment for Long-Horizon LLM Agents Query 
+
+> Current State
+> Action Prob
+> <action> </action>
+> ...
+> Hindsight Info
+> Candidate Action
+> rule
+> Normalization
+> Prompt
+> Outcome reward Hindsight
+> Q-value
+> Group
+> Advantage
+> Query
+> Actions
+> Actions
+> Actions
+
+Figure 2. The HCAPO framework. (a) Illustrates the generative verification process: for a candidate action at, the LLM acts as a critic to compute the hindsight score ρt by conditioning on the state st and hindsight information sf inal . (b) Shows the full optimization loop where a group of G trajectories is evaluated via Hindsight Q-values to produce the final group-based advantage Ai,t .
+
+J (θ) = E{τi}Ki=1 ∼πθold 
+
+"
+
+1
+
+K
+
+> K
+
+X
+
+> i=1
+
+1
+
+TiTiX
+
+> t=1
+
+min 
+
+
+
+ri,t (θ)AHCAPO  
+
+> i,t
+
+,
+
+clip (ri,t (θ), 1 − ϵ, 1 + ϵ)AHCAPO 
+
+> i,t
+
+
+
+− βKL DKL (πθ || πref )
+
+#
+
+(9) where ϵ is the clipping parameter to constrain policy updates, and βKL penalizes the KL divergence against the reference policy πref to prevent model collapse. To further stabilize credit assignment in tasks with rigid causal chains, we optionally apply a temporal smoothing 
+
+mechanism to QH 
+
+> i,t
+
+to distribute credit across adjacent rea-soning and action steps (see Appendix A). The pseudocode for HCAPO is provided in Appendix B. 
+
+## 5. Theoretical Rationale for HCAPO 
+
+In this section, we provide a formal analysis for the synergy between macro-scale outcome signals and micro-scale hind-sight guidance. We demonstrate that HCAPO’s composite advantage effectively resolves the credit assignment prob-lem by targeting task bottlenecks while maintaining overall training stability. 
+
+5.1. Synergy of Macro and Micro Advantages 
+
+The composite advantage in HCAPO integrates two com-plementary scales of feedback. Recalling Eq. 8, the total advantage AHCAPO  
+
+> i,t
+
+is formulated as: 
+
+AHCAPO  
+
+> i,t
+
+= AGRPO 
+
+> i
+
+| {z } 
+
+> Macro Signal
+
++ω · QH 
+
+> i,t
+
+− μH
+
+σH
+
+| {z }
+
+> Micro Correction
+
+(10) 
+
+Macro Stability from GRPO. The macro signal, derived from standard trajectory-level GRPO, provides a robust and consistent reinforcement signal.It ensures that the policy trends toward high-reward outcomes. However, this signal assigns credit uniformly to all actions in a successful trial, regardless of their actual contribution. 
+
+Micro Precision from HCAPO. The micro correction term acts as a high-resolution ”filter” specifically designed for critical decision nodes. While the macro signal maintains the global task direction, the hindsight-refined QH isolates the causal contribution of individual actions. This allows the model to amplify credit for pivotal ”breakthrough” decisions while suppressing the influence of redundant or noisy steps that happened to occur on the path to success. 
+
+5.2. Rationale for Cross-State Normalization 
+
+A potential concern is the use of a global group mean μH
+
+computed across heterogeneous states. The global group mean μH converges to the expectation of QH over the sam-pled state-action pairs across all trajectories in the group: 
+
+μH ≈ Es∼dπ ,a ∼π [QH(s, a )] . (11) Applying the Law of Total Expectation, we can decompose this global expectation: 
+
+μH ≈ Es∼dπ
+
+Ea∼π(a|s)[QH(s, a ) | s] = Es∼dπ [V H(s)] ,
+
+(12) where V H(s) is the hindsight state-value function and dπ (s)
+
+is the state visitation distribution under the current policy. This proves that μH is a non-parametric estimate of the aver-age expected utility across the entire task-visitation spaces. The core strength of HCAPO lies in its ability to automati-cally identify task bottlenecks. Let s∗ be a pivotal bottleneck state. Before the breakthrough ( s < s ∗), the value is low (Vlow ); after the breakthrough ( s > s ∗), the value signifi-cantly increases ( Vhigh ). Since the global mean μH means the expectation over all states, it naturally falls between these two regimes: Vlow <
+
+5Hindsight Credit Assignment for Long-Horizon LLM Agents 
+
+μH < V high . This positioning makes μH an ideal adaptive threshold for credit assignment at the bottleneck s∗:• Breakthrough Actions ( a∗): Lead to QH ≈ Vhigh ,resulting in a large positive advantage ( Vhigh − μH > 0). • Non-instrumental Actions ( a−): Result in QH ≈
+
+Vlow , leading to a negative advantage ( Vlow − μH < 0). Similar to how GRPO works, HCAPO reduces variance for the bottleneck states. It filters out task-level background noise, enabling the agent to concentrate its learning capacity on triggering the transition from Vlow to Vhigh .
+
+Summary. In summary, HCAPO addresses the two fun-damental limitations of standard group optimization: the coarse estimation of step-level Q-values and the misalign-ment of baselines for intermediate states. We resolve the former by refining Q-values through hindsight reasoning to isolate instrumental actions. For the latter, we demonstrate that HCAPO’s multi-scale advantage integration provides a discriminative and accurate value estimate specifically at critical bottleneck nodes, while leveraging robust trajectory-level signals to maintain global training stability. 
+
+## 6. Experiments 
+
+In this section, we present empirical evaluations of HCAPO across diverse agentic tasks. Specifically, we aim to demon-strate: (1) the superior capability of HCAPO in training LLM agents compared to trajectory-level baselines; (2) the behavioral evolution of agents regarding trajectory effi-ciency; and (3) the computational budget of our framework. 
+
+6.1. Experiment Setup Benchmarks. To ensure a rigorous comparison, our ex-perimental setup and benchmarks follow all the configura-tions in GiGPO (Feng et al., 2025). We first evaluate on 
+
+ALFWorld (Shridhar et al., 2020), an embodied environ-ment assessing multi-step reasoning across six categories of household tasks. Secondly, we use WebShop (Yao et al., 2022a), a web-based environment where agents navigate HTML sites to purchase items matching specific attributes; we report both the average Score and the Success Rate, which respectively capture the quality of task completion. Finally, we evaluate on Search-augmented QA tasks, in-cluding single-hop (NQ (Kwiatkowski et al., 2019), Trivi-aQA (Joshi et al., 2017), PopQA (Mallen et al., 2023)) and multi-hop (HotpotQA (Yang et al., 2018), 2Wiki (Ho et al., 2020), MuSiQue (Trivedi et al., 2022), Bamboogle (Press et al., 2023)) datasets. We treat NQ and HotpotQA as in-domain benchmarks and use the remaining datasets to assess out-of-domain generalization. 
+
+Baselines. To ensure a standardized and rigorous compar-ison, we adopt the baseline results directly as reported in the original GiGPO paper (Feng et al., 2025) and EMPG paper (Wang et al., 2025). For ALFWorld and Web-Shop , the baselines include: (1) Closed-source LLMs : GPT-4o (Achiam et al., 2023) and Gemini-2.5-Pro (Team et al., 2023); (2) Prompting agents : ReAct (Yao et al., 2022b) and Reflexion (Shinn et al., 2023); and (3) RL training meth-ods : PPO (Schulman et al., 2017), RLOO (Ahmadian et al., 2024), GRPO (Shao et al., 2024b),EMPG (Wang et al., 2025) and the state-of-the-art GiGPO (Feng et al., 2025). For search-augmented QA tasks, following the experimen-tal protocol in GiGPO (Feng et al., 2025), we compare HCAPO against a specific suite of baselines including R1-Instruct, Search-R1 (Jin et al., 2025), ZeroSearch (Sun et al., 2025), StepSearch (Sun et al., 2025) and the state-of-the-art GiGPO (Feng et al., 2025). By utilizing the figures reported in the prior literature, we ensure that our evaluation is strictly consistent with the existing state-of-the-art benchmarks and maintains a fair comparison across all multi-turn reasoning and tool-calling tasks. 
+
+Training Details. We utilize the Qwen2.5-Instruct series (1.5B, 3B, and 7B) (Yang et al., 2024) as our base mod-els. To ensure a fair comparison, all experimental settings are kept identical to those in GiGPO (Feng et al., 2025). Detailed settings are provided in Appendix C. 
+
+6.2. Performance on ALFWorld and WebShop 
+
+As shown in Table 1, HCAPO achieves significant gains over the trajectory-level baseline GRPO and demonstrates performance comparable to the state-of-the-art GiGPO across both ALFWorld and WebShop. On ALFWorld (7B), HCAPO reaches an overall success rate of 91.4% , surpass-ing GRPO’s 77.6% by 13.8 points and slightly exceeding GiGPO (90.8%). Similar gains are observed at 1.5B (87.0% vs. 72.8% for GRPO). On WebShop, HCAPO improves both evaluation metrics: at 7B, the average Score rises from 79.3 to 85.1 and the Success Rate from 66.1 to 73.8; at 1.5B, Score increases from 75.8 to 83.8 and Success Rate from 56.8 to 68.5, closely matching or exceeding GiGPO. These results highlight that HCAPO effectively overcomes the limitations of coarse trajectory-level feedback. While GRPO struggles to isolate instrumental actions in long in-teraction sequences, HCAPO’s hindsight ratio successfully identifies key actions even in complex environments like 
+
+Pick2 or Cool , leading to more robust and effective learning. Furthermore, HCAPO’s performance becomes more stable as the model scales from 1.5B to 7B. This scaling trend suggests that larger models are better equipped to lever-age hindsight information, likely due to their superior rea-soning capacity and instruction-following abilities, which 6Hindsight Credit Assignment for Long-Horizon LLM Agents 
+
+Table 1. Performance on ALFWorld and WebShop. Results are averaged over 3 random seeds. For ALFWorld, we report the average success rate (%) for each subtask as well as the overall result. For WebShop, we report both the average score and the average success rate (%). We compare our proposed HCAPO with GRPO and GiGPO. Best results are bolded .                                                                                                                                                                                                                   
+
+> Type Method ALFWorld WebShop Pick Look Clean Heat Cool Pick2 All Score Succ.
+> Closed-Source Model
+> Prompting GPT-4o 75.3 60.8 31.2 56.7 21.6 49.8 48.0 31.8 23.7 Prompting Gemini-2.5-Pro 92.8 63.3 62.1 69.0 26.6 58.7 60.3 42.5 35.9
+> Qwen2.5-1.5B-Instruct
+> Prompting Qwen2.5 5.9 5.5 3.3 9.7 4.2 0.0 4.1 23.1 5.2 Prompting ReAct 17.4 20.5 15.7 6.2 7.7 2.0 12.8 40.1 11.3 Prompting Reflexion 35.3 22.2 21.7 13.6 19.4 3.7 21.8 55.8 21.9 RL Training PPO (with critic) 64.8 ±3.5 40.5 ±6.9 57.1 ±4.9 60.6 ±6.6 46.4 ±4.0 47.4 ±1.9 54.4 ±3.1 73.8 ±3.0 51.5 ±2.9 RL Training RLOO 88.3 ±3.0 52.8 ±8.6 71.0 ±5.9 62.8 ±8.7 66.4 ±5.5 56.9 ±4.7 69.7 ±2.5 73.9 ±5.6 52.1 ±6.7 RL Training GRPO 85.3 ±1.5 53.7 ±8.0 84.5 ±6.8 78.2 ±7.9 59.7 ±5.0 53.5 ±5.6 72.8 ±3.6 75.8 ±3.5 56.8 ±3.8 RL Training EMPG 85.5 33.5 78.9 76.2 74.7 69.1 73.7 80.4 60.8 RL Training GiGPO 94.4 ±5.9 67.5 ±4.6 94.8 ±3.8 94.4 ±7.8 79.8 ±4.7 76.4 ±5.4 86.7 ±1.7 83.1 ±1.6 65.0 ±3.2 RL Training HCAPO (Ours) 88.6 ±7.0 75.0 ±0.0 97.6 ±1.8 90.7 ±6.9 84.2 ±0.0 74.2 ±6.9 87.0 ±4.1 83.8 ±0.7 68.5 ±1.0
+> Base Model: Qwen2.5-7B-Instruct
+> Prompting Qwen2.5 33.4 21.6 19.3 6.9 2.8 3.2 14.8 26.4 7.8 Prompting ReAct 48.5 35.4 34.3 13.2 18.2 17.6 31.2 46.2 19.5 Prompting Reflexion 62.0 41.6 44.9 30.9 36.3 23.8 42.7 58.1 28.8 RL Training PPO (with critic) 92.3 ±4.0 64.0 ±8.4 92.5 ±2.4 89.5 ±7.0 80.3 ±2.0 68.8 ±8.3 80.4 ±2.7 81.4 ±3.1 68.7 ±5.1 RL Training RLOO 87.6 ±4.3 78.2 ±8.3 87.3 ±5.8 81.3 ±7.6 71.9 ±5.2 48.9 ±8.4 75.5 ±4.6 80.3 ±3.2 65.7 ±4.0 RL Training GRPO 90.8 ±5.1 66.1 ±6.7 89.3 ±5.4 74.7 ±6.9 72.5 ±5.4 64.7 ±7.3 77.6 ±5.2 79.3 ±2.8 66.1 ±3.7 RL Training EMPG 92.9 75.2 74.8 86.3 73.7 65.3 78.5 81.0 69.3 RL Training GiGPO 97.7 ±1.6 82.7 ±7.9 98.8 ±1.6 83.7 ±7.2 89.3 ±8.2 79.2 ±6.6 90.8 ±1.3 84.4 ±2.9 72.8 ±3.2 RL Training HCAPO (Ours) 99.1 ±1.3 90.3 ±2.0 97.3 ±1.9 81.8 ±8.8 90.8 ±6.6 81.9 ±10.0 91.4 ±2.3 85.1 ±1.3 73.8 ±2.8
+
+allow for more consistent posterior evaluations of past ac-tions.Additional ablation results are reported in Appendix D. 
+
+6.3. Performance on Search-augmented QA Tasks 
+
+Table 2 presents the results on search-augmented QA tasks. We observe that HCAPO achieves strong and consis-tent gains across both single-hop and multi-hop reasoning datasets. Notably, HCAPO reaches an average success rate of 48.3% at 7B, outperforming prior strong baselines such as Search-R1 and StepSearch, and maintaining a perfor-mance level comparable to GiGPO. In Single-Hop QA, HCAPO yields consistent performance gains across the datasets, primarily because it more effec-tively identifies the specific query that provides the most critical information for the final answer. HCAPO success-fully highlights the high-utility “golden query” that leads directly to the correct evidence. By concentrating credit on these pivotal actions rather than distributing it uniformly across the interaction history, HCAPO reinforces the most efficient retrieval paths and enhances the agent’s ability to locate core evidence in a single step. 
+
+6.4. Dynamics of Behavioral Conciseness 
+
+We investigate how the hindsight signal reshapes the agent’s decision-making process during training. A unique advan-tage of HCAPO is its ability to identify and suppress re-dundant actions even within successful trajectories. We define “redundant actions” as those assigned a hindsight confidence score πhind ≤ 0.9 when Ttemp = 1 , indicating low instrumental utility relative to the successful outcome. As illustrated in Figure 3(a), we track the proportion of such redundant actions over the training process. Initially, the policy generates a high percentage of noise actions. However, as HCAPO penalizes these steps, the “pruning rate” significantly improves, and the frequency of redundant actions steadily decreases. This signifies that the agent is successfully internalizing the essential causal logic of the task.Furthermore, these results provide strong evidence of HCAPO’s discriminative power for noisy actions. This behavioral refinement is further evidenced by the path-shortening effect shown in Figure 3(b). While the GRPO baseline maintains a high average trajectory length ( ≈ 7.8
+
+steps) due to its inability to distinguish key actions, HCAPO agents converge to a more concise policy ( ≈ 5.8 steps). 7Hindsight Credit Assignment for Long-Horizon LLM Agents 
+
+Table 2. Performance on search-augmented QA tasks. † and ⋆ indicate in-domain and out-of-domain datasets, respectively. Bold indicates the best performance in each category. 
+
+Type Method Single-Hop QA Multi-Hop QA Avg. NQ † TriviaQA ⋆ PopQA ⋆ HotpotQA † 2Wiki ⋆ MuSiQue ⋆ Bamboogle ⋆
+
+Base Model: Qwen2.5-3B-Instruct 
+
+RL Training R1-Instruct 27.0 53.7 19.9 23.7 29.2 7.2 29.3 27.1 RL Training Search-R1 34.1 54.5 37.8 32.4 31.9 10.3 26.4 32.5 RL Training ZeroSearch 41.4 57.4 44.8 27.4 30.0 9.8 11.1 31.7 RL Training StepSearch – – – 34.5 32.0 17.4 – 34.4 RL Training GiGPO 42.0 59.5 42.4 36.9 37.0 12.6 64.1 42.1 RL Training HCAPO (Ours) 44.4 60.5 45.5 38.6 36.3 14.8 64.5 44.3 
+
+Base Model: Qwen2.5-7B-Instruct 
+
+RL Training R1-Instruct 21.0 44.9 17.1 20.8 27.5 6.0 19.2 22.4 RL Training Search-R1 39.3 61.0 39.7 37.0 40.1 14.6 36.8 38.5 RL Training ZeroSearch 43.6 61.8 51.5 34.6 35.2 18.4 27.8 39.1 RL Training StepSearch – – – 38.6 36.6 22.6 – 40.0 RL Training GiGPO 46.4 64.7 46.1 41.6 43.6 18.9 68.9 47.2 RL Training HCAPO (Ours) 46.1 65.5 47.6 42.1 43.1 17.7 69.0 48.3 0 10 20 30 40 50       
+
+> Training Steps
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> Proportion of redundant actions  HCAPO
+> 025 50 75 100 125 150
+> Training Steps
+> 6
+> 8
+> 10
+> 12
+> Episode Length
+> HCAPO
+> GRPO
+
+Figure 3. LEFT: Proportion of redundant actions during training in webshop task. RIGHT: Path-shortening effect of HCAPO vs. GRPO in webshop task. 
+
+6.5. Analysis of Computational Efficiency 
+
+In this section, we analyze the computational overhead intro-duced by the hindsight mechanism. The primary addition to the training pipeline is the Generative Verification process used to compute the hindsight probability πhind .
+
+Efficiency of Generative Verification. Crucially, Genera-tive Verification is computationally efficient by design. Un-like the Generation phase, which requires time-consuming auto-regressive decoding to generate actions token-by-token, Generative Verification only involves scoring existing tra-jectories. The model extracts the log-probabilities of the action tokens in a single forward pass. This parallelizable, prefix-based computation bypasses the sequential bottleneck of auto-regressive decoding, making the Generative Verifi-cation phase significantly faster than the Generation phase. 
+
+Latency Breakdown. Figure 4 provides a breakdown of the step-wise training latency. As shown in the pie chart, the vast majority of computational resources are consumed 27.1% 
+
+> 6.7%
+> 8.3%
+> 6.9%
+> 51.0%
+> Update_actor
+> 32.5s (27.1%)
+> Ref
+> 8.0s (6.7%)
+> Hindsight_prob
+> 10.0s (8.3%)
+> Old_log_prob
+> 8.3s (6.9%)
+> Gen
+> 61.3s (51.0%)
+> HCAPO Training Time Breakdown per Iteration
+
+Figure 4. Computational cost breakdown during training. The hindsight audit pass accounts for only 8.3% of total training time. 
+
+by the Generation stages. Attributable to its non-generative nature, the computation of hindsight prob accounts for only approximately 8.3% of the total training time. This result demonstrates that HCAPO provides a high performance-to-cost ratio, delivering substantial improvements in credit assignment with minimal additional computational burden. 
+
+## 7. Conclusion and Limitations 
+
+Conclusion. We introduce HCAPO , a value-free frame-work that bridges HCA theory and long-horizon LLM agent optimization. Our analysis reveals that accurate estimation of step-level action values is important and enough for credit assignment, even when coupled with a simplified global group normalization. By leveraging the LLM’s intrinsic reasoning for generative verification, HCAPO provides a 8Hindsight Credit Assignment for Long-Horizon LLM Agents 
+
+novel and efficient approach for scalable agent optimization without relying on external models. 
+
+Limitations. Despite its effectiveness, HCAPO relies on the base model’s reasoning capacity, which may limit the precision of credit signals in small models. Furthermore, while striving to preserve the agent’s decision-making pro-cess, the inclusion of hindsight information inevitably in-troduces some degree of out-of-distribution data. Future work could explore specialized fine-tuning to better align this hindsight reasoning with the policy. 
+
+## References 
+
+Achiam, J., Adler, S., Agarwal, S., Ahmad, L., Akkaya, I., Aleman, F. L., Almeida, D., Altenschmidt, J., Altman, S., Anadkat, S., et al. Gpt-4 technical report. arXiv preprint arXiv:2303.08774 , 2023. Ahmadian, A., Cremer, C., Gall ´e, M., Fadaee, M., Kreutzer, J., Pietquin, O., ¨Ust ¨un, A., and Hooker, S. Back to basics: Revisiting reinforce style optimization for learning from human feedback in llms. arXiv preprint arXiv:2402.14740 , 2024. Andrychowicz, M., Wolski, F., Ray, A., Schneider, J., Fong, R., Welinder, P., McGrew, B., Tobin, J., Pieter Abbeel, O., and Zaremba, W. Hindsight experience replay. Advances in neural information processing systems , 30, 2017. Dong, G., Mao, H., Ma, K., Bao, L., Chen, Y., Wang, Z., Chen, Z., Du, J., Wang, H., Zhang, F., et al. Agentic reinforced policy optimization. arXiv preprint arXiv:2507.19849 , 2025. Feng, L., Xue, Z., Liu, T., and An, B. Group-in-group policy optimization for LLM agent training. In Advances in Neural Information Processing Systems , 2025. Guo, D., Yang, D., Zhang, H., Song, J., Zhang, R., Xu, R., Zhu, Q., Ma, S., Wang, P., Bi, X., et al. Deepseek-r1: In-centivizing reasoning capability in llms via reinforcement learning. arXiv preprint arXiv:2501.12948 , 2025. Gur, I., Furuta, H., Huang, A., Safdari, M., Matsuo, Y., Eck, D., and Faust, A. A real-world webagent with planning, long context understanding, and program synthesis. arXiv preprint arXiv:2307.12856 , 2023. Harutyunyan, A., Dabney, W., Mesnard, T., Ghesh-laghi Azar, M., Piot, B., Heess, N., van Hasselt, H. P., Wayne, G., Singh, S., Precup, D., et al. Hindsight credit assignment. Advances in neural information processing systems , 32, 2019. Ho, X., Nguyen, A.-K. D., Sugawara, S., and Aizawa, A. Constructing a multi-hop qa dataset for compre-hensive evaluation of reasoning steps. arXiv preprint arXiv:2011.01060 , 2020. Jin, B., Zeng, H., Yue, Z., Yoon, J., Arik, S., Wang, D., Zamani, H., and Han, J. Search-r1: Training llms to reason and leverage search engines with reinforcement learning. arXiv preprint arXiv:2503.09516 , 2025. Joshi, M., Choi, E., Weld, D. S., and Zettlemoyer, L. Triviaqa: A large scale distantly supervised challenge dataset for reading comprehension. arXiv preprint arXiv:1705.03551 , 2017. Kool, W., van Hoof, H., and Welling, M. Buy 4 reinforce samples, get a baseline for free! 2019. Kwiatkowski, T., Palomaki, J., Redfield, O., Collins, M., Parikh, A., Alberti, C., Epstein, D., Polosukhin, I., Devlin, J., Lee, K., et al. Natural questions: a benchmark for ques-tion answering research. Transactions of the Association for Computational Linguistics , 7:453–466, 2019. Li, J., Wang, Y., Yan, D., Tian, Y., Xu, Z., Song, H., Xu, P., and Cheong, L. L. Salt: Step-level advantage assign-ment for long-horizon agents via trajectory graph. arXiv preprint arXiv:2510.20022 , 2025. Li, Z., Xu, T., Zhang, Y., Lin, Z., Yu, Y., Sun, R., and Luo, Z.-Q. Remax: A simple, effective, and efficient reinforce-ment learning method for aligning large language models. 
+
+arXiv preprint arXiv:2310.10505 , 2023. Lightman, H., Kosaraju, V., Burda, Y., Edwards, H., Baker, B., Lee, T., Leike, J., Schulman, J., Sutskever, I., and Cobbe, K. Let’s verify step by step. In The Twelfth International Conference on Learning Representations ,2023. Lin, Z., Lin, M., Xie, Y., and Ji, R. Cppo: Accelerating the training of group relative policy optimization-based rea-soning models. arXiv preprint arXiv:2503.22342 , 2025. Liu, A., Feng, B., Xue, B., Wang, B., Wu, B., Lu, C., Zhao, C., Deng, C., Zhang, C., Ruan, C., et al. Deepseek-v3 technical report. arXiv preprint arXiv:2412.19437 , 2024. Liu, X., Wang, K., Wu, Y., Huang, F., Li, Y., Zhang, J., and Jiao, J. Agentic reinforcement learning with implicit step rewards. arXiv preprint arXiv:2509.19199 , 2025a. Liu, Z., Chen, C., Li, W., Qi, P., Pang, T., Du, C., Lee, W. S., and Lin, M. Understanding r1-zero-like training: A critical perspective. arXiv preprint arXiv:2503.20783 ,2025b. 9Hindsight Credit Assignment for Long-Horizon LLM Agents 
+
+Mallen, A., Asai, A., Zhong, V., Das, R., Khashabi, D., and Hajishirzi, H. When not to trust language models: Inves-tigating effectiveness of parametric and non-parametric memories. In Proceedings of the 61st Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , pp. 9802–9822, 2023. Mnih, V., Kavukcuoglu, K., Silver, D., Rusu, A. A., Veness, J., Bellemare, M. G., Graves, A., Riedmiller, M., Fidje-land, A. K., Ostrovski, G., et al. Human-level control through deep reinforcement learning. nature , 518(7540): 529–533, 2015. Ouyang, L., Wu, J., Jiang, X., Almeida, D., Wainwright, C., Mishkin, P., Zhang, C., Agarwal, S., Slama, K., Ray, A., et al. Training language models to follow instructions with human feedback. Advances in neural information processing systems , 35:27730–27744, 2022. Press, O., Zhang, M., Min, S., Schmidt, L., Smith, N. A., and Lewis, M. Measuring and narrowing the composi-tionality gap in language models. In Findings of the As-sociation for Computational Linguistics: EMNLP 2023 ,pp. 5687–5711, 2023. Rafailov, R., Sharma, A., Mitchell, E., Manning, C. D., Ermon, S., and Finn, C. Direct preference optimiza-tion: Your language model is secretly a reward model. 
+
+Advances in neural information processing systems , 36: 53728–53741, 2023. Schick, T., Dwivedi-Yu, J., Dess `ı, R., Raileanu, R., Lomeli, M., Hambro, E., Zettlemoyer, L., Cancedda, N., and Scialom, T. Toolformer: Language models can teach themselves to use tools. Advances in Neural Information Processing Systems , 36:68539–68551, 2023. Schulman, J., Moritz, P., Levine, S., Jordan, M., and Abbeel, P. High-dimensional continuous control using generalized advantage estimation. arXiv preprint arXiv:1506.02438 ,2015. Schulman, J., Wolski, F., Dhariwal, P., Radford, A., and Klimov, O. Proximal policy optimization algorithms. 
+
+arXiv preprint arXiv:1707.06347 , 2017. Shao, J.-J., Yang, X.-W., Zhang, B.-W., Guo, L.-Z., and Li, Y.-F. Chinatravel: A real-world benchmark for language agents in chinese travel planning. 2024a. Shao, Z., Wang, P., Zhu, Q., Xu, R., Song, J., Bi, X., Zhang, H., Zhang, M., Li, Y., Wu, Y., et al. Deepseekmath: Push-ing the limits of mathematical reasoning in open language models. arXiv preprint arXiv:2402.03300 , 2024b. Shinn, N., Cassano, F., Gopinath, A., Narasimhan, K., and Yao, S. Reflexion: Language agents with verbal rein-forcement learning. Advances in Neural Information Processing Systems , 36:8634–8652, 2023. Shridhar, M., Yuan, X., C ˆot ´e, M.-A., Bisk, Y., Trischler, A., and Hausknecht, M. Alfworld: Aligning text and embodied environments for interactive learning. arXiv preprint arXiv:2010.03768 , 2020. Spaan, M. T. Partially observable markov decision pro-cesses. In Reinforcement learning: State-of-the-art , pp. 387–414. Springer, 2012. Stiennon, N., Ouyang, L., Wu, J., Ziegler, D., Lowe, R., Voss, C., Radford, A., Amodei, D., and Christiano, P. F. Learning to summarize with human feedback. Advances in neural information processing systems , 33:3008–3021, 2020. Sun, H., Qiao, Z., Guo, J., Fan, X., Hou, Y., Jiang, Y., Xie, P., Zhang, Y., Huang, F., and Zhou, J. Zerosearch: In-centivize the search capability of llms without searching. 
+
+arXiv preprint arXiv:2505.04588 , 2025. Sutton, R. S., Barto, A. G., et al. Reinforcement learning: An introduction , volume 1. MIT press Cambridge, 1998. Sutton, R. S., McAllester, D., Singh, S., and Mansour, Y. Policy gradient methods for reinforcement learning with function approximation. Advances in neural information processing systems , 12, 1999. Team, G., Anil, R., Borgeaud, S., Alayrac, J.-B., Yu, J., Sori-cut, R., Schalkwyk, J., Dai, A. M., Hauth, A., Millican, K., et al. Gemini: a family of highly capable multimodal models. arXiv preprint arXiv:2312.11805 , 2023. Trivedi, H., Balasubramanian, N., Khot, T., and Sabharwal, A. Musique: Multihop questions via single-hop ques-tion composition. Transactions of the Association for Computational Linguistics , 10:539–554, 2022. Wang, J., Liu, J., Fu, Y., Li, Y., Wang, X., Lin, Y., Yue, Y., Zhang, L., Wang, Y., and Wang, K. Harnessing un-certainty: Entropy-modulated policy gradients for long-horizon llm agents. arXiv preprint arXiv:2509.09265 ,2025. Xi, Z., Liao, C., Li, G., Yang, Y., Chen, W., Zhang, Z., Wang, B., Jin, S., Zhou, Y., Guan, J., et al. Agentprm: Process reward models for llm agents via step-wise promise and progress. arXiv preprint arXiv:2511.08325 , 2025. Xie, J., Zhang, K., Chen, J., Zhu, T., Lou, R., Tian, Y., Xiao, Y., and Su, Y. Travelplanner: A benchmark for real-world planning with language agents. arXiv preprint arXiv:2402.01622 , 2024. Yang, A., Yang, B., Zhang, B., Hui, B., Zheng, B., Yu, B., Li, C., Liu, D., Huang, F., Wei, H., et al. “qwen2. 5 tech-nical report.” arxiv preprint arxiv: 2412.15115. Technical report, 5 technical report. arXiv preprint arXiv, 2024. 10 Hindsight Credit Assignment for Long-Horizon LLM Agents 
+
+Yang, Z., Qi, P., Zhang, S., Bengio, Y., Cohen, W., Salakhut-dinov, R., and Manning, C. D. Hotpotqa: A dataset for diverse, explainable multi-hop question answering. In 
+
+Proceedings of the 2018 conference on empirical methods in natural language processing , pp. 2369–2380, 2018. Yao, S., Chen, H., Yang, J., and Narasimhan, K. Web-shop: Towards scalable real-world web interaction with grounded language agents. Advances in Neural Informa-tion Processing Systems , 35:20744–20757, 2022a. Yao, S., Zhao, J., Yu, D., Du, N., Shafran, I., Narasimhan, K. R., and Cao, Y. React: Synergizing reasoning and acting in language models. In The eleventh international conference on learning representations , 2022b. Yu, Q., Zhang, Z., Zhu, R., Yuan, Y., Zuo, X., Yue, Y., Dai, W., Fan, T., Liu, G., Liu, L., et al. Dapo: An open-source llm reinforcement learning system at scale. arXiv preprint arXiv:2503.14476 , 2025. Zhang, C., Li, L., He, S., Zhang, X., Qiao, B., Qin, S., Ma, M., Kang, Y., Lin, Q., Rajmohan, S., et al. Ufo: A ui-focused agent for windows os interaction. In Proceedings of the 2025 Conference of the Nations of the Americas Chapter of the Association for Computational Linguistics: Human Language Technologies (Volume 1: Long Papers) ,pp. 597–622, 2025a. Zhang, K., Li, J., Li, G., Shi, X., and Jin, Z. Codeagent: Enhancing code generation with tool-integrated agent sys-tems for real-world repo-level coding challenges. arXiv preprint arXiv:2401.07339 , 2024. Zhang, Z., Chen, Z., Li, M., Tu, Z., and Li, X. Rlvmr: Reinforcement learning with verifiable meta-reasoning rewards for robust long-horizon agents. arXiv preprint arXiv:2507.22844 , 2025b. Zhou, Y., Zanette, A., Pan, J., Levine, S., and Kumar, A. Archer: Training language model agents via hierarchical multi-turn rl. arXiv preprint arXiv:2402.19446 , 2024. Ziegler, D. M., Stiennon, N., Wu, J., Brown, T. B., Radford, A., Amodei, D., Christiano, P., and Irving, G. Fine-tuning language models from human preferences. arXiv preprint arXiv:1909.08593 , 2019. 11 Hindsight Credit Assignment for Long-Horizon LLM Agents 
+
+## A. Temporal Smoothing For HCAPO 
+
+A.1. Methodology 
+
+In multi-step tasks like ALFWorld, we observe a ”credit disconnection” problem: the LLM verifier easily identifies the final ”CleanObject” action as useful, but sometimes assigns lower scores to early-stage ”navigational” or ”preparatory” actions (e.g., ”GoToPlace”, ”OpenObject”). However, the final success is strictly contingent on these predecessors. By applying the temporal smoothing window ˜QH 
+
+> i,t
+
+= αQ H 
+
+> i,t
+
++ (1 − α)QH
+
+> i,t +1
+
+, we effectively allow the ”breakthrough signal” from the terminal step to flow backward. With α = 0 .5, we treat the reasoning step and its immediate execution as a coherent functional unit. This prevents the policy from over-optimizing for the final reward while neglecting the prerequisite steps. 
+
+A.2. Experiments 
+
+Table 3 shows that smoothing significantly stabilizes learning in complex multi-step sequences, leading to higher overall success rates.Figure 5 illustrates the training stability improvement achieved by temporal smoothing in ALFWorld tasks. 0 20 40 60 80 100 120 140 
+
+# Training Steps 
+
+0.2 
+
+0.4 
+
+0.6 
+
+0.8 
+
+1.0 
+
+> Success Rate
+
+# Training Curve 
+
+HCAPO w smooth 
+
+HCAPO w/o smooth 
+
+GIGPO  
+
+> Figure 5. Success Rate during training
+
+12 Hindsight Credit Assignment for Long-Horizon LLM Agents 
+
+Table 3. Performance on ALFWorld with temporal smoothing. Results are averaged over 3 random seeds. For ALFWorld, we report the average success rate (%) for each subtask as well as the overall result. We compare our proposed HCAPO with GRPO and GiGPO. 
+
+Type Method ALFWorld Pick Look Clean Heat Cool Pick2 All 
+
+Qwen2.5-1.5B-Instruct 
+
+RL Training GRPO 85.3 ±1.5 53.7 ±8.0 84.5 ±6.8 78.2 ±7.9 59.7 ±5.0 53.5 ±5.6 72.8 ±3.6 RL Training GiGPO 94.4 ±5.9 67.5 ±4.6 94.8 ±3.8 94.4 ±7.8 79.8 ±4.7 76.4 ±5.4 86.7 ±1.7 RL Training HCAPO w/o Smooth 88.6 ±7.0 75.0 ±0.0 97.6 ±1.8 90.7 ±6.9 84.2 ±0.0 74.2 ±6.9 87.0 ±4.1 RL Training HCAPO w Smooth 93.3 ±5.4 70.8 ±5.9 93.1 ±2.0 90.7 ±6.9 86.0 ±2.5 76.4 ±1.0 87.2 ±3.7 
+
+Qwen2.5-7B-Instruct 
+
+RL Training GRPO 90.8 ±5.1 66.1 ±6.7 89.3 ±5.4 74.7 ±6.9 72.5 ±5.4 64.7 ±7.3 77.6 ±5.2 RL Training GiGPO 97.7 ±1.6 82.7 ±7.9 98.8 ±1.6 83.7 ±7.2 89.3 ±8.2 79.2 ±6.6 90.8 ±1.3 RL Training HCAPO w/o Smooth 99.1 ±1.3 90.3 ±2.0 97.3 ±1.9 81.8 ±8.8 90.8 ±6.6 81.9 ±10.0 91.4 ±2.3 RL Training HCAPO w Smooth 100.0 ±0.0 91.7 ±5.9 97.3 ±1.9 91.7 ±2.9 98.2 ±2.5 95.8 ±0.0 96.9 ±1.3 
+
+## B. Algorithm Pseudocode 
+
+Algorithm 1 Training LLM Agents with HCAPO 
+
+1: Require: Initial policy πθ , task distribution p(X), weighting coefficient ω, batch size N , clipping bounds [Cmin , C max ].
+
+2: for each training iteration do 
+
+3: Update old policy: θold ← θ
+
+4: // 1. Multi-step Rollout Phase 
+
+5: Sample task x ∼ p(X) and initialize N identical environments. 
+
+6: for t = 1 to T do 
+
+7: Sample actions ai,t ∼ πθold (· | si,t ) for all i ∈ { 1, . . . , N }.
+
+8: Execute actions, observation {oi,t }Ni=1 and then next states {si,t +1 }Ni=1 .
+
+9: end for 
+
+10: // 2. Hindsight Credit Assignment Phase 
+
+11: Compute Macro Advantage AGRPO  
+
+> i,t
+
+via trajectory-level relative rewards. 
+
+12: Compute hindsight probabilities πhind (ai,t ) via Generative Verification .
+
+13: Estimate importance ratios ρi,t = clip (πhind (ai,t )/¯πhind , C min , C max ).
+
+14: Derive refined Hindsight Q-values QH 
+
+> i,t
+
+= ρi,t · γT −tR(τi).
+
+15: (Optional) Apply temporal smoothing: ˜QH 
+
+> i,t
+
+= αQ H 
+
+> i,t
+
++ (1 − α)QH
+
+> i,t +1
+
+.
+
+16: Compute Micro Advantage via cross-state normalization: AMicro  
+
+> i,t
+
+= QH 
+
+> i,t −μH
+> σH
+
+.
+
+17: // 3. Policy Update Phase 
+
+18: Combine multi-scale advantages: AHCAPO  
+
+> i,t
+
+= AGRPO  
+
+> i
+
++ ωA Micro  
+
+> i,t
+
+.
+
+19: Update policy θ by maximizing the PPO-clipped surrogate objective JHCAPO (θ).
+
+20: end for 
+
+## C. Experiment Details 
+
+C.1. Details of Training Hyperparameters for ALFWorld. All methods are configured with identical hyperparameters to ensure a fair comparison: the maximum prompt length is 2048 tokens, and the maximum response length is 512 tokens. Each episode allows up to 50 environment steps. The learning rate is set to 1 × 10 −6 for the actor and 1 × 10 −5 for the critic (used only in PPO baselines). We adopt a rule-based reward, assigning a reward of +10 for success and 0 for failure. To handle invalid actions generated by the agent, we apply a reward penalty of −0.1. For all group-based RL methods (GRPO, GiGPO, HCAPO), we use a group size of G = 8 and sample 16 different groups per rollout, resulting in a total of 16 × 8 = 128 environments. In contrast, PPO uses 128 separate environments for rollouts. The rollout temperature is set to 1.0, while the validation 13 Hindsight Credit Assignment for Long-Horizon LLM Agents 
+
+temperature is set to 0.4. The mini-batch size is 256, and the KL-divergence loss coefficient βKL is 0.01. 
+
+Hyperparameters for WebShop. All methods are configured with the following hyperparameters: the maximum prompt length is 4096 tokens, and the maximum response length is 512 tokens. Each episode is limited to 15 environment steps. The learning rate is 1 × 10 −6 for the actor and 1 × 10 −5 for the critic. We adopt a rule-based reward, assigning a reward of 
+
++10 for success and 0 for failure. Invalid actions are penalized with a reward of −0.1. As with ALFWorld, all group-based RL methods use a group size of G = 8 and sample 16 groups per rollout, totaling 128 environments. PPO uses 128 distinct environments for rollouts. The rollout temperature is set to 1.0, and the validation temperature is 0.4. The mini-batch size is 64, and βKL is 0.01. 
+
+Hyperparameters for Search-Augmented QA. The maximum prompt length is 4096 tokens, and the maximum response length is 512 tokens. The maximum number of turns is set to 4. The learning rate is 1 × 10 −6 for the actor. We adopt a rule-based reward, assigning a reward of +1 for success and 0 for failure. Invalid actions are penalized with a reward of 
+
+−0.01 . We set the training data size to 256 and use a group size of G = 5 . Rollout and validation temperatures are set to 1.0 and 0.0, respectively. The mini-batch size is 512, and βKL is 0.001. 
+
+Computing Details. For ALFWorld and WebShop, Qwen2.5-1.5B experiments are run on 4× H20 GPUs and Qwen2.5-7B on 8× H20 GPUs, each for 150 iterations. For search-augmented QA, Qwen2.5-3B uses 8× H20 GPUs and Qwen2.5-7B uses 8× H20 GPUs, each for 200 iterations. 
+
+HCAPO Specific Hyperparameters. For the Generative Verification process, we set the sharpening temperature Ttemp =5.0. The hindsight importance ratio ρi,t is clipped within [Cmin , C max ] = [0 .8, 1.2] to prevent training instability from extreme posterior estimations. The hindsight weighting coefficient ω is set to 1.0. The temporal smoothing factor α is 0.5, and the discount factor γ is 0.95.These hyperparameters are kept consistent across all benchmarks to demonstrate the robustness of the framework without the need for task-specific tuning. 
+
+C.2. Agent Training Prompts 
+
+The prompts we use for LLM agents are constructed using Python-style string formatting, where placeholders enclosed in curly braces ( {} ) represent semantic slots. These placeholders, such as {task description }, {step count }, and 
+
+{current observation }, are dynamically populated at runtime via Python’s .format() function. To enrich the agent’s context, we use historical information and set the history length to 2 for ALFWorld and WebShop and the full history for search-augmented QA experiments. The <think> </think> block instructs the agent to explicitly perform step-by-step reasoning, thereby promoting Chain-of-Thought (CoT) style deliberation. The <action> </action> block is used to clearly indicate the final action decision. The search agent outputs reasoning traces within <think> </think> , issues search queries within 
+
+<search> </search> , and provides final answers within <answer> </answer> tags. Retrieved evidence from the search engine is presented within <information> </information> tags. The detailed templates for each environment are provided below. C.2.1. ALFW ORLD AGENT TRAINING TEMPLATE 
+
+ALFWorld Agent Training Template                                                     
+
+> You are an expert agent operating in the ALFRED embodied Environment. Your task is to: {task_description}. Prior to this step, you have already taken {step_count} step(s). Below are the most recent {history_length} observations and the corresponding actions you took: ,→
+> {action_history} You are now at step {current_step} and your current observation is: {current_observation}. ,→
+> Your admissible actions of the current situation are: [{admissible_actions}].
+
+14 Hindsight Credit Assignment for Long-Horizon LLM Agents 
+
+Now it’s your turn to take an action. You should first reason step-by-step about the current situation. This reasoning process MUST be enclosed within <think> </think> tags. Once you’ve finished your reasoning, you should choose an admissible action for current step and present it within <action> </action> tags. 
+
+> ,→
+> ,→
+> ,→
+> ,→
+
+C.2.2. W EB SHOP AGENT TRAINING TEMPLATE 
+
+WebShop Agent Training Template 
+
+You are an expert autonomous agent operating in the WebShop e-commerce environment. Your task is to: {task_description}. Prior to this step, you have already taken {step_count} step(s). Below are the most recent {history_length} observations and the corresponding actions you took: ,→
+
+{action_history} You are now at step {current_step} and your current observation is: {current_observation}. ,→
+
+Your admissible actions for the current situation are: [{available_actions}]. Now it’s your turn to take one action for the current step. You should first reason step-by-step about the current situation, then think carefully which admissible action best advances the shopping goal. This reasoning process MUST be enclosed within <think> </think> tags. Once you’ve finished your reasoning, you should choose an admissible action for current step and present it within <action> </action> tags. 
+
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+
+C.2.3. S EARCH -AUGMENTED QA A GENT TRAINING TEMPLATE 
+
+Search-augmented QA Agent Training Template 
+
+You are an expert agent tasked with answering the given question step-by-step. Your question: {task_description}. Prior to this step, you have already taken {step_count} step(s). Below is the interaction history where <search> </search> wrapped your past search queries and <information> </information> wrapped the corresponding search results returned by the external search engine. 
+
+> ,→
+> ,→
+> ,→
+
+History: {memory_context} Now it’s your turn to respond for the current step. You should first conduct reasoning process. This process MUST be enclosed within <think> </think> tags. After completing your reasoning, choose only one of the following actions (do not perform both): 
+
+> ,→
+> ,→
+> ,→
+
+(1) If you find you lack some knowledge, you can call a search engine to get more external information using format: <search> your query </search>. ,→
+
+(2) If you have enough knowledge to answer the question confidently, provide your final answer within <answer> </answer> tags, without detailed illustrations. For example, <answer>Beijing</answer>. 
+
+> ,→
+> ,→
+
+## D. Ablation Experiments 
+
+We conduct an ablation study on ALFWorld using the Qwen2.5-1.5B-Instruct backbone to evaluate the impact of the hindsight weighting coefficient ω. This parameter modulates the relative influence of the micro-scale hindsight advantage against the macro-scale GRPO baseline. Specifically, the composite advantage is formulated as defined in Eq. (8). Here, the first term is the trajectory-level GRPO advantage, while the second term is the step-level hindsight correction; ω
+
+directly scales their relative contribution. By varying ω, we can quantify how strongly hindsight credit assignment affects 15 Hindsight Credit Assignment for Long-Horizon LLM Agents 
+
+learning in the Qwen2.5-1.5B setting. Table 4 reports per-subtask success rates and the overall success rate under four settings ( ω = 0 , 0.2, 0.5, 1.0). The results show a clear monotonic trend: as ω increases, the overall success rate improves step by step (72.8 → 79.7 → 84.4 → 87.0). In particular, ω = 0 corresponds to the GRPO baseline and ω = 1 .0 reflects our full HCAPO. This consistent improvement indicates that injecting hindsight credit assignment is highly effective, validating our design and motivating the default choice of ω = 1 .0.   
+
+> Table 4. Ablation on ALFWorld with different ωvalues. Results are averaged over 3 random seeds.
+
+ω Pick Look Clean Heat Cool Pick2 All 
+
+0 85.3 ±1.5 53.7 ±8.0 84.5 ±6.8 78.2 ±7.9 59.7 ±5.0 53.5 ±5.6 72.8 ±3.6 0.2 89.5 ±8.8 45.8 ±11.8 77.8 ±5.2 87.0 ±6.9 78.9 ±0.0 73.6 ±8.6 79.7 ±3.4 0.5 91.4 ±6.1 79.2 ±5.9 93.1 ±2.0 83.3 ±15.6 88.9 ±0.0 80.7 ±1.0 84.4 ±4.8 1.0 88.6 ±7.0 75.0 ±0.0 97.6 ±1.8 90.7 ±6.9 84.2 ±0.0 74.2 ±6.9 87.0 ±4.1 
+
+16

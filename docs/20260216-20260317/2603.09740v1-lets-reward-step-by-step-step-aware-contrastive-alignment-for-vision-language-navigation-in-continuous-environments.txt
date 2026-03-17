@@ -1,0 +1,749 @@
+Title: Let's Reward Step-by-Step: Step-Aware Contrastive Alignment for Vision-Language Navigation in Continuous Environments
+
+URL Source: https://arxiv.org/pdf/2603.09740v1
+
+Published Time: Wed, 11 Mar 2026 01:12:13 GMT
+
+Number of Pages: 28
+
+Markdown Content:
+# Let’s Reward Step-by-Step: Step-Aware Contrastive Alignment for Vision-Language Navigation in Continuous Environments 
+
+Haoyuan Li 1, Rui Liu 1, Hehe Fan 1, and Yi Yang 1†
+
+College of Computer Science and Technology, Zhejiang University, Hangzhou, China 
+
+(haoyuanli, ruiliu, hehefan, yangyics)@zju.edu.cn https://github.com/lhy-zjut/SACA 
+
+Abstract. Vision-Language Navigation in Continuous Environments (VLN-CE) requires agents to learn complex reasoning from long-horizon human interactions. While Multi-modal Large Language Models (MLLMs) have driven recent progress, current training paradigms struggle to bal-ance generalization capability, error recovery and training stability. Specif-ically, (i) policies derived from SFT suffer from compounding errors, struggling to recover from out-of-distribution states, and (ii) Reinforce-ment Fine-Tuning (RFT) methods e.g. GRPO are bottlenecked by sparse outcome rewards. Their binary feedback fails to assign credit to individ-ual steps, leading to gradient signal collapse in failure dominant batches. To address these challenges, we introduce Step-Aware Contrastive Align-ment ( SACA ), a framework designed to extract dense supervision from imperfect trajectories. At its core, the Perception-Grounded Step-Aware auditor evaluates progress step-by-step, disentangling failed trajectories into valid prefixes and exact divergence points. Leveraging these sig-nals, Scenario-Conditioned Group Construction mechanism dynamically routes batches to specialized resampling and optimization strategies. Ex-tensive experiments on VLN-CE benchmarks demonstrate that SACA achieves state-of-the-art performance. 
+
+Keywords: Vision-Language Navigation · Multi-modal Large Language Models · Reinforcement Fine-Tuning · Embodied Intelligence 
+
+## 1 Introduction 
+
+Vision-Language Navigation in Continuous Environments (VLN-CE) requires agents to interpret natural language instructions, process visual streams and execute low-level actions [2, 27]. While Video-based Large Language Models (Video-LLMs) have improved spatial-temporal reasoning and serve as promising foundation models, applying them to continuous navigation is challenging due to trade-offs among generalization, error recovery and training stability [40,55]. The standard adaptation approach for VLN relies on Supervised Fine-Tuning (SFT) using expert data [10, 55, 67]. Although SFT quickly aligns models’ behavior with instructions, policies trained purely by imitation suffer from compounding 
+
+> arXiv:2603.09740v1 [cs.RO] 10 Mar 2026
+
+2 H. Li et al. 
+
+errors. As shown in Fig. 1, minor deviations push agents into out-of-distribution (OOD) states where policies trained by SFT often fail [40]. (b)            
+
+> Where am I?
+> Oh, I’m standing
+> next to the glass
+> doors. If I turn
+> right, I will ...
+> (b) SACA Framework (a) Previous Work
+> Instruction: Walk past the glass doors and left towards the island .
+> Turn right and walk into the kitchen . Stop in front of the microwave .
+
+Fig. 1: (a) Previous work discard entire trajectory upon failure due to compound-ing errors and sparse rewards. (b) SACA uses the PGSA auditor to pinpoint the ex-act divergence point ( ). Then uses Re-pair Resampling ( ) to recover from near-miss trajectories. 
+
+Reinforcement Fine-Tuning (RFT) addresses this by allowing autonomous exploration. Group Relative Policy Optimization (GRPO) [17, 47] is ahighly efficient RFT algorithm that eliminates the need for expensive value functions and critical models. However, standard GRPO struggles in VLN-CE due to sparse naviga-tion rewards. The environment typ-ically provides binary feedback only when the agent executes a STOP ac-tion. This coarse signal fails at step-level credit assignment, treating im-mediate failures and near-misses the same. During early exploration, this phenomenon often results in batches where all trajectories fail. In these all-failure groups, GRPO’s relative ad-vantage vanishes, leading to gradient collapse and wasted computation. While Process Reward Models (PRMs) [11, 56, 59] can provide dense supervision, training domain-specific PRMs is costly and prone to reward hacking. We observe that not all failures are equally uninformative. In fact, our ex-perimental data indicates that approximately 73% of failed episodes success-fully execute the initial sub-instructions, yielding valuable valid prefixes that standard RL navely discards (detail in Appendix A). To extract this dense, step-level supervision from imperfect trajectories without relying on expensive, domain-specific PRMs, we propose Step-Aware Contrastive Alignment (SACA). At its core, SACA employs Perception-Grounded Step-Aware (PGSA) auditor that evaluates progress step-by-step against landmarks extracted from instruc-tions. Integrating precise spatial grounding with semantic alignment, the PGSA auditor provides a robust continuous Soft Score for trajectory ranking alongside a discrete Structural Mask. This mask explicitly disentangles the trajectory into a Valid Prefix and a Divergence Point, enabling SACA to pinpoint the earliest moment the agent drifted off-course. Leveraging these granular signals, SACA employs a Scenario-Conditioned Group Construction mechanism to dynamically route batches to specialized optimization strategies. If a sampled group has at least one success (mixed-outcome), outcome rewards drive training: near-miss failures are utilized through Repair Resampling, replanning from the Divergence Point to synthesize correc-tive demonstrations. Conversely, if all trajectories fail (null-outcome), SACA triggers All-Failure Rescue. It forms a Reflection Sub group using the best fail-Let’s Reward Step-by-Step 3
+
+ure (the Pseudo-Anchor) alongside mined hard negatives, restoring relative su-pervision via conservative process-aware advantages. Furthermore, fine-grained step-level constraints are applied exclusively to the Pseudo-Anchor: Consistency Alignment reinforces the Valid Prefix through behavior cloning, while Con-trastive Correction explicitly penalizes the Divergence Point. These mechanisms effectively convert failed rollouts into trajectory- and step-level supervision. In summary, the main contributions are three-fold: (i) We propose Step-Aware Contrastive Alignment (SACA), a framework that resolves learning-signal collapse in sparse-reward by extracting dense supervision from imperfect trajec-tories. This is achieved through the Perception-Grounded Step-Aware (PGSA) auditor that leverages zero-shot foundation models for precise spatial and seman-tic tracking, bypassing the need for domain-specific PRMs ( §3.1). (ii) We intro-duce a Scenario-Conditioned Group Construction mechanism that dynamically switches between Repair Resampling for mixed-outcome groups and All-Failure Rescue for null-outcome groups ( §3.2). We further propose the robust SACA optimization objective that combines trajectory-level advantages with step-level Consistency Alignment and Contrastive Correction ( §3.3). (iii) Extensive ex-periments on VLN-CE benchmarks demonstrate that SACA achieves state-of-the-art performance, providing an efficient exploration paradigm for continuous embodied tasks ( §4.2). 
+
+## 2 Related Work 
+
+Vision-Language Navigation in Continuous Environments (VLN-CE). 
+
+Vision-Language Navigation (VLN) requires embodied agents to execute natural language instructions [2, 39]. While early research focused on discrete topologi-cal graphs [9, 12–15, 32–34, 50, 68], recent paradigms have shifted to continuous environments (VLN-CE) [1, 7, 16, 26, 44, 49], demanding fine-grained low-level control. To manage this complexity, many methods rely on simulator-pretrained waypoint predictors [1, 52, 54]. However, these predictors often overfit training layouts, bottlenecking generalization to unseen scenes and highlighting the need for more adaptable, long-horizon navigation architectures. 
+
+Navigation with Multi-modal Large Language Models (MLLMs). The rapid evolution of MLLMs has unlocked new avenues for VLN. Some approaches [8, 36, 37, 68] integrate MLLMs as zero-shot high-level planners to achieve instruc-tion annotation with high linguistic diversity, though they typically underper-form task-specific models. Conversely, another line of research [10,61–63] focuses on end-to-end Supervised Fine-Tuning (SFT) of Video-LLMs [28, 30, 55, 65] to directly parse spatio-temporal dynamics and output low-level control commands. 
+
+Reinforcement Fine-Tuning (RFT) in Embodied Intelligence. RFT can enhance the ability of LLMs and MLLMs in reasoning and generalization [17, 21, 22, 31, 47, 48, 60]. To balance alignment with computational efficiency and learning complexity, RFT has rapidly evolved from DPO [42] and PPO [46] to highly scalable, critic-free frameworks e.g. GRPO [17, 47] and GSPO [66]. They span several paradigms, including offline, online, and test-time RL. While RFT 4 H. Li et al. 
+
+was a common technique in Physics-based Simulator [23,29], VLA [18,19,58,64] and discrete VLN [5, 51], its direct application to VLN-CE is imcomplete due to the expanded action space and longer trajectory length. Recently, VLN-R1 [40] pioneered GRPO in VLN-CE. Yet, it remains bottlenecked by sparse outcome supervision. Proposed SACA framework introduces the PGSA auditor to extract dense, step-level signals from imperfect trajectories. Leveraging these signals, Scenario-Conditioned Group Construction mechanism dynamically reconstructs pseudo-positive samples from failures. By structurally isolating valid prefixes and repairing divergence points, SACA provides continuous supervision, effectively overcoming the sample inefficiency of sparse rewards. 
+
+## 3 Method 
+
+In this section, we present the SACA framework. We first introduce the PGSA auditor, which extracts continuous ranking signals and discrete structural bound-aries from uninformative rollouts without requiring a pre-trained reward model (§3.1). Then, we detail the Scenario-Conditioned Group Construction mech-anism, dynamically switching between Repair Resampling for mixed-outcome groups and All-Failure Rescue for null-outcome groups ( §3.2). Finally, we for-mulate the robust SACA optimization objective, integrating trajectory-level con-servative advantages with step-level corrective constraints ( §3.3). 
+
+3.1 Perception-Grounded Step-Aware (PGSA) Auditor 
+
+To bridge the semantic gap between high-level linguistic instructions I and low-level continuous observations O = {o1, . . . , o T }, the PGSA auditor employs a hierachical, zero-shot perception pipeline. Given an instruction, we first use a frozen tiny LLM ( e.g. , Qwen3-0.6B [57]) to parse into a sequence of intermediate landmarks L = {l1, . . . , l m}. By synergizing foundation models ( e.g. , Ground-ingDINO [35], SAM3 [3], CLIP [41]), the PGSA auditor synthesizes two comple-mentary supervision signals: a continuous soft score for fine-grained trajectory ranking, and a discrete hard mask to structurally isolate the exact divergence point where the policy deviates from the optimal path. 
+
+Hierarchical Soft Scoring. To formulate a robust evaluation of progress to-ward a target landmark li, we construct a composite soft score St that pro-gressively fuses global contextual awareness with precise object-level grounding. Specifically, the PGSA auditor first computes a global semantic similarity via CLIP [41]. GroundingDINO [35] acts as a spatial bottleneck, predicting a bound-ing box and an associated detection confidence cdet . To distill pure object-centric semantics and filter out background noise, instances with high detection confi-dence ( cdet ≥ τdet ) are further refined by SAM3 [3], yielding a precise object mask Mobj with an IoU score ciou . The integrated reward is formulated as: 
+
+St(ot, l i) = w1sim (ot, l i)+ I(cdet ≥ τdet )w2cdet +w3(ciou ·sim (ot⊙Mobj , l i)) , (1) where w1, w 2, w 3 are balancing weights. This progressive formulation ensures that St gracefully relies on global context when the target is distant, yet exhibits Let’s Reward Step-by-Step 5Instruction:  Walk  past the  glass doors  and left towards the  island .
+
+Turn right and walk into  the  kitchen . Stop in front of the  microwave .
+
+Sampled Trajectories  
+
+> Soft Score
+
+Perception -Grounded Step -Aware Auditor 
+
+Landmarks:  glass doors, 
+
+island, kitchen, microwave .           
+
+> Soft Score Hard Mask
+> 0.94 0.79 0.83 0.85
+> 0.32 0.28 0.09 0.22
+> Valid Prefix
+> Subsequent Divergent
+> Standard Binary Sparse Reward
+> Starting State
+> Process State
+> Correct State
+> Failure State
+> Pseudo Anchor
+
+Scenario -Conditioned Group Construction  
+
+> Scenario A: Mixed Group Scenario B: All -Failure Rescue
+
+Robust SACA Optimization   
+
+> Valid Prefix
+> New Starting State
+> Scenario A: Mixed Group
+> Scenario A: Mixed Group
+> Eq. (1 5)
+> Eq. (1 6)
+
+Fig. 2: Overview of proposed SACA framework. The PGSA auditor evaluates K
+
+trajectories against instruction landmarks, yielding a Soft Score for ranking and a Hard Mask to isolate the Divergence Point. Based on batch outcomes, a Scenario-Conditioned mechanism dynamically routes to either Repair Resampling (for mixed groups) or All-Failure Rescue (for null-outcome groups), followed by robust optimization. 
+
+a sharp, highly informative peak upon precise spatial grounding, providing the agent with dense, low-variance positive reinforcement. To derive a scale-invariant trajectory-level evaluation and mitigate the length bias inherent in cumulative step-wise rewards, we aggregate the step scores into a normalized process score Rproc (T ) via a threshold-gated formulation: 
+
+Rproc (T ) = 1
+
+T
+
+> T
+
+X
+
+> t=1
+
+ReLU (St − τs), (2) where T represents the trajectory length. Here, the ReLU function acts as a noise-filtering gate: it truncates low-confidence step scores below the threshold (τs) to zero, ensuring that only valid perception steps strongly aligned with the instruction can accumulate and contribute to the final trajectory score. Please refer to Appendix B for detailed visualizations of the step-level trajectory score. 
+
+Structural Hard Masking. Simultaneously, we apply a stricter hard threshold 
+
+τh to generate a step-wise binary mask Mt = I(St > τ h) ∈ { 0, 1}. During navigation, the active landmark li advances to the next landmark in L once this hard-match condition is satisfied for c consecutive steps. This mask structurally disentangles the trajectory by identifying the exact step where the agent deviates from the instruction. We define the Divergence Point tdiv as: 6 H. Li et al. (a) Get Step -Wise Binary Mask  (b) Back To  Divergence Point  (c) Repair Resampling 
+
+Fig. 3: Illustraion of the Repair Resampling process. (a) Extracting the struc-tural mask Mt via the PGSA auditor. (b) Backtracking to the Divergence Point tdiv 
+
+to prune the erroneous suffix. (c) Resampling a corrective path from tdiv , thereby sal-vaging the valid prefix and providing robust step-level supervision. 
+
+tdiv =
+
+(
+
+min {t ∈ { 1, . . . , T } | Mt = 0 }, if ∃t s.t. Mt = 0 ,T + 1 , otherwise . (3) As shown in Fig. 3, the trajectory is partitioned into a Valid Prefix compris-ing all steps t < t div , and a subsequent divergent phase starting at tdiv . This decoupling enables smooth trajectory-level ranking via Rproc while preserving strict discrete boundaries for step-level correction. 
+
+3.2 Scenario-Conditioned Group Construction Mechanism 
+
+Let rout (T ) ∈ { 0, 1} denote the binary outcome reward. For each instruction, the policy model πθ samples a group of trajectories: G = {T 1, . . . , TK }. The core principle is using outcome supervision whenever success exists. 
+
+Scenario A: Mixed Group ( ∃τi ∈ G, r out (τi) = 1 ). When G contains suc-cessful trajectories, outcome supervision drives the primary optimization. To further boost sample efficiency, we apply Repair Resampling to high-quality “near-miss” failures. We formally define this near-miss subset as trajectories: 
+
+Gmiss =
+
+(
+
+Ti ∈ G | rout (Ti) = 0 ∧ t(i)
+
+> div
+
+Ti
+
+> η 
+
+)
+
+, (4) where the valid-prefix ratio exceeds a threshold η. For each Ti ∈ Gmiss , we truncate the rollout at the Divergence Point t(i) 
+
+> div
+
+and iteratively resample suffixes 
+
+T (n) 
+
+> suf f
+
+∼ πθ (· | T i, 1: t(i)
+
+> div
+
+) up to Nrep times. Then halt resampling and construct a repaired trajectory via concatenation: 
+
+T rep i = Ti, 1: t(i)
+
+> div
+
+⊕ T (n) 
+
+> suf f
+
+. (5) These successfully synthesized trajectories form an auxiliary set T rep to aug-ment the current training update, strictly without recursive resampling. If all 
+
+Nrep attempts fail, the original Ti is retained. 
+
+Scenario B: All-Failure Rescue ( ∀T i ∈ G, r out (Ti) = 0 ). When all K tra-jectories fail, standard outcome-based GRPO collapses. SACA triggers the All-Failure Rescue by constructing a Reflection Sub-group Gsub centered around a Let’s Reward Step-by-Step 7
+
+Pseudo-Anchor, which isolates the most informative failure and its nearby alter-natives for corrective comparison. The Pseudo-Anchor Tanch is used only as the most informative failure, rather than a pseudo-positive target. First, we select the trajectory with the highest process score: 
+
+Tanch = argmax  
+
+> τ∈G
+
+Rproc (T ). (6) Next, we mine Hard Negatives using a dual-criterion score: 
+
+Sneg (T ) = λ · PrefixSim (T , Tanch ) − (1 − λ) · (Rproc (Tanch ) − Rproc (T )) , (7) where we instantiate PrefixSim using action-level Longest Common Subsequence (LCS). λ is a balancing weight. Both Hard-Negative mining and Repair Resam-pling are centered on the same structural prior: informative failures tend to share a correct prefix and diverge only in the later stage. We set m < K and select the top-m failed trajectories ranked by Sneg , excluding the Pseudo-Anchor itself, to construct the negative set Gneg , yielding Gsub = {T anch } ∪ Gneg . m is chosen such that |Gsub | ≥ 2, ensuring stable subgroup normalization. 
+
+3.3 Robust SACA Optimization Objective 
+
+We use LGRP O (τi, ˆAi) to denote the standard clipped policy-ratio loss evalu-ated on trajectory τi with advantage ˆAi. Within the Reflection Sub-group Gsub ,we compute the relative advantage to update the policy. To reduce the risk of wrongful penalization due to noisy visual-process estimates, we introduce a hierarchical conservative estimation mechanism: 
+
+ˆAraw i = Rproc (τi) − μ {Rproc (τ ) | τ ∈ Gsub }
+
+σ {Rproc (τ ) | τ ∈ Gsub } + ϵ0
+
+. (8) 
+
+Margin-Based Rescue. First, we compute the margin ∆:
+
+∆ = Rproc (Tanch ) − μ {Rproc (T ) | T ∈ Gneg }. (9) If the Pseudo-Anchor lacks credibility ( ∆ < δ ), we shrink the advantages by a temperature factor κ < 1:
+
+ˆA′ 
+
+> i
+
+=
+
+(
+
+κ ˆAraw i , if ∆ < δ, 
+
+ˆAraw i , otherwise . (10) 
+
+Negative-Only Scaling. We apply an attenuation factor s ∈ (0 , 1] strictly to the negative advantages: 
+
+ˆAi =
+
+( ˆA′
+
+> i
+
+, ˆA′ 
+
+> i
+
+≥ 0,s · ˆA′
+
+> i
+
+, ˆA′ 
+
+> i
+
+< 0. (11) This preserves directional preference toward the most informative failure while reducing the risk of over-penalizing plausible alternatives under noisy vi-sual estimates. 
+
+Step-Level Constraints. Beyond trajectory-level advantages, we apply fine-grained structural constraints exclusively to the Pseudo-Anchor Tanch to avoid amplifying noisy supervision from low-quality failures. We treat the actions along the Valid Prefix as pseudo-correct decisions and reinforce them via behavior 8 H. Li et al. 
+
+cloning. By definition of tdiv , all steps t < t div satisfy Mt = 1 . Contrastive Correction is applied strictly to the Divergence Point tdiv :
+
+Lalign (Tanch ) = − X
+
+> t<t div
+
+log πθ (at | ot, I ), (12) 
+
+Lcorr (Tanch ) = − log exp( sim (hstdiv , h a+ )/α )exp( sim (hstdiv , h a+ )/α ) + exp( sim (hstdiv , h a− )/α ) , (13) where hstdiv denotes the policy’s hidden state at the Divergence Point tdiv . Dur-ing training, a+ is instantiated as a local teacher action derived from the simu-lator’s shortest-path signal and is used exclusively for corrective supervision. 
+
+Summary. SACA dynamically switches objectives based on the group scenario: 
+
+• For a Mixed Group, we use the outcome-based advantage ˆAout i and the mixed strategy: 
+
+ˆAout i = rout (Ti) − μ({rout (T ) | T ∈ G})
+
+σ({rout (T ) | T ∈ G}) + ϵ0
+
+, (14) 
+
+Lmixed = 1
+
+|G|
+
+X
+
+> i∈G
+
+LGRP O (Ti, ˆAout i )−λrep 
+
+1
+
+|T rep |
+
+X
+
+> T ∈T rep
+
+X 
+
+> t∈suffix (T)
+
+log πθ (at | ot, I ),
+
+(15) where λrep , ϵ 0 are balancing weights. 
+
+• For an All-Failure Group, we utilize the robust process advantage ˆAi alongside the anchor-specific constraints: 
+
+Lf ail = 1
+
+|Gsub |
+
+X
+
+> i∈Gsub
+
+LGRP O (Ti, ˆAi)+ λ1Lalign (Tanch )+ λ2Lcorr (Tanch ), (16) where λ1, λ 2 are balancing weights. In each training iteration, SACA first scores sampled trajectories with the PGSA auditor, then routes the group to either Mixed-Group Repair or All-Failure Rescue based on outcome availability, and finally updates the policy with scenario-specific objectives. Every sampled rollout is assigned a usable training role e.g. successful, repairable, or rescuable. Even failed trajectories contribute structured supervision under severe reward sparsity. Additional step-by-step ex-planation of the SACA framework is provided in Appendix B. 
+
+## 4 Experiment 
+
+In this section, we comprehensively evaluate the SACA framework. We first outline the experimental setup, detailing the VLN-CE benchmarks, evaluation metrics, and implementation details ( §4.1). Building upon this foundation, we compare SACA with existing state-of-the-art methods, demonstrating its supe-rior generalization and robust error-recovery capabilities in both standard and Let’s Reward Step-by-Step 9Method Observation Encoder R2R-CE Val-Unseen RxR-CE Val-Unseen Pano. Odo. Depth S.RGB NE ↓ OS ↑ SR ↑ SPL ↑ NE ↓ SR ↑ SPL ↑ nDTW ↑                                                                                                                                                                                                                                                                                   
+
+> HPN+DN ∗[24] ✓✓✓6.31 40.0 36.0 34.0 ----CMA ∗[20] ✓✓✓6.20 52.0 41.0 36.0 8.76 26.5 22.1 47.0 VLN
+> ⟳ BERT ∗[20] ✓✓✓5.74 53.0 44.0 39.0 8.98 27.0 22.6 46.7 Sim2Sim ∗[25] ✓✓✓6.07 52.0 43.0 36.0 ----GridMM ∗[53] ✓✓✓5.11 61.0 49.0 41.0 ----ETPNav ∗[1] ✓✓✓4.71 65.0 57.0 49.0 5.64 54.7 44.8 61.9 ScaleVLN ∗[54] ✓✓✓4.80 –55.0 51.0 ----InstructNav [36] ----6.89 –31.0 24.0 ----AG-CMTP [6] ✓✓✓7.90 39.2 23.1 19.1 ----R2R-CMTP [6] ✓✓✓7.90 38.0 26.4 22.7 ----LAW [44] ✓✓✓6.83 44.0 35.0 31.0 10.90 8.0 8.0 38.0 CM2 [16] ✓✓✓7.02 41.5 34.3 27.6 ----WS-MGMap [7] ✓✓✓6.28 47.6 38.9 34.3 ----ETPNav + FF [52] ✓✓✓5.95 55.8 44.9 30.4 8.79 25.5 18.1 -Seq2Seq [27] ✓✓7.77 37.0 25.0 22.0 12.10 13.9 11.9 30.8 CMA [27] ✓✓7.37 40.0 32.0 30.0 ----VLN-R1 [40] ✓7.00 41.2 30.2 21.8 10.40 22.3 17.5 -NaVid [62] ✓5.47 49.1 37.4 35.9 ----MapNav [63] ✓4.93 53.0 39.7 37.2 ----NaVILA [10] ✓5.37 57.6 49.7 45.5 ----StreamVLN [55] ✓5.43 62.5 52.8 47.2 6.72 48.6 42.5 60.2 SACA (Ours) ✓4.57 64.9 60.3 55.1 4.90 60.3 49.8 62.1
+> NaVILA †[10] ✓5.22 62.5 54.0 49.0 6.77 49.3 44.0 58.8 UniNaVid †[61] ✓5.58 53.3 47.0 42.7 6.24 48.7 40.9 -StreamVLN †[55] ✓4.98 64.2 56.9 51.9 6.22 52.9 46.0 61.9 SACA (Ours) †✓4.19 69.3 64.7 56.9 4.75 62.1 51.7 66.0
+
+Table 1: Comparison with state-of-the-art methods. ∗ indicates methods using the waypoint predictor from [20]. † denotes methods using additional training data beyond the R2R-CE [2] and RxR-CE [27] benchmarks. 
+
+complex long-horizon navigation tasks ( §4.2). Finally, we present extensive ab-lation studies to validate the individual contributions of the PGSA perception modules, the Scenario-Conditioned Group Construction mechanism, and the ro-bust SACA optimization objective ( §4.3). 
+
+4.1 Experimental Setup Datasets and Evaluation. We evaluate the SACA framework on two promi-nent Vision-Language Navigation in Continuous Environments (VLN-CE) bench-marks: R2R-CE [2] and RxR-CE [27]. Both datasets are constructed over the Matterport3D (MP3D) [4] scenes and simulated within the Habitat platform [38, 43,45]. Following the standard evaluation protocol established by previous VLN-CE works, we assess navigation performance using a comprehensive suite of metrics. These include Trajectory Length (TL), Navigation Error (NE), Oracle Success Rate (OS), Success Rate (SR), and Success weighted by Path Length (SPL). For RxR-CE, we additionally report normalized Dynamic Time Warping (nDTW) to measure the spatial fidelity between the predicted and ground-truth paths. Among these metrics, SR and SPL on the unseen splits remain the most critical indicators of an agent’s generalization capability. 10 H. Li et al. (a)  
+
+> (b)
+> (a)
+> (b)
+> (a)
+> (b)
+> StreamVLN  VLN -R1  SACA (Ours)
+> Instruction: Turn right and go down the hallway then turn left Pass the chair on the left and turn right into the kitchen. Wait near the f rid ge.
+> Timeline
+
+Fig. 4: Qualitative comparison of navigation trajectories. (a) Egocentric ob-servations. (b) Top-down maps. Green and red frames denote correct trajectory and failure trajectory, respectively. 
+
+Implementation Details. We initialize the policy network using a pre-trained Video-LLM ( e.g. , LLaVA-Video-8B [65]) and first perform SFT to align its visual representations with basic navigation instructions, deployed on 8 Nvidia A6000 GPUs. During SFT phase, we employ a learning rate of 1 × 10 −5 with a cosine schedule (10% warmup), which requires approximately 36 hours. Subsequently, during the RFT phase, we reduce the learning rate to 1 × 10 −6 with a weight decay of 0.01 and set the KL penalty coefficient β = 0 .04 , completing one epoch in about 24 hours. For a comprehensive list of hyperparameters and detailed training configurations, please refer to the Appendix C. 
+
+4.2 Comparisons with State-of-the-Arts 
+
+Table 1 compares SACA with state-of-the-art methods on the val-unseen splits of VLN-CE R2R [2] and RxR [27]. Baselines are categorized by observation encoders and extra data usage. SACA establishes a new state-of-the-art across nearly all metrics. We also provide visualizations of comparison experiments in Fig. 4. While StreamVLN [55] and VLN-R1 [40] fail to recover from deviations, SACA successfully maintains step-level alignment to reach the destination. 
+
+Superiority in Standard Ego-view Settings. Compared to recent single-RGB methods ( e.g. , VLN-R1 [40], StreamVLN [55]) using no extra data, SACA achieves 60.3% SR and 55.1% SPL on R2R-CE. This yields substantial ab-solute improvements of 7.5% (SR) and 7.9% (SPL) over the previous best, StreamVLN, while reducing Navigation Error (NE) to 4.57. This validates the profound efficacy of mining step-level supervision from failed rollouts. Let’s Reward Step-by-Step 11                                                               
+
+> Table 2: Ablation study on the core components of SACA. SS : Soft Score for ranking; AFR : All-Failure Rescue (Scenario B); RR : Repair Resampling (Scenario A). Row Components R2R-CE Val-Unseen RxR-CE Val-Unseen
+> SS AFR RR NE ↓OS ↑SR ↑SPL ↑NE ↓SR ↑SPL ↑nDTW ↑
+> 0SFT Baseline [55] 5.43 62.5 52.8 47.2 6.72 48.6 42.5 60.2 15.39 55.3 54.1 48.8 6.54 49.9 43.0 60.3 2✓5.21 63.2 55.4 49.6 6.15 51.8 44.3 60.7 3✓✓4.82 64.1 58.2 52.4 5.48 56.4 47.6 61.3 4✓✓✓4.57 64.9 60.3 55.1 4.90 60.3 49.8 62.1
+
+Robustness in Long-Horizon Navigation. On the challenging, long-horizon RxR-CE benchmark, SACA’s advantages magnify. It attains 60.3% SR and 
+
+49.8% SPL , surpassing the previous SOTA by massive margins of 11.7% (SR) and 7.3% (SPL). By structurally breaking down credit assignment, the PGSA auditor effectively mitigates the gradient collapse typical of standard methods. 
+
+Scaling with Additional Data. When augmented with the ScaleVLN [55] dataset ( †), SACA further improves to 62.7% SR (R2R-CE) and 62.1% SR 
+
+(RxR-CE). Notably, SACA † outperforms StreamVLN † by 9.2% in RxR SR. 
+
+Surpassing Privileged Modalities. Relying strictly on single ego-centric RGB images, SACA significantly outperforms methods heavily engineered for multi-sensor fusion. It surpasses ETPNav (which requires Panoramic views, Odometry, and Depth modalities) by 3.3% and 5.6% in R2R and RxR SR, respectively. This suggests that proposed dense, step-aware RL signals enable MLLMs to implicitly build spatial awareness that eclipses explicit multi-sensor mapping. 
+
+4.3 Ablation Study 
+
+We conduct extensive ablation studies on the VLN-CE R2R [2] and RxR [27] Val-Unseen splits. The analysis is structured to validate the core macro-architecture (Table 2 and Fig. 5), the specific micro-objective designs (Table 3), and the hyperparameter sensitivity (Table 4). 
+
+> Fig. 5: Illustration of SR curves dur-ing RFT training.
+
+Training Dynamics and Sample Efficiency. Fig. 5 illustrates the SR during RFT process. Standard GRPO (brown curve) suffers from severe learning-signal collapse and a pre-mature plateau due to its reliance on sparse outcome rewards. Incorpo-rating step-aware dense supervision without the All-Failure Rescue mech-anism (SACA w/o AFR, blue curve) accelerates initial bootstrapping but eventually bottlenecks because it still 12 H. Li et al. Instruction:  Walk past the dining room  table  and  chairs  and turn right . Walk past the  bar  and stop by the  bar stools .
+
+> (a)
+> (b)
+> (c)
+> (d)
+> Timeline
+
+Fig. 6: Qualitative visualization of the Perception-Grounded Step-Aware (PGSA) Auditor’s cascaded pipeline. (a) Raw continuous egocentric observa-tions ot during navigation. (b) GroundingDINO [35] detects intermediate landmarks. 
+
+(c) SAM3 [3] extracts precise pixel-level masks. (d) The corresponding top-down tra-jectory mapping. 
+
+discards null-outcome batches. In contrast, proposed full SACA framework (green curve) achieves vastly superior sample efficiency and asymptotic per-formance. By dynamically recovering dense supervision from completely failed batches via AFR, SACA maintains stable and effective gradient updates through-out training, successfully breaking the exploration bottleneck. 
+
+Core Components Analysis. Table 2 demonstrates the progressive integra-tion of SACA’s core components starting from the SFT Baseline (Row 0). Re-lying exclusively on sparse outcome rewards, standard GRPO (Row 1) yields only marginal improvements ( e.g. , +1.3% SR on RxR) and suffers from severe learning-signal collapse, as illustrated by the early plateau of the brown curve in Fig. 5. Incorporating the continuous Soft Score (SS) from the PGSA auditor (Row 2) provides a dense ranking signal crucial for initial bootstrapping, steadily boosting the RxR SR to 51.8%. The subsequent introduction of the All-Failure Rescue (AFR) mechanism (Row 3) brings substantial gains, driving RxR SR up by a massive 4.6% to 56.4%. As visually corroborated by Fig. 5, AFR effectively recovers dense supervision from null-outcome batches (green curve), breaking the early performance bottleneck observed when AFR is disabled (blue curve). Finally, integrating Repair Resampling (Row 4) salvages near-miss failures by truncating trajectories at the exact Divergence Point and resampling the suffix. 
+
+Objective Constraints & Robustness Mechanisms. Table 3 details the im-pact of the specific objectives and robust scaling factors. Removing Consistency Let’s Reward Step-by-Step 13 
+
+Table 3: Ablation study on specific objective designs and robustness mech-anisms within SACA. All variants are compared against the full SACA model. Model Variant R2R-CE Val-Unseen RxR-CE Val-Unseen                                                  
+
+> NE ↓OS ↑SR ↑SPL ↑NE ↓SR ↑SPL ↑nDTW ↑
+> SACA 4.57 64.9 60.3 55.1 4.90 60.3 49.8 62.1
+> Ablation on Objective Constraints
+> w/o Consistency Align ( Lalign )4.89 63.8 58.0 51.6 5.34 57.1 46.2 60.5 w/o Contrastive Correct ( Lcorrect )4.98 63.5 57.3 52.8 5.51 56.4 46.5 59.4
+> Ablation on Robustness Mechanisms
+> w/o Margin-Based Rescue ( κ= 1 )4.85 64.1 58.5 53.0 5.25 57.8 47.9 61.2 w/o Negative-Only Scaling ( s= 1 )4.76 64.5 59.1 54.0 5.12 58.6 48.5 61.6
+
+Table 4: Ablation study on the group size ( K) and maximum repair attempts (Nrep ). Group Size ( K) Max Repairs ( Nrep ) R2R-CE Val-Unseen RxR-CE Val-Unseen                                                     
+
+> NE ↓OS ↑SR ↑SPL ↑NE ↓SR ↑SPL ↑nDTW ↑
+> 434.92 62.1 56.4 51.2 5.30 55.2 45.3 59.5 834.57 64.9 60.3 55.1 4.90 60.3 49.8 62.1
+> 16 34.59 64.7 60.1 54.8 4.93 59.9 49.5 61.8 814.81 63.5 58.1 53.4 5.15 57.5 47.1 60.2 854.60 64.8 60.0 54.9 4.92 60.1 49.6 62.0
+
+Align ( Lalign ) significantly reduces navigation efficiency ( e.g. , R2R SPL drops from 55.1% to 51.6%), indicating that without behavior cloning on the valid pre-fix, the agent takes longer, sub-optimal paths. Conversely, omitting Contrastive Correct ( Lcorrect ) heavily degrades long-horizon success ( e.g. , RxR SR drops to 56.4%), emphasizing the necessity of explicitly penalizing the Divergence Point to prevent repeated mistakes at complex intersections. Furthermore, disabling robustness mechanisms like Margin-Based Rescue ( κ = 1 ) or Negative-Only Scaling ( s = 1 ) degrades overall performance. This demonstrates their crucial roles in filtering noisy gradients from low-confidence pseudo-anchors and acting as regularizers against the over-penalization of plausible alternative paths 
+
+Qualitative Visualization of PGSA Auditor. To intuitively demonstrate the efficacy of proposed cascaded perception modules, we visualize a navigation episode in Fig. 6. Given an instruction containing intermediate landmarks ( e.g. ,“chairs”, “bar stools”), raw visual observations (Row a) lack explicit object-level focus. GroundingDINO [35] (Row b) successfully detects these textual land-marks, yielding bounding boxes. However, standard bounding boxes inevitably encompass noisy background pixels. SAM3 [3] (Row c) refines these detections into precise pixel-level masks, strictly isolating the target objects. This pure spatial-semantic grounding ensures robust local CLIP [41] alignment, allowing the auditor to accurately track progress on the top-down trajectory (Row d) and pinpoint the exact divergence point without any trained reward models. 14 H. Li et al.                                              
+
+> Table 5: Ablation study on the perception modules within the PGSA Au-ditor. Global : CLIP [41] Image-Text Similarity; BBox : GroundingDINO [35] object detection; Mask : SAM3 [3] precise segmentation. Row Perception Modules R2R-CE Val-Unseen RxR-CE Val-Unseen
+> Global BBox Mask NE ↓OS ↑SR ↑SPL ↑NE ↓SR ↑SPL ↑nDTW ↑
+> 1✓4.95 63.2 57.6 52.1 5.45 56.5 46.2 59.5 2✓✓4.71 64.1 59.2 54.0 5.11 58.7 48.3 61.1 3✓✓✓4.57 64.9 60.3 55.1 4.90 60.3 49.8 62.1
+
+Hyperparameter Sensitivity. Table 4 evaluates SACA’s sensitivity to group size ( K) and maximum repair attempts ( Nrep ). A smaller group ( K = 4 ) suffers from high variance in advantage estimation ( e.g. , RxR SR drops to 55.2%), while a larger group ( K = 16 ) introduces computational overhead and noisy long-tail trajectories that degrade performance (R2R SR drops to 60.1%), making K = 8 
+
+the optimal balance. For repair attempts, Nrep = 1 provides insufficient ex-ploration depth. Conversely, excessive attempts ( Nrep = 5 ) cause the policy to overfit to highly improbable, “stitched” trajectories, leading to a slight perfor-mance decay. Thus, Nrep = 3 balances exploration depth and policy stability. 
+
+Perception Modules within PGSA auditor. Table 5 evaluates the cascaded perception modules of the PGSA Auditor. Relying solely on global CLIP similar-ity (Row 1) yields suboptimal results ( e.g. , 57.6% SR on R2R). Adding Ground-ingDINO [35] bounding boxes (Row 2) provides explicit object-level ground-ing, which increases R2R SR to 59.2%. Finally, incorporating SAM3 [3] masks (Row 3) enables precise pixel-level segmentation. This crucial step filters out background noise to ensure pure local semantic alignment, ultimately pushing performance to the state-of-the-art 60.3% SR on both datasets. 
+
+## 5 Conclusion 
+
+In this work, we introduce Step-Aware Contrastive Alignment (SACA), a novel reinforcement fine-tuning framework designed to overcome learning-signal col-lapse in sparse-reward Vision-Language Navigation. By leveraging a zero-shot Perception-Grounded Step-Aware (PGSA) auditor, SACA effectively extracts dense, step-level supervision for both continuous ranking scores and discrete structural boundaries, bypassing the need for costly task-specific Process Reward Models. The Scenario-Conditioned Group Construction mechanism seamlessly integrates Repair Resampling for near-misses and All-Failure Rescue for entirely failed batches. The robust SACA optimization objective fuses trajectory-level advantages and step-level constraints to rescue dense supervision from failed roll-outs, preventing RL signal collapse. Extensive experiments on VLN-CE bench-marks demonstrate that SACA establishes a new state-of-the-art performance. Let’s Reward Step-by-Step 15 
+
+## References 
+
+1. An, D., Wang, H., Wang, W., Wang, Z., Huang, Y., He, K., Wang, L.: Etpnav: Evolving topological planning for vision-language navigation in continuous environ-ments. IEEE Transactions on Pattern Analysis and Machine Intelligence (TPAMI) 
+
+47 (7), 5130–5145 (2025) 3, 9 2. Anderson, P., Wu, Q., Teney, D., Bruce, J., Johnson, M., Sünderhauf, N., Reid, I., Gould, S., Van Den Hengel, A.: Vision-and-language navigation: Interpreting visually-grounded navigation instructions in real environments. In: Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR). pp. 3674–3682 (2018) 1, 3, 9, 10, 11 3. Carion, N., Gustafson, L., Hu, Y.T., Debnath, S., Hu, R., Suris, D., Ryali, C., Al-wala, K.V., Khedr, H., Huang, A., Lei, J., Ma, T., Guo, B., Kalla, A., Marks, M., Greer, J., Wang, M., Sun, P., Rädle, R., Afouras, T., Mavroudi, E., Xu, K., Wu, T.H., Zhou, Y., Momeni, L., Hazra, R., Ding, S., Vaze, S., Porcher, F., Li, F., Li, S., Kamath, A., Cheng, H.K., Dollár, P., Ravi, N., Saenko, K., Zhang, P., Feichten-hofer, C.: Sam 3: Segment anything with concepts. arXiv preprint arXiv:2511.16719 (2025) 4, 12, 13, 14, 21 4. Chang, A., Dai, A., Funkhouser, T., Halber, M., Niessner, M., Savva, M., Song, S., Zeng, A., Zhang, Y.: Matterport3D: Learning from RGB-D data in indoor environments. International Conference on 3D Vision (3DV) (2017) 9 5. Chen, J., Gao, C., Meng, E., Zhang, Q., Liu, S.: Reinforced structured state-evolution for vision-language navigation. In: Proceedings of the IEEE/CVF Con-ference on Computer Vision and Pattern Recognition. pp. 15450–15459 (2022) 4 6. Chen, K., Chen, J.K., Chuang, J., Vázquez, M., Savarese, S.: Topological plan-ning with transformers for vision-and-language navigation. In: Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR). pp. 11276–11286 (2021) 9 7. Chen, P., Ji, D., Lin, K., Zeng, R., Li, T., Tan, M., Gan, C.: Weakly-supervised multi-granularity map learning for vision-and-language navigation. Advances in Neural Information Processing Systems (NeurIPS) 35 , 38149–38161 (2022) 3, 9 8. Chen, P., Sun, X., Zhi, H., Zeng, R., Li, T.H., Liu, G., Tan, M., Gan, C.: a2 nav: Action-aware zero-shot robot navigation by exploiting vision-and-language ability of foundation models. arXiv preprint arXiv:2308.07997 (2023) 3 9. Chen, S., Guhur, P.L., Tapaswi, M., Schmid, C., Laptev, I.: Think global, act lo-cal: Dual-scale graph transformer for vision-and-language navigation. In: Proceed-ings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR). pp. 16537–16547 (2022) 3 10. Cheng, A.C., Ji, Y., Yang, Z., Gongye, Z., Zou, X., Kautz, J., Bıyık, E., Yin, H., Liu, S., Wang, X.: Navila: Legged robot vision-language-action model for navigation. Robotics: Science and Systems (RSS) (2025) 1, 3, 9 11. Cui, G., Yuan, L., Wang, Z., Wang, H., Zhang, Y., Chen, J., Li, W., He, B., Fan, Y., Yu, T., et al.: Process reinforcement through implicit rewards. arXiv preprint arXiv:2502.01456 (2025) 2 12. Fan, S., Liu, R., Wang, W., Yang, Y.: Navigation instruction generation with bev perception and large language models. In: European Conference on Computer Vi-sion (ECCV). pp. 368–387 (2024) 3 13. Fan, S., Liu, R., Wang, W., Yang, Y.: Scene map-based prompt tuning for nav-igation instruction generation. In: Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR). pp. 6898–6908 (2025) 3 16 H. Li et al. 14. Gao, J., Liu, R., Wang, W.: 3d gaussian map with open-set semantic grouping for vision-language navigation. In: Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV). pp. 9252–9262 (2025) 3 15. Gao, J., Liu, R., Xu, Y., Cao, T., Zhang, Y., Zhang, Z., Peng, S., Yang, Y., Wang, W.: Uncertainty-aware gaussian map for vision-language navigation. In: Interna-tional Conference on Learning Representations (ICLR) (2026) 3 16. Georgakis, G., Schmeckpeper, K., Wanchoo, K., Dan, S., Miltsakaki, E., Roth, D., Daniilidis, K.: Cross-modal map learning for vision and language navigation. In: Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR). pp. 15460–15470 (2022) 3, 9 17. Guo, D., Yang, D., Zhang, H., Song, J., Zhang, R., Xu, R., Zhu, Q., Ma, S., Wang, P., Bi, X., et al.: Deepseek-r1: Incentivizing reasoning capability in llms via reinforcement learning. arXiv:2501.12948 (2025) 2, 3 18. Guo, W., Lu, G., Deng, H., Wu, Z., Tang, Y., Wang, Z.: Vla-reasoner: Empowering vision-language-action models with reasoning via online monte carlo tree search. arXiv preprint arXiv:2509.22643 (2025) 4 19. Guo, Y., Zhang, J., Chen, X., Ji, X., Wang, Y.J., Hu, Y., Chen, J.: Improving vision-language-action model with online reinforcement learning. In: 2025 IEEE International Conference on Robotics and Automation (ICRA). pp. 15665–15672 (2025) 4 20. Hong, Y., Wang, Z., Wu, Q., Gould, S.: Bridging the gap between learning in dis-crete and continuous environments for vision-and-language navigation. In: Proceed-ings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR). pp. 15439–15449 (2022) 9 21. Hurst, A., Lerer, A., Goucher, A.P., Perelman, A., Ramesh, A., Clark, A., Os-trow, A., Welihinda, A., Hayes, A., Radford, A., et al.: Gpt-4o system card. arXiv preprint arXiv:2410.21276 (2024) 3 22. Jaech, A., Kalai, A., Lerer, A., Richardson, A., El-Kishky, A., Low, A., Helyar, A., Madry, A., Beutel, A., Carney, A., et al.: Openai o1 system card. arXiv preprint arXiv:2412.16720 (2024) 3 23. Koenig, N., Howard, A.: Design and use paradigms for gazebo, an open-source multi-robot simulator. In: 2004 IEEE/RSJ international conference on intelligent robots and systems (IROS). vol. 3, pp. 2149–2154 (2004) 4 24. Krantz, J., Gokaslan, A., Batra, D., Lee, S., Maksymets, O.: Waypoint models for instruction-guided navigation in continuous environments. In: Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV). pp. 15162– 15171 (2021) 9 25. Krantz, J., Lee, S.: Sim-2-sim transfer for vision-and-language navigation in con-tinuous environments. In: European Conference on Computer Vision (ECCV). pp. 588–603 (2022) 9 26. Krantz, J., Wijmans, E., Majundar, A., Batra, D., Lee, S.: Beyond the nav-graph: Vision and language navigation in continuous environments. In: European Confer-ence on Computer Vision (ECCV). pp. 104–120 (2020) 3 27. Ku, A., Anderson, P., Patel, R., Ie, E., Baldridge, J.: Room-across-room: Multilin-gual vision-and-language navigation with dense spatiotemporal grounding. arXiv preprint arXiv:2010.07954 (2020) 1, 9, 10, 11 28. Li, Y., Wang, C., Jia, J.: Llama-vid: An image is worth 2 tokens in large language models. In: European Conference on Computer Vision (ECCV). pp. 323–340 (2024) 3Let’s Reward Step-by-Step 17 29. Liang, J., Makoviychuk, V., Handa, A., Chentanez, N., Macklin, M., Fox, D.: Gpu-accelerated robotic simulation for distributed reinforcement learning. In: Confer-ence on Robot Learning (CoRL). pp. 270–282. PMLR (2018) 4 30. Lin, J., Yin, H., Ping, W., Molchanov, P., Shoeybi, M., Han, S.: Vila: On pre-training for visual language models. In: Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) (2024) 3 31. Liu, A., Feng, B., Xue, B., Wang, B., Wu, B., Lu, C., Zhao, C., Deng, C., Zhang, C., Ruan, C., et al.: Deepseek-v3 technical report. arXiv:2412.19437 (2024) 3 32. Liu, R., Wang, W., Yang, Y.: Vision-language navigation with energy-based policy. Advances in Neural Information Processing Systems (NeurIPS) 37 , 108208–108230 (2024) 3 33. Liu, R., Wang, W., Yang, Y.: Volumetric environment representation for vision-language navigation. In: Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR). pp. 16317–16328 (2024) 3 34. Liu, R., Wang, X., Wang, W., Yang, Y.: Bird’s-eye-view scene graph for vision-language navigation. In: Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV) (2023) 3 35. Liu, S., Zeng, Z., Ren, T., Li, F., Zhang, H., Yang, J., Jiang, Q., Li, C., Yang, J., Su, H., et al.: Grounding dino: Marrying dino with grounded pre-training for open-set object detection. In: European Conference on Computer Vision (ECCV). pp. 38–55. Springer (2024) 4, 12, 13, 14, 21, 23 36. Long, Y., Cai, W., Wang, H., Zhan, G., Dong, H.: Instructnav: Zero-shot sys-tem for generic instruction navigation in unexplored environment. arXiv preprint arXiv:2406.04882 (2024) 3, 9 37. Long, Y., Li, X., Cai, W., Dong, H.: Discuss before moving: Visual language navi-gation via multi-expert discussions. arXiv preprint arXiv:2309.11382 (2023) 3 38. Puig, X., Undersander, E., Szot, A., Cote, M.D., Partsey, R., Yang, J., Desai, R., Clegg, A.W., Hlavac, M., Min, T., Gervet, T., Vondruš, V., Berges, V.P., Turner, J., Maksymets, O., Kira, Z., Kalakrishnan, M., Malik, J., Chaplot, D.S., Jain, U., Batra, D., Rai, A., Mottaghi, R.: Habitat 3.0: A co-habitat for humans, avatars and robots (2023) 9 39. Qi, Y., Wu, Q., Anderson, P., Wang, X., Wang, W.Y., Shen, C., Hengel, A.v.d.: Reverie: Remote embodied visual referring expression in real indoor environments. In: Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR). pp. 9982–9991 (2020) 3 40. Qi, Z., Zhang, Z., Yu, Y., Wang, J., Zhao, H.: Vln-r1: Vision-language navigation via reinforcement fine-tuning. arXiv preprint arXiv:2506.17221 (2025) 1, 2, 4, 9, 10, 23 41. Radford, A., Kim, J.W., Hallacy, C., Ramesh, A., Goh, G., Agarwal, S., Sastry, G., Askell, A., Mishkin, P., Clark, J., et al.: Learning transferable visual models from natural language supervision. In: International Conference on Machine Learning (ICML). pp. 8748–8763. PmLR (2021) 4, 13, 14 42. Rafailov, R., Sharma, A., Mitchell, E., Manning, C.D., Ermon, S., Finn, C.: Direct preference optimization: Your language model is secretly a reward model. Advances in Neural Information Processing Systems (NeurIPS) 36 , 53728–53741 (2023) 3 43. Ramakrishnan, S.K., Gokaslan, A., Wijmans, E., Maksymets, O., Clegg, A., Turner, J., Undersander, E., Galuba, W., Westbury, A., Chang, A.X., et al.: Habitat-matterport 3d dataset (hm3d): 1000 large-scale 3d environments for em-bodied ai. arXiv preprint arXiv:2109.08238 (2021) 9 18 H. Li et al. 44. Raychaudhuri, S., Wani, S., Patel, S., Jain, U., Chang, A.: Language-aligned way-point (law) supervision for vision-and-language navigation in continuous environ-ments. In: Proceedings of the 2021 Conference on Empirical Methods in Natural Language Processing (EMNLP). pp. 4018–4028 (2021) 3, 9 45. Savva, M., Kadian, A., Maksymets, O., Zhao, Y., Wijmans, E., Jain, B., Straub, J., Liu, J., Koltun, V., Malik, J., et al.: Habitat: A platform for embodied ai research. In: Proceedings of the IEEE/CVF international conference on computer vision. pp. 9339–9347 (2019) 9 46. Schulman, J., Wolski, F., Dhariwal, P., Radford, A., Klimov, O.: Proximal policy optimization algorithms. arXiv preprint arXiv:1707.06347 (2017) 3 47. Shao, Z., Wang, P., Zhu, Q., Xu, R., Song, J., Bi, X., Zhang, H., Zhang, M., Li, Y., Wu, Y., et al.: Deepseekmath: Pushing the limits of mathematical reasoning in open language models. arXiv:2402.03300 (2024) 2, 3 48. Singh, A., Fry, A., Perelman, A., Tart, A., Ganesh, A., El-Kishky, A., McLaughlin, A., Low, A., Ostrow, A., Ananthram, A., et al.: Openai gpt-5 system card. arXiv preprint arXiv:2601.03267 (2025) 3 49. Wang, H., Liang, W., Van Gool, L., Wang, W.: Dreamwalker: Mental planning for continuous vision-language navigation. In: Proceedings of the IEEE/CVF interna-tional conference on computer vision. pp. 10873–10883 (2023) 3 50. Wang, H., Wang, W., Liang, W., Xiong, C., Shen, J.: Structured scene memory for vision-language navigation. In: Proceedings of the IEEE/CVF conference on Computer Vision and Pattern Recognition. pp. 8455–8464 (2021) 3 51. Wang, X., Xiong, W., Wang, H., Wang, W.Y.: Look before you leap: Bridging model-free and model-based reinforcement learning for planned-ahead vision-and-language navigation. In: European Conference on Computer Vision (ECCV). pp. 37–53 (2018) 4 52. Wang, Z., Li, X., Yang, J., Liu, Y., Hu, J., Jiang, M., Jiang, S.: Lookahead explo-ration with neural radiance representation for continuous vision-language naviga-tion. In: Proceedings of the IEEE/CVF conference on computer vision and pattern recognition. pp. 13753–13762 (2024) 3, 9 53. Wang, Z., Li, X., Yang, J., Liu, Y., Jiang, S.: Gridmm: Grid memory map for vision-and-language navigation. In: Proceedings of the IEEE/CVF International conference on computer vision. pp. 15625–15636 (2023) 9 54. Wang, Z., Li, J., Hong, Y., Wang, Y., Wu, Q., Bansal, M., Gould, S., Tan, H., Qiao, Y.: Scaling data generation in vision-and-language navigation. In: Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV) (2023) 3, 9 55. Wei, M., Wan, C., Yu, X., Wang, T., Yang, Y., Mao, X., Zhu, C., Cai, W., Wang, H., Chen, Y., Liu, X., Pang, J.: Streamvln: Streaming vision-and-language navigation via slowfast context modeling. In: IEEE International Conference on Robotics and Automation (ICRA) (2026) 1, 3, 9, 10, 11, 23 56. Wu, Z., Hu, Y., Shi, W., Dziri, N., Suhr, A., Ammanabrolu, P., Smith, N.A., Ostendorf, M., Hajishirzi, H.: Fine-grained human feedback gives better rewards for language model training. Advances in Neural Information Processing Systems (NeurIPS) 36 , 59008–59033 (2023) 2 57. Yang, A., Li, A., Yang, B., Zhang, B., Hui, B., Zheng, B., Yu, B., Gao, C., Huang, C., Lv, C., et al.: Qwen3 technical report. arXiv preprint arXiv:2505.09388 (2025) 4, 21, 26 58. Ye, A., Zhang, Z., Wang, B., Wang, X., Zhang, D., Zhu, Z.: Vla-r1: Enhancing rea-soning in vision-language-action models. arXiv preprint arXiv:2510.01623 (2025) 4Let’s Reward Step-by-Step 19 59. Yin, Z., Sun, Q., Zeng, Z., Cheng, Q., Qiu, X., Huang, X.: Dynamic and gener-alizable process reward modeling. In: Proceedings of the Annual Meeting of the Association for Computational Linguistics (ACL) (2025) 2 60. Zhai, S., Bai, H., Lin, Z., Pan, J., Tong, P., Zhou, Y., Suhr, A., Xie, S., LeCun, Y., Ma, Y., et al.: Fine-tuning large vision-language models as decision-making agents via reinforcement learning. Advances in Neural Information Processing Systems (NeurIPS) 37 , 110935–110971 (2024) 3 61. Zhang, J., Wang, K., Wang, S., Li, M., Liu, H., Wei, S., Wang, Z., Zhang, Z., Wang, H.: Uni-navid: A video-based vision-language-action model for unifying embodied navigation tasks. Robotics: Science and Systems (RSS) (2025) 3, 9 62. Zhang, J., Wang, K., Xu, R., Zhou, G., Hong, Y., Fang, X., Wu, Q., Zhang, Z., Wang, H.: Navid: Video-based vlm plans the next step for vision-and-language navigation. Robotics: Science and Systems (RSS) (2024) 3, 9 63. Zhang, L., Hao, X., Xu, Q., Zhang, Q., Zhang, X., Wang, P., Zhang, J., Wang, Z., Zhang, S., Xu, R.: Mapnav: A novel memory representation via annotated semantic maps for vlm-based vision-and-language navigation. In: Proceedings of the 63rd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers). pp. 13032–13056 (2025) 3, 9 64. Zhang, R., Zhao, C., Du, H., Niyato, D., Wang, J., Sawadsitang, S., Shen, X., Kim, D.I.: Embodied ai-enhanced vehicular networks: An integrated vision lan-guage models and reinforcement learning method. IEEE Transactions on Mobile Computing (2025) 4 65. Zhang, Y., Wu, J., Li, W., Li, B., Ma, Z., Liu, Z., Li, C.: Video instruction tuning with synthetic data. arXiv preprint arXiv:2410.02713 (2024) 3, 10 66. Zheng, C., Liu, S., Li, M., Chen, X.H., Yu, B., Gao, C., Dang, K., Liu, Y., Men, R., Yang, A., et al.: Group sequence policy optimization. arXiv preprint arXiv:2507.18071 (2025) 3 67. Zheng, D., Huang, S., Zhao, L., Zhong, Y., Wang, L.: Towards learning a generalist model for embodied navigation. In: Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) (2024) 1 68. Zhou, G., Hong, Y., Wu, Q.: Navgpt: Explicit reasoning in vision-and-language navigation with large language models. In: Proceedings of the AAAI Conference on Artificial Intelligence (AAAI). pp. 7641–7649 (2024) 3 Let’s Reward Step-by-Step: Step-Aware Contrastive Alignment for Vision-Language Navigation in Continuous Environments 
+
+# Supplementary Material 
+
+A Statistics of Failed Episodes . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 20 B More Details about SACA Framework . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 21 B.1 Implementation Details of the PGSA Auditor . . . . . . . . . . . . . 21 B.2 Execution Dynamics of the SACA Optimization . . . . . . . . . . .21 B.3 Anatomy of Step-Level Reward Allocation in SACA . . . . . . .22 C Implementation Details and Hyperparameters . . . . . . . . . . . . . . . . . . . . . . .23 D More Visualize Examples . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 26 E Prompt Design for the SACA Framework . . . . . . . . . . . . . . . . . . . . . . . . . . . 26 E.1 Instruction Parsing Prompt for Landmark Extraction . . . . . 26 E.2 Action Prediction Prompt for SACA Training . . . . . . . . . . . . . 27 
+
+## A Statistics of Failed Episodes     
+
+> Fig. S1: Distribution of valid-prefix ratios among failed navigation trajectories.
+
+As shown in Fig. S1, our statistics indicates that a sig-nificant majority ( ∼ 73% ) of failed episodes actually con-tain a high-quality valid pre-fix before the agent devi-ates from the optimal path (tdiv /T > η , with η = 0 .5). While standard RFT meth-ods naively discards these near-miss failures entirely, SACA actively identifies and sal-vages these valuable prefixes to provide dense step-level supervision, thereby signifi-cantly mitigating data ineffi-ciency. Let’s Reward Step-by-Step 21 
+
+## B More Details about Step-Aware Contrastive Alignment Framework 
+
+We provide the granular implementation mechanics and algorithmic intricacies corresponding to Algorithm 1 and Algorithm 2. 
+
+B.1 Implementation Details of the PGSA Auditor 
+
+Algorithm 1 formalizes the step-wise auditing process. Evaluating continuous visual streams against textual landmarks requires several adaptations: 
+
+1. Prompting Strategy for Zero-Shot Grounding ( Mdet ): To initialize the detection module (GroundingDINO [35]), the raw intermediate landmark string li is wrapped into a standardized prompt template: “A photo of a [ li].” to align with the model’s pre-training distribution. If GroundingDINO [35] re-turns multiple bounding boxes exceeding τdet , we solely retain the instance with the highest confidence score cdet to compute the local similarity slocal , thereby suppressing background noise. 
+
+2. Local Masking Operation ( ot ⊙ Mobj ): We utilize the pixel-level mask 
+
+Mobj generated by Mseg (SAM3 [3]). The background pixels outside Mobj are strictly zeroed out (padded with black pixels) before being encoded by the CLIP visual encoder Mvlm . This strict isolation ensures that slocal genuinely reflects the semantic alignment of the target object alone. 
+
+3. Landmark Transition Mechanism: Algorithm 1 evaluates a single ac-tive landmark li. In our full pipeline, the instruction comprises a sequence of landmarks L = {l1, . . . , l m}, generated by frozen Qwen3-0.6B [57]. The auditor transitions from li to li+1 when a robust temporal-spatial constraint is met: the step-wise Soft Score St must exceed the hard threshold τh for c = 2 consecutive steps. This temporal smoothing prevents premature landmark transitions caused by transient visual glitches or motion blur during navigation. 
+
+B.2 Execution Dynamics of the SACA Optimization 
+
+Algorithm 2 details the routing and policy update mechanism. To deploy this efficiently on MLLMs, several systemic optimizations and definitions are applied: 
+
+1. Definition of Outcome Reward ( rout ): The binary outcome reward rout (Ti)
+
+is strictly determined by the environment’s topological graph. It evaluates to 1
+
+only if the agent asserts the STOP action and its final spatial coordinates are within a constant value e.g. 3.0 meters of the destination. 
+
+2. GRPO KL-Divergence Penalty: In both the Mixed Group (Eq. 15) and All-Failure Rescue (Eq. 16) scenarios, the LGRP O function incorporates an implicit Kullback-Leibler (KL) divergence penalty to prevent policy col-lapse. Specifically, the reward advantages ˆAi are dynamically adjusted using 
+
+ˆAi −βKL KL (πθ ∥πref ), where the reference policy πref is initialized from the SFT checkpoint and frozen. The KL penalty ensures the policy remains exploratory and prevents deterministic mode collapse during intensive Repair Resampling. 22 
+
+3. Tie-Breaking for the Pseudo-Anchor: In Scenario B, the framework selects the Pseudo-Anchor Tanch based on the maximum process score Rproc (T ).In the rare event of a tie where multiple trajectories share the exact same Rproc 
+
+score, we employ the maximum trajectory length Ti as a secondary tie-breaking criterion, favoring the trajectory that explored further before failing. 
+
+B.3 Anatomy of Step-Level Reward Allocation in SACA 
+
+Table S1 summarizes the temporal allocation of reward signals and their corre-sponding optimization objectives across different phases of a repaired trajectory. 
+
+Table S1: Summary of Step-Level Reward and Objective Allocation in SACA. Trajectory Phase Temporal Condition Hard Mask Dominant Reward Signal ( ˆAt) Optimization Objective Valid Prefix t < t div Mt = 1 Dense Positive (Continuous Baseline + Peaks) Lalign (Behavior Cloning)               
+
+> Divergence Point t=tdiv Mt= 0 Sharp Negative (Explicit Penalty) Lcorr (Contrastive Correction)
+> Resampled Suffix t > t div Mt= 1 Dense Positive (Continuous Baseline + Peaks) Lrepair (Suffix Cloning)
+
+1. Dense Positive Alignment ( t̸ = tdiv ). For all steps within the valid prefix and the successfully resampled suffix, the agent is considered to be on the optimal path ( Mt = 1 ). During these phases, the optimization functions effectively treat the executed actions as pseudo-correct demonstrations. The underlying reward signal is driven by the Composite Soft Score St, which provides a continuous positive advantage. This ensures the policy receives steady contextual guidance (via global semantics) interspersed with strong positive reinforcement peaks (via local spatial grounding) upon encountering landmarks. 
+
+2. Explicit Contrastive Penalty ( t = tdiv ). The critical inflection point oc-curs exactly at the divergence step. When St ≤ τh, the mask flips ( Mt = 0 ), signaling a fatal deviation. SACA isolates this specific step. The Contrastive Correction objective injects a sharp, explicit negative penalty strictly at tdiv ,pulling the policy towards the correct teacher action a+ while aggressively push-ing it away from the specific erroneous action a− that caused the deviation. 
+
+Fig. S2: Heatmap visualization. We vi-sualize the step-wise evolution of semantic alignment and advantage assignment over a trajectory consist with 48 steps. 
+
+As shown in Fig. S2, SACA as-signs heterogeneous signals based on the structural phase of the trajectory, seamlessly transitioning from dense positive alignment to explicit con-trastive penalty. During the Valid Prefix (t < 38 ) and the Resampled Suffix (t > 38 ), the fusion of continu-ous Global Semantics and sharp Local Semantics provides a dense, positive Process Advantage (warm colors). At the Divergence Point (tdiv = 38 ), a sudden drop in semantic matching causes the Composite Soft Score to plummet, which in turn triggers the Let’s Reward Step-by-Step 23 
+
+structural hard mask. This explicitly applies a Contrastive Correction penalty (deep blue), heavily discouraging the precise erroneous action before the tra-jectory is successfully resampled. By structuring the step-level rewards in this heterogeneous manner, SACA elegantly resolves the credit assignment problem in long-horizon navigation, ensuring that the agent is neither penalized for cor-rect early decisions nor left unguided after a mid-trajectory failure. 
+
+## C Implementation Details and Hyperparameters 
+
+To ensure the full reproducibility of our experiments, Table S2 meticulously details the comprehensive hyperparameter configurations utilized across both SFT and SACA stages. 
+
+• General Infrastructure. All training phases are distributed across 8 GPUs utilizing the Distributed Data Parallel (DDP) strategy. To accommodate the extensive context required for continuous visual observations and long-horizon instructions, we set the maximum sequence length to 4096. Furthermore, we leverage bfloat16 mixed precision and Flash Attention to significantly optimize memory consumption and accelerate training throughput. 
+
+• SFT Stage. During the preliminary SFT phase, the policy is trained for 2 epochs using the AdamW optimizer with β values of [0 .9, 0.999] and a weight decay of 0.01. We employ a constant learning rate of 1 × 10 −5 and maintain a total global batch size of 16. 
+
+• Reinforcement Fine-Tuning (SACA) Stage. In the subsequent reinforce-ment learning phase, the learning rate is strictly reduced to 1 × 10 −6 to ensure stable policy updates. For the GRPO rollout, we sample K = 8 candidate trajectories per instruction. To salvage near-miss failures, the valid-prefix ra-tio threshold ( η) is set to 0.5, and the policy is permitted a maximum of 
+
+Nrep = 3 suffix resampling attempts. For the PGSA Auditor, we rigorously calibrate the sensitivity parameters to balance exploration and precise ground-ing. Specifically, we apply a soft threshold τs = 0 .2 for step-score noise filtering, a hard threshold τh = 0 .25 for structural divergence masking, and a detection threshold τdet = 0 .3 to filter GroundingDINO [35] bounding boxes. The step-wise soft score components are balanced by weights w1 = 0 .3, w2 = 0 .3,and w3 = 0 .4. Finally, to regularize the advantage estimation and prevent over-penalization, we implement robust scaling mechanisms featuring a mar-gin threshold δ = 0 .1, a temperature shrinkage factor κ = 0 .5, and a negative attenuation scale s = 0 .5.
+
+## D More Visualize Examples 
+
+We provide more qualitative visualization (Fig. S3) and more qualitative com-parison results with other methods e.g. StreamVLN [55], VLN-R1 [40] (Fig. S4). 24 
+
+Algorithm 1 Perception-Grounded Step-Aware (PGSA) Auditing Process 
+
+Require: Trajectory T = {o1, . . . , o T }; Current target landmark ( li)
+
+Require: GroundingDINO ( Mdet ), SAM2 ( Mseg ), CLIP ( Mvlm )
+
+Require: Hyperparameters: Detection threshold ( τdet ); Soft threshold ( τs); Hard threshold ( τh); Weights w1, w 2, w 3
+
+Initialize process score Rproc ← 0
+
+Initialize divergence point tdiv ← T , divergence flag Fdiv ← False Initialize Hard Mask sequence M ← { 1, 1, . . . , 1} of length T
+
+for t = 1 to T do Phase 1: Semantic Grounding & Global Context 
+
+B, c det ← M det (ot, l i) ▷ Detect bounding box and confidence 
+
+sglobal ← M vlm (ot, l i) ▷ Compute global image-text similarity 
+
+Phase 2 : Spatial Refinement & Local Alignment if cdet ≥ τdet then 
+
+Mobj , c iou ← M seg (ot, B ) ▷ Extract precise object mask 
+
+slocal ← M vlm (ot ⊙ Mobj , l i) ▷ Compute local masked similarity 
+
+else 
+
+slocal ← 0, ciou ← 0 ▷ Fallback if object is totally invisible 
+
+end if Phase 3: Comprehensive Soft Score Calculation 
+
+St ← w1sglobal + ⊮{cdet ≥τdet }
+
+ w2cdet + w3ciou slocal 
+
+ ▷ (Eq. 1) 
+
+Phase 4: Accumulation & Masking if St ≥ τs then 
+
+Rproc ← Rproc + ( St − τs) ▷ Accumulate continuous process reward 
+
+end if if St < τ h and not Fdiv then 
+
+tdiv ← t ▷ Locate the precise structural Divergence Point (Eq. 3) 
+
+Fdiv ← True 
+
+end if if Fdiv then 
+
+Mt ← 0 ▷ Apply Hard Mask 
+
+end if end for 
+
+Rproc ← Rproc /T  ▷ Normalize process score over trajectory length (Eq. 2) 
+
+return Rproc , tdiv , MLet’s Reward Step-by-Step 25 
+
+Algorithm 2 Step-Aware Contrastive Alignment (SACA) Framework 
+
+Require: Policy πθ ; Reference policy πref ; PGSA Auditor APGSA (Algorithm 1) 
+
+Require: Hyperparameters: Group size K; Sub-group size m; Valid ratio η; Margin 
+
+δ; Temp κ; Scale s; Max repairs Nrep 
+
+while training is not converged do 
+
+Sample instruction I and extract intermediate landmarks L = {l1, . . . , l m}
+
+Sample K candidate trajectories G = {T 1, . . . , TK } ∼ πθ (· | I)
+
+Phase 1: Perception-Grounded Auditing 
+
+for all Ti ∈ G do 
+
+Compute soft score Rproc (Ti) (Eq. 2), divergence point t(i) 
+
+> div
+
+(Eq. 3), and mask 
+
+M (i) via APGSA (Ti, L )
+
+Evaluate binary outcome reward rout (Ti) ∈ { 0, 1}
+
+Phase 2a: Scenario A - Mixed Group 
+
+Compute outcome advantages ˆAout i normalized over the full group G (Eq. 14) Initialize repaired group Grep ← ∅ 
+
+for all Tj ∈ G s.t. rout (Tj ) = 0 and t(j) 
+
+> div
+
+/T > η do 
+
+Sample suffixes {T (n) 
+
+> suf f
+
+}Nrep  
+
+> n=1
+
+∼ πθ (· | T j, 1: t(j)
+
+> div
+
+)
+
+if ∃n ∈ { 1, . . . , N rep } s.t. rout (T (n) 
+
+> suf f
+
+) = 1 then 
+
+Construct T rep  
+
+> j
+
+← T j, 1: t(j)
+
+> div
+
+⊕ T (n) 
+
+> suf f
+
+▷ ⊕ denotes concatenation 
+
+Grep ← Grep ∪ {T rep  
+
+> j
+
+}
+
+Compute total loss Ltotal ← L mixed ( ˆAout , G rep ) (Eq. 15) 
+
+Phase 2b: Scenario B - All-Failure Rescue 
+
+Select Pseudo-Anchor: Tanch ← arg max T ∈ G Rproc (T ) (Eq. 6) Form negative subset Gneg ⊂ G \ {T anch } comprising top-m trajectories ranked by score neg (Eq. 7) Construct Reflection Sub-group: Gsub ← {T anch } ∪ Gneg 
+
+Compute raw advantages ˆAraw i normalized over Gsub (Eq. 8) 
+
+Margin-Based Rescue: ˆA′ 
+
+> i
+
+← ˆAraw i · (κ · I[∆<δ ] + I[∆≥δ]) (Eqs. 9, 10) 
+
+Negative-Only Scaling: ˆAi ← ˆA′ 
+
+> i
+
+· (s · I[ ˆA′ 
+
+> i<0]
+
++ I[ ˆA′
+
+> i≥0]
+
+) (Eq. 11) Compute Lalign and Lcorrect for Tanch leveraging divergence point t(anch )
+
+> div
+
+(Eqs. 12, 13) Compute total loss Ltotal ← L f ail ( ˆAi, Lalign , Lcorrect ) (Eq. 16) 
+
+Phase 3: Policy Update 
+
+Update policy parameters: θ ← θ − α∇θ Ltotal 
+
+end while 26 
+
+Table S2: Comprehensive training configurations for SFT and SACA stages. General & SFT Configuration SACA Hyperparameters Hyperparameter Value Hyperparameter Value General Infrastructure Scenario & Grouping 
+
+Policy Model Video-LLaVA-8B Group size ( K) 8Max Sequence Length 4096 Valid-prefix ratio ( η) 0.5 Number of GPUs 8 Max resampling attempts ( Nrep ) 3Parallel Strategy DDP PGSA Auditor Settings 
+
+Training Precision bfloat16 Soft threshold ( τs) 0.2 Flash Attention ✓ Hard threshold ( τh) 0.25 
+
+SFT Stage Configuration Detection threshold ( τdet ) 0.3 Optimizer AdamW Score weights ( w1, w 2, w 3) 0.3, 0.3, 0.4 Betas [0.9, 0.999] Robustness & RL Settings 
+
+Weight Decay 0.01 Margin threshold ( δ) 0.1 Learning Rate 1 × 10 −5 Temperature shrinkage ( κ) 0.5 Batch Size (Total) 16 Negative attenuation ( s) 0.5 Epochs 2 Learning Rate 1 × 10 −6
+
+Warmup Ratio 0.03 Objective Weights 
+
+LR Scheduler Cosine Hard-Negative weight ( λ) 0.5 Max Grad Norm 1.0 Repair loss weight ( λrep ) 1.0 Gradient Accumulation 2 Align loss weight ( λ1) 1.0 Drop Path Rate 0.1 Contrastive loss weight ( λ2) 1.0 
+
+## E Prompt Design for the SACA Framework 
+
+In this section, we provide the detailed prompt templates utilized throughout our SACA framework. Specifically, we first introduce the instruction parsing prompt used by the frozen tiny LLM to extract intermediate landmarks, followed by the action prediction prompt employed by the policy MLLM during the RFT phase. 
+
+E.1 Instruction Parsing Prompt for Landmark Extraction 
+
+To enable the PGSA auditor to track navigation progress, we first parse the high-level linguistic instruction into a sequence of intermediate landmarks L =
+
+{l1, . . . , l m}. As detailed in Box 1, we deploy a frozen tiny LLM ( e.g. , Qwen3-0.6B [57]) with a structured zero-shot prompt to extract these landmarks se-quentially. 
+
+Box 1. Instruction Parsing Prompt for Tiny LLM 
+
+System : You are a specialized linguistic parser for an embodied navigation agent. Your task is to extract a sequential list of intermediate visual land-marks from a given navigation instruction. These landmarks will be used by a downstream visual perception module to track the agent’s progress. 
+
+User : <Instruction> Let’s Reward Step-by-Step 27 
+
+Output Format : You must extract the physical objects or locations men-tioned in the instruction in the exact order they are intended to be encoun-tered. Output strictly a valid JSON list of strings. Do not include any other explanations. 
+
+Example Input : Walk past the dining room table and chairs and turn right. Walk past the bar and stop by the bar stools. 
+
+Example Output : [table, chairs, bar, bar stools] 
+
+E.2 Action Prediction Prompt for SACA Training 
+
+During the SACA training phase, we aim to enable the policy MLLM to effec-tively align its visual perception with the linguistic instruction. To this end, we design a concise, structured prompt that incorporates both current and histori-cal visual observations, explicitly defines the discrete action options, and directly outputs the action sequence. The complete user input format is presented in Box 2. 
+
+Box 2. System Prompt and Input Format for SACA Training 
+
+System : You are an intelligent embodied agent navigating in a continuous 3D indoor environment. Your objective is to reach a specific destination based on a natural language instruction. At each step, you will be provided with the instruction and your current egocentric visual observation. Your task is to analyze the visual scene, align it with the given instruction, reason about your current progress, and predict the next optimal action. 
+
+User : <Image>, <Instruction> 
+
+Output Format : Devise an action sequence to follow the instruction using the four actions: TURN LEFT ( ←) or TURN RIGHT ( →) by 15 degrees, MOVE FORWARD ( ↑) by 25 centimeters, or STOP .
+
+Example : <action> →→→↑ </action> 28 Instruction:  Walk  out of the closet  and  into the hallway . Walk through the  hallway entrance on the left . Stop just  inside the entryway .      
+
+> Instruction: Walk to the foot of the bed and turn right. Walk to the other end of the foot and turn right. Walk forward. Wait on the run in front of the bathroom .
+
+(a) 
+
+(b) 
+
+(a) 
+
+(b) 
+
+Timeline 
+
+Fig. S3: Qualitative visualization of navigation episodes. (a) Continuous ego-centric visual observations. (b) The corresponding top-down trajectory maps. Key textual landmarks parsed from the instructions are highlighted in red, guiding the step-aware progress tracking. (a) 
+
+(b) 
+
+(a) 
+
+(b) 
+
+(a) 
+
+(b) 
+
+> StreamVLN  VLN -R1  SACA (Ours)
+
+Instruction:  Walk past the right of the bar, and turn left to walk through the kitchen. Stop once you reach the shelves on your right. 
+
+Timeline 
+
+Fig. S4: More qualitative comparison. (a) Egocentric observations. (b) Top-down maps. Green and red frames denote correct trajectory and failure trajectory, respec-tively.

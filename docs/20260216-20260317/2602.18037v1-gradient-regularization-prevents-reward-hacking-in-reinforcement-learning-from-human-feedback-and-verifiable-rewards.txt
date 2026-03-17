@@ -1,0 +1,1222 @@
+Title: Gradient Regularization Prevents Reward Hacking in Reinforcement Learning from Human Feedback and Verifiable Rewards
+
+URL Source: https://arxiv.org/pdf/2602.18037v1
+
+Published Time: Mon, 23 Feb 2026 01:26:43 GMT
+
+Number of Pages: 25
+
+Markdown Content:
+# Gradient Regularization Prevents Reward Hacking in Reinforcement Learning from Human Feedback and Verifiable Rewards 
+
+Johannes Ackermann 1 2 Michael Noukhovitch 3 4 Takashi Ishida 2 1 Masashi Sugiyama 2 1 
+
+## Abstract 
+
+Reinforcement Learning from Human Feedback (RLHF) or Verifiable Rewards (RLVR) are two key steps in the post-training of modern Language Models (LMs). A common problem is reward hacking, where the policy may exploit inaccura-cies of the reward and learn an unintended behav-ior. Most previous works address this by limiting the policy update with a Kullback-Leibler (KL) penalty towards a reference model. We propose a different framing: Train the LM in a way that biases policy updates towards regions in which the reward is more accurate. First, we derive a theoretical connection between the accuracy of a reward model and the flatness of an optimum at convergence. Gradient regularization (GR) can then be used to bias training to flatter regions and thereby maintain reward model accuracy. We con-firm these results by showing that the gradient norm and reward accuracy are empirically cor-related in RLHF. We then show that Reference Resets of the KL penalty implicitly use GR to find flatter regions with higher reward accuracy. We further improve on this by proposing to use explicit GR with an efficient finite-difference esti-mate. Empirically, GR performs better than a KL penalty across a diverse set of RL experiments with LMs. GR achieves a higher GPT-judged win-rate in RLHF, avoids overly focusing on the format in rule-based math rewards, and prevents hacking the judge in LLM-as-a-Judge math tasks. 
+
+## 1. Introduction 
+
+Reinforcement Learning (RL) has become a key part of the post-training of language models (LMs) (Stiennon et al., 2020; Shao et al., 2024). In the case of RL from Human Feedback (RLHF) (Christiano et al., 2017), we use RL to 
+
+> 1
+
+The University of Tokyo 2RIKEN AIP 3Mila 4Université de Montréal. Correspondence to: Johannes Ackermann <ackermann@ms.k.u-tokyo.ac.jp>. 
+
+Preprint. February 23, 2026. 
+
+align the behavior of LMs with human preferences, which we cannot easily represent with a rule-based reward. In the case of RL from Verifiable Feedback (RLVR) (Havrilla et al., 2024; Lambert et al., 2024), RL is used to improve the performance on tasks with verifiable rewards, such as mathematical reasoning or agentic tasks. In RLHF, we use pairwise comparison data to train a reward model (RM), which then provides the reward estimates for policy updates. In RLVR, we use a verifier such as a rule-based reward or another Large Language Model (LLM) to check if the model output matches the expected answer. In both cases there is a desired behavior, corresponding to a desired true reward, which we try to approximate with the trained RM, rule-based reward, or LLM-as-a-judge reward. We collectively refer to them as proxy rewards (PRs). A key challenge of RL post-training is: How can we ensure that when updating our policy with the PR, we actually improve the true reward, i.e., how can we ensure that our PR stays accurate as the policy changes throughout training? One solution is to iteratively update the PR during training with new data from the current policy (Christiano et al., 2017). As this can be costly, another option is to use a Kullback-Leibler (KL) penalty to ensure the policy stays close to the initial model (Stiennon et al., 2020). In practice, the KL penalty slows down training and may not even improve performance (Gao et al., 2023), leading to recent papers abandoning it for tasks with rule-based rewards (GLM-4.5 Team et al., 2025; Olmo Team et al., 2025). However, this risks reward hacking with reward models and LLM-as-a-judge. We thus aim to modify the policy update such that the policy not only maximizes the PR, but also maximizes the PR accuracy, without constraining it to stay close to the initial policy. We argue that reward hacking often corresponds to sharp optima of the PR and propose gradient regularization (GR) as a solution. We illustrate an overview in Figure 1. In Section 3, we formalize this notion and show a theoretical connection between the flatness of an optimum and the PR accuracy at this optimum, as measured by the Bradley-Terry (BT; Bradley & Terry, 1952) loss. In Section 4, we show that this theoretical connection can be utilized to improve RLHF in practice. We leverage a recent method, Reference Resets (Liu et al., 2025a), and demonstrate that it implicitly 1
+
+> arXiv:2602.18037v1 [cs.LG] 20 Feb 2026
+
+Gradient Regularization Prevents Reward Hacking The answer is }}}))})))}3} The answer is 4. 
+
+> Reward
+> The answer is 3.
+
+0 500 1000 
+
+0.7
+
+0.8
+
+0.9
+
+Gradient Step 
+
+> Proxy Reward
+
+0 500 1000 
+
+0
+
+0.2
+
+0.4
+
+Gradient Step 
+
+> True Reward
+
+0 500 1000 
+
+1.0 
+
+Gradient Step 
+
+> Gradient Norm  No GR
+> GR
+
+Figure 1. We argue that reward hacking often corresponds to exploiting sharp maxima in action space, as illustrated by the conceptual figure (left). For example, an LLM judge may be confused and assign a high reward to a wrong answer with specific formatting. In the LLM-as-a-Judge training run shown on the right, the increase in gradient norm coincides with reward hacking, resulting in true reward collapsing. By using gradient norm regularization, we can prevent this issue and obtain a better model, as seen by the improved true reward. The examples show Qwen2.5-0.5B models trained on GSM8K with a Qwen2.5-1.5B-Instruct judge with access to the true answer. 
+
+regularizes the gradient, providing a novel interpretation of this method. We empirically show this enables better RLHF performance on the TL;DR task. In Section 5, we propose a novel application of explicit gradient regularization to RL post-training. We demonstrate that it outperforms baselines in RLHF tasks with reward models as well as rule-based and LLM-as-a-judge RLVR math tasks. By using GR, we are able to train proficient LLM-as-a-Judge and RLHF models 
+
+completely replacing the standard KL penalty .
+
+## 2. Background 
+
+2.1. Reinforcement Learning 
+
+As is common in the RL post-training literature (Shao et al., 2024; Ahmadian et al., 2024), we consider an episode con-sisting of a single state s, representing the prompt, and a single action a, representing the reply. We denote the state set by S and the action set by A. As policy πϕ with parameters ϕ, we consider an autoregressive LM with con-ditional probability πϕ(a|s) = Q 
+
+> t
+
+πϕ(at|s, a<t ), where at
+
+is the t-th response token, a<t refers to the response tokens before at and a refers to the entire response. We assume that there is a true reward function R∗ : S × A → R
+
+and our goal is to maximize the return of the policy πϕ
+
+on this reward J∗(ϕ) = Es∼P (s),a ∼πϕ [R∗(s, a )] . How-ever, we do not have access to R∗. Instead, we use a proxy reward (PR) eR, and train the policy to maximize its return J(ϕ, θ ) = Es∼P (s),a ∼πϕ [ eRθ (s, a )] . To optimize the return we use REINFORCE policy gradient updates (Williams, 1992) 
+
+∇ϕJ(ϕ, θ ) = 
+
+Es∼P (s),a ∼πϕ
+
+h
+
+( eRθ (s, a ) − b(s)) ∇ϕ log πϕ(a|s)
+
+i
+
+, (1) where b(s) is a baseline. In this work, we use a variant of Group Relative Policy Optimization (GRPO) (Shao et al., 2024) called GRPO Done Right (Dr.GRPO) (Liu et al., 2025b), which removes normalization terms from GRPO. As we do not do multiple updates per batch, Dr.GRPO simplifies to using REINFORCE with the baseline be-ing the sample average over multiple actions drawn for the same state, i.e, b(s) = 1
+
+> N
+
+PNi=1 eR(s, a i), with ai ∼
+
+πϕ(a|s). GRPO was originally presented with a KL penalty 
+
+DKL (πϕ; πϕ1 ), as commonly used in RLHF (Stiennon et al., 2020). This KL-penalty, weighted by a hyper-parameter β,is intended to keep the model close to the initial policy πϕ1 ,preventing reward hacking (Stiennon et al., 2020), but is sometimes omitted in more recent works (GLM-4.5 Team et al., 2025; Olmo Team et al., 2025). 
+
+2.2. Proxy Rewards 
+
+We consider three types of PRs: Trained reward models Rθ ,rule based rewards RR, and LLM-as-a-Judge rewards RLM .
+
+Reward Models (RMs) are commonly used in RLHF (Christiano et al., 2017; Stiennon et al., 2020) to represent complex preferences which are hard to turn into rule-based rewards. They generally assume the Bradley-Terry (BT) model of preference (Bradley & Terry, 1952) where the probability P of preferring one option a1 over another op-tion a0 is the logistic function σ(x) = 1 /(1 + e−x) of the difference of the true reward for each action, i.e., 
+
+P (a1 > a 0 | s) = σ (R∗(s, a 1) − R∗(s, a 0)) . (2) Pairs of responses (a0, a 1) for each prompt s are collected from an initial model πϕ1 . Human annotators then choose their preferred (winning) reply aw and not preferred (losing) reply al, creating a dataset DRM = {(sj , a j
+
+> w
+
+, a j 
+
+> l
+
+)}NRM  
+
+> j=1
+
+. We can then use the BT assumption to train an RM Rθ : S × A → R with parameters θ ∈ Θ by minimizing the cross-entropy loss based on the BT model: 
+
+LBT (θ, ϕ ) = 
+
+− E(s,a w ,a l)∼Pπϕ [log σ(Rθ (s, a w) − Rθ (s, a l))] , (3) 2Gradient Regularization Prevents Reward Hacking 
+
+where Pπϕ = P (s)πϕ(a0|s)πϕ(a1|s)P (a1 > a 0|s) is the probability of the (s, a w, a l) triplet under the policy πϕ. To train the RM we minimize LBT (θ, ϕ 1) and the expectation is replaced by the sample average from DRM .
+
+Rule-Based Rewards (Havrilla et al., 2024) are de-terministic checks whether a final answer matches the ground truth. To encourage reasoning, and to allow a discrimination of a final answer against occurrences of the answer during reasoning, rule-based rewards typically require the answer to follow a specific format, for example using the LaTeX tag \boxed{} (Hendrycks et al., 2021) or the HTML tags (DeepSeek-AI, 2025) 
+
+<think>...</think><answer>...</answer> .Thus, oftentimes one reward term RF checks whether the format matches and another reward term RC checks for correctness, to give the rule-based reward RR = RC + RF.
+
+LLM-as-a-Judge (Zheng et al., 2023) prompts an LLM and uses its textual output to check whether an answer is correct. Frequently designing a rule-based reward can be challenging due to many possible accurate solutions, e.g., the correctness of a proof or many equivalent ways to write a math answer. Instead, prompting an LLM-as-a-Judge with a description of scoring criteria, the question, and the cor-rect answer (if available) can allow us to capture solutions more robustly. LLM-as-a-Judge can also allow for more complicated rewards with a combination of objective (e.g., correct reply) and subjective (e.g., clear reasoning) criteria. 
+
+2.3. Gradient Regularization (GR) 
+
+Flat minima of a loss function L(ϕ) are connected to better generalization in supervised learning (Hochre-iter & Schmidhuber, 1997; Foret et al., 2021), i.e., a smaller difference between the population/test loss L(ϕ) = 
+
+E(x,y )∼P (x,y )[ℓ(fϕ(x), y )] and its empirical approximation on a finite training dataset D, consisting of i.i.d. input-label pairs (x, y ) ∼ P (x, y ), for a loss function ℓ. A way to ob-tain flat minima is by regularizing the gradient norm of the objective L, i.e., the squared Euclidean norm ∥∇ ϕL(ϕ)∥2
+
+(Zhao et al., 2022). Adding this term to our loss function, we need to calculate its gradient, which can be approximated with a parameter perturbation (Karakida et al., 2023) 
+
+∆ϕ∥∇ ϕL(ϕ)∥2 = ∇ϕL(ϕ + ε∇ϕL(ϕ)) − ∇ ϕL(ϕ)
+
+ε .
+
+(4) The model parameters are then updated as 
+
+ϕ ← ϕ − η∇ϕL(ϕ) − η γ
+
+2 ∆ϕ∥∇ ϕL(ϕ)∥2 , (5) where η ∈ R+ is the learning rate and γ ∈ R is a hyper-parameter controlling the strength of the GR and ε controls the strength of the parameter perturbation. 
+
+## 3. Accurate Proxy Rewards via Gradient Regularization 
+
+3.1. Problem Formulation and Overview 
+
+As mentioned above, the goal of RL is to learn a policy 
+
+πϕ that maximizes the expected true reward R∗. As we do not have access to R∗ we instead have to use the PR eR to update our policy. As the PR is generally an approximation of the true reward R∗, it may be prone to reward hacking and we need to ensure that the PR stays accurate during training. For PRs that have been trained or designed based on samples from an initial policy π1, such as RMs in RLHF, the most common solution is to use a KL penalty (Stiennon et al., 2020; Shao et al., 2024) ensuring that the policy stays close to π1 and thus the PR stays accurate. However, the KL penalty also limits how much the policy can learn. Instead of changing the PR eR or constraining πϕ, we aim to update the policy πϕ such that it obtains a high reward provided by the PR eR, while also biasing the policy update towards regions in which the PR eR is accurate. Our goal is thus 
+
+max  
+
+> ϕ
+
+Ea∼πϕ [ eR(s, a )] − γLBT (θ, ϕ ) , (6) where γ > 0 is a hyper-parameter and we use the BT loss 
+
+LBT (θ, ϕ ) of a PRs parameterized with θ on actions sam-pled from πϕ. However, we cannot directly evaluate the BT loss LBT (θ, ϕ ), as it requires pairwise comparisons for actions drawn from πϕ. As we will show below, under some assumptions, overly sharp optima of the objective J(ϕ, θ )
+
+correspond to overly sharp maxima of the PR eR, which imply an excess BT loss LBT of the PR. Regularizing the policy gradient norm during training biases the optimization towards flat optima (Zhao et al., 2022), avoiding this prob-lem. Instead of LBT (θ, ϕ ), we thus use the policy gradient norm ∥∇ ϕJ(ϕ, θ )∥2, yielding the practically optimizable 
+
+max  
+
+> ϕ
+
+Ea∼πϕ [ eR(s, a )] − γ ∥∇ ϕJ(ϕ, θ )∥2 . (7) 
+
+3.2. Gradient Regularization Improves Proxy Reward Accuracy 
+
+Our argument consists of three steps: GR biases optimiza-tion towards flat maxima. Flat maxima imply pairwise robust policies. Pairwise robust policies correspond to accu-rate PRs, under the assumption of a flat reward. We provide an illustration in Figure 2. We note that our argument in this section focuses on continuous action spaces, while LMs use discrete action spaces. We discuss this discrepancy at the end of this section and provide experimental evidence in the LM setting in Section 4 and Section 5. 
+
+GR Favors Flat Maxima in Parameter Space It is well known that GR favors flat minima in the parameter space 3Gradient Regularization Prevents Reward Hacking 
+
+ϕ
+
+J(ϕ, θ )  
+
+> sharp flat
+> πϕsharp πϕflat
+
+a
+
+eR(s, a ) 
+
+> L-Dregion
+> D
+> L
+> flat
+> too sharp
+
+Figure 2. Conceptual illustration of our theoretical argument: (left) Regularizing the gradient norm biases optimization toward flat basins in parameter space, and (right) under action-smoothness, a flat maximum makes δ-close pairs unlikely to have a reward gap larger than K,i.e. decreases the probability of overly sharp action pairs a1, a 2 : ∥a1 − a2∥ ≤ δ, | eR(s, a 1) − eR(s, a 2)| > K . Under the assumption of a Lipschitz-continuous true reward R∗, each such pair implies an incorrect proxy reward eR.
+
+(Barrett & Dherin, 2021; Karakida et al., 2023). One way to see this is the argument of Zhao et al. (2022), connect-ing the gradient norm to Lipschitz continuity, which we reproduce for completeness in Appendix B.3. It is also well known in the supervised learning literature (Hochre-iter & Schmidhuber, 1997) that flat minima lead to bet-ter generalization, i.e., a smaller difference between the population loss L(θ) and the loss on the training set bL(θ).Equivalently, in RL, we would directly expect GR to en-sure a similar PR score obtained on the training prompts 
+
+bJ(ϕ, θ ) = Es∼Dtr ,a ∼πϕ [ eRθ (s, a )] and on the test prompts 
+
+J(ϕ, θ ) = Es∼Dte ,a ∼πϕ [ eRθ (s, a )] . Instead of considering generalization, we consider the PR accuracy, or more pre-cisely the BT loss LBT , necessitating the next two steps. 
+
+Flat Maxima in Parameter Space imply Robust Max-ima in Action Space We need to connect the flatness of an optimum in parameter space with its flatness in ac-tion space, often referred to as robustness. Lee & Yoon (2025) previously investigated this connection under the assumption of a ball with constant reward, which we use as starting point. While they assume a constant return on a ball B(ϕ∗, E) := {ϵ : ∥ϵ∥ ≤ E} around the optimum ϕ∗,we allow the reward to decrease by at most ˆL:
+
+Definition 3.1 (E − bL flat reward maximum) . For a reward function R(s, a ) and policy πϕ(a|s), parameterized by ϕ, a maximum ϕ∗ is E − bL-flat if the following holds: For all ϵ ∈ Rm s.t. ∥ϵ∥ ≤ E ,
+
+Ea∼πϕ∗ (s)
+
+h eR(s, a )
+
+i
+
+− Ea∼πϕ∗+ϵ(s)
+
+h eR(s, a )
+
+i
+
+≤ bL (8) We also define the concept of a (δ, K, ρ )-pairwise robust pol-icy, which measures the probability of action pairs (a1, a 2)
+
+sampled from the policy violating K/δ -Lipschitz-continuity, i.e. | eR(s, a 1) − eR(s, a 2)| > K, ∥a1 − a2∥ < δ :
+
+Definition 3.2 ((δ, K, ρ )-pairwise robust policy) . For a pol-icy πϕ(a|s) and a reward R(s, a ), define the sharpness set 
+
+SK,δ (R) := {(s, a 1, a 2) : ∥a1 − a2∥ ≤ δ, |R(s, a 1) −
+
+R(s, a 2)| > K }, i.e. the set of δ-close action pairs for which the reward changes by more than K. A policy πϕ is 
+
+(δ, K, ρ )-pairwise robust for a reward R if 
+
+P (SK,δ (R)|πϕ) ≤ ρ , (9) with P (SK,δ (R)|πϕ) being the probability under s ∼ P (s)
+
+and (a1, a 2) i.i.d.
+
+∼ πϕ(a|s).We obtain the following proposition, linking flatness in parameter space to (δ, K, ρ ) in action space, under the as-sumption of a β-smooth PR: 
+
+Proposition 3.3 ( E − bL flat reward implies (δ, K, ρ ) ro-bust policy) . Assume a Gaussian policy with fixed covari-ance Σ, where we denote the policy noise Z ∼ N (0 , Σ) ,and that eR(s, a ) is β-smooth in a. Further, J(ϕ∗) := 
+
+∇ϕ μϕ(s) ϕ=ϕ∗ is the Jacobian matrix of the mean ac-tion μϕ(s). If ϕ∗ is an E − bL flat reward maximum, then the PR action gradient ∥∇ a eR(s, μ ϕ(s)) ∥ is bounded by 
+
+G := bLD∗ + β
+
+2 D∗ + β E[∥Z∥] ,
+
+with radius D∗ ≤ ∥ J(ϕ∗)∥ E + O(E2). For a given δ > 0
+
+and K > 0, with K/δ > G , we then know that no pairwise violations can occur within the radius r := 1
+
+> β
+
+  Kδ − G, and thus the policy ϕ∗ is (δ, K, ρ )-robust with 
+
+P (SK,δ ( eR) | πϕ∗ ) ≤ 2 P (∥Z∥ > r ) := ρ . 
+
+The proposition follows first linking flatness in parameter space to flatness in action space (Lee & Yoon, 2025). Then, under a β-smooth PR, by a gradient bound we can ensure the absence of non-Lipschitz action pairs within a radius r
+
+around the mean. Thus a violation requires at least one of the actions to fall outside this region Pr( ∥Z∥ > r ) and the final results follows from a union bound. A full derivation is shown in Appendix B. Intuitively, for a given maximum, as the sensitivity to disturbances ˆL increases, the probability of overly sharp actions P (SK,δ |πϕ) increases as well. As the radius of the robustness E increases, P (SK,δ |πϕ) decreases 4Gradient Regularization Prevents Reward Hacking 
+
+or stays constant, as we can freely pick a smaller E′ < E .Thus, flatter, wider minima decrease the risk of sharp action pairs. Next we will show that a larger P (SK,δ |πϕ) incurs a larger excess BT loss LBT .
+
+Non-Robust Policies Imply Inaccurate Proxy Reward 
+
+To connect (δ, K, ρ )-robustness and the BT loss, we make the assumption of an L-Lipschitz true reward, |R∗(s, a 1) −
+
+R∗(s, a 2)| ≤ L∥a1 − a2∥. We then obtain 
+
+Proposition 3.4. For prompts s ∼ P (s), pairs of actions 
+
+(a1, a 2), L-Lipschitz true reward function R∗, proxy reward 
+
+eR, policy πϕ, and K > Lδ , the excess BT loss can be lower bounded as 
+
+LBT ( eR) − L BT (R∗) ≥ 2( σ(K) − σ(Lδ )) 2P (SK,δ |πϕ) .
+
+(10) The proof is shown in Appendix B.2. A non-robust policy in action space at least incurs an excess BT loss proportionate to the probability of overly sharp pairs P (SK,δ ) and the magnitude of the sharpness (σ(K) − σ(Lδ )) 2. By changing the policy ϕ to decrease the ratio of violating pairs P (SK,δ )
+
+or the magnitude of the violations K, we obtain a policy that induces a smaller excess BT loss. As shown above, we can bias the policy updates towards such policies with GR. 
+
+Limitations While GR itself can be applied to LMs re-gardless of whether the action space A is discrete or contin-uous, our theoretical argument assumes a Gaussian policy and requires a distance function, which is difficult to define for LMs. As we assume the true reward to be Lipschitz under this distance, a distance under a representation that captures semantic closeness ϕ(a) : A → Rd, such as the hidden space of the LM we are training, would be an appeal-ing option. For example in the illustrative Figure Figure 1 (left), the distance in action corresponds to semantic simi-larity, not formatting. Further, we only address excess BT loss incurred by overly sharp maxima, i.e. overly sharp PR maxima. We do not show whether or not GR prevents convergence to flat but incorrect regions of the PR. To empirically validate our theory, we next show that im-plicit GR, via Reference Resets, can improve RLHF. In Section 5 we leverage explicit GR for further improvements. 
+
+## 4. Reference Reset as Gradient Regularization 
+
+Instead of performing explicit GR, we can rely on the im-plicit GR inherent to stochastic gradient descent (Barrett & Dherin, 2021). We propose to leverage Reference Resets (Liu et al., 2025a) where the KL penalty is changed by itera-tively resetting its reference to the current policy πϕ during training i.e., the update is penalized with DKL (πϕ; πϕ′ ),where every R steps we set ϕ′ ← ϕ. Since implicit GR usually occurs during the later stages of training, we find Reference Resets with a sufficient number of gradient steps per iteration to be an effective way of obtaining flat maxima. While Liu et al. (2025a) reset the policy when the reward has stagnated, we instead choose to perform resets every 
+
+R gradient steps similar to prior work using resets in RL (Nikishin et al., 2022; Noukhovitch et al., 2023). We find that it is important to train beyond reward stagnation, as the gradient norm decreases significantly only after stagnation. 
+
+Setup We experiment on the well-known TL;DR summa-rization task (Stiennon et al., 2020) of Reddit posts with human summaries. Following (Gao et al., 2023; Tang et al., 2024) we make this a controlled synthetic setup, where the preference and evaluation data is relabeled by a “gold” re-ward model, Skywork-RewardLlama-3.1-8B-v0.2 (Liu et al., 2024). Compared to noisy human preferences, this setup gives us an oracle that enables consistent evaluations. We run experiments with models from both Pythia (Biderman et al., 2023) and Qwen 2.5 (Qwen et al., 2025) families for different scales. See full details in Appendix C.2. 
+
+Gradient Norm Tracks Sharpness and RM Accuracy 
+
+To test our theory of GR, we plot the gradient norm against three important empirical values: 1) The training reward from the RM. 2) The sharpness of the current policy param-eters ϕ, which we predict is tied to reward-hacking. The sharpness is estimated by sampling 32 perturbations {ϵi}32 
+
+> i=1
+
+and evaluating S(ϕ, θ ) = max i J(ϕ, θ ) − J(ϕ + ϵi, θ ), for each checkpoint. And 3) the BT loss LBT (θ, ϕ ), which rep-resents how accurate our reward model is for our current policy. We sample completions from our model, label with the gold RM, and get the BT loss under our training RM. In this way, we can empirically check whether we are training in a regime where our PR is accurate. We train a Pythia 1B model with GRPO+Reference Resets and show results in Figure 3 with dashed vertical lines representing resets. In each iteration the gradient norm initially spikes and the reward increases quickly. After the reward stabilizes, the gradient norm decreases. With it the sharpness of the param-eters and the BT loss also decrease. This demonstrates that the gradient norm is tied to both the sharpness and accuracy of the PR. Continuing training after the reset, we now start out with a more accurate RM. This enables training in a regime with a good PR, leading to a better final policy. 
+
+Reference Resets Outperform Standard KL We run an extensive comparison across both families and two sizes per model on standard baselines. The initial models are SFT-trained on TLDR data. From there we compare our method to DPO (Rafailov et al., 2023), DPO with reference reset, also known as Trust Region DPO (TR-DPO) (Gorbatovski et al., 2025), and standard GRPO with a fixed KL penalty. Our results are shown in Table 1. GRPO + Reference Re-sets strongly outperforms all other methods for all but one 5Gradient Regularization Prevents Reward Hacking 
+
+0 1000 2000 
+
+> 0
+> 1
+> 2
+> 3
+
+Step 
+
+> Training Reward
+
+0 1000 2000 
+
+> 0.6
+> 0.8
+> 1
+
+Step 
+
+> Sharpness
+
+0 1000 2000 
+
+> 0.6
+> 0.62
+> 0.64
+> 0.66
+
+Step 
+
+> BT Loss
+
+0 1000 2000 0 1000 2000 0 1000 2000 
+
+1.8
+
+1.9
+
+2
+
+2.1
+
+> Gradient Norm
+
+Figure 3. When gradient norm decreases in a reset iteration, so do sharpness, and BT Loss LRM . Evolution of reward, sharpness and BT loss during training on TL;DR with Pythia 1B using GRPO+reference resets, resets shown as grey dashed lines. After initially spiking in an iteration, gradient norm decreases along with the sharpness of the parameters and the BT-loss under the current policy. We show moving averages over 30 steps. 
+
+0 50 100 
+
+−14 
+
+−12 
+
+−10 
+
+−8
+
+DKL (πθ || π1)      
+
+> Gold Model Score
+> β= 0 .03
+> β= 0 .04
+> β= 0 .05
+> β= 0 .06
+> β= 0 .07
+> β= 0 .08
+> Resets
+
+Figure 4. Reference Resets outperform all possible weights β of KL penalty. 
+
+Oracle evaluation (Gold Model Score) vs KL from initial model for Pythia 1B on the TL;DR test set. 
+
+Table 1. Win rate vs reference response on the TL;DR summariza-tion task, as judged by the gold RM. 
+
+Model Family Pythia Qwen 2.5 Size 1B 2.8B 0.5B 1.5B SFT 17.8% 25.6% 16.4% 28.1% DPO 45.9% 68.0% 48.5% 71.6% TR-DPO 45.5% 66.6% 49.7% 73.4% GRPO 62.2% 68.5% 54.1% 82.5% 
+
+GRPO + Ref. Reset 78.1% 76.4% 70.2% 82.0% 
+
+setup. Notably, a Pythia 1B model trained with Reference Resets performs better than a Pythia 2.8B model trained with standard GRPO, even with a finely-tuned β, as shown in Appendix C. In our experiments, TR-DPO’s Reference Resets do not seem to afford the same performance improve-ments. We speculate that this is because DPO does not use an RM, thus there can be no sharp action-space PR maxima which GR would help to avoid. 
+
+Is a Scheduled or Weaker β a Sufficient Alternative? 
+
+Originally, Reference Resets were proposed (Liu et al., 2025a) not to improve RM accuracy but to prevent the KL term from dominating the reward sum. If this was their main mechanism, decreasing the strength of the KL penalty β
+
+should have a similar effect. Further, an analysis of the opti-mal policy under iterated KL constrained optimization (see Appendix E) shows that the optimal policy for i reset itera-tions is equivalent to the optimal policy with a KL constraint to π1 with a lower penalty strength β′ = β/i . However, Figure 4 shows that decreasing β is not able to match Refer-ence Resets. This demonstrates the necessity for our novel insight that Reference Resets change the optimization dy-namics via implicit gradient regularization during training and its effects on the PR accuracy. 
+
+## 5. Explicit Gradient Regularization 
+
+Reference Resets are an indirect way of regularizing the gradient norm, require many more gradient steps, and do not provide a direct, controllable way to trade-off reward maximization, adherence to the initial policy, and gradient regularization. We therefore propose a novel application of explicit GR methods to RLHF and RLVR, specifically finite-difference GR (Karakida et al., 2023). To improve training stability, we implement parameter perturbations only on the transformer blocks, leaving the embedding layer and output head untouched, and clip the intermediate gra-dients. To make GR training efficient, we reuse the actions 
+
+a ∼ πϕ(a|s) to calculate both the gradients ∇J(ϕ, θ ) and 
+
+∇J(ϕ + ε∇J(ϕ, θ ), θ ). In principle, this would require new actions a ∼ πϕ+ε∇J(ϕ,θ )(a|s) or correction by impor-tance sampling. However, we empirically found this to be unnecessary and reusing actions reduces computation over-head. 1 PyTorch-style pseudocode, implementation details and experimental details are shown in Appendix C. 
+
+5.1. GR Mitigates Hacking Reward Models in RLHF 
+
+We first investigate whether GR can fully replace the stan-dard KL penalty in RLHF. Scaling up from TL;DR, we run experiments on the AlpacaFarm dataset (Dubois et al., 2023), with preference feedback from GPT 4.1-Nano. We again evaluate with winrate: generating completions on the test set and judging them against reference completions with GPT4.1-Nano. We train models from the Qwen 2.5 family, running for 1000 gradient steps in the 1.5B experiments and 500 gradient steps in the 0.5B and 3B experiments and early-stop based on the training winrate. We evaluate and ablate GR in four settings: 1) no KL penalty, no GR 2) KL penalty, 
+
+> 1
+
+In our MATH reasoning experiments on 8 GH200 GPUs, generating the actions took on average 7.4s, while the policy update took 60ms without GR and 150ms with GR. 
+
+6Gradient Regularization Prevents Reward Hacking  
+
+> Table 2. Win rate vs reference response on AlpacaFarm dataset, Qwen 2.5, judged by GPT4.1-Nano with early stopping. The 1.5B experiment is run for three different SFT policies and RMs.
+
+Model Size 0.5B 1.5B 3B SFT Model 12.8% 20.6% 26.3% No Reg 12.8% 21.7% 44.2% KL Reg 16.9% 27.6% 52.8% Reference Resets 17.4% 27.1% 49.2% GR 18.5% 29.2% 59.2%    
+
+> 0.60.65 0.7
+> 20
+> 30
+> 40
+> RM Accuracy
+> Winrate (%)  SFT
+> No Reg
+> KL Reg
+> Reference Reset
+> GR
+> Figure 5. Explicit GR performs well even with inaccurate RMs.
+> RM accuracy on SFT data vs GPT 4.1 Accuracy for different SFT and RM models, corresponding to different random seeds for full RLHF pipeline. The x-axis scale is nonlinear.
+
+3) Reference Resets + KL, 4) GR without KL. We do a grid-search to find the optimal strength for each regularization method for each model size and show results in Table 2. In most cases using RL without regularization only yields a modest improvement over the initial SFT policy. RL with a KL penalty works decently well though Reference Resets is sometimes better. But explicit GR consistently performs best, demonstrating that it can replace the KL penalty and improve overall performance. 
+
+Explicit GR is robust to RM accuracy RLHF perfor-mance can vary heavily depending on the accuracy of the RM and performance of the initial policy (Huang et al., 2024). To demonstrate robustness, we rerun our whole pipeline two more times for the 1.5B model: initial SFT, dataset sampling, RM training, GRPO with hyper-parameter tuning. In Figure 5 we show the winrate of each trained model against the accuracy of the RM with which it trained. We observe that GR performs significantly better than Ref-erence Resets or a KL penalty when the RM is weaker, demonstrating better robustness. Reference Resets do per-form slightly better than GR with the strongest RM, where reward-hacking is less prevalent. We also find that GR is robust to choices of hyper-parameters γ and ε, and show a learning rate sweep in Appendix D.1. Finally, we discover that strong GR can even compensate in robustness for a weak RM by training in a  
+
+> Table 3. Test accuracies on GSM8K after with GRPO and different regularization methods, with LLM judge or rule-based reward.
+
+Feedback-Type Rule-Based LLM Judge Qwen 2.5 Size 0.5B 1.5B 0.5B 1.5B Base model 3.0% 37.5% 3.0% 37.5% No Reg 46.7% 72.9% 2.0% 1.9% KL Reg 44.3% 72.4% 26.4% 55.5% GR 50.9 % 75.7 % 42.8 % 67.8 %     
+
+> 0500 1000
+> 0.2
+> 0.4
+> Gradient Step Accuracy
+> No Reg
+> GR
+> 0500 1000
+> 2.9
+> 2.95
+> 3
+> Gradient Step Format Reward
+> Figure 6. GR prevents overly focusing on formatting reward.
+> Qwen2.5-0.5B on GSM8K, test set accuracy (left) and formatting reward (right), the dashed line shows the optimal formatting reward. Without regularization, the policy focuses overly on the formatting reward, resulting in worse accuracy.
+
+regime where the RM is more accurate than on its training distribution, see Appendix D.2. 
+
+5.2. GR Prevents Focus on Easy Rule-Based Rewards 
+
+Recent work in RLVR has generally removed the KL penalty to allow for a stronger deviation from the base model (GLM-4.5 Team et al., 2025; Olmo Team et al., 2025), though others have kept it for training stability (Kimi Team et al., 2025). As GR does not constrain the divergence from the base model, but may provide the desired training stability, we investigate whether it can be used in RLVR to enable more flexibility while preventing reward hacking. We perform experiments with Qwen 2.5 0.5B-Instruct and 1.5B-Instruct on GSM8K (Cobbe et al., 2021) with the stan-dard combination of formatting and correctness reward, see full details in Appendix C. We indeed observe more stable training and improved final accuracy, as shown in Figure 6 (left) and Table 3. Notably, improved performance comes at the expense of a slightly worse adherence to the formatting reward. In the presence of both rewards, we can see the excessive focus on the easier formatting reward as a kind of reward hacking, even when neither reward is hackable on its own. This demonstrates how GR can be effective in situations with a combination of rule-based rewards. Next, we show that a form of reward hacking is also possible even within a single reward and how GR can mitigate it. We 7Gradient Regularization Prevents Reward Hacking   
+
+> Table 4. GR prevents focus on easy questions. Accuracy on MATH with rule-based reward, by difficulty of the question cat-egory, grouped by base-model accuracy. Colored depending on increase or decrease after Step 250. Without regularization, after initial improvement, the policy improves on the easy questions but worsens on the hard questions.
+
+Step 0 250 500 750 1000 Init. Acc. GR 00-20% 11.7 15.4 15.2 16.2 16.2 20-40% 31.9 39.8 40.2 41.1 41.8 40-60% 49.1 57.9 58.4 59.4 58.7 60-80% 68.0 75.7 76.4 76.7 76.5 >80% 83.0 87.9 89.0 89.6 89.2 No Reg 00-20% 11.7 15.2 14.9 13.9 14.3 20-40% 31.9 39.0 38.5 36.7 37.6 40-60% 49.1 57.7 58.3 55.8 56.2 60-80% 68.0 76.2 76.0 74.3 73.9 >80% 83.0 87.0 88.0 87.2 87.9       
+
+> 0500 1000
+> 0.7
+> 0.8
+> 0.9
+> Gradient Steps LLM Judge Score
+> 0500 1000
+> 0
+> 0.2
+> 0.4
+> Gradient Steps True Accuracy
+> No Reg
+> GR
+> KL
+> Figure 7. GR prevents reward hacking with LLM-as-a-Judge
+> Results when training Qwen2.5-0.5B-Inst. on GSM8K with Qwen2.5 1.5B-Inst. as judge. Left: LLM-Judge and rule-based ac-curacy over time, showing reward hacking without regularization.
+
+train a Qwen-2.5-1.5B-Instruct model with a rule-based reward on MATH (Hendrycks et al., 2021). The base model achieves 46.3% pass@1 accuracy and GRPO+GR (57.6%) clearly outperforms standard GRPO (54.8%). In order to discern reward hacking, we investigate the accuracy more closely. We divide performance into quintiles of difficulty so that test-set questions are split based on the initial accuracy of their category and level-labels, as provided by the dataset As shown in Table 4, without regularization the performance on the easiest quintile of questions continues to improve past 250 steps. But after the first 250 steps, performance on harder questions actually degrades. This demonstrates how RL can focus on learning only the easiest questions in order to hack even a rule-based reward. In contrast, training with GR more evenly improves the accuracies across difficulties, avoiding the focus on the easier questions. 
+
+5.3. GR Mitigates Hacking LLM-as-a-Judge in RLVR 
+
+Finally, we investigate RL with LLM-as-a-Judge. As LLM-as-a-Judge can be susceptible to adversarial attacks (Zhao et al., 2025), we presume it can also be reward-hacked as a   
+
+> 0500 1000
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> Gradient Step
+> Accuracy
+
+No Regularization   
+
+> 0500 1000
+> Gradient Step
+
+GR  
+
+> 1.0
+> Gradient Norm
+> Figure 8. Gradient norm increases as reward hacking occurs.
+> True accuracy and gradient norm when training Qwen2.5 0.5B-Instruct on GSM8K with Qwen2.5 1.5B-Instruct LLM judge.
+
+PR. To investigate, we re-run the previous GSM8k experi-ments but replace the rule-based correctness reward with an LLM judge based on Qwen2.5 1.5B-Instruct (Qwen et al., 2025). The judge receives the problem description, true answer, model response, model reasoning, and is instructed to output a score for correctness (1 to 5) which acts as the reward. As shown in Figure 7, without regularization the model quickly starts to “hack” the judge LLM. LLM judge score goes sharply up while pass@1 accuracy on the test set peaks quite early. Empirically, we observed the model out-putting excessive brackets and new HTML tags to fool the judge. In contrast, both GR and KL show much more rea-sonable train rewards and prevent excessive reward hacking. But as shown in Table 3, GR results in better final perfor-mance. Confirming results in Section 4, we also see that, without regularization, an increase in gradient norm occurs when reward hacking begins, shown in Figure 8 (left). In Appendix D.3 we compare different judge models, showing that the additional cost of GR can be amortized by allowing the usage of smaller judge models. 
+
+## 6. Conclusion 
+
+We have investigated the problem of RL with proxy rewards (PR) and proposed a novel perspective: learning a policy in a regime where the PR is accurate. For this purpose, we have derived a theoretical connection between the flatness of an optimum and the Bradley-Terry loss of the PR at this optimum. By regularizing the gradient norm during training, we can bias the RL updates towards such a flat optimum. We first validated our theoretical analysis by using implicit gradient regularization (GR) via Reference Resets, show-ing they improve upon a KL penalty. We then proposed to use explicit GR based on an efficient implementation of a finite-difference estimate. Explicit GR allows us to miti-gate reward model hacking of RMs in RLHF, reduce focus on easy rule-based rewards in RLVR, and alleviate format hacking with LLM-as-a-judge. We believe that GR is a promising candidate to completely replace KL penalties and improve training runs that currently eschew regularization. 8Gradient Regularization Prevents Reward Hacking 
+
+## Acknowledgements 
+
+We would like to thank Soichiro Nishimori and Thanawat Lodkaew for helpful discussions. 
+
+## Impact Statement 
+
+We propose a method to prevent reward hacking in RL post-training of LLMs. We believe that preventing reward hacking is likely to have a beneficial impact in general. However, our theory only considers certain specific kinds of reward hacking, thus there is a risk that by overly relying on our method, users may miss other kinds of reward hacking, which should be monitored independently. 
+
+## References 
+
+Ackermann, J., Ishida, T., and Sugiyama, M. Off-Policy Corrected Reward Modeling for Reinforcement Learning from Human Feedback. In COLM , 2025. URL https: //openreview.net/forum?id=0zxugBcgF5 .Ahmadian, A., Cremer, C., Gallé, M., Fadaee, M., Kreutzer, J., Pietquin, O., Üstün, A., and Hooker, S. Back to Ba-sics: Revisiting REINFORCE Style Optimization for Learning from Human Feedback in LLMs. In ACL ,2024. URL https://aclanthology.org/2024. acl-long.662.pdf .Bahri, D., Mobahi, H., and Tay, Y. Sharpness-Aware Minimization Improves Language Model Generaliza-tion. In ACL , pp. 7360–7371, Dublin, Ireland, 2022. URL https://aclanthology.org/2022. acl-long.508/ .Barrett, D. G. T. and Dherin, B. Implicit Gradient Regular-ization. In ICLR , 2021. URL http://arxiv.org/ abs/2009.11162 .Biderman, S., Schoelkopf, H., Anthony, Q., Bradley, H., O’Brien, K., Hallahan, E., Khan, M. A., Purohit, S., Prashanth, U. S., Raff, E., Skowron, A., Sutawika, L., and Wal, O. v. d. Pythia: A Suite for Analyzing Large Language Models Across Training and Scaling. In ICML , 2023. URL http://arxiv.org/abs/ 2304.01373 .Bradley, R. A. and Terry, M. E. Rank Analysis of Incomplete Block Designs: I. The Method of Paired Comparisons. 
+
+Biometrika , 39(3/4):324–345, 1952. URL https:// www.jstor.org/stable/2334029 .Christiano, P., Leike, J., Brown, T. B., Martic, M., Legg, S., and Amodei, D. Deep reinforcement learning from human preferences. In NeurIPS 2017 , 2017. URL http: //arxiv.org/abs/1706.03741 .Cobbe, K., Kosaraju, V., Bavarian, M., Chen, M., Jun, H., Kaiser, L., Plappert, M., Tworek, J., Hilton, J., Nakano, R., Hesse, C., and Schulman, J. Training Verifiers to Solve Math Word Problems, 2021. URL 
+
+http://arxiv.org/abs/2110.14168 .DeepSeek-AI. DeepSeek-R1: Incentivizing Reasoning Ca-pability in LLMs via Reinforcement Learning. Techni-cal report, 2025. URL https://arxiv.org/abs/ 2501.12948 .Dubois, Y., Li, X., Taori, R., Zhang, T., Gulrajani, I., Ba, J., Guestrin, C., Liang, P., and Hashimoto, T. B. AlpacaFarm: A Simulation Framework for Methods that Learn from Human Feedback. In NeurIPS . arXiv, 2023. URL http: //arxiv.org/abs/2305.14387 .Ethayarajh, K., Xu, W., Muennighoff, N., Jurafsky, D., and Kiela, D. KTO: Model Alignment as Prospect Theoretic Optimization. In ICML , 2024. URL http://arxiv. org/abs/2402.01306 .Foret, P., Kleiner, A., Mobahi, H., and Neyshabur, B. Sharpness-Aware Minimization for Efficiently Improving Generalization. In ICLR , 2021. URL http://arxiv. org/abs/2010.01412 .Gao, L., Schulman, J., and Hilton, J. Scaling Laws for Reward Model Overoptimization. In ICML ,2023. URL https://proceedings.mlr.press/ v202/gao23h/gao23h.pdf .GLM-4.5 Team, Zeng, A., Lv, X., Zheng, Q., Hou, Z., Chen, B., Xie, C., Wang, C., Yin, D., Zeng, H., Zhang, J., Wang, K., Zhong, L., Liu, M., Lu, R., Cao, S., Zhang, X., Huang, X., Wei, Y., Cheng, Y., An, Y., Niu, Y., Wen, Y., Bai, Y., Du, Z., Wang, Z., Zhu, Z., Zhang, B., Wen, B., Wu, B., Xu, B., Huang, C., Zhao, C., Cai, C., Yu, C., Li, C., Ge, C., Huang, C., Zhang, C., Xu, C., Zhu, C., Li, C., Yin, C., Lin, D., Yang, D., Jiang, D., Ai, D., Zhu, E., Wang, F., Pan, G., Wang, G., Sun, H., Li, H., Li, H., Hu, H., Zhang, H., Peng, H., Tai, H., Zhang, H., Wang, H., Yang, H., Liu, H., Zhao, H., Liu, H., Yan, H., Liu, H., Chen, H., Li, J., Zhao, J., Ren, J., Jiao, J., Zhao, J., Yan, J., Wang, J., Gui, J., Zhao, J., Liu, J., Li, J., Li, J., Lu, J., Wang, J., Yuan, J., Li, J., Du, J., Du, J., Liu, J., Zhi, J., Gao, J., Wang, K., Yang, L., Xu, L., Fan, L., Wu, L., Ding, L., Wang, L., Zhang, M., Li, M., Xu, M., Zhao, M., Zhai, M., Du, P., Dong, Q., Lei, S., Tu, S., Yang, S., Lu, S., Li, S., Li, S., Shuang-Li, Yang, S., Yi, S., Yu, T., Tian, W., Wang, W., Yu, W., Tam, W. L., Liang, W., Liu, W., Wang, X., Jia, X., Gu, X., Ling, X., Wang, X., Fan, X., Pan, X., Zhang, X., Zhang, X., Fu, X., Zhang, X., Xu, Y., Wu, Y., Lu, Y., Wang, Y., Zhou, Y., Pan, Y., Zhang, Y., Wang, Y., Li, Y., Su, Y., Geng, Y., Zhu, Y., Yang, Y., Li, Y., Wu, Y., Li, Y., Liu, Y., Wang, Y., Li, Y., Zhang, Y., Liu, Z., 9Gradient Regularization Prevents Reward Hacking 
+
+Yang, Z., Zhou, Z., Qiao, Z., Feng, Z., Liu, Z., Zhang, Z., Wang, Z., Yao, Z., Wang, Z., Liu, Z., Chai, Z., Li, Z., Zhao, Z., Chen, W., Zhai, J., Xu, B., Huang, M., Wang, H., Li, J., Dong, Y., and Tang, J. GLM-4.5: Agentic, Reasoning, and Coding (ARC) Foundation Models, 2025. URL http://arxiv.org/abs/2508.06471 .Gorbatovski, A., Shaposhnikov, B., Malakhov, A., Sur-nachev, N., Aksenov, Y., Maksimov, I., Balagansky, N., and Gavrilov, D. Learn Your Reference Model for Real Good Alignment. In ICLR , 2025. URL http: //arxiv.org/abs/2404.09656 .Havrilla, A., Du, Y., Raparthy, S. C., Nalmpantis, C., Dwivedi-Yu, J., Zhuravinskyi, M., Hambro, E., Sukhbaatar, S., and Raileanu, R. Teaching Large Lan-guage Models to Reason with Reinforcement Learning. In ICML 2024 Workshop AI4Math . arXiv, 2024. URL 
+
+http://arxiv.org/abs/2403.04642 .Hendrycks, D., Burns, C., Kadavath, S., Arora, A., Basart, S., Tang, E., Song, D., and Steinhardt, J. Measuring Mathematical Problem Solving With the MATH Dataset. In NeurIPS , 2021. URL http://arxiv.org/abs/ 2103.03874 .Hochreiter, S. and Schmidhuber, J. Flat Minima. Neural Computation , 9(1):1–42, 1997. URL https://doi. org/10.1162/neco.1997.9.1.1 .Huang, S., Noukhovitch, M., Hosseini, A., Rasul, K., Wang, W., and Tunstall, L. The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summariza-tion. In COLM , 2024. URL http://arxiv.org/ abs/2403.17031 .Hugging Face. Open r1: A fully open reproduction of deepseek-r1, 2025. URL https://github.com/ huggingface/open-r1 .Karakida, R., Takase, T., Hayase, T., and Osawa, K. Understanding Gradient Regularization in Deep Learning: Efficient Finite-Difference Computation and Implicit Bias. In ICML , pp. 15809–15827, 2023. URL https://proceedings.mlr.press/ v202/karakida23a.html .Kimi Team, Bai, Y., Bao, Y., Chen, G., Chen, J., Chen, N., Chen, R., Chen, Y., Chen, Y., Chen, Y., Chen, Z., Cui, J., Ding, H., Dong, M., Du, A., Du, C., Du, D., Du, Y., Fan, Y., Feng, Y., Fu, K., Gao, B., Gao, H., Gao, P., Gao, T., Gu, X., Guan, L., Guo, H., Guo, J., Hu, H., Hao, X., He, T., He, W., He, W., Hong, C., Hu, Y., Hu, Z., Huang, W., Huang, Z., Huang, Z., Jiang, T., Jiang, Z., Jin, X., Kang, Y., Lai, G., Li, C., Li, F., Li, H., Li, M., Li, W., Li, Y., Li, Y., Li, Z., Li, Z., Lin, H., Lin, X., Lin, Z., Liu, C., Liu, C., Liu, H., Liu, J., Liu, J., Liu, L., Liu, S., Liu, T. Y., Liu, T., Liu, W., Liu, Y., Liu, Y., Liu, Y., Liu, Y., Liu, Z., Lu, E., Lu, L., Ma, S., Ma, X., Ma, Y., Mao, S., Mei, J., Men, X., Miao, Y., Pan, S., Peng, Y., Qin, R., Qu, B., Shang, Z., Shi, L., Shi, S., Song, F., Su, J., Su, Z., Sun, X., Sung, F., Tang, H., Tao, J., Teng, Q., Wang, C., Wang, D., Wang, F., Wang, H., Wang, J., Wang, J., Wang, J., Wang, S., Wang, S., Wang, Y., Wang, Y., Wang, Y., Wang, Y., Wang, Y., Wang, Z., Wang, Z., Wang, Z., Wei, C., Wei, Q., Wu, W., Wu, X., Wu, Y., Xiao, C., Xie, X., Xiong, W., Xu, B., Xu, J., Xu, J., Xu, L. H., Xu, L., Xu, S., Xu, W., Xu, X., Xu, Y., Xu, Z., Yan, J., Yan, Y., Yang, X., Yang, Y., Yang, Z., Yang, Z., Yang, Z., Yao, H., Yao, X., Ye, W., Ye, Z., Yin, B., Yu, L., Yuan, E., Yuan, H., Yuan, M., Zhan, H., Zhang, D., Zhang, H., Zhang, W., Zhang, X., Zhang, Y., Zhang, Y., Zhang, Y., Zhang, Y., Zhang, Y., Zhang, Y., Zhang, Z., Zhao, H., Zhao, Y., Zheng, H., Zheng, S., Zhou, J., Zhou, X., Zhou, Z., Zhu, Z., Zhuang, W., and Zu, X. Kimi K2: Open Agentic Intelligence, 2025. URL 
+
+https://arxiv.org/abs/2507.20534 .Kingma, D. P. and Ba, J. Adam: A Method for Stochastic Optimization. In ICLR , 2015. URL http://arxiv. org/abs/1412.6980 .Lambert, N., Morrison, J., Pyatkin, V., Huang, S., Ivison, H., Brahman, F., Miranda, L. J. V., Liu, A., Dziri, N., Lyu, S., Gu, Y., Malik, S., Graf, V., Hwang, J. D., Yang, J., Bras, R. L., Tafjord, O., Wilhelm, C., Soldaini, L., Smith, N. A., Wang, Y., Dasigi, P., and Hajishirzi, H. Tulu 3: Pushing Frontiers in Open Language Model Post-Training, 2024. URL http://arxiv.org/abs/2411.15124 .Lee, H., Cho, H., Kim, H., Gwak, D., Kim, J., Choo, J., Yun, S.-Y., and Yun, C. PLASTIC: Improving Input and Label Plasticity for Sample Efficient Reinforcement Learning. In NeurIPS , 2023. URL http://arxiv.org/abs/ 2306.10711 .Lee, H. K. and Yoon, S. W. Flat Reward in Policy Parameter Space Implies Robust Reinforcement Learning. In ICLR ,2025. URL https://openreview.net/forum? id=4OaO3GjP7k .Liu, C. Y., Zeng, L., Liu, J., Yan, R., He, J., Wang, C., Yan, S., Liu, Y., and Zhou, Y. Skywork-Reward: Bag of Tricks for Reward Modeling in LLMs, 2024. URL 
+
+http://arxiv.org/abs/2410.18451 .Liu, M., Diao, S., Lu, X., Hu, J., Dong, X., Choi, Y., Kautz, J., and Dong, Y. ProRL: Prolonged Reinforcement Learning Expands Reasoning Boundaries in Large Lan-guage Models, 2025a. URL http://arxiv.org/ abs/2505.24864 .Liu, Z., Chen, C., Li, W., Qi, P., Pang, T., Du, C., Lee, W. S., and Lin, M. Understanding R1-Zero-Like Training: 10 Gradient Regularization Prevents Reward Hacking 
+
+A Critical Perspective, 2025b. URL http://arxiv. org/abs/2503.20783 .Loshchilov, I. and Hutter, F. Decoupled Weight Decay Regularization. In ICLR , 2019. URL http://arxiv. org/abs/1711.05101 .Nikishin, E., Schwarzer, M., D’Oro, P., Bacon, P.-L., and Courville, A. The Primacy Bias in Deep Reinforcement Learning. In ICML , June 2022. URL https://proceedings.mlr.press/ v162/nikishin22a.html .Noukhovitch, M., Lavoie, S., Strub, F., and Courville, A. Language Model Alignment with Elastic Reset. In 
+
+NeurIPS , 2023. URL https://openreview.net/ forum?id=6lgugutkin .Olmo Team, Ettinger, A., Bertsch, A., Kuehl, B., Gra-ham, D., Heineman, D., Groeneveld, D., Brahman, F., Timbers, F., Ivison, H., Morrison, J., Poznanski, J., Lo, K., Soldaini, L., Jordan, M., Chen, M., Noukhovitch, M., Lambert, N., Walsh, P., Dasigi, P., Berry, R., Ma-lik, S., Shah, S., Geng, S., Arora, S., Gupta, S., An-derson, T., Xiao, T., Murray, T., Romero, T., Graf, V., Asai, A., Bhagia, A., Wettig, A., Liu, A., Ran-gapur, A., Anastasiades, C., Huang, C., Schwenk, D., Trivedi, H., Magnusson, I., Lochner, J., Liu, J., Miranda, L., Sap, M., Morgan, M., Schmitz, M., Guerquin, M., Wilson, M., Huff, R., Bras, R. L., Xin, R., Shao, R., Skjonsberg, S., Shen, S. Z., Li, S. S., Wilde, T., Py-atkin, V., Merrill, W., Chang, Y., Gu, Y., Zeng, Z., Sab-harwal, A., Zettlemoyer, L., Koh, P. W., Farhadi, A., Smith, N. A., and Hajishirzi, H. Olmo 3, 2025. URL 
+
+https://arxiv.org/abs/2512.13961 .Ouyang, L., Wu, J., Jiang, X., Almeida, D., Wainwright, C. L., Mishkin, P., Zhang, C., Agarwal, S., Slama, K., Ray, A., Schulman, J., Hilton, J., Kelton, F., Miller, L., Simens, M., Askell, A., Welinder, P., Christiano, P., Leike, J., and Lowe, R. Training language models to follow instructions with human feedback. In NeurIPS , 2022. URL http://arxiv.org/abs/2203.02155 .Qwen, Yang, A., Yang, B., Zhang, B., Hui, B., Zheng, B., Yu, B., Li, C., Liu, D., Huang, F., Wei, H., Lin, H., Yang, J., Tu, J., Zhang, J., Yang, J., Yang, J., Zhou, J., Lin, J., Dang, K., Lu, K., Bao, K., Yang, K., Yu, L., Li, M., Xue, M., Zhang, P., Zhu, Q., Men, R., Lin, R., Li, T., Tang, T., Xia, T., Ren, X., Ren, X., Fan, Y., Su, Y., Zhang, Y., Wan, Y., Liu, Y., Cui, Z., Zhang, Z., and Qiu, Z. Qwen2.5 Technical Report, 2025. URL 
+
+http://arxiv.org/abs/2412.15115 .Rafailov, R., Sharma, A., Mitchell, E., Ermon, S., Man-ning, C. D., and Finn, C. Direct Preference Optimization: Your Language Model is Secretly a Reward Model. In 
+
+NeurIPS , 2023. URL https://arxiv.org/abs/ 2305.18290v2 .Rajbhandari, S., Rasley, J., Ruwase, O., and He, Y. ZeRO: Memory Optimizations Toward Training Trillion Pa-rameter Models. In SC ’20: Proceedings of the In-ternational Conference for High Performance Comput-ing, Networking, Storage and Analysis , 2020. URL 
+
+http://arxiv.org/abs/1910.02054 .Razin, N., Malladi, S., Bhaskar, A., Chen, D., Arora, S., and Hanin, B. Unintentional Unalignment: Likelihood Displacement in Direct Preference Optimization. In 
+
+ICLR , 2025. URL http://arxiv.org/abs/2410. 08847 .Shao, Z., Wang, P., Zhu, Q., Xu, R., Song, J., Bi, X., Zhang, H., Zhang, M., Li, Y. K., Wu, Y., and Guo, D. DeepSeekMath: Pushing the Limits of Mathemat-ical Reasoning in Open Language Models, 2024. URL 
+
+http://arxiv.org/abs/2402.03300 .Stiennon, N., Ouyang, L., Wu, J., Ziegler, D. M., Lowe, R., Voss, C., Radford, A., Amodei, D., and Christiano, P. Learning to summarize from human feedback. In 
+
+NeurIPS , 2020. URL http://arxiv.org/abs/ 2009.01325 .Tang, Y., Guo, D. Z., Zheng, Z., Calandriello, D., Cao, Y., Tarassov, E., Munos, R., Pires, B. Á., Valko, M., Cheng, Y., and Dabney, W. Understanding the performance gap between online and offline alignment algorithms, 2024. URL http://arxiv.org/abs/2405.08448 .von Werra, L., Belkada, Y., Tunstall, L., Beeching, E., Thrush, T., Lambert, N., Huang, S., Rasul, K., and Gallouédec, Q. Trl: Transformer reinforcement learn-ing. https://github.com/huggingface/trl ,2020. Wei, C., Yu, J., He, Y. T., Dong, H., Shu, Y., and Yu, F. ReDit: Reward Dithering for Improved LLM Pol-icy Optimization. In NeurIPS , 2025. URL http: //arxiv.org/abs/2506.18631 .Williams, R. J. Simple statistical gradient-following algo-rithms for connectionist reinforcement learning. Machine Learning , 8(3-4):229–256, 1992. URL http://link. springer.com/10.1007/BF00992696 .Yang, A., Li, A., Yang, B., Zhang, B., Hui, B., Zheng, B., Yu, B., Gao, C., Huang, C., Lv, C., Zheng, C., Liu, D., Zhou, F., Huang, F., Hu, F., Ge, H., Wei, H., Lin, H., Tang, J., Yang, J., Tu, J., Zhang, J., Yang, J., Yang, J., Zhou, J., Zhou, J., Lin, J., Dang, K., Bao, K., Yang, K., Yu, L., Deng, L., Li, M., Xue, M., Li, M., Zhang, P., Wang, P., Zhu, Q., Men, R., Gao, R., Liu, S., Luo, 11 Gradient Regularization Prevents Reward Hacking 
+
+S., Li, T., Tang, T., Yin, W., Ren, X., Wang, X., Zhang, X., Ren, X., Fan, Y., Su, Y., Zhang, Y., Zhang, Y., Wan, Y., Liu, Y., Wang, Z., Cui, Z., Zhang, Z., Zhou, Z., and Qiu, Z. Qwen3 Technical Report, 2025. URL http: //arxiv.org/abs/2505.09388 .Zhang, Z., Luo, R., Su, Q., and Sun, X. GA-SAM: Gradient-Strength based Adaptive Sharpness-Aware Minimization for Improved Generalization. In Goldberg, Y., Kozareva, Z., and Zhang, Y. (eds.), EMNLP , Abu Dhabi, United Arab Emirates, 2022. Association for Computational Linguistics. URL https://aclanthology.org/ 2022.emnlp-main.257/ .Zhao, Y., Zhang, H., and Hu, X. Penalizing Gradient Norm for Efficiently Improving Generalization in Deep Learn-ing. In ICML , 2022. URL https://proceedings. mlr.press/v162/zhao22i.html .Zhao, Y., Zhang, H., and Hu, X. When Will Gradient Regularization Be Harmful? In ICML , 2024. URL 
+
+http://arxiv.org/abs/2406.09723 .Zhao, Y., Liu, H., Yu, D., Kung, S., Chen, M., Mi, H., and Yu, D. One Token to Fool LLM-as-a-Judge, Septem-ber 2025. URL http://arxiv.org/abs/2507. 08794 .Zheng, L., Chiang, W.-L., Sheng, Y., Zhuang, S., Wu, Z., Zhuang, Y., Lin, Z., Li, Z., Li, D., Xing, E. P., Zhang, H., Gonzalez, J. E., and Stoica, I. Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena. In NeurIPS Datasets & Benchmarks , 2023. URL http://arxiv. org/abs/2306.05685 .12 Gradient Regularization Prevents Reward Hacking 
+
+## A. Extended related work 
+
+Reference Resets We here provide an overview of alternative explanations for reference-resets and related methods. Noukhovitch et al. (2023) proposed Elastic Resets, a method which maintains an exponential moving average of the weights 
+
+¯ϕ during the updates. After each R steps, the current policy parameters are replaced with the EMA weights ¯ϕ and the EMA weights are reinitialized to the initial policy ϕ1. Next, (Gorbatovski et al., 2025) proposed Trust-Region Direct Preference Optimization (TR-DPO), which proposes a method very similar to reference resets, applied to DPO (Rafailov et al., 2023). Similar to Reference Resets, the reference policy is set to the current policy after each R updates. While DPO is meant to increase the probability of preferred responses π(aw|s) while decreasing the probability of un-preferred responses 
+
+π(al|s), in practice it often decreases both π(aw|s) and π(al|s), degrading performance. This issue is known as likelihood displacement (Razin et al., 2025). Gorbatovski et al. (2025) motivate the mechanism of TR-DPO by preventing likelihood displacement, however likelihood displacement does not occur in on-policy alignment methods such as GRPO, which we investigate in this work. This mechanism can thus not explain why Reference Resets improve over standard GRPO. Liu et al. (2025a) motivate the need for Reference Resets in reasoning training due to the magnitude of the KL penalty overwhelming the magnitude of the reward after a certain number of training steps. However, if this was the reason, we could simply use a smaller KL penalty β from the beginning, which we show in Figure 15 does not work. Another reasonable approach following the reasoning of (Liu et al., 2025a) would be to simply decrease β when the reward stagnates, but we also show in the experiments (Figure 14) that this does not work as well as Reference Resets. Instead, we provide a theoretical analysis explaining its success and provide experiments validating it specifically in the RLHF setting. Ackermann et al. (2025) contemporarily to Liu et al. (2025a) proposed reference resets as an ablation called “PPO + New KL”. 
+
+Replacing the KL penalty in Post-training The most common way to prevent reward hacking with proxy rewards is a KL penalty, introduced in RLHF by Stiennon et al. (2020) and RLVR by Havrilla et al. (2024). Some recent reports about large model training, for example GLM4.5 (GLM-4.5 Team et al., 2025) and Olmo3 (Olmo Team et al., 2025) remove the KL penalty, while others such as Kimi K2 (Kimi Team et al., 2025) still use it. Our experiments show that both in RLHF and math experiments using gradient regularization performs better than either the KL penalty or removing the KL penalty. Direct alignment methods such as Direct Preference Optimization (DPO) (Rafailov et al., 2023), Kahneman-Tversky Optimization (KTO) (Ethayarajh et al., 2024), do not use an explicit KL penalty during training, however they indirectly optimize the KL-constrained RL objective. Instead of just a KL penalty (Ouyang et al., 2022) uses PPO-ptx which adds an additional behavior cloning term to the loss, on data sampled from a pretraining dataset, to prevent regressions on standard NLP benchmarks during RLHF training. 
+
+Gradient Regularization While (Karakida et al., 2023) performs experiments with convolutional neural networks, (Zhao et al., 2022; 2024) further apply GR to vision transformer models. Sharpness-aware minimization (SAM) (Foret et al., 2021) has been shown to correspond to gradient regularization with a specific choice of hyper-parameters (Karakida et al., 2023). (Bahri et al., 2022; Zhang et al., 2022) apply SAM to transformer pre-training in order to improve generalization. SAM has also been used in RL, particularly by Lee et al. (2023) to improve sample efficiency when training a policy for Atari games, and by (Lee & Yoon, 2025) to obtain robust policies in continuous control tasks. Our theoretical analysis in part uses the argument provided (Lee & Yoon, 2025), relating parameter flatness to action robustness. Our work is, to our knowledge, the first one to investigate the relation of GR to the accuracy of proxy rewards, as well as the first work to use GR in RLHF/RLVR post-training of LMs. 
+
+## B. Proof(s) 
+
+Our argument can be summarized as follows: Lee & Yoon (2025) showed that flatness in parameter space is related to flatness in action space, we slightly extend the argument to a maximum error of bL in Proposition B.5. In our case this controls the expected proxy reward inside, when assuming a Gaussian policy with fixed covariance and full row-rank Jacobian (Assumption B.2). Under the assumption of β smoothness of the expected proxy reward (Assumption B.3), this provides a bound on the gradient norm of the expected proxy reward (Lemma B.6). We then relate the gradient norm of the expected proxy reward to the point-wise norm of the action-gradient in Lemma B.7. Then, as in an area with a bounded gradient norm Lipschitz continuity is guaranteed, in Lemma B.8 we show that overly sharp action pairs can only occur if at least one of the actions is outside of a certain radius from the maximum. Putting it all together yields Proposition 3.3. Finally, we show that, under a Lipschitz continuous true reward (Assumption B.4), sharp minima incur an excess BT error. 13 Gradient Regularization Prevents Reward Hacking 
+
+B.1. Flatness in Parameter Space implies (δ, K, ρ )-pairwise robustness 
+
+We will first show that a E − bL flat reward implies a D − bL robust policy, closely based on the proof proposed by Lee & Yoon (2025). We also need to define a D − bL action robust policy: 
+
+Definition B.1 (D − bL action robust policy, slightly modified from Lee & Yoon (2025)) . For a reward function R(s, a ) and policy πϕ(a|s), parameterized by ϕ, a maximum ϕ∗ is D-bL action robust if the following holds: For all δ ∈ R|A| s.t. ∥δ∥ ≤ D : Ea∼πϕ∗
+
+h eR(s, a )
+
+i
+
+− Ea∼πϕ∗
+
+h eR(s, a + δ)
+
+i
+
+≤ bL (11) We will also need the following assumptions during this section: 
+
+Assumption B.2 (Gaussian policy with fixed covariance and full row-rank Jacobian) . For each s, πϕ∗ (· | s) = N (μϕ∗ (s), Σ) 
+
+with a fixed positive definite covariance Σ. The Jacobian matrix J(ϕ∗) of the mean action μϕ(s) w.r.t. ϕ, evaluated at ϕ∗,has full row rank. 
+
+Assumption B.3 (Action-smooth proxy reward) . For all s ∈ S , the PR eR(s, a ) is β-smooth in a, i.e., ∥∇ a eR(s, a 1) −∇a eR(s, a 2)∥ ≤ β∥a1 − a2∥ for all a1, a 2 ∈ A .
+
+Assumption B.4 (Lipschitz-continuous true reward) . For all s ∈ S , the true reward R∗(s, a ) is Lipschitz in a, i.e., 
+
+|R∗(s, a 1) − R∗(s, a 2)| ≤ L∥a1 − a2∥ for all a1, a 2.We now can show that an E − bL flat return implies D − bL robust policy: 
+
+Proposition B.5 ( E − bL flat return implies D − bL robust policy, slightly modified from Lee & Yoon (2025)) . If ϕ∗ is an 
+
+E − bL flat return maximum of a policy under assumption B.2, then the policy ϕ∗ is D∗ − bL robust, where: 
+
+D∗ ≤ J(ϕ∗) E + O(E2), (12) 
+
+and 
+
+J(ϕ∗) := ∇ϕ μϕ(s) ϕ=ϕ∗
+
+is the Jacobian matrix of the mean action μϕ(s) with respect to ϕ, evaluated at ϕ∗.Proof. Assume a Gaussian policy with fixed covariance Σ, such that πϕ(a|s) = N (a; μϕ(s), Σ) , where μϕ(s) is the mean of the Gaussian we are training. A Taylor expansion yields μϕ+ϵ(s) = μϕ(s) + J(ϕ)ϵ + O(|| ϵ|| 2).Define the change in policy for a given state s due to the perturbation ϵ as 
+
+δ(s) = μϕ+ϵ(s) − μϕ(s) = J(ϕ)ϵ + O(|| ϵ|| 2) .
+
+Then by the triangle inequality, the Cauchy-Schwarz inequality and definition ∥ϵ∥ < E, we have 
+
+|| δ(s)|| ≤ || J(ϕ)|||| ϵ|| + O(|| ϵ|| 2) ≤ || J(ϕ)||E + O(E2) .
+
+The sub-optimality of this action perturbation δ is 
+
+Es∼P (s),a ∼πϕ∗ (s)
+
+h eR(s, a )
+
+i
+
+− Es∼P (s),a ∼πϕ∗ (s)
+
+h eR(s, a + δ(s)) 
+
+i
+
+(13)  
+
+> Def. δ
+
+= Es∼P (s),a ∼πϕ∗ (s)
+
+h eR(s, a )
+
+i
+
+− Es∼P (s),a ∼πϕ∗+ϵ(s)
+
+h eR(s, a )
+
+i Def 3.1 
+
+≤ bL (14) Thus a E − bL flat reward maximum implies a D∗ − bL robust policy with D∗ ≤ || J(ϕ∗)||E + O(E2)
+
+As we want to show an excess BT loss based on a Lipschitz-continuity assumption, which is defined over action pairs, we need to relate D − bL robustness to P (SK,δ |πϕ). For this purpose we need B.3 following two simple lemmas: 14 Gradient Regularization Prevents Reward Hacking 
+
+Lemma B.6 (Flatness and β-smoothness imply bounded gradient) . Let f : Rd → R be differentiable and β-smooth on a ball B(c, r ), i.e., ∥∇ f (x) − ∇ f (y)∥ ≤ β∥x − y∥ ∀x, y ∈ B(c, r ) . Assume a "flat maximum" in c, such that 
+
+f (c) − f (c + u) ≤ bL ∀u : ∥u∥ ≤ r. Then the gradient norm at c is bounded as 
+
+∥∇ f (c)∥ ≤ bLr + β
+
+2 r . 
+
+Proof. Based on the standard quadratic upper bound based on β-smoothness, we know 
+
+f (c + u) ≤ f (c) + ∇f (c)T u + β
+
+2 ∥u∥2 ∀c + u ∈ B(c, r ) .
+
+We can rearrange this to 
+
+f (c) − f (c + u) ≥ −∇ f (c)T u − β
+
+2 ∥u∥2 .
+
+By choosing the worst case u = −r ∇f (c)  
+
+> ∥∇ f(c)∥
+
+(if ∥∇ f (c)∥ = 0 the bound is trivially true), we have ∥u∥ = r and 
+
+−∇ f (c)T u = r∥∇ f (c)∥. Plugging this into the inequality and using f (c) − f (c + u) ≤ bL yields 
+
+∥∇ f (c)∥ ≤ bLr + β
+
+2 r . 
+
+Note that robustness with radius r implies robustness with any r′ < r and we could further improve this bound by picking 
+
+r′ = min( 
+
+q
+
+2β ˆL) := r∗, if r∗ ≤ r. We do not do this here for ease of exposition. We next need to connect the gradient bound of the expected E[ eR(s, a + Z)] to a bound on the gradient of the pointwise eR(s, a ):
+
+Lemma B.7 (Pointwise action-gradient is controlled by Gaussian-smoothing) . Fix s and let f (a) = eR(s, a ). Under Assumption B.3 and for Z ∼ N (0 , Σ) , define the Gaussian-smoothed reward 
+
+¯f (c) := E[f (c + Z)] .
+
+Then ∇ ¯f (c) = E[∇f (c + Z)] and for all c,
+
+∥∇ f (c)∥ ≤ ∥∇ ¯f (c)∥ + β E [∥Z∥] .
+
+Proof. Since f is β-smooth, it is continuously differentiable with Lipschitz gradient, and we can interchange gradient and expectation to obtain ∇ ¯f (c) = E[∇f (c + Z)] . Then, by Jensen’s inequality and β-smoothness, 
+
+∥∇ f (c) − ∇ ¯f (c)∥ = E[∇f (c) − ∇ f (c + Z)] ≤ E∥∇ f (c) − ∇ f (c + Z)∥ ≤ β E∥Z∥ ,
+
+then, by the triangle inequality and the previous line, 
+
+∥∇ f (c)∥ = ∥∇ f (c) − ∇ f (c + Z) + ∇f (c + Z)∥ ≤ ∥∇ f (c + Z)∥ + ∥∇ f (c) − ∇ f (c + Z)∥ (15) 
+
+≤ ∥∇ f (c + Z)∥ + βE [∥Z∥] = ∥∇ ¯f (c)∥ + βE [∥Z∥] . (16) Then, we need to connect local smoothness and our knowledge of the gradient norm ∥∇ f (c)∥ at the center to violations of Lipschitz-continuity: 
+
+Lemma B.8 (Pairwise robustness is bounded by local smoothness) . Fix a state s. Denote f (a) = eR(s, a ). Assume that there exists a center c ∈ A and radius r > 0 such that f is β-smooth on the ball B(c, r ) := {a : ∥a − c∥ ≤ r}. Let 
+
+a, a 1, a 2i.i.d.
+
+∼ π(a|s).Then for any δ > 0 and K > 0, we have 
+
+P (∥a1 − a2∥ ≤ δ, |f (a1) − f (a2)| > K ) ≤ 2P (∥a − c∥ > r ) ,
+
+for r = 1
+
+> β
+
+  Kδ − ∥∇ f (x)∥
+
+15 Gradient Regularization Prevents Reward Hacking 
+
+Proof. For any x ∈ B(c, r ), by β-smoothness, 
+
+∥∇ f (x)∥ ≤ ∥∇ f (c)∥ + ∥∇ f (x) − ∇ f (c)∥ ≤ ∥∇ f (c)∥ + β∥x − c∥ ≤ ∥∇ f (c)∥ + βr . 
+
+For any two points x, y ∈ B(c, r ),
+
+f (x) − f (y) = 
+
+Z 10
+
+∇f (y + t(x − y)) T (x − y)dt . 
+
+taking the norm, using the Cauchy-Schwarz inequality, and the bounded gradient, we get 
+
+|f (x) − f (y)| ≤ 
+
+Z 10
+
+∥∇ f (y + t(x − y)) ∥∥ x − y∥dt ≤ (∥∇ f (c)∥ + βr )∥x − y∥ .
+
+Therefore, if x, y ∈ B(c, r ) and ∥x − y∥ ≤ δ, then 
+
+|f (x) − f (y)| ≤ (∥∇ f (c)∥ + βr )δ . 
+
+Thus, the event {∥ a1 − a2∥ ≤ δ, |f (a1) − f (a2)| > K } cannot occur when a1, a 2 ∈ B(c, r ) and (∥∇ f (c)∥ + βr )δ < K .It thus can only occur if at least one of a1 or a2 is not in B(c, r ), which occurs with probability P (∥a − c∥ > r ). By a union bound of the two events we get the result. Finally, we can put it all together: 
+
+Proposition B.9 (From D-bL robustness to pairwise sharpness control) . Assume a Gaussian policy with full row-rank Jacobian (Assumption B.2), a β-smooth proxy reward eR (B.3), and fix a state s. If ϕ∗ is D-bL action robust, then for any 
+
+δ > 0 and K > 0 such that K/δ > G , we have gradient magnitude bound G and non-violating radius r,
+
+G := bLD + β
+
+2 D + β E∥Z∥ , r := 1
+
+β
+
+  Kδ − G ,
+
+such that 
+
+P (SK,δ ( eR) | πϕ∗ ) ≤ 2 P (∥Z∥ > r ) .
+
+Proof. Fix s and denote c = μϕ∗ (s). Denote the PR as f (a) = eR(s, a ), mean action as c = μϕ∗ (s), and the smoothed proxy reward ¯f (c) = EZ∼N (0 ,Σ) [f (c + Z)] . By Assumption B.2, a ∼ πϕ∗ (a|s) can be written as a = c + Z with Z ∼ N (0 , Σ) .By Lemma B.6 and, applied to ¯f , which we know fulfills Assumption B.3, we obtain on B(c, D ) the gradient bound 
+
+∥∇ ¯f (c)∥ ≤ bLD + β
+
+2 D . 
+
+From Lemma B.7, we know that the gradient norm of f can then be bounded as 
+
+∥∇ f (c)∥ ≤ bLD + β
+
+2 D + β E[∥Z∥]
+
+| {z }
+
+> := G
+
+.
+
+We then know from Lemma B.8, that in B(c, r ) with non-violating radius r = 1 
+
+> β
+
+( Kδ − G) there can be no action pairs a1, a 2
+
+with ∥a1 − a2∥ ≤ δ and | eR(s, a 1) − eR(s, a 2)| > K , thus such violations can only occur if at least one action is outside 
+
+B(c, r ):
+
+P (∥a1 − a2∥ ≤ δ, |f (a1) − f (a2)| > K ) ≤ 2 P (∥a1 − c∥ > r ) .
+
+Finally, a1 − c ∼ N (0 , Σ) , so P (∥a1 − c∥ > r ) = P (∥Z∥ > r ).16 Gradient Regularization Prevents Reward Hacking 
+
+B.2. BT-Loss Lower Bound Based on Sharpness 
+
+Now that we have connected D − bL robustness to the probability of actions pairs violating a flatness assumption P (SK,δ |πϕ),we now analyze the incurred excess BT loss LBT due to these violations. For this purpose, we make the assumption of a Lipschitz continuous true reward (Assumption B.4) 
+
+Proposition B.10. For a prompt s ∼ P (s), a pair of actions (a1, a 2), L-Lipschitz true reward function R∗, reward model 
+
+eR, the excess-risk can be lower bounded as 
+
+LBT ( eR) − L BT (R∗) ≥ 2( σ(K) − σ(Lδ )) 2P (SK,δ ) , (17) 
+
+where SK,δ := 
+
+n
+
+(s, a 1, a 2) : ∥a1 − a2∥ ≤ δ, | eR(s, a 1) − eR(s, a 2)| > K 
+
+o
+
+is the set of action pairs for which the RM eR is not K-Lipschitz continuous and Pr( SK,δ ) is the probability of an action pair sampled (a1, a 2) ∼ πϕ(·| s) being in this set. 
+
+Let s ∼ P (s) denote prompts, a ∈ A denote actions. Let R∗(s, a ) be the true reward. Under the BT model, the preference probability is p := Pr( Y = 1 | s, a 1, a 2) = σ(∆ ∗), ∆∗ := R∗(s, a 1) − R∗(s, a 2), with the logistic function 
+
+σ(x) = 11+ e−x , where Y = 1 means that a1 is preferred over a2. A parametric reward model eR(s, a ) induces the predicted pairwise probability q := P eR(Y = 1 |s, a 1, a 2) = σ(∆ θ ),∆θ := eR(s, a 1) − eR(s, a 2). The BT loss in equation 3 can be rewritten as 
+
+Lπ1
+
+> BT
+
+(θ) = E(s,a w ,a l)
+
+h
+
+− log σ
+
+ eR(s, a w) − eR(s, a l
+
+
+
+)
+
+i
+
+, (18) but it can also be rewritten to explicitly consider a preference label Y , where we have actions a1, a 2; then draw Y ∼
+
+Bernoulli( p) with p = Pr( Y = 1 |s, a 1, a 2). Taking expectations first over Y |s, a 1, a 2 and then over (s, a 1, a 2), we get, 
+
+Lπ1
+
+> BT
+
+(θ) = E(s,a 1,a 2)EY ∼Bernoulli( p) [ℓ(q; Y )] , (19) for Y ∈ { 0, 1} and ℓ(q; Y ) = − [Y log q + (1 − Y ) log(1 − q)] . We proceed with this version. 
+
+Lower Bound Condition on (s, a 1, a 2) so that p is fixed. Then 
+
+EY ∼Bernoulli( p) [ℓ(q; Y )] = H(p, q ), EY ∼Bernoulli( p) [ℓ(p; Y )] = H(p), (20) where H(p, q ) is the cross-entropy and H(p) is the entropy. Averaging over (s, a 1, a 2) and subtracting yields 
+
+L( eR) − L (R∗) = E(s,a 1,a 2) [DKL (Bernoulli( p); Bernoulli( q))] . (21) For a fixed locality parameter δ > 0 and margin threshold K > 0, we define the sharpness set 
+
+SK,δ := {(s, a 1, a 2) : ∥a1 − a2∥ ≤ δ, |∆θ | > K } . (22) Assume the true reward is L-Lipschitz: 
+
+|R∗(s, a 1) − R∗(s, a 2)| ≤ L∥a1 − a2∥ ⇒ | ∆∗| ≤ Lδ whenever ∥a1 − a2∥ ≤ δ . (23) Furthermore, we study the interval separation on SK,δ : On SK,δ we have ∆∗ ≤ Lδ and ∆θ ≥ K. By monotonicity and symmetry of σ,
+
+p = σ(∆ ∗) ∈ I∗ := [ σ(−Lδ ), σ (Lδ )] = [1 − σ(Lδ ), σ (Lδ )] ,q = σ(∆ θ ) ∈ Iθ := [0 , 1 − σ(K)] ∪ [σ(K), 1] , . (24) If we assume K > Lδ , the minimum distance between these sets becomes: 
+
+inf 
+
+> p∈I∗,q ∈Iθ
+
+|p − q| = min {σ(K) − σ(Lδ ), (1 − σ(Lδ )) − (1 − σ(K)) } = σ(K) − σ(Lδ ) . (25) Consequently, for every (s, a 1, a 2) ∈ SK,δ ,
+
+|p − q| ≥ σ(K) − σ(Lδ ) . (26) 17 Gradient Regularization Prevents Reward Hacking 
+
+phi = model.state_dict() actions = model.generate(states) rewards = reward_fn(states, actions) grad1 = torch.zeros_like(phi) 
+
+for idx in range(batch_size / accumulation_steps): 
+
+# mb = microbatch 
+
+loss = grpo_loss(states_mb, actions_mb, rewards_mb) loss.backwards() grad1 += model.grad grad1 = norm_clip(grad1) phi_2 = phi + varepsilon * grad1 grad2 = torch.zeros_like(phi) model.set_state_dict(phi_2) 
+
+for idx in range(batch_size / accumulation_steps): loss = grpo_loss(states_mb, actions_mb, rewards_mb, phi_2) loss.backwards() grad2 += model.grad grad2 = norm_clip(grad2) comb_grad = grad1 + gamma * (grad2 - grad1) / varepsilon model.set_state_dict(phi) model.grad = comb_grad optimizer.step() 
+
+Figure 9. Implementation of finite-difference gradient regularization with GRPO in PyTorch 
+
+Since we can use the inequality DKL (Bernoulli( p); Bernoulli( q)) ≥ 2|p−q|2 for p, q ∈ (0 , 1) , combining with equation 26 yields: 
+
+DKL (Bernoulli( p); Bernoulli( q)) ≥ 2( σ(K) − σ(Lδ )) 2 for every (s, a 1, a 2) ∈ SK,δ . (27) Let 1S := 1{Z ∈ SK,δ } indicate membership of SK,δ . We can make equation 27 valid for all (s, a 1, a 2) by multiplying the RHS with the indicator: 
+
+DKL (Bernoulli( p); Bernoulli( q)) ≥ 2( σ(K) − σ(Lδ )) 21S for all (s, a 1, a 2) . (28) By taking the expectation of equation 28 and using equation 21, we obtain the desired lower bound 
+
+LBT ( eR) − L BT (R∗) ≥ 2( σ(K) − σ(Lδ )) 2P (SK,δ ) . (29) 
+
+B.3. Connection of Gradient Regularization and Lipschitz Continuity 
+
+For completeness, we reproduce the argument of Zhao et al. (2022), which explicitly connects gradient regularization to Lipschitzness in parameters θ.By the mean value theorem for differentiable L, we have L(θ1) − L(θ2) = ∇L(ζ)T (θ1 − θ2) , with ζ = cθ 1 + (1 − c)θ2,with some c ∈ [0 , 1] and the Cauchy-Schwarz inequality then yields ∥L(θ1) − L(θ2)∥ ≤ ∥∇ L(ζ)∥∥ (θ1 − θ2)∥ . Here, 
+
+||∇ L(ζ)|| takes the role of the Lipschitz constant and as θ2 → θ1, ||∇ L(ζ)|| becomes ||∇ L(θ)|| . Thus we can see that gradient regularization leads to local Lipschitzness in parameter space, i.e., a flat local minimum. 
+
+## C. Experiment Details 
+
+In this section we provide additional experimental details. 
+
+C.1. Gradient regularization implementation 
+
+In our experiments, we use the GR method (Karakida et al., 2023) based on the finite difference estimate ∆ϕ∥∇ ϕL(ϕ)∥2 = 
+
+> ∇ϕL(ϕ+ε∇ϕL(ϕ)) −∇ ϕL(ϕ)
+> ε
+
+. We, thus, need to perturb the parameters ϕ. Empirically, we found it to be beneficial to perturb 18 Gradient Regularization Prevents Reward Hacking          
+
+> Table 5. GRPO hyper-parameters in RLHF experiments. We tuned the learning rate for each method on Qwen 2.5-1.5B experiments from
+> 1×10 −6,3×10 −6,5×10 −6.
+
+Method GR KL, Resets, No Reg Optimizer Adam (Kingma & Ba, 2015) LR 5 × 10 −6 3 × 10 −6
+
+Adam β1 0.9 Adam β2 0.999 Batchsize 256 Rollouts per Prompt 8Temperature 0.7 GR ε 1 × 10 −3 -Gradient Clipping 1.0 Output Length 106 only the parameters of the transformer blocks, including attention matrices, MLP weights and layer norm parameters, but not perturb the embedding layer or final output layer. In principle, to calculate ∥∇ ϕJ(ϕ + ∇ϕJ(ϕ)) ∥ we would also need to sample new actions ai ∼ πϕ+∇ϕJ(ϕ)(a|s) and estimate the gradient using these. In practice, the computational overhead of this would be large, we reuse the same actions. This introduces some bias which could be corrected use importance sampling, however, empirically we found this to be unnecessary. We also need to choose a perturbation strength ε. While Karakida et al. (2023) found a relatively large ε ≈ 0.05 to perform best, initial experiments showed ε = 10 −3 to perform well in our setting. We thus used it through-out our experiments. We further use gradient clipping, both for the disturbance 
+
+∇ϕJ(ϕ) and the gradient ∥∇ ϕJ(ϕ + ∇ϕJ(ϕ)) ∥, each to 10. We found this to prevent gradient spikes from destabilizing training. The final combined gradient is then again clipped to 1.0 within DeepSpeed, as is done for the non GR methods as well. We train our models using DeepSpeed ZeRO 2 (Rajbhandari et al., 2020) and use gradient accumulation. 
+
+C.2. RLHF Details 
+
+For our RLHF experiments, we first need to train an SFT model, sample a training dataset DRM , and train an RM. For both, we use the code and hyper-parameters provided by Huang et al. (2024), which use the AdamW optimizer (Loshchilov & Hutter, 2019) with weight decay. The SFT models are trained on the SFT dataset for one epoch. For the summarization experiments, we use the SFT dataset provided by (Huang et al., 2024), for Alpaca experiments we use the Alpaca-Instructions dataset (Dubois et al., 2023), but filter it by length following (Ackermann et al., 2025). This length filtering to a maximum length of 512 tokens significantly decreases the computational cost. Further, while Alpaca-Instructions contains separate splits for SFT, RM and RL training, we combine them to a single dataset as used in the summarization setting. To obtain the RM training dataset, we sample pairs of responses from the SFT model and label them with either the Gold RM “Skywork-RewardLlama-3.1-8B-v0.2” (Liu et al., 2024) for summarization or with GPT4.1-Nano for Alpaca experiments. For the summarization tasks we use 278,496 preference pairs, for Alpaca Experiments we use 43,008 pairs for the 3B model and 86,016 pairs for the 0.5B and 1.5B models. With the smaller data amount the 0.5B and 1.5B models did not produce sufficiently accurate RMs to use for subsequent GRPO updates. We train the RMs, initialized from the SFT model, for one epoch on the dataset with the hyper-parameters as recommended by (Huang et al., 2024). We then use the Dr.GRPO implementation provided by TRL (von Werra et al., 2020) with the hyper-parameters as listed in Table 5. Additionally, we tuned the KL penalty strength β and GR strength γ as listed Tables 6 and 7.  
+
+> Table 6. KL penalty values considered in hyperparameter optimization for Reference Resets Tl;DR.
+
+Experiment KL values GRPO Pythia 1B TL;DR {0.03 , 0.04 , 0.05 , 0.06 , 0.07 , 0.08 }
+
+GRPO Pythia 2.8B TL;DR {0.04 , 0.06 , 0.08 , 0.10 }
+
+GRPO+Ref Reset Pythia 1B TL;DR {0.2, 0.25 , 0.3, 0.35 , 0.4}
+
+GRPO+Ref Reset Pythia 2.8B TL;DR {0.25 , 0.3, 0.35 , 0.4}
+
+19 Gradient Regularization Prevents Reward Hacking 
+
+C.3. Gradient Regularization on Alpaca Farm 
+
+We perform on the AlpacaFarm dataset (Dubois et al., 2023) with Qwen2.5 models (Qwen et al., 2025). Similar to the TL;DR experiments we first train an SFT model, sample pairs of responses from it, and obtain pairwise comparisons from GPT4.1 Nano. We then train an RM based on these comparisons, initialized from the SFT model.  
+
+> Table 7. KL penalty values considered in hyperparameter optimization for Alpaca GPT4.1 Nano experiments.
+
+Experiment Hyperparameters GR Qwen 2.5 0.5B γ ∈ { 1 × 10 −1, 1 × 10 −2, 1 × 10 −3}
+
+GR Qwen 2.5 1.5B γ ∈ { 1 × 10 −1, 1 × 10 −2, 1 × 10 −3}
+
+GR Qwen 2.5 3B γ ∈ { 3 × 10 −3}
+
+KL Qwen 2.5 0.5B β ∈ { 0.03 , 0.05 , 0.07 , 0.1, 0.15 }
+
+KL Qwen 2.5 1.5B β ∈ { 0.03 , 0.05 , 0.07 , 0.1, 0.15 }
+
+KL Qwen 2.5 3B β ∈ { 0.05 , 0.1}
+
+KL+Reset Qwen 2.5 0.5B β ∈ { 0.2, 0.4, 0.5}
+
+KL+Reset Qwen 2.5 1.5B β ∈ { 0.3, 0.4, 0.5}
+
+KL+Reset Qwen 2.5 3B β ∈ { 0.2, 0.3, 0.4}
+
+C.4. Reasoning Experiments 
+
+We use the hyperparameters as stated in Table 8 and Table 9. We did not tune β, ϵ or γ and simply used conservative values from the RLHF experiments. For both GR and no regularization we tried learning rates 3 × 10 −6 and 5 × 10 −6. For GR, the larger learning rate was beneficial. We follow the setup of Wei et al. (2025), with GSM8K using one-shot prompting, math uses chain-of-thought prompting, both with the default Qwen2.5-Instruct system instructions. We also use the same reward terms, which are based on the rewards used by Open R1 (Hugging Face, 2025). For GSM8K, the prompt is Respond in the following format: <reasoning>...</reasoning><answer>...</answer> ,followed by a one-shot example. The reward consists of a rule-based correctness reward ( [0 , 2] ), a formatting term checking whether the answer is an integer formatting reward ( {0, 0.5}), a formatting term checking whether the formatting is exactly followed including whitespace ( {0, 1.0}), and excluding whitespace ( {0, 1.0}), and a formatting reward for matching XML tags ( {0, 0.5}). On MATH the prompt is simply the problem statement followed by Let's think step by step and output the final answer within \\boxed{}. . The used reward consists of a correctness reward ( [0 , 2] ) and a formatting reward rewarding up to three of the following with 1/3 each: Step # keywords, Numbered lists, bullet points, First, Second, Next, Finally keywords. This is done to encourage reasoning (Hugging Face, 2025).  
+
+> Table 8. Hyperparameters in reasoning experiments with GR
+
+Dataset GSM8K MATH Optimizer Adam LR 5 × 10 −6
+
+Adam β1 0.9 Adam β2 0.999 Batchsize 256 1024 Rollouts per Prompt 8Temperature 0.7 GR ε 10 −3
+
+GR γ 10 −3
+
+Gradient Clipping 1.0 Output Length 768 1024 20 Gradient Regularization Prevents Reward Hacking 
+
+Table 9. Hyperparameters in reasoning experiments with KL penalty or no penalty 
+
+Dataset GSM8K MATH Optimizer Adam LR 3 × 10 −6
+
+Adam β1 0.9 Adam β2 0.999 Batchsize 256 1024 Rollouts per Prompt 8Temperature 0.7 KL penalty β 0.05/ 0.0 0.0 Gradient Clipping 1.0 Output Length 768 1024 
+
+C.5. LLM Judge Setup 
+
+In the main text we use Qwen2.5 1.5B-Instruct (Qwen et al., 2025) as a judge with the following prompt: 
+
+Judge the correctness of the answer and reasoning for the given problem. The format is as follows: <problem> ... </problem> <model_answer> <reasoning> ... </reasoning> <answer> ... </answer> </model_answer> <correct_solution> ... </correct_solution> You will reply with the following XML format: <judgement> ... </judgement> <correctness_score> ... </correctness_score> <coherence_score> ... </coherence_score> The model_answer may contain mistakes in the reasoning, the final answer, and in the format. ,→
+
+Give a one sentence judgement on the model_answer, then you will give scores from 1 to 5 for correctness and for coherence of the reasoning trace. ,→
+
+We additionally use 1-shot prompting with a correct example. During training the agent is provided the correctness score scaled to [0 , 2] , along with the same formatting rewards used in the rule-based-reward setting. 21 Gradient Regularization Prevents Reward Hacking 10 3 10 2 10 1     
+
+> Gradien Regularization Strength
+> 22
+> 24
+> 26
+> 28
+> GPT 4.1-Nano Winrate (%)
+> SFT Model
+> Gradient Reg 10 410 310 2
+> GR Disturbance
+> 21
+> 22
+> 23
+> 24
+> 25
+> 26
+> 27
+> 28
+> GPT 4.1-Nano Winrate (%)
+> SFT Model
+> GR
+
+Figure 10. GR is rather predictable in choice of hyper-parameter. Qwen2.5-1.5B on AlapcaFarm with different GR strengths γ and fixed ε = 10 −3 (left) with, and different disturbance strengths ε and fixed γ = 3 × 10 −2(right) on the AlpacaFarm dataset, with early stopping. 0 100 200 300 400 
+
+> Training steps
+> 0.56
+> 0.58
+> 0.60
+> 0.62
+> 0.64
+> 0.66
+> 0.68
+> 0.70
+> BT
+> =1e-3
+> =3e-3
+> =5e-3
+> =1e-2
+> =1.3e-2
+> =2e-2
+
+Figure 11. Strong GR can decrease BT loss below initial value. BT loss 
+
+LBT (ϕ, θ ) during training of a Qwen 2.5 0.5B model on the TL;DR task with GR, using the Gold reward model. 2 4 6  
+
+> Learning Rate 1e 6
+> 22
+> 24
+> 26
+> 28
+> GPT 4.1-Nano Winrate (%)
+> SFT Model
+> GR
+> KL
+
+Figure 12. Learning rate sweep for KL penalty and GR when training a Qwen 2.5-1.5B model on the Alpacafarm dataset. KL β = 0 .1, GR γ = 3 × 10 −2Q2.5-1.5B Q2.5-3B Q3-4B 
+
+> Judge Model
+> 0
+> 10
+> 20
+> 30
+> 40
+> 50
+> 60
+> 70
+> GSM8K Accuracy (%)
+> No Reg
+> GR
+
+Figure 13. GR allows usage of cheaper judges to reach same performance. Test accuracy when training a Qwen2.5-0.5B model on GSM8K with different judges. 
+
+## D. Additional Experiments 
+
+D.1. Gradient Regularization γ, ε, and learning rate sweeps 
+
+To evaluate the sensitivity of GR to the hyper-parameters controlling strength of the regularization γ and the strength of the perturbation ε, we performed experiments on the Qwen2.5 1.5B model in the Alpaca GPT4.1 Nano setting. We fix either γ = 3 × 10 −2 or ε = 10 −3 and vary the respective other parameter. We show the results in Figure 10. We find the performance to be rather predictable, facilitating hyper-parameter tuning. We used the same disturbance strength ε = 10 −3
+
+for all experiments and did not find it necessary to tune it per task or model. In the reasoning experiments we did not tune γ
+
+and simply used γ = 10 −3, however, in the RLHF experiments we found it necessary to tune γ as described above, just like we found it necessary to tune β for the KL penalty. We also perform a learning rate sweep for the KL penalty and GR in the same Alpaca, Qwen2.5 1.5B setting. We use the best performing KL hyper-parameters from our main hyper-parameter optimization, i.e. β = 0 .1 for the KL penalty and 
+
+γ = 0 .03 for GR. The results are shown in Figure 12. 
+
+D.2. Gradient regularization decreases BT loss 
+
+We also perform experiments in the synthetic TL;DR gold model setup, training a Qwen 2.5 0.5B model with different GR strengths γ. The results in Figure 11 show that stronger regularization leads to a lower BT model loss LBT (ϕ, θ ), evaluated on 4096 action pairs with labels from the gold reward model. Interestingly, training with strong GR can result in a decreasing BT loss LBT beyond the initial BT loss, which we did not observe when utilizing either KL regularization or Reference Resets. This illustrates the practical strength of the connection between gradient norm and PR accuracy. 22 Gradient Regularization Prevents Reward Hacking 0 25 50 75 100 125                  
+
+> DKL (|| 1)
+> 14
+> 13
+> 12
+> 11
+> 10
+> 9
+> 8
+> 7
+> Gold Model Score
+> Constant
+> Schedule
+> Resets 025 50 75 100 125 150 175 200
+> DKL (;1)
+> 12
+> 11
+> 10
+> 9
+> 8
+> 7
+> 6
+> Gold Model Score
+> R= 25
+> R= 50
+> R= 100
+> R= 200
+> R= 400
+
+Figure 14. Pythia 1B on TL;DR task. Left: Reference Resets schedule ablation. A scheduled β performs better than a constant value, however, it does not match the performance of full Reference Resets. Right: Steps per reset R for GRPO + Reference Resets. A larger R is generally beneficial, but requires significantly more gradient steps. 
+
+D.3. LLM judge ablation 
+
+In the main text we are using Qwen2.5 1.5B-Instruct as judge. As we are using similarly sized policy models, we believe this could be a useful proxy for experiments in which LLMs are trained with equally large judge models. However, to see whether GR is also useful with comparatively stronger judges, we additionally run experiments with Qwen2.5 3B-Instruct and Qwen3 4B Instruct-2507 (Yang et al., 2025) as judges. We train a Qwen2.5 0.5B-Instruct model on GSM8K. For Qwen3 we use Judgement:... Correctness_score:... Coherence_score:... as reply format instead of the xml tags, as we found Qwen3 to perform better with this format. As shown in Figure 13, GR enables us to reach the same performance using a cheaper judge, potentially saving total computational cost. In our setup with 8 GH200 GPUs, training with GR and the 1.5B judge took 84 minutes, while training without GR and the 4B judge took 88 minutes. The additional cost of GR can thus be amortized by being able to use a cheaper judge. 
+
+D.4. KL penalty schedule 
+
+While we have shown in the main text that Reference Resets perform better in RLHF than simply decreasing the strength of the KL penalty β from the beginning, another hypothesis might be that decreasing the KL strength β during training will match the results of Reference Resets. As an additional baseline, we thus decrease the strength of the KL penalty to β′ = β/i in iteration i, while keeping the reference as π1. Thus in each iteration the optimal policy under Reference Resets and the scheduled β is the same, assuming the previous iterations converged to their respective optimal policies. As shown in Figure 14 (left), the schedule indeed yields a notable improvement over a fixed β, but also does not match the performance of Reference Resets. We attribute this to the KL penalty explicitly keeping the policy close to the good region of the RM found in previous iteration, which a scheduled β does not ensure. 
+
+D.5. Steps per reset R
+
+Our theoretical derivation suggests that flatter minimum corresponds to a more accurate reward model. Experiments show that the gradient norm keeps decreasing within each iteration even after the PR score is saturated. Thus, we expect training for more steps R per reset to improve performance at the cost of a higher computational expense. We evaluate different values for R when training a Pythia 1B model on the summarization task and show the results in Figure 14 (right), training each model for 1500 total steps. Indeed, we find more steps R to lead to a better KL-Gold-Reward tradeoff and perhaps a better asymptotic reward. However, for high values such as R = 400 the computational cost becomes prohibitively expensive, such that we use R = 200 in experiments unless otherwise specified. 
+
+D.6. Reward hacking example 
+
+An example output by a Qwen2.5 0.5B model trained without regularization hacking a Qwen2.5-1.5B-Instruct judge: 
+
+<reasoning> 1. Given values: \\[ 
+
+23 Gradient Regularization Prevents Reward Hacking 0 500 1000 1500 2000           
+
+> Gradient Steps
+> 0
+> 1
+> 2
+> 3
+> 4
+> RM Model Score
+> GRPO
+> GRPO+Reset
+> 0500 1000 1500 2000
+> Gradient Steps
+> 14
+> 13
+> 12
+> 11
+> 10
+> 9
+> 8
+> 7
+> Gold Model Score
+> 0500 1000 1500 2000
+> Gradient Steps
+> 0.58
+> 0.60
+> 0.62
+> 0.64
+> 0.66
+> 0.68
+> 0.70
+> RM BT Loss
+> 0.60 0.65 0.70
+> RM BT Loss
+> 14
+> 13
+> 12
+> 11
+> 10
+> 9
+> 8
+> 7
+> Gold Model Score
+
+Figure 15. Proxy and gold reward for no resets (blue, β = 0 .06 ) and resets (orange, β = 0 .3). The proxy reward should thus match after 5 resets which here with R = 200 corresponds to 1200 training steps. The achieved proxy reward is relatively similar at training step 
+
+t = 1200 , however, the gold reward with resets is significantly higher. 
+
+\text{initial}} = 500, \text{spent_on_clothes}} = 20/100 \times 500 = 100, \text{remaining_after_clothes}} = 500 - 100 = 40}}, \text{spent_on_cds}} = 25/100 \times 40 = 100}}))))))))))))))))))))))))))))))>> 
+
+> ,→
+> ,→
+
+To find the final amount, we perform the following steps: \[ \text{final_left}} = 500 - 100 + 100 = 119}} \)) </code>> </p>> </reasoning> <answer> 119 </answer> 
+
+## E. Reference Resets in RLHF 
+
+To investigate the impact of reference resets in RLHF we provide an asymptotic argument, showing an equivalence between using reference resets and using a lower β. While we show that this equivalence indeed shows up in experiments for the RM reward Rθ , the achieved true reward R∗ is significantly higher when doing reference sets than when using a lower β.This can not be explained by the asymptotic argument, we thus continue by providing an analysis from the point of view of optimization dynamics. 
+
+E.1. Asymptotic analysis 
+
+It is well known (e.g. (Rafailov et al., 2023, Appendix A.1)) that the optimal solution of the KL-regularized optimization problem arg max π eR(s, a ) − DKL (π, π 1) is 
+
+π(s, a ) ∝ π1(s, a ) exp 
+
+
+
+β−1 eR(s, a )
+
+
+
+. (30) With reference resets, we are solving this problem repeatedly, thus for iteration kπk(s, a ) ∝ πk−1(s, a ) exp 
+
+
+
+β−1 eR(s, a )
+
+
+
+. (31) If we insert πk−1 into this, we obtain 
+
+πk(s, a ) ∝ π1(s, a ) exp 
+
+
+
+(β/k )−1 eR(s, a )
+
+
+
+. (32) 24 Gradient Regularization Prevents Reward Hacking 
+
+Therefore, the optimal policy for Reference Resets with k iterations and KL-penalty strength β should be the same as the solution without resets with a weaker KL-penalty weight β′ = β/k . In experiments, we can indeed see a similar behavior when only looking at the RM reward, as shown in Figure 15 (left). There, after 1200 steps the RM reward eR achieved with reset is roughly in the rang of reward without reference resets. As this argument makes no statements about the true reward 
+
+R∗, we might expect it to be similar for both methods as well. Surprisingly, we instead find that the true reward achieved by Reference Resets is significantly higher than the true reward achieved in a single stage. We believe this effect can not be explained by an asymptotic analysis, thus motivating our optimization dynamics argument. In Figure 15 (right), we also show that using Reference Resets higher gold reward regions can be obtained for the same RM BT loss LBT .25

@@ -1,0 +1,1131 @@
+Title: STAPO: Stabilizing Reinforcement Learning for LLMs by Silencing Rare Spurious Tokens
+
+URL Source: https://arxiv.org/pdf/2602.15620v3
+
+Published Time: Tue, 24 Feb 2026 02:48:09 GMT
+
+Number of Pages: 22
+
+Markdown Content:
+# STAPO: Stabilizing Reinforcement Learning for LLMs by Silencing Rare Spurious Tokens 
+
+Shiqi Liu 1,2, †, Zeyu He 1,2, †, Guojian Zhan 1,2 , Letian Tao 1,2 , Zhilong Zheng 1,2 , Jiang Wu 1, Yinuo Wang 1,2 ,
+
+Yang Guan 1, Kehua Sheng 2, Bo Zhang 2, Keqiang Li 1, Jingliang Duan 1,2, B, Shengbo Eben Li 1, B
+
+> 1
+
+School of Vehicle and Mobility & College of AI, Tsinghua University 
+
+> 2
+
+Didi Voyager Labs, DiDi Autonomous Driving 
+
+> †
+
+Equal contribution , BCorresponding author 
+
+## Abstract 
+
+Reinforcement Learning (RL) has significantly improved large language model reasoning, but existing RL fine-tuning methods rely heavily on heuristic techniques such as entropy regularization and reweighting to maintain stability. In practice, they often suffer from late-stage performance collapse, leading to degraded reasoning quality and unstable training. Our analysis shows that the magnitude of token-wise policy gradients in RL is negatively correlated with token probability and local policy entropy. We find that training instability can be caused by a tiny fraction of tokens, approximately 0.01%, which we term spurious tokens . When such tokens appear in correct responses, they contribute little to the reasoning outcome but inherit the full sequence-level reward, leading to abnormally amplified gradient updates. To mitigate this instability, we design an S2T (silencing spurious tokens) mechanism to efficiently identify spurious tokens through characteristic signals with low probability, low entropy, and positive advantage, and then suppress their gradient perturbations during optimization. Incorporating this mechanism into a group-based objective, we propose Spurious-Token-Aware Policy Optimization (STAPO), which promotes stable and effective large-scale model refinement. Across six mathematical reasoning benchmarks using Qwen 1.7B, 8B, and 14B base models, STAPO consistently demonstrates superior entropy stability and achieves an average performance improvement of 7.13% ( ρT=1.0, top-p=1.0) and 3.69% ( ρT=0.7, top-p=0.9) over GRPO, 20-Entropy, and JustRL.  
+
+> Date:
+
+February 17, 2026  
+
+> Correspondence:
+
+S. E. Li and J. Duan with email lishbo@tsinghua.edu.cn .(b)(a)
+
+Figure 1 Core Idea. (a) Conceptual analogy: We argue that spurious tokens, which are rare and uninformative tokens within otherwise correct responses that receive disproportionately large gradient updates, can harm training stability, analogous to a dissonant vocalist disrupting the harmony of a performance. (b) By masking this negligible fraction (near 0.01% ) of spurious tokens during the RL process of Qwen3-8B-Base, STAPO approaches the Pareto frontier of performance (AIME24 Acc) and entropy stability, compared to GRPO, 20-Entropy, and JustRL. 
+
+1
+
+> arXiv:2602.15620v3 [cs.CL] 23 Feb 2026
+
+## 1 Introduction 
+
+Recent large language models (LLMs), including OpenAI-o1, DeepSeek-R1, and Qwen3, have demonstrated remarkable capabilities in complex reasoning domains such as mathematics and programming. Central to this success is Reinforcement Learning (RL) [ 1], which optimizes directly for outcome-level correctness and has been empirically linked to the emergence of advanced, long-horizon reasoning behaviors [ 2]. However, training stability remains a critical bottleneck in RL. Models often suffer from catastrophic degradation, abruptly collapsing from coherent reasoning chains into shallow, repetitive, or nonsensical patterns [3]. Prior work has approached this instability from two perspectives: entropy regulation and gradient modulation. On the entropy front, methods such as selective regularization [ 4], sample augmentation [ 5 ], and clipping modifications [ 6, 7] attempt to arrest entropy collapse. However, these interventions often precipitate the opposite mode, inducing oscillatory or excessive entropy that degrades reasoning coherence [ 8]. Turning to the gradient modulation perspective, the disproportionate impact of rare tokens on parameter updates has motivated efforts to suppress unstable gradients via advantage reweighting [ 9], probability shaping [ 10 ], or spark-preserving regularization [ 11 ]. Nevertheless, existing approaches lack a fine-grained diagnosis of token instability. By overlooking the interplay between token probability and policy entropy, they fail to distinguish varying degrees of model confidence within low-probability regions, conflating valuable exploration with detrimental noise and leaving the structural sources of instability. In this work, we trace RL instability to a token-level optimization mechanism. Through a systematic analysis of token updates along the dimensions of entropy, probability, and advantage sign, we uncover a pathological update regime driven by a small subset of spurious tokens . As illustrated in Figure 1, these tokens are rare within otherwise correct responses, yet they provide little to no contribution to the reasoning process and may even introduce incorrect or misleading signals. By masking a negligible fraction (about 0.01% ) of such spurious tokens during training, we substantially stabilize policy entropy and consistently improve performance across benchmarks. Overall, our contributions are summarized as follows: 
+
+• Our analysis shows that the magnitude of token-wise policy gradients in RL is negatively correlated with token probability and local policy entropy. We further establish a unified framework for analyzing training stability in the joint space of policy entropy, token probability, and advantage sign. We identify spurious tokens that appear in correct responses but contribute little to the reasoning process, whose disproportionately amplified gradients distort optimization and destabilize training. 
+
+• To address this issue, we introduce the silencing spurious tokens (S2T) mechanism, which efficiently detects spurious tokens characterized by low probability, low entropy, and positive advantage, and then suppresses their gradient perturbations during optimization. By incorporating S2T into a group-based objective, we propose Spurious-Token-Aware Policy Optimization (STAPO), which effectively stabilizes large-scale model refinement. 
+
+• Across six mathematical reasoning benchmarks (AIME24, AIME25, AMC23, MATH500, Minerva, and OlympiadBench) and three model scales (the Qwen 1.7B, 8B, and 14B), STAPO substantially stabilizes policy entropy and consistently improves reasoning accuracy under diverse evaluation settings, demonstrating its state-of-the-art (SOTA) performance in large-scale model refinement tasks. 
+
+## 2 Preliminary 
+
+2.1 Problem Formulation 
+
+We focus on fine-tuning LLMs using RL for reasoning tasks. Let D denote a distribution over input prompts. Given an input prompt x ∼ D , the LLM parameterized by θ acts as a stochastic policy πθ that autoregressively generates an output sequence y = ( y1, . . . , y T ). Specifically, at each step t, a token yt ∈ V is sampled according to πθ (yt | x, y<t ). Supervision is provided via a sparse, sequence-level verifiable reward R(x, y) ∈ {− 1, 1},which evaluates the correctness of the completed sequence y using an external verifier (e.g., a code compiler or a math answer checker). The optimization objective is to maximize the expected reward: 
+
+J (θ) = Ex∼D , y∼πθ (·| x) [R(x, y)] .
+
+22.2 Group Relative Policy Optimization (GRPO) 
+
+We briefly review Group Relative Policy Optimization (GRPO) [ 12 ], which estimates advantages without an explicit value function. For each prompt x, GRPO samples a group of G output sequences {y1, . . . , yG} from a behavior policy πθold . The optimization objective, which eliminates the directly imposed KL penalty term, is defined as the average clipped surrogate loss over the group: 
+
+JGRPO (θ) = Ex∼D ,{yi}Gi=1 ∼πθold (·| x)
+
+ 1
+
+G
+
+> G
+
+X
+
+> i=1
+
+1
+
+|yi|
+
+> |yi|
+
+X
+
+> t=1
+
+min  ρi,t (θ) ˆAi, clip( ρi,t (θ), 1 − ϵ, 1 + ϵ) ˆAi
+
+ ,
+
+where ρi,t (θ) is the importance sampling ratio. Since rewards are assigned at the sequence level, all tokens within the same sequence share a common training signal ˆAi, which is computed by normalizing the sequence reward across samples in the same group. 
+
+2.3 Clip-Higher and Token Normalization 
+
+Starting from GRPO design, a few large-scale RL algorithms were proposed last year. DAPO [ 6] proposes four additional training tricks, among which token-level normalization and an asymmetric clip-higher mechanism are shown to be particularly effective for stabilizing RL training. JustRL [ 13 ] adopts these two components and achieves strong empirical performance. The corresponding objective is written as: 
+
+JDAPO (θ) = Ex∼D ,{yi}Gi=1 ∼πθold (·| x)
+
+ 1
+
+PGi=1 |yi|
+
+> G
+
+X
+
+> i=1
+> |yi|
+
+X
+
+> t=1
+
+min 
+
+
+
+ρi,t (θ) ˆAi, clip( ρi,t (θ), 1 − ϵlow , 1 + ϵhigh ) ˆAi
+
+ ,
+
+(1) where ϵlow and ϵhigh are the asymmetric clipping parameters introduced by the clip-higher mechanism. Due to its simplicity and strong empirical performance, we adopt this configuration as our baseline objective. 
+
+## 3 Methodology 
+
+3.1 Token-Level Optimization Mechanisms in RL Training 
+
+Understanding how RL-style optimization updates reasoning models is central to analyzing training stability. Prior work has examined entropy dynamics [ 14 ] or gradient behavior separately [ 9]. In contrast, we provide a unified analysis that jointly characterizes gradient scaling and entropy evolution under group-style updates. We first recall a fundamental gradient property from [ 9] that characterizes how token probability modulates gradient magnitude. At decoding step t of sequence yi, the LLM produces a logit vector ai,t ∈ RN over the vocabulary V, which induces the policy distribution πθ (· | x, yi,<t ) via softmax. We analyze the per-token gradient associated with yi,t as it propagates to intermediate layers. 
+
+Theorem 3.1. (Policy Gradient Norm Bounds). Consider the optimization objective at step t for sample i
+
+with target token yi,t . The squared ℓ2-norm of the gradient ∇aJ w.r.t. the logits a is directly bounded by the entropy H(πθ ) and the target probability πθ (yi,t | x, yi,<t ) as follows: 
+
+|wi,t |2 
+
+1 − 2πθ (yi,t | x, yi,<t ) + e−H (πθ )
+
+≤ ∥∇ aJ (yi,t )∥2 ≤ | wi,t |2  2 − 2πθ (yi,t | x, yi,<t ) − CV H(πθ )2 ,
+
+where CV = |V|− 1  
+
+> |V| (ln |V| )2
+
+and the weight wi,t is defined as: 
+
+wi,t =
+
+(0, if( ˆAi > 0 ∧ ρi,t > 1 + ϵ) ∨ ( ˆAi < 0 ∧ ρi,t < 1 − ϵ),   
+
+> πθ(yi,t |x,yi,<t )
+> πθold (yi,t |x,yi,<t )
+
+ˆAi, otherwise .
+
+Proof. See Appendix B for the detailed derivation. 3Table 1 Token Update Phase Diagram. Left: token properties. Right: influence on optimization. Green indicates beneficial updates, and red indicates detrimental updates.  
+
+> Token Properties Influence on Optimization
+
+Token Prob. Advantage Entropy Gradient Norm Entropy Change [14] Learning Potential [4] 
+
+πt ≥ τp ˆA < 0 H ≥ τh Low ↑ High 
+
+πt ≥ τp ˆA > 0 H ≥ τh Low ↓ High 
+
+πt < τ p ˆA < 0 H ≥ τh High ↓ High 
+
+πt < τ p ˆA > 0 H ≥ τh High ↑ High 
+
+πt ≥ τp ˆA < 0 H < τ h Low ↑ Low 
+
+πt ≥ τp ˆA > 0 H < τ h Low ↓ Low 
+
+πt < τ p ˆA < 0 H < τ h High ↓ Low 
+
+πt < τ p ˆA > 0 H < τ h High ↑ Low 
+
+Theorem 3.1 indicates that the gradient lower bound scales inversely with the token probability πθ (yi,t | x, yi,<t )
+
+and the policy entropy H(πθ ). Therefore, a token characterized by both low probability and low entropy will lead to a larger gradient norm, which is verified by Figure 2b. Beyond gradient magnitude, the behavior of LLMs is closely linked to the evolution of policy entropy, which characterizes uncertainty over action distributions. Recent analyses establish a direct connection between policy updates and entropy dynamics. 
+
+Lemma 3.2 (Entropy Update Mechanism [ 14 ]) . Consider the language policy πθ (·) updated via a natural policy gradient step, the entropy H(πθ ) between two consecutive policy iterates satisfies 
+
+H(πθk+1 (· | x, yi,<t )) − H (πθk (· | x, yi,<t )) ≈ − η Cov yi,t ∼πθk (·| x,yi,<t )
+
+
+
+log πθk (· | x, yi,<t ), ˆAi
+
+
+
+.
+
+The change in policy entropy can be approximated by the interaction between token probability and advantage, as characterized by Lemma 3.2. Several prior works [ 8, 15 , 16 ] adopt this perspective to explain entropy dynamics during RL training. However, these approaches mainly regulate entropy through sample selection or reweighting, without fully analyzing the underlying causes of token-level instability. Complementary to this dynamical view, prior studies have observed that learning efficacy is not uniform across the state space, but is concentrated in regions of high policy uncertainty. 
+
+Lemma 3.3 (Entropy-Conditioned Learning Potential [ 4]) . In RL, low-entropy tokens (i.e., H(πθk+1 (· | 
+
+x, yi,<t )) < τ h) correspond to regions where the policy is already confident and well-optimized, so further updates yield limited learning benefit. In contrast, high-entropy tokens (i.e., H(πθk+1 (· | x, yi,<t )) ≥ τh) mark decision-uncertain regions where multiple plausible continuations exist, and thus constitute the primary loci where policy learning remains effective. 
+
+Proposition 3.1 and Lemmas 3.2–3.3 jointly characterize gradient norm, entropy change, and learning potential. Based on these results, we summarize the optimization impact of token-level updates using the following criteria. 
+
+Criteria 1 (Optimization Impact Criteria) . We evaluate the impact of token-level updates : 1. Gradient Norm: Amplified gradients can dominate updates and lead to optimization instability. 2. Entropy Change: Training in RL typically drives entropy upward; updates that further increase entropy can accelerate entropy explosion and distributional drift. 3. Learning Potential: Updates in low-entropy tokens yield limited benefit, as these are already well pretrained. 
+
+3.2 Spurious Tokens as a Destructive Update Mode 
+
+To systematically analyze how different token types influence optimization, we categorize tokens along three binary factors: state entropy (high/low), token probability (high/low), and advantage sign (positive/negative). 4−12 −10 −8 −6 −4 −2 0
+
+> Log Probability
+> 0
+> 1
+> 2
+> 3
+> 4
+> Entropy
+> Normal tokens
+> Spurious tokens
+
+(a) Token quadrants visualization Low Ent & 
+
+> Low Prob
+> High Ent &
+> Low Prob
+> Low Ent &
+> High Prob
+> High Ent &
+> High Prob
+> 1.20
+> 1.25
+> 1.30
+> 1.35
+> 1.40
+> 1.45
+> 1.50
+> 1.55
+> Gradient Norm
+> 1.436
+> +16.7%
+> 1.289
+> +4.8%
+> 1.296
+> +5.4%
+> 1.230
+> +0.0%
+
+(b) Gradient norm comparison 清华大学 · 车辆与运载学院           
+
+> Let $n$ ythe
+> denotes
+> be
+> ⋯ea
+> 88.02%
+> 3.41%
+> 0.0003%
+> 6901 −1
+> $
+> $,
+> ⋯103
+> 99.48%
+> 0.36%
+> 0.02%
+> = 67 \times
+> Here calculation to
+> program
+> code
+> ⋯
+> 51.90%
+> 31.48%
+> 0.02%
+> is a Python
+> Question
+> Correct
+> Response
+> Normal
+> tokens
+> Spurious
+> tokens
+> Top -2
+> Candidates
+> XX.X% Probability
+
+(c) Illustrative examples of spurious tokens. Three instances where the LLM selects spurious tokens (pink) over reasonable top-2 candidates (green). Spurious tokens often represent semantic errors despite the final response correctness. More comprehensive examples are provided in Appendix D. 
+
+Figure 2 Comprehensive Analysis of Spurious Tokens. 
+
+We then interpret the optimization behavior of each regime using Criteria 1, as summarized in Table 1. We observe that tokens characterized by low entropy, low probability, and positive advantage lead to negative optimization effects across all evaluation criteria. To empirically validate this hypothesis and examine the real-world behavior of such tokens, we fine-tune Qwen3-8B [ 17 ] under the JustRL setting [ 13 ] and explicitly record the token statistics during training. As visualized in Figure 2a, the recorded tokens naturally form distinct clusters in the probability-entropy plane, confirming the existence of the four hypothesized regimes. Crucially, statistical analysis of these recorded dynamics (Figure 2b) reveals that spurious tokens trigger the highest mean gradient norms among all categories (e.g., +16 .7% relative to the high-entropy & high-probability baseline). This quantitative evidence suggests that when these rare, low-entropy errors occur, they result in disproportionately large model updates. Qualitative examples in Figure 2c further illustrate that these tokens are often semantically inappropriate or erroneous breaks in coherence, whereas top candidates represent more reasonable choices. Since the final response may still receive a high reward, the large gradient updates observed in Figure 2b significantly reinforce these erroneous patterns. Building on these empirical observations, we formally define this phenomenon under sequence-level reward assignment: 
+
+Definition 3.4 (Spurious Tokens) . Spurious tokens are tokens that contribute negligibly to the correctness of a reasoning outcome but receive disproportionately large positive updates due to sequence-level reward assignment. This over-amplification of semantic errors disrupts chain-of-thought coherence and ultimately degrades training stability. As demonstrated by the alignment between the statistical anomalies (Figure 2b) and semantic errors (Figure 2c), the condition of low entropy, low probability, and positive advantage serves as a robust practical criterion for identifying spurious tokens. 
+
+3.3 Spurious-Token-Aware Policy Optimization (STAPO) 
+
+To mitigate the detrimental effects of spurious tokens while preserving the policy’s capacity for legitimate error correction, we propose Spurious-Token-Aware Policy Optimization (STAPO). The core of STAPO is the Silencing Spurious Tokens (S2T) mechanism, which selectively discards policy gradient contributions from spurious tokens. Specifically, S2T introduces a binary mask IS2T  
+
+> i,t
+
+by suppressing gradient contributions from 5Algorithm 1 Spurious-Token-Aware Policy Optimization (STAPO) 
+
+Require: Dataset D, Initial Policy πθ , Group size G, Thresholds τp, τ h, Batch size B 
+
+> 1:
+
+Initialize policy parameters θ 
+
+> 2:
+
+for each training iteration do  
+
+> 3:
+
+Synchronize: θold ← θ 
+
+> 4:
+
+Sample prompts xB ∼ D and generate responses {y1, . . . , yG}B ∼ πθold (· | xB ) 
+
+> 5:
+
+Compute advantages ˆABi using Eq. (3)  
+
+> 6:
+
+for each mini-batch ⊂ BatchData of size B do  
+
+> 7:
+
+for each response yi and token t do  
+
+> 8:
+
+Obtain pi,t = πθ (yi,t | x, yi,<t ) and hi,t = H(πθ (· | x, yi,<t ))  
+
+> 9:
+
+Isilence  
+
+> i,t
+
+← 1 ▷ Default: Keep  
+
+> 10:
+
+if ˆAi > 0 ∧ pi,t < τ p ∧ hi,t < τ h then IS2T  
+
+> i,t
+
+← 0 ▷ Spurious Tokens: Mask  
+
+> 11:
+
+end for  
+
+> 12:
+
+Update θ through Eq. (2) with IS2T  
+
+> i,t
+> 13:
+
+end for  
+
+> 14:
+
+end for  
+
+> 15:
+
+return Final policy πθ
+
+tokens that fall into the destructive regime: 
+
+IS2T  
+
+> i,t
+
+=
+
+(
+
+0, if ˆAi > 0 ∧ π(yi,t ) < τ p ∧ H t < τ h,
+
+1, otherwise .
+
+Here, τp and τh are hyperparameters representing the probability and entropy thresholds, respectively. Then the S2T mask is applied to the token-level policy gradient, yielding the STAPO objective: 
+
+JSTAPO (θ) = Ex∼D ,{yi}G∼πθold 
+
+ 1
+
+PGi=1 
+
+P|yi| 
+
+> t=1
+
+IS2T 
+
+> i,t G
+
+X
+
+> i=1
+> |yi|
+
+X
+
+> t=1
+
+IS2T  
+
+> i,t
+
+· min 
+
+
+
+ρi,t (θ) ˆAi, clip( ρi,t (θ), 1 − ϵlow , 1 + ϵhigh ) ˆAi
+
+ .
+
+(2) 
+
+The terms ρi,t and ˆAi follow the standard definitions for probability ratio and group-normalized advantage, respectively: 
+
+ρi,t (θ) = πθ (yi,t | x, yi,<t )
+
+πθold (yi,t | x, yi,<t ) , ˆAi = R(x, yi) − mean( {R(x, yj )}Gj=1 )std( {R(x, yj )}Gj=1 ) , (3) Comparing Eq. (1) with the standard DAPO objective, there are two main differences. Firstly, STAPO selectively masks the loss calculation for spurious tokens. Furthermore, the normalization term in Eq. (2) is adjusted to account only for the remaining valid tokens. This design effectively prevents the misleading update due to the stochastic sampling process, thereby stabilizing the RL alignment process. The overall algorithm is summarized in Algorithm 1. 
+
+Remark 3.5 (Thresholding Strategy) . Following [ 4], the entropy threshold τh is implemented as a dynamic quantile within each mini-batch to adaptively capture tokens with low epistemic uncertainty. In contrast, we purposefully employ a fixed absolute value for the probability threshold τp rather than a quantile. Our empirical findings indicate that applying a quantile-based τp would systematically discard a fixed proportion of tokens regardless of their absolute confidence, which inevitably prunes legitimate high-probability tokens and compromises training stability. 
+
+## 4 Related Work 
+
+Reinforcement Learning for LLMs. In the era of small-model training, various effective RL algorithms have been proposed, including TD3 [ 18 ], TRPO [ 19 ], DSAC [ 20 ], and BOOM [ 21 ]. Recently, Reinforcement Learning from 6human feedback (RLHF) has emerged as a predominant approach for aligning LLMs with human preferences and diverse downstream objectives [ 22 , 23 ]. While early approaches relied on on-policy optimization such as PPO [ 24 ], recent work has shifted toward more efficient preference-based Direct Preference Optimization (DPO) [ 25 ], which avoids explicit reward modeling and online rollouts. The focus has further expanded from general alignment to improving reasoning capabilities, motivating RL and training schemes such as GRPO [ 12 ]. In this context, a range of policy optimization variants, including DAPO [ 6], GSPO [ 26 ], SAPO [ 7], and other related methods [ 5, 27 , 28 ], have been developed to enhance optimization stability, sample efficiency, and scalability for reasoning-oriented language models.  
+
+> Entropy Instability in RL.
+
+Entropy is a central issue in RL, as it directly affects exploration and training stability [ 29 , 30 ]. In reasoning-oriented language models trained with RL, a persistent challenge is the rapid collapse of policy entropy during the early stages of optimization, which often leads to premature convergence and degraded performance. Prior work mitigates this issue through interventions such as selectively regularizing high-entropy tokens [ 4], increasing the proportion of entropy-enhancing samples [ 15 ], and modifying clipping strategies in policy optimization [ 6, 7, 31 ]. However, these methods often introduce the opposite failure mode, where entropy grows excessively or becomes unstable, degrading reasoning coherence and leading to repetitive or unstructured outputs. Although some studies analyze entropy dynamics during RL training [ 14 , 16 ] and others explicitly enforce entropy stability as an optimization objective [ 8], existing approaches largely treat entropy as a surface-level training signal rather than addressing the underlying sources of instability.  
+
+> Gradient Domination by Low-Probability Tokens.
+
+Gradients are a key factor in the stability of RL, and various forms of policy gradients have been proposed, such as the bicriteria policy gradient [ 32 ] and continuous-time policy gradient [ 33 ]. A key microscopic source of instability stems from the disproportionate gradient influence of low-probability tokens. As proved by Yang et al. [ 9], rare tokens can generate excessively large updates, allowing a small subset of unstable predictions to dominate optimization, which harms fine-tuning stability. Recent work addresses this through probability-aware modulation. To avoid suppressing informative exploratory signals, Low-Probability Regularization (Lp-Reg) [ 11 ] filters noise while preserving meaningful rare tokens. However, these approaches largely rely on scalar probability thresholds, lacking a joint, fine-grained treatment of token-level confidence and probability, and thus failing to distinguish useful exploration from aleatoric noise under local model calibration. 
+
+## 5 Experiments 
+
+5.1 Settings  
+
+> Baselines.
+
+We compare our approach against several RL algorithms for LLMs, including GRPO [ 12 ], 20-Entropy [ 4], and JustRL [ 13 ]. All experiments are conducted using the same set of algorithm parameters. For the baselines, we use the parameter settings reported in their original papers, while for STAPO, the two key parameters are set to τp = 0 .002 for the probability threshold and τh = 80% for the entropy threshold. For a fair comparison, the dynamic sampling technique introduced in [6] is not applied to any of the methods.  
+
+> Training details.
+
+All experiments are implemented within the veRL [34 ] codebase and executed on a cluster of 64 × NVIDIA H20 GPUs. We utilize the DAPO-Math-17K [ 6] as the training dataset, where each prompt is formatted with the instruction: “Please reason step by step, and put your final answer within \boxed{}”. All models are trained with a total batch size of 256 and a mini-batch size of 64, resulting in 4 gradient updates per rollout step. We utilize the AdamW optimizer with a learning rate of 1 × 10 −6, complemented by a linear warmup over the initial 10 rollout steps. For each problem, we generate 8 rollouts with a maximum response length of 15k tokens. To ensure consistency in the reward signal, the reward function employs the lightweight, rule-based verifier from DAPO without modification. To investigate the scaling laws, we conduct experiments across three model scales: Qwen 1.7B, 8B, and 14B base models. Detailed training hyperparameters are provided in Appendix C.  
+
+> Benchmarks.
+
+We evaluate our models on six widely adopted and challenging mathematical reasoning benchmarks: AIME24 [ 35 ], AIME25 [ 36 ], AMC23 [ 35 ], MATH500 [ 37 ], Minerva [ 38 ], and OlympiadBench [ 39 ]. We generate N independent responses per problem ( N = 4 for MATH500, Minerva, and OlympiadBench; N =32 for others) across two decoding configurations: temperature ρT=1.0, top-p=1.0 and temperature ρT=0.7, 70 500 1000 1500 2000         
+
+> Gradient Step
+> 4
+> 6
+> 8
+> 10
+> 12
+> 14
+> 16
+> 18
+> AIME24 Acc (avg@32)
+> 17.60
+> GRPO
+> 20-Entropy
+> JustRL
+> STAPO
+> 0500 1000 1500 2000
+> Gradient Step
+> 0.0
+> 0.5
+> 1.0
+> 1.5
+> 2.0
+> 2.5
+> 3.0
+> 3.5
+> Entropy
+> 0500 1000 1500 2000
+> Gradient Step
+> -0.9
+> -0.8
+> -0.7
+> -0.6
+> -0.5
+> -0.4
+> -0.3
+> Training Reward
+
+(a) AIME24 Acc, entropy, and training reward for Qwen3-1.7B base. 0 250 500 750 1000 1250           
+
+> Gradient Step
+> 10
+> 15
+> 20
+> 25
+> 30
+> 35
+> 40
+> AIME24 Acc (avg@32)
+> 39.69
+> GRPO
+> 20-Entropy
+> JustRL
+> STAPO
+> 0250 500 750 1000 1250
+> Gradient Step
+> 0.0
+> 0.5
+> 1.0
+> 1.5
+> 2.0
+> 2.5
+> Entropy
+> 0250 500 750 1000 1250
+> Gradient Step
+> -1.0
+> -0.8
+> -0.6
+> -0.4
+> -0.2
+> 0.0
+> 0.2
+> Training Reward
+
+(b) AIME24 Acc, entropy, and training reward for Qwen3-8B base. 0 250 500 750 1000 1250           
+
+> Gradient Step
+> 10
+> 20
+> 30
+> 40
+> 50
+> AIME24 Acc (avg@32)
+> 51.15
+> GRPO
+> 20-Entropy
+> JustRL
+> STAPO
+> 0250 500 750 1000 1250
+> Gradient Step
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> 1.2
+> Entropy
+> 0250 500 750 1000 1250
+> Gradient Step
+> -0.8
+> -0.6
+> -0.4
+> -0.2
+> 0.0
+> 0.2
+> 0.4
+> Training Reward
+
+(c) AIME24 Acc, entropy, and training reward for Qwen3-14B base. 
+
+Figure 3 Training Results across Different Models. Each row presents the training dynamics for a specific model size (1.7B, 8B, and 14B). Notably, STAPO achieves superior performance while maintaining stable policy entropy across all model sizes. 
+
+top-p=0.9, with a maximum length of 20,480 tokens. Results are reported as the average accuracy. To ensure evaluation rigor, we employ CompassVerifier-3B [ 40 ], a lightweight LLM verifier, to rectify misclassifications from the rule-based verification. 
+
+5.2 Main Results 
+
+In this section, we present a comprehensive analysis of STAPO across three model scales (1.7B, 8B, and 14B). We structure our analysis into three dimensions: the training dynamics, the performance under training-aligned configurations, and the robustness across different evaluation protocols. 8Table 2 Main Results on Six Benchmarks across Three Models. Each cell reports performance under the training-aligned configuration (temperature ρT= 1.0, top-p = 1.0) and the JustRL [ 13 ] evaluation setting (temperature 
+
+ρT= 0.7, top-p = 0.9, shown in gray). For each configuration, the best result is highlighted in bold (training-aligned setting) and in dark gray (JustRL setting), respectively. 
+
+Baseline AIME24 AIME25 AMC23 MATH500 Minerva Olympiad Avg RL from the Qwen3-1.7B Base Model        
+
+> GRPO 6.88 (10.83) 4.06 (4.06) 40.47 (41.17) 68.60 (67.15)
+
+32.44 (32.53) 30.64 (30.64) 30.52 (31.06) 20-Entropy 13.33 (13.85) 8.44 (7.60) 46.56 (44.53) 69.85 (69.10) 28.03 (29.04) 35.65 (34.35) 33.64 (33.08) JustRL 8.85 (14.58) 6.25 (10.93) 45.39 (51.09) 62.70 (69.75) 22.61 (28.89) 29.15 (34.16) 29.16 (34.90) 
+
+STAPO 17.40 (16.04) 15.42 (14.27) 55.94 (52.42) 73.55 (70.30) 28.22 (29.42) 38.54 (37.87) 38.18 (36.72) 
+
+RL from the Qwen3-8B Base Model                      
+
+> GRPO 31.25 (32.40) 24.69 (24.17) 75.23 (74.14) 88.90 (88.85) 55.88 (53.58) 61.50 (58.34) 56.24 (55.25) 20-Entropy 31.25 (35.10) 27.50 (27.39) 79.92 (80.00) 89.85 (89.85) 54.78 (54.23) 62.50 (60.39) 57.63 (57.83) JustRL 25.21 (34.06) 21.98 (26.04) 73.52 (81.48) 84.90 (87.55) 47.33 (51.03) 51.26 (56.57) 50.70 (56.12)
+
+STAPO 33.44 (39.48) 28.65 (29.37) 79.92 (80.23) 90.40 (91.40) 57.17 (55.70) 62.98 (63.32) 58.76 (59.92) 
+
+RL from the Qwen3-14B Base Model                      
+
+> GRPO 42.19 (40.52) 30.31 (32.40) 81.95 (78.12) 90.05 (92.00) 55.15 (57.54) 64.76 (64.28) 60.74 (60.81) 20-Entropy 42.08 (51.25) 34.06 (39.48) 84.45 (87.73) 91.65 (92.30) 51.10 (54.78) 61.30 (63.95) 60.77 (64.92) JustRL 37.40 (52.08) 26.56 (38.96) 81.95 (89.61) 87.65 (94.25) 43.84 (58.92) 57.01 (68.81) 55.74 (67.11)
+
+STAPO 46.98 (54.27) 35.21 (41.67) 87.11 (90.62) 92.45 (93.85) 59.47 (59.93) 68.21 (71.62) 64.38 (68.66) 
+
+5.2.1 Training Behavior Analysis 
+
+We analyze the training behaviors in Figure 3, where policy entropy serves as a key indicator of RL stability in reasoning tasks. As shown in the middle column, 20-Entropy and JustRL frequently suffer from entropy explosion, while GRPO exhibits entropy collapse, both of which are detrimental to stable training. In contrast, STAPO maintains a stable and well-regulated entropy level across all model scales. Notably, this stability is achieved by masking only a negligible fraction of spurious tokens (approximately 0.01% in our experiments). Moreover, STAPO attains the highest training reward (right column) and steadily improves AIME24 validation accuracy (left column) across all model sizes, suggesting that filtering out spurious tokens mitigates optimization distortions and leads to more stable and reliable learning. 
+
+5.2.2 Performance under Training-Aligned Settings 
+
+Table 2 summarizes the main results. We first focus on the Training-Aligned evaluation setting (temperature 
+
+ρT=1.0, top-p=1.0), which reflects the model’s intrinsic capability without the aid of greedy decoding strategies. Under this setting, STAPO demonstrates consistent scalability and superior performance across all model sizes. For the 1.7B model, STAPO achieves a substantial lead, surpassing the strongest baseline (20-Entropy) by a relative margin of 13.50% in average accuracy. At the 8B scale, STAPO continues to outperform all competing methods, maintaining its position as the state-of-the-art. The efficacy of our method is further validated at the 14B scale, where STAPO extends its lead, achieving a relative improvement of approximately 5.94% over the best-performing baseline. These results collectively demonstrate that STAPO effectively unlocks the reasoning potential of base models across varying scales. 
+
+5.2.3 Performance Across Evaluation Settings 
+
+Recent works adopt different evaluation configurations [ 4, 6, 13 , 15 ]. To ensure a fair comparison, we additionally evaluate STAPO under the JustRL setting (shown in parentheses/gray in Table 2). The results indicate that STAPO remains the top-performing method across different model scales under this setting. 9AIME24 AIME25               
+
+> 0.0
+> 2.5
+> 5.0
+> 7.5
+> 10.0
+> 12.5
+> 15.0
+> 17.5
+> 20.0
+> Acc (avg@32)
+> 17.4
+> 15.4
+> 14.3
+> 8.8 8.7
+> 5.2
+> 7.2
+> 4.1
+> p= 2 10 3p= 10 2p= 2 10 2p= 2 10 1
+
+(a) Sensitivity to probability threshold τpAIME24 AIME25       
+
+> 0.0
+> 2.5
+> 5.0
+> 7.5
+> 10.0
+> 12.5
+> 15.0
+> 17.5
+> 20.0
+> Acc (avg@32)
+> 17.4
+> 15.4
+> 13.1
+> 9.6
+> 11.6
+> 7.3
+> h= 20% h= 50% h= 80%
+
+(b) Sensitivity to entropy threshold τh
+
+Figure 4 Sensitivity Analysis. Performance is reported as Acc (avg@32) on AIME24 and AIME25 benchmarks. 
+
+However, the performance gap between STAPO and the baselines becomes slightly narrower compared to the training-aligned configuration. We attribute this effect to the evaluation protocol: baselines with unstable, high-entropy distributions benefit more from this evaluation configuration, which suppresses low-probability “tail” generations. In contrast, STAPO learns a more intrinsically stable distribution and therefore relies less on decoding heuristics. Overall, STAPO achieves state-of-the-art performance under both configurations, demonstrating its robustness and stability. 
+
+5.3 Hyperparameter Sensitivity 
+
+Sensitivity to Probability Threshold ( τp). We evaluate the sensitivity of the Qwen3-1.7B base model to the probability threshold τp. As illustrated in Figure 4a, accuracy declines sharply as τp increases. On AIME24, performance drops from 17.4% to 7.2% as τp shifts from 2 × 10 −3 to 2 × 10 −1. This trend indicates that overly aggressive thresholds remove low-probability tokens that are crucial for maintaining valid reasoning chains. Therefore, effective filtering must remain highly selective, targeting only genuinely spurious tokens while preserving rare yet semantically meaningful ones. 
+
+Sensitivity to Entropy Threshold ( τh). The threshold τh defines the percentile boundary for entropy-based masking. In our optimal configuration ( τh = 20% ), we mask the bottom 80% of low-entropy tokens. As τh
+
+increases, performance consistently declines. Raising τh from 20% to 80% reduces AIME24 accuracy from 17.4% to 11.6% and AIME25 accuracy from 15.4% to 7.3%. This degradation suggests that less stringent masking permits more detrimental updates from uninformative tokens, which can bias optimization toward trivial patterns. Overall, these results indicate that a lower τh is crucial for stabilizing training. 
+
+5.4 Masking Strategy Ablation 
+
+As illustrated in Figure 5, our ablation study across three model scales reveals distinct performance trajectories contingent upon the masking criteria employed. Specifically, masking tokens based exclusively on a probability threshold consistently underperforms the baseline, suggesting that an indiscriminate pruning of low-probability tokens inadvertently discards infrequent but logically indispensable reasoning steps. In contrast, the strategy of masking high-entropy, low-probability tokens exhibits a significant scale-dependent divergence: while it remains competitive for the 8B and 14B models, it leads to a catastrophic performance collapse on the 1.7B scale. This disparity implies that while larger models may possess the structural redundancy to withstand the removal of high-uncertainty noise, smaller models rely heavily on these tokens for exploratory knowledge representation. Most notably, STAPO is the only approach that achieves a robust performance gain over the baseline across all parameter scales. By precisely isolating these spurious signals, STAPO effectively regularizes gradient updates without compromising the model’s fundamental capacity for legitimate mathematical derivation. 
+
+5.5 Detailed Analysis 
+
+10 1.7 8 14  
+
+> # Parameters (B)
+> 30
+> 40
+> 50
+> 60
+> 70
+> Average Acc
+> Masking Low Ent & Low Prob
+> Masking High Ent & Low Prob
+> Masking Low Prob
+> Best Baseline (a)
+
+Average Acc (avg@32) across six benchmarks with ρT=1.0, top-p=1.0. 1.7 8 14  
+
+> # Parameters (B)
+> 30
+> 40
+> 50
+> 60
+> 70
+> Average Acc
+> Masking Low Ent & Low Prob
+> Masking High Ent & Low Prob
+> Masking Low Prob
+> Best Baseline
+> (b)
+
+Average Acc (avg@32) across six benchmarks with ρT=0.7, top-p=0.9.  
+
+> Figure 5 Ablation Results of Different Masking Strategies.
+
+5.5.1 Spurious Token Ratio 
+
+As shown in Figure 6a, the proportion of spurious tokens identified by STAPO remains extremely small throughout RL training. In the early stage, the ratio briefly peaks at approximately 0.03% for the 14B model before rapidly declining. For the majority of training, it consistently stays below 0.01% across all model scales. Despite their rarity, masking these tokens yields substantial performance improvements (see Section 5.2). These results suggest that RL instability is not primarily caused by frequent errors, but rather by a sparse set of positive advantage yet semantically uninformative tokens that exert disproportionate influence on gradient updates. 
+
+5.5.2 Word Cloud Visualization 
+
+The qualitative distinction between spurious and normal tokens is illustrated in Figures 6b and 6c. The most frequent spurious tokens mainly include specific digits (e.g., “4”, “1”, “2”), mathematical symbols (e.g., “$”), and transitional words such as “Wait”, “But”, and “Since”. Although these tokens may appear in correct responses, they typically contribute little to the underlying logical derivation. When coupled with large gradient updates, they can induce disproportionately unstable optimization dynamics. In contrast, the retained normal tokens correspond to the structural vocabulary of mathematical reasoning, including words such as “Let”, “find”, “we”, and “can”. These tokens represent essential procedural and logical components that sustain coherent reasoning chains. 
+
+## 6 Conclusion 
+
+In this work, we investigate the instability of RL from a token-level perspective and identify a pathological update regime driven by the interaction between token probability, policy entropy, and advantage sign. We show that a negligible fraction of spurious tokens, defined as rare and uninformative tokens that coincidentally co-occur with correct outcomes, can receive disproportionately amplified gradients and exert an outsized influence on optimization dynamics. To address this instability, we equip the training process with S2T mechanism that efficiently detects spurious tokens using characteristic signals, including low probability, low entropy, and positive advantage, and curtails their gradient influence during optimization. Embedded within a group-based objective, we propose Spurious-Token-Aware Policy Optimization (STAPO), a framework designed to enhance the stability and effectiveness of large-scale model refinement. Empirical results across six mathematical reasoning benchmarks demonstrate that this minimal intervention substantially stabilizes policy entropy and consistently improves reasoning performance. While our current experiments focus primarily on mathematical reasoning tasks, we have yet to evaluate the 11 0 250 500 750 1000 
+
+> Gradient Step
+> 0
+> 0.5
+> 1
+> 1.5
+> 2
+> 2.5
+> 3
+> Spurious Tokens Ratio (×10 −4 )
+> 0.01% Threshold
+> Qwen3-1.7B Base
+> Qwen3-8B Base
+> Qwen3-14B Base
+
+(a) Spurious tokens ratio. (b) Frequent spurious tokens. (c) Frequent normal tokens. 
+
+Figure 6 Analysis of Spurious Tokens. (a) indicates the ratio of spurious tokens during training; (b) and (c) present the word clouds of frequently masked spurious tokens and retained normal tokens. 
+
+proposed method in other domains, such as code generation, or conduct ablation studies across all classification scenarios. Moreover, the current analysis focuses primarily on tokens within correct responses. In future work, we plan to extend our empirical evaluation to broader task domains and analyze tokens from incorrect responses, aiming to develop a more comprehensive understanding of token-level dynamics in RL. We hope this study provides new insights into improving the stability of RL for LLM reasoning. 12 References 
+
+[1] Shengbo Eben Li. Reinforcement Learning for Sequential Decision and Optimal Control . Springer, Singapore, 2023. [2] Yuji Cao, Huan Zhao, Yuheng Cheng, Ting Shu, Yue Chen, Guolong Liu, Gaoqi Liang, Junhua Zhao, Jinyue Yan, and Yun Li. Survey on large language model-enhanced reinforcement learning: Concept, taxonomy, and methods. 
+
+IEEE Transactions on Neural Networks and Learning Systems , 2024. [3] Kaiyan Zhang, Yuxin Zuo, Bingxiang He, Youbang Sun, Runze Liu, Che Jiang, Yuchen Fan, Kai Tian, Guoli Jia, Pengfei Li, et al. A survey of reinforcement learning for large reasoning models. arXiv preprint arXiv:2509.08827 ,2025. [4] Shenzhi Wang, Le Yu, Chang Gao, Chujie Zheng, Shixuan Liu, Rui Lu, Kai Dang, Xionghui Chen, Jianxin Yang, Zhenru Zhang, et al. Beyond the 80/20 rule: High-entropy minority tokens drive effective reinforcement learning for llm reasoning. arXiv preprint arXiv:2506.01939 , 2025. [5] Longtian Qiu, Shan Ning, Jiaxuan Sun, and Xuming He. NoisyGRPO: Incentivizing multimodal cot reasoning via noise injection and bayesian estimation. In The Thirty-ninth Annual Conference on Neural Information Processing Systems , 2025. [6] Qiying Yu, Zheng Zhang, Ruofei Zhu, Yufeng Yuan, Xiaochen Zuo, Yu Yue, Weinan Dai, Tiantian Fan, Gaohong Liu, Lingjun Liu, et al. Dapo: An open-source llm reinforcement learning system at scale. arXiv preprint arXiv:2503.14476 , 2025. [7] Chang Gao, Chujie Zheng, Xiong-Hui Chen, Kai Dang, Shixuan Liu, Bowen Yu, An Yang, Shuai Bai, Jingren Zhou, and Junyang Lin. Soft adaptive policy optimization. arXiv preprint arXiv:2511.20347 , 2025. [8] Kai Yang, Xin Xu, Yangkun Chen, Weijie Liu, Jiafei Lyu, Zichuan Lin, Deheng Ye, and Saiyong Yang. Entropic: Towards stable long-term training of llms via entropy stabilization with proportional-integral control. arXiv preprint arXiv:2511.15248 , 2025. [9] Zhihe Yang, Xufang Luo, Zilong Wang, Dongqi Han, Zhiyuan He, Dongsheng Li, and Yunjian Xu. Do not let low-probability tokens over-dominate in rl for llms. arXiv preprint arXiv:2505.12929 , 2025. [10] Tue Le, Nghi DQ Bui, Linh Ngo Van, and Trung Le. Token-regulated group relative policy optimization for stable reinforcement learning in large language models. arXiv preprint arXiv:2511.00066 , 2025. [11] Guanhua Huang, Tingqiang Xu, Mingze Wang, Qi Yi, Xue Gong, Siheng Li, Ruibin Xiong, Kejiao Li, Yuhao Jiang, and Bo Zhou. Low-probability tokens sustain exploration in reinforcement learning with verifiable reward. 
+
+arXiv preprint arXiv:2510.03222 , 2025. [12] Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, YK Li, Yang Wu, et al. Deepseekmath: Pushing the limits of mathematical reasoning in open language models. 
+
+arXiv preprint arXiv:2402.03300 , 2024. [13] Bingxiang He, Zekai Qu, Zeyuan Liu, Yinghao Chen, Yuxin Zuo, Cheng Qian, Kaiyan Zhang, Weize Chen, Chaojun Xiao, Ganqu Cui, et al. Justrl: Scaling a 1.5 b llm with a simple rl recipe. arXiv preprint arXiv:2512.16649 , 2025. [14] Ganqu Cui, Yuchen Zhang, Jiacheng Chen, Lifan Yuan, Zhi Wang, Yuxin Zuo, Haozhan Li, Yuchen Fan, Huayu Chen, Weize Chen, et al. The entropy mechanism of reinforcement learning for reasoning language models. arXiv preprint arXiv:2505.22617 , 2025. [15] Zhiheng Xi, Xin Guo, Yang Nan, Enyu Zhou, Junrui Shen, Wenxiang Chen, Jiaqi Liu, Jixuan Huang, Zhihao Zhang, Honglin Guo, et al. Bapo: Stabilizing off-policy reinforcement learning for llms via balanced policy optimization with adaptive clipping. arXiv preprint arXiv:2510.18927 , 2025. [16] Shumin Wang, Yuexiang Xie, Wenhao Zhang, Yuchang Sun, Yanxi Chen, Yaliang Li, and Yanyong Zhang. On the entropy dynamics in reinforcement fine-tuning of large language models. arXiv preprint arXiv:2602.03392 , 2026. [17] An Yang, Anfeng Li, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo Zheng, Bowen Yu, Chang Gao, Chengen Huang, Chenxu Lv, et al. Qwen3 technical report. arXiv preprint arXiv:2505.09388 , 2025. [18] Scott Fujimoto, Herke Hoof, and David Meger. Addressing function approximation error in actor-critic methods. In International conference on machine learning , pages 1587–1596. PMLR, 2018. 
+
+13 [19] John Schulman, Sergey Levine, Pieter Abbeel, Michael Jordan, and Philipp Moritz. Trust region policy optimization. In International conference on machine learning , pages 1889–1897. PMLR, 2015. [20] Jingliang Duan, Wenxuan Wang, Liming Xiao, Jiaxin Gao, Shengbo Eben Li, Chang Liu, Ya-Qin Zhang, Bo Cheng, and Keqiang Li. Distributional soft actor-critic with three refinements. IEEE Transactions on Pattern Analysis and Machine Intelligence , 47(5):3935–3946, 2025. [21] Guojian Zhan, Likun Wang, Xiangteng Zhang, Jiaxin Gao, Masayoshi Tomizuka, and Shengbo Eben Li. Bootstrap off-policy with world model. In The Thirty-ninth Annual Conference on Neural Information Processing Systems .[22] Aaron Jaech, Adam Kalai, Adam Lerer, Adam Richardson, Ahmed El-Kishky, Aiden Low, Alec Helyar, Aleksander Madry, Alex Beutel, Alex Carney, et al. Openai o1 system card. arXiv preprint arXiv:2412.16720 , 2024. [23] Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song, Peiyi Wang, Qihao Zhu, Runxin Xu, Ruoyu Zhang, Shirong Ma, Xiao Bi, et al. Deepseek-r1 incentivizes reasoning in llms through reinforcement learning. Nature ,645(8081):633–638, 2025. [24] John Schulman, Filip Wolski, Prafulla Dhariwal, Alec Radford, and Oleg Klimov. Proximal policy optimization algorithms. arXiv preprint arXiv:1707.06347 , 2017. [25] Rafael Rafailov, Archit Sharma, Eric Mitchell, Christopher D Manning, Stefano Ermon, and Chelsea Finn. Direct preference optimization: Your language model is secretly a reward model. In Advances in Neural Information Processing Systems , volume 36, pages 53728–53741, 2023. [26] Chujie Zheng, Shixuan Liu, Mingze Li, Xiong-Hui Chen, Bowen Yu, Chang Gao, Kai Dang, Yuqiong Liu, Rui Men, An Yang, Jingren Zhou, and Junyang Lin. Group sequence policy optimization, 2025. [27] Yu Yue, Yufeng Yuan, Qiying Yu, Xiaochen Zuo, Ruofei Zhu, Wenyuan Xu, Jiaze Chen, Chengyi Wang, TianTian Fan, Zhengyin Du, et al. Vapo: Efficient and reliable reinforcement learning for advanced reasoning tasks. arXiv preprint arXiv:2504.05118 , 2025. [28] Jiakang Wang, Runze Liu, Lei Lin, Wenping Hu, Xiu Li, Fuzheng Zhang, Guorui Zhou, and Kun Gai. Aspo: Asymmetric importance sampling policy optimization. arXiv preprint arXiv:2510.06062 , 2025. [29] Jingliang Duan, Yang Guan, Shengbo Eben Li, Yangang Ren, Qi Sun, and Bo Cheng. Distributional soft actor-critic: Off-policy reinforcement learning for addressing value estimation errors. IEEE transactions on neural networks and learning systems , 33(11):6584–6598, 2021. [30] Yinuo Wang, Likun Wang, Yuxuan Jiang, Wenjun Zou, Tong Liu, Xujie Song, Wenxuan Wang, Liming Xiao, Jiang Wu, Jingliang Duan, et al. Diffusion actor-critic with entropy regulator. Advances in Neural Information Processing Systems , 37:54183–54204, 2024. [31] Aili Chen, Aonian Li, Bangwei Gong, Binyang Jiang, Bo Fei, Bo Yang, Boji Shan, Changqing Yu, Chao Wang, Cheng Zhu, et al. Minimax-m1: Scaling test-time compute efficiently with lightning attention. arXiv preprint arXiv:2506.13585 , 2025. [32] Guojian Zhan, Xiangteng Zhang, Feihong Zhang, Letian Tao, and Shengbo Eben Li. Bicriteria policy optimization for high-accuracy reinforcement learning. IEEE Transactions on Neural Networks and Learning Systems , 2025. [33] Guojian Zhan, Yuxuan Jiang, Jingliang Duan, Shengbo Eben Li, Bo Cheng, and Keqiang Li. Continuous-time policy optimization. In ACC , pages 3382–3388, 2023. [34] Guangming Sheng, Chi Zhang, Zilingfeng Ye, Xibin Wu, Wang Zhang, Ru Zhang, Yanghua Peng, Haibin Lin, and Chuan Wu. Hybridflow: A flexible and efficient rlhf framework. In Proceedings of the Twentieth European Conference on Computer Systems , pages 1279–1297, 2025. [35] Jia Li, Edward Beeching, Lewis Tunstall, Ben Lipkin, Roman Soletskyi, Shengyi Huang, Kashif Rasul, Longhui Yu, Albert Q Jiang, Ziju Shen, et al. Numinamath: The largest public dataset in ai4maths with 860k pairs of competition math problems and solutions. Hugging Face repository , 13(9):9, 2024. [36] OpenCompass. Aime2025 dataset. https://huggingface.co/datasets/opencompass/AIME2025 , 2025. Accessed: 2025-01-23. [37] Dan Hendrycks, Collin Burns, Saurav Kadavath, Akul Arora, Steven Basart, Eric Tang, Dawn Song, and Jacob Steinhardt. Measuring mathematical problem solving with the math dataset. In Proceedings of the Neural Information Processing Systems Track on Datasets and Benchmarks , volume 1, 2021. 
+
+14 [38] Aitor Lewkowycz, Anders Andreassen, David Dohan, Ethan Dyer, Henryk Michalewski, Vinay Ramasesh, Ambrose Slone, Cem Anil, Imanol Schlag, Theo Gutman-Solo, et al. Solving quantitative reasoning problems with language models. In Advances in Neural Information Processing Systems , volume 35, pages 3843–3857, 2022. [39] Chaoqun He, Renjie Luo, Yuzhuo Bai, Shengding Hu, Zhen Thai, Junhao Shen, Jinyi Hu, Xu Han, Yujie Huang, Yuxiang Zhang, Jie Liu, Lei Qi, Zhiyuan Liu, and Maosong Sun. OlympiadBench: A challenging benchmark for promoting AGI with olympiad-level bilingual multimodal scientific problems. In Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , pages 15865–15895. Association for Computational Linguistics, 2024. [40] Shudong Liu, Hongwei Liu, Junnan Liu, Linchen Xiao, Songyang Gao, Chengqi Lyu, Yuzhe Gu, Wenwei Zhang, Derek F Wong, Songyang Zhang, et al. Compassverifier: A unified and robust verifier for llms evaluation and outcome reward. In Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing ,pages 33454–33482, 2025. [41] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin Zheng, Cody Hao Yu, Joseph Gonzalez, Hao Zhang, and Ion Stoica. Efficient memory management for large language model serving with pagedattention. In 
+
+Proceedings of the 29th symposium on operating systems principles , pages 611–626, 2023. 
+
+15 Appendix 
+
+## A Gradient Norm Decomposition 
+
+We first establish an exact decomposition of the gradient norm with respect to the logits, which serves as the foundation for our bounds. 
+
+Lemma A.1 (Gradient Norm Decomposition [ 9]) . Let a ∈ R|V| denote the logits and πθ (vn) = ean  
+
+> P
+> meam
+
+be the induced softmax distribution. Let yi,t be the target token with index k (i.e., vk = yi,t ). The squared ℓ2-norm of the gradient of the group-style objective J with respect to a satisfies: 
+
+∥∇ aJ (yi,t )∥2 = |wi,t |2
+
+1 − 2πθ (yi,t ) + 
+
+> |V|
+
+X
+
+> n=1
+
+πθ (vn)2
+
+ ,
+
+where the weight wi,t is defined as: 
+
+wi,t =
+
+(0, if( ˆAi > 0 ∧ ρi,t > 1 + ϵ) ∨ ( ˆAi < 0 ∧ ρi,t < 1 − ϵ),   
+
+> πθ(yi,t |x,yi,<t )
+> πθold (yi,t |x,yi,<t )
+
+ˆAi, otherwise .
+
+Proof. Recall that the gradient of the log-likelihood ln πθ (yi,t ) with respect to the logit an is given by 
+
+δkn − πθ (vn), where δkn is the Kronecker delta. The gradient of the weighted objective J is therefore: 
+
+∂J (yi,t )
+
+∂a n = wi,t · (δkn − πθ (vn)) = 
+
+(
+
+wi,t (1 − πθ (vk)) , if n = k, 
+
+−wi,t πθ (vn), if n̸ = k. 
+
+Computing the squared ℓ2-norm by summing over all n ∈ { 1, . . . , |V|} :
+
+∥∇ aJ (yi,t )∥2 =  wi,t (1 − πθ (vk)) 2 + X
+
+> n̸=k
+
+(−wi,t πθ (vn)) 2
+
+= |wi,t |2
+
+(1 − 2πθ (vk) + πθ (vk)2) + X
+
+> n̸=k
+
+πθ (vn)2
+
+
+
+= |wi,t |2
+
+1 − 2πθ (vk) + πθ (vk)2 + X
+
+> n̸=k
+
+πθ (vn)2
+
+ ,
+
+= |wi,t |2
+
+1 − 2πθ (vk) + 
+
+> |V|
+
+X
+
+> n=1
+
+πθ (vn)2
+
+ .
+
+Identifying vk as yi,t completes the proof. 
+
+## B Proof of Proposition 3.1 
+
+We now complete the proof of Proposition 3.1. By Lemma A.1, the squared gradient norm can be written as 
+
+∥∇ aJ (yi,t )∥2 = |wi,t |2
+
+1 − 2πθ (yi,t ) + 
+
+> |V|
+
+X
+
+> n=1
+
+πθ (vn)2
+
+ . (4) Therefore, the term P|V|  
+
+> n=1
+
+πθ (vn)2 is known as the collision probability of the distribution. This quantity measures the concentration of the distribution: it increases as the distribution becomes more peaked and decreases as the distribution becomes more uniform. 16 Lower bound. To derive a lower bound, we relate the collision probability to the Shannon entropy. Recall that the Rényi entropy of order 2 is defined as 
+
+H2(πθ ) = − ln 
+
+
+
+> |V|
+
+X
+
+> n=1
+
+πθ (vn)2
+
+ .
+
+For discrete distributions, the Rényi entropy of order 2 is always upper bounded by the Shannon entropy: 
+
+H2(πθ ) ≤ H (πθ ),
+
+where H(πθ ) = − P|V|  
+
+> n=1
+
+πθ (vn) ln πθ (vn). Substituting this inequality into Eq. (4) gives the entropy-based lower bound: 
+
+∥∇ aJ (yi,t )∥2 ≥ | wi,t |2 
+
+1 − 2πθ (yi,t ) + e−H (πθ )
+
+.
+
+Upper bound. To derive an upper bound, we use an inequality that characterizes how far a discrete distribution deviates from uniformity. For a finite alphabet V, the collision probability satisfies [9] 
+
+> |V|
+
+X
+
+> n=1
+
+πθ (vn)2 ≤ 1 − CV H(πθ )2,
+
+where CV = |V|− 1  
+
+> |V| (ln |V| )2
+
+. Substituting this bound into Eq. (4) yields 
+
+∥∇ aJ (yi,t )∥2 ≤ | wi,t |2  1 − 2πθ (yi,t ) + 1 − CV H(πθ )2
+
+= |wi,t |2  2 − 2πθ (yi,t ) − CV H(πθ )2 .
+
+Combining the lower and upper bounds completes the proof of Proposition 3.1. 
+
+## C Training Details 
+
+We implement our proposed STAPO algorithm based on the open-source alignment framework veRL [34 ]. All models are trained using the AdamW optimizer with a constant learning rate of 1 × 10 −6 and a warm-up phase of 10 steps. To ensure training stability, we apply a global gradient clipping norm of 1.0. For efficient data generation, we utilize vLLM [ 41 ] as the inference backend. The training process employs a global batch size of 256, with each prompt generating a group of G = 8 rollouts. Following the DAPO formulation, we do not employ a separate value network or an additional KL divergence penalty term in the loss function; instead, we rely on group-relative advantages and the clipping mechanism to constrain policy updates. We conduct all experiments on 64 NVIDIA H20 GPUs. The complete set of hyperparameters used across all model scales is detailed in Table 3. 
+
+## D Supplementary Spurious Cases 
+
+In this section, we provide a detailed taxonomic description of the three categories of spurious tokens identified in our mechanistic analysis. Below we detail each category with a representative example referenced from the accompanying tables. 
+
+• Category I: Uncommon Syntax (Table 4). This category comprises tokens that are linguistically valid but highly improbable given the model’s pre-trained distribution. The model often substitutes standard technical terminology with colloquialisms or awkward phrasing. 
+
+Example: As shown in Case 2 , when describing operations on a graph, the model selects the token “broken ” (Prob: 0.05%) to describe the removal of edges. The canonical term “ removed ” dominates the Top-5 distribution (Prob: 85.53%). Reinforcing such low-probability synonyms forces the policy to drift away from standard mathematical language, destabilizing the linguistic entropy. 17 Table 3 Full Training Hyperparameters  
+
+> Hyperparameter Value
+
+Advantage Estimator GRPO Use KL Loss No Use Entropy Regularization No Train Batch Size 256 Max Prompt Length 1k Max Response Length 15k PPO Mini Batch Size 64 PPO Micro Batch Size/GPU 1Clip Ratio Range [0.8, 1.28] Grad Clip 1.0 Learning Rate 1e-6 Warm-up Step 10 Training Temperature 1.0 Training Top-p 1.0 Validation Temperature 0.7 Validation Top-p 0.9 Rollout N 8Reward Function DAPO 
+
+• Category II: Hallucinations and Math Errors (Table 5). This category involves factual inaccuracies, calculation errors, or hallucinated values embedded within a trajectory that coincidentally results in a correct final answer (trajectories with locally incorrect steps but correct final answers). 
+
+Example: In Case 3 , the model attempts to verify a factorization with the equation 6901 = 67 × 103 - 1.Since 67 × 103 equals 6901 exactly, the inclusion of the subtraction operator “ -” renders the statement mathematically false ( 6900 ̸ = 6901 ). Because the final answer matches the ground truth, the RL objective erroneously increases the likelihood of this arithmetic hallucination. 
+
+• Category III: Formatting Errors (Table 6). The final category pertains to L ATEX syntax errors, malformed delimiters, or hallucinated stop sequences that occur in the trajectory but are ignored by the answer extraction parser. 
+
+Example: Case 4 illustrates a latent formatting error. In the summation sequence, the model generates the integer token “ 3” immediately following the plus sign, bypassing the canonical token “ ␣” (space) which carries a significantly higher prior probability. Although L ATEX renderers automatically correct the spacing (making the error invisible in the final output), the policy learns to overfit to a non-standard sequence that omits canonical whitespace. Throughout this section, model outputs are presented as rendered L ATEX to facilitate content verification. However, for errors categorized under formatting or syntax, we retain the raw token sequence to explicitly demonstrate the distributional anomalies.   
+
+> Table 4 Category I: Uncommon Syntax. Case 1 Context:
+
+The length of A is 1981 , and the length of B is 1014 . Since the length of U is 2012 , for the minimum length of A ∩ B, B should start immediately from the right of A. The length of A ∩ B is the sum of the lengths of A and B minus the length of U , so its minimum value is 1981 + 1014 − 2012 = 983 .Here is a Python calculation to verify the above reasoning... Continued on next page... 18 Table 4 – continued from previous page      
+
+> Spurious Token Prob ( P)Adv Top-5 Distribution calculation
+
+0.0115% 1.62 code(51.90%) | program(31.48%) | solution(11.58%) | script(3.32%) | function(0.58%)  
+
+> Case 2 Context:
+
+We are given n islands with ferry lines between each pair of distinct islands, which is essentially a complete graph Kn. Each edge of the graph is colored by one of k colors, corresponding to the companies operating the ferry lines. For any closure of one company, all its lines must be broken (the corresponding edges ignored) such that the remaining graph can no longer support a Hamiltonian Cycle, meaning it’s no longer possible to visit all the islands exactly once without returning to the starting point. According to the condition, every color, therefore, must serve to connect the graph in such a way that the removal of edges of any single color makes the graph Hamiltonian non-existent. In a complete graph Kn, we can color the edges in such a way that removing any single color results in a graph that lacks a Hamiltonian Cycle. For this, we can use a result from graph theory, informally known as "edge coloring minimum spanning trees": for n nodes, we can divide the set of nodes into 2⌊ n 
+
+> 2
+
+⌋ color classes (as far as coloring spans, and where ⌊x⌋ means "the greatest integer less than x"). So when we have n = 2 m (even) nodes, the maximal number of colors k we can use is m − 1, since we can divide our n nodes into m colors and deleting any one will still result in a complete graph K2m−1
+
+which remains Hamiltonian (since K2m−1 is always Hamiltonian for m ≥ 1). For n = 2 m + 1 (odd) nodes, we can divide our n nodes into m classes, so the discard of any one of these 
+
+m classes will disintegrate the graph such that a Hamiltonian Cycle will become impossible because it contains a vertex of degree 1 or a subdivision thereof.      
+
+> Spurious Token Prob ( P)Adv Top-5 Distribution broken
+
+0.0471% 2.47 removed(85.53%) | closed(3.32%) | deleted(2.58%) | disconnected(1.57%) | taken(0.95%)  
+
+> discard
+
+0.0001% 2.47 maximal(85.89%) | maximum(9.05%) | num-ber(1.57%) | largest(0.45%) | answer(0.45%)  
+
+> Case 3 Context:
+
+Therefore, the final boxed answer is: \[ \boxed {41} \]<|endoftext|>      
+
+> Spurious Token Prob ( P)Adv Top-5 Distribution boxed
+
+0.1486% 0.54 answer(98.88%) | result(0.52%) | value(0.19%) |boxed(0.15%) | solution(0.15%)  
+
+> Case 4 Context:
+
+To solve the given problem, we need to find the smallest number of candies N that satisfies the given conditions. Specifically: 1. When N candies are divided between 21 people (Albert and his 20 friends), the remainder is 5.      
+
+> Spurious Token Prob ( P)Adv Top-5 Distribution between
+
+0.0667% 0.72 among(64.55%) | by(23.75%) | evenly(8.74%) |amongst(1.95%) | equally(0.92%)  
+
+> Case 5 Context:
+
+To tr isegment, we must first count the number of points in the polygon. 
+
+###### Step 1:sume the number of points in the polygon Let n yea the number of sides (or vertices) in a polygon P as given in the problem statement. We are given that P1, P 2, . . . P n/ are the n vertices of the polygon. Continued on next page... 19 Table 4 – continued from previous page  
+
+> Spurious Token Prob (
+
+P ) Adv Top-5 Distribution tr 0.0004% 0.72 olve(63.83%) | determine(30.15%) | find(5.24%) | tri-ang(0.20%) | count(0.10%)  
+
+> y
+
+0.0003% 0.72 | be(88.02%) | represent(5.63%) | denote(3.41%) | =(0.76%) | and(0.59%)  
+
+> Table 5 Category II: Hallucinations and Math Errors. Case 1 Context:
+
+A = 12 |x1(y2 − y3) + x2(y3 − y2) + x3(y1 − y2)|
+
+Here, $ x $s and $y$s are the coordinates of the points.  
+
+> Spurious Token Prob (
+
+P ) Adv Top-5 Distribution 2 0.0179% 0.54 1(99.95%) | 2(0.01%) | 3(0.01%) | 0(0.00%) | }_-(0.00%)  
+
+> $s
+
+0.0117% 0.54 _(94.78%) | 1(1.05%) | =(0.82%) | _{(0.82%) | $(0.50%)  
+
+> Case 2 Context:
+
+(a − 10 , b − 10) = (193 , 11) → a = 203 , b = 21 3Spurious Token Prob ( P ) Adv Top-5 Distribution 3 0.0017% 0.94 \ (99.98%) | \n (0.01%) | 1(0.01%) | \\n (0.00%) | 3(0.00%)  
+
+> Case 3 Context:
+
+6901 = 67 × 103 -1 
+
+> Spurious Token Prob (
+
+P ) Adv Top-5 Distribution - 0.0202% 1.21 $,(99.48%) | $(0.36%) | +(0.13%) | -(0.02%) |=(0.00%)  
+
+> Case 4 Context:
+
+−16 a3 = 350 ,a3 = −21 .5625 . 
+
+> Spurious Token Prob (
+
+P ) Adv Top-5 Distribution 5 0.1896% 1.62 8(98.16%) | 2(1.40%) | 5(0.24%) | 9(0.07%) | 7(0.04%)  
+
+> Case 5 Context:
+
+Compute a for Each Pair: Continued on next page... 20 Table 5 – continued from previous page 
+
+(−5, 30) → a = −25 (−4, 12) → a = −8(−3, 6) → a = −3(−2, 3) → a = −1(0 , 0) → a = 0 (−7, −42) → a = 49 (−8, −24) → a = 32 (−9, −18) → a = 9
+
+(−10 , −15) → a = 5 (−12 , −12) → a = 24      
+
+> Spurious Token Prob ( P)Adv Top-5 Distribution 9
+
+0.0123% 0.35 2(99.98%) | 9(0.01%) | 1(0.01%) | 3(0.00%) | 8(0.00%)  
+
+> Case 6 Context:
+
+Thus, 
+
+sin x = 435 
+
+> 4
+
+35 = 435 533      
+
+> Spurious Token Prob ( P)Adv Top-5 Distribution 4
+
+0.0867% 1.62 5(95.28%) | 3(3.69%) | \(0.64%) | 6(0.11%) | 4(0.09%)   
+
+> Table 6 Category III: Formatting Errors. Case 1 Context:
+
+To solve this problem, let’s start by using the given information about the function f (x) = 
+
+ax 2 + bx + c:1. Since f (1) = 0 , we know that: 
+
+a + b + c = 0 
+
+This means c = −a − b.
+
+> Now
+
+, substitute c = −a − b into the quadratic function: 
+
+f (x) = ax 2 + bx − (a + b)     
+
+> Spurious Token Prob ( P)Adv Top-5 Distribution Now
+
+0.0708% 0.35 2(99.74%) | Next(0.12%) | Now(0.06%) | So(0.03%) | Sub(0.02%)  
+
+> Case 2 Context:
+
+\boxed{5 \text{ agony}}      
+
+> Spurious Token Prob ( P)Adv Top-5 Distribution \
+
+0.0015% 0.35 }\n (99.57%) | }(0.25%) | } \n\n (0.12%) | } \(0.03%) | }. \n (0.01%)  
+
+> Case 3 Context:
+
+\therefore 10^y )$ \(\sqrt{25}=5 
+
+Continued on next page... 21 Table 6 – continued from previous page  
+
+> Spurious Token Prob (
+
+P ) Adv Top-5 Distribution 
+
+)$ 0.0063% 0.72 =(84.69%) | = \(6.95%) | =(4.22%) | \n(1.55%) | 
+
+\n(0.35%) 
+
+> Case 4 Context:
+
+Σ3 = 11 3 + 10 3 + 9 3 + 8 3 + 7 3 + 6 3 + 5 3 + 4 3 +33 + 2 3 + 1 3 + 0 3 
+
+> Spurious Token Prob (
+
+P ) Adv Top-5 Distribution 3 0.0911% 1.62 ␣(99.92%) | 3(0.07%) | \n(0.00%) | \(0.00%) |+(0.00%)  
+
+> Case 5 Context:
+
+Repeating these steps three more times for each roll back to P4: - If A was rolled, P5 = (56 , 368) 
+
+- If B was rolled, P5 = (56 , 184) - If C was rolled, P5 = (768 , 184) :Spurious Token Prob ( P ) Adv Top-5 Distribution : 0.0035% 2.47 \n\n(88.06%) | ((4.38%) | \n(4.38%) | \n\n(1.26%) | ,(0.36%)  
+
+> Case 6 Context:
+
+Hence, the maximum value of $\frac{n_i}{k}$ for 1 \leq i \leq 70 is: 
+
+\[ \boxed{553} \] 
+
+> struck
+
+user<|endoftext|>  
+
+> Spurious Token Prob (
+
+P ) Adv Top-5 Distribution struck 0.0000% 1.21 \(98.58%) | \)(0.13%) | \(0.10%) | $(0.08%) |$$(0.07%) 22

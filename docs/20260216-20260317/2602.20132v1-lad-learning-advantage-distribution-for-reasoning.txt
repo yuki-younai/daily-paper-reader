@@ -1,0 +1,999 @@
+Title: LAD: Learning Advantage Distribution for Reasoning
+
+URL Source: https://arxiv.org/pdf/2602.20132v1
+
+Published Time: Tue, 24 Feb 2026 03:11:14 GMT
+
+Number of Pages: 27
+
+Markdown Content:
+# LAD: Learning Advantage Distribution for Reasoning 
+
+Wendi Li 1 and Sharon Li 11Department of Computer Sciences, University of Wisconsin–Madison 
+
+# Abstract 
+
+Current reinforcement learning objectives for large-model reasoning primarily focus on maximizing expected rewards. This paradigm can lead to overfitting to dominant reward signals, while neglecting alternative yet valid reasoning trajectories, thereby limiting diversity and exploration. To address this issue, we introduce Learning Advantage Distributions (LAD), a distribution-matching framework that replaces advantage maximization with learning the advantage-induced distribution. By establishing the equivalence between the optimal policy update and an advantage-based target distribution, we derive a practical LAD objective formulated as minimizing an 
+
+𝑓 -divergence between the policy-induced and advantage-induced distributions. This yields a gradient update that increases likelihood for high-advantage responses while suppressing over-confident probability growth, preventing collapse without requiring auxiliary entropy regularization. LAD incurs no extra training cost compared to GRPO and scales naturally to LLM post-training. In a controlled bandit setting, LAD faithfully recovers the multimodal advantage distribution, validating the theoretical formulation. Experiments on math and code reasoning tasks across several LLM backbones show that LAD reliably improves both accuracy and generative diversity. Code is available here. 
+
+Date: February 17, 2026 
+
+Contact: {wli679 , sharonli }@cs.wisc.edu 
+
+# 1. Introduction 
+
+Large language models have recently shown impressive performance across a wide range of complex reasoning tasks (Guo et al., 2025; Jaech et al., 2024; Yang et al., 2025). A central approach driving this progress is reinforcement learning with verifiable rewards (RLVR) (Guo et al., 2025; Shao et al., 2024). In RLVR, response correctness is automatically verified using external tools such as compilers, symbolic solvers, or mathematical checkers. By replacing noisy and unreliable feedback with deterministic, verification-based rewards, RLVR enables more stable optimization and mitigates reward hacking, leading to substantial gains in complex logical reasoning tasks (Da et al., 2025; Dong et al., 2025; Jiang et al., 2025a; Liu et al., 2025b; Luo et al., 2025a,b; Shao et al., 2025; Wang et al., 2025b,c). However, current RLVR objectives for large-model reasoning are built around maximizing expected reward, a formulation that inherently overfits to dominant reward signals. This can drive policies toward mode collapses, suppressing alternative reasoning trajectories and reducing exploratory diversity (Cui et al., 2025b; Wu and Choi, 2025). As illustrated in Figure 1 (left), the policy distribution trained with the reward maximization objective (GRPO) concentrates on the most desirable action and neglects other meaningful modes. This reveals a fundamental limitation: the reward-maximization paradigm at the heart of RLVR imposes a structural bottleneck on the diversity and exploration (Liu et al., 2025a; Zhu et al., 2025). Al-though entropy-based constraints and advantage regularization methods have been proposed to mitigate this issue (Cheng et al., 2025; Deng et al., 2025; Wang et al., 2025a; Yu et al., 2025), these approaches largely   
+
+> arXiv:2602.20132v1 [cs.LG] 23 Feb 2026 LAD: Learning Advantage Distribution for Reasoning density
+> state-action space state-action space state-action space
+
+GRPO  FlowRL  LAD 
+
+advantage maximization  learning advantage distribution  
+
+> advantage distirbution policy distirbution
+
+Figure 1 | Advantage distribution and policy distribution on 50-arm bandit trained via different training objectives. retain reward expectation maximization as their core objective. To address this limitation, we propose a framework that makes the policy Learn the Advantage Distribution (LAD ). Our work takes a perspective shift: we formalize policy optimization as learning to match an advantage-induced distribution, rather than maximizing expected advantage. This shift turns RLVR from a scalar-expectation objective into a distribution-matching problem, allowing the policy to preserve multiple promising reasoning modes instead of collapsing onto a single high-reward trajectory (Figure 1, right). We develop both the theoretical LAD objective and a practical surrogate that avoids intractable computation while preserving the same optima. The training cost of LAD is the same as standard GRPO, making LAD scalable to real-world LLM reasoning tasks. Concurrent work such as FlowRL (Zhu et al., 2025) also departs from pure reward maximization with a reward-matching objective, but it does not learn the full advantage-induced action distribution and can be proved as a more constrained instance of our broader distribution-matching framework. Finally, we validate LAD through both controlled experiments and LLM reasoning evaluations. In a carefully designed bandit environment, LAD can learn the policy distribution that faithfully aligns with the underlying advantage-induced distribution. Additionally, we conduct experiments on six challenging mathematical reasoning and three coding reasoning benchmarks across multiple LLM backbones. LAD consistently improves both accuracy and diversity over GRPO, entropy-regularized baselines, and FlowRL. Further, we conduct comprehensive ablations to understand LAD’s gains across divergence choices and training conditions. Collectively, these findings validate LAD as a principled and effective training objective for RL-based post-training of LLMs, particularly in complex reasoning settings. We summarize our contributions as follows: 1. We introduce LAD, a new objective that reframes RLVR as matching the advantage-induced action distribution instead of maximizing expected advantage. 2. We derive a practical surrogate with theoretical justification and improved optimization behavior, enabling scaling to real-world LLM reasoning tasks with comparable training cost as GRPO. 3. Through extensive experiments and systematic ablations, we provide empirical evidence that LAD achieves superior performance and improves diversity. 
+
+# 2. Preliminary 
+
+Reward Maximization in RL for LLMs. We consider a contextual bandit formulation of reinforcement learning (RL) for LLMs. Let 𝑥 ∈ 𝜌 denote a prompt sampled from a distribution 𝜌 , and let the model (policy) 
+
+𝜋 𝜃 (𝑦 |𝑥 ) generate a response 𝑦 ∈ 𝒴 . Upon observing the response, the environment returns a scalar reward 
+
+𝑟 (𝑥, 𝑦 ) ∈ R. The objective of most existing RL algorithms is to learn policy parameters 𝜃 that maximize the 
+
+> 2LAD: Learning Advantage Distribution for Reasoning
+
+expected reward, 𝐽 (𝜋 𝜃 ) = E𝑥 ∼𝒟 , 𝑦 ∼𝜋 𝜃 (·| 𝑥 )[𝑟 (𝑥, 𝑦 )] . Gradient-based methods (Williams, 1992) optimize this objective by exploiting the identity between ∇𝜃 𝐽 (𝜋 𝜃 ) and 
+
+E𝑥 ∼𝜌,𝑦 ∼𝜋 𝜃 (·| 𝑥 )[−𝐴 (𝑥, 𝑦 )∇𝜃 log 𝜋 𝜃 (𝑦 |𝑥 )] , (1) where 𝐴 (𝑥, 𝑦 ) is an advantage function, commonly approximated by 𝑟 (𝑥, 𝑦 ) − 𝑏 (𝑥 ) with 𝑏 (𝑥 ) serving as a baseline to reduce gradient variance. 
+
+Trust-Region Constrained Policy Optimization. Direct gradient ascent on 𝐽 (𝜋 𝜃 ) can induce large pol-icy updates, often resulting in unstable training. Trust-region methods mitigate this issue by constraining each policy update to remain close to a behavior (sampling) policy 𝜋 old . A canonical formulation under-lying Trust Region Policy Optimization (Schulman et al., 2015) and its practical variant Proximal Policy Optimization (Schulman et al., 2017) is given by: 
+
+max  
+
+> 𝜃
+
+E𝑥 ∼𝜌,𝑦 ∼𝜋 old (·| 𝑥 )[︂ 𝜋 𝜃 (𝑦 |𝑥 )
+
+𝜋 old (𝑦 |𝑥 ) · 𝐴 (𝑥, 𝑦 )]︂ (2) s.t. E𝑥 ∼𝜌 [𝐷 KL (𝜋 old (·| 𝑥 ) ‖ 𝜋 𝜃 (·| 𝑥 ))] ≤ 𝜖, 
+
+where 𝜖 > 0 controls the maximum allowable deviation from the behavior policy via a KL-divergence constraint. 
+
+Reinforcement Learning with Verifiable Reward (RLVR) is a post-training paradigm in which rewards are assigned by deterministic, rule-based verifiers. Because such rewards are less susceptible to reward hacking, RLVR has proven particularly effective for reasoning-intensive tasks. Representative RLVR algorithms, including GRPO (Shao et al., 2024) and RLOO (Ahmadian et al., 2024), typically incorporate group-wise normalization or ranking-based estimators to reduce variance in advantage estimation. Despite these modifications, the core objective of existing RLVR methods remains the maximization of expected advantage, as in Eq. (1) . This objective often leads to a rapid collapse of exploratory diversity, which tends to concentrate probability mass on a small set of high-reward responses and suppress alternative valid reasoning paths (Cui et al., 2025b; Wu and Choi, 2025). Motivated by this limitation, we propose to shift the learning objective from advantage maximization to learning the distribution of advantages. 
+
+# 3. Method 
+
+In this section, we propose Learning Advantage Distribution (LAD) , a framework that trains policies by matching the distribution induced by advantages rather than maximizing expected advantage. Building on the structure implied by trust-region policy optimization, we formulate LAD as minimizing an 𝑓 -divergence between a policy-induced distribution and an advantage-induced distribution (Sec. 3.1). We further derive a practical surrogate loss that preserves the same optimal policy while enabling scalable training for LLMs (Sec. 3.2). 
+
+# 3.1. Learn Advantage Distribution with 𝑓 -divergence 
+
+To align the policy with the distribution induced by advantage values, we first define two distributions: one derived from the policy 𝜋 𝜃 (𝑦 |𝑥 ) and the other from the advantage function 𝐴 (𝑥, 𝑦 ). At optimality, these two distributions coincide. We state this relationship through the following lemma, which directly motivates our training objective. 
+
+Lemma 3.1 (Distribution equivalence ). Let 𝜋 𝜃 denote the current policy parameterized by 𝜃 , and let 𝜋 old be the behavior model. Suppose that 𝜋 𝜃 is optimized using a trust-region constrained reinforcement learning 
+
+> 3LAD: Learning Advantage Distribution for Reasoning
+
+algorithm (e.g., PPO (Schulman et al., 2017)) as in Eq. 2. There exists a Lagrange multiplier 𝜂 > 0, such that the optimal policy 𝜋 * 
+
+> 𝜃
+
+satisfies 𝜋 * 
+
+> 𝜃 (𝑦 |𝑥 )
+> 𝜋 old (𝑦 |𝑥 )
+
+𝑍 𝜋 (𝑥 ) = 𝑒 𝐴 (𝑥,𝑦 )
+
+> 𝜂
+
+𝑍 𝐴 (𝑥 ) , (3) 
+
+where 𝜂 is a Lagrangian multiplier, 𝑍 𝜋 (𝑥 ) = ∑︀ 𝑦 𝜋 *  
+
+> 𝜃 (𝑦 |𝑥 )
+> 𝜋 old (𝑦 |𝑥 )
+
+and 𝑍 𝐴 (𝑥 ) = ∑︀ 𝑦 𝑒 𝐴 (𝑥,𝑦 ) 
+
+> 𝜂
+
+are two normalizations. 
+
+Lemma 3.1 implies that trust-region constrained optimization implicitly induces a policy-improvement probability distribution proportional to the exponentiated advantage. Rather than treating this form as a theoretical result, we make it explicit and treat it as a learning target. This leads to a shift in perspective: policy optimization can be viewed as learning to match an advantage-induced distribution, rather than maximizing expected advantage. Formally, we define two distributions below: 
+
+𝒫 𝜋 𝜃 (𝑦 |𝑥 ) = 𝜋 𝜃 (𝑦 |𝑥 )
+
+𝜋 old (𝑦 |𝑥 )𝑍 𝜋 (𝑥 ) , (4) 
+
+𝒫 𝒜 (𝑦 |𝑥 ) = 𝑒 𝐴 (𝑥,𝑦 )
+
+> 𝜂
+
+𝑍 𝐴 (𝑥 ) . (5) Intuitively, 𝒫 𝒜 is the target advantage distribution, encouraging higher probability to higher-advantage responses; 𝒫 𝜋 𝜃 is the policy-induced distribution measuring how much the policy deviates from the behavior policy. The constructions of 𝒫 𝒜 and 𝒫 𝜋 𝜃 are directly inspired by the optimal policy form arising from trust-region constrained policy optimization. This connection ensures that the proposed distributions are theoretically consistent with established policy improvement principles. Given these two equivalent distributions, we formulate the learning objective by minimizing their di-vergence. To this end, we recall the definition of the 𝑓 -divergence, which is a general class of discrepancy measures that subsumes many commonly used divergences (e.g., KL, Jensen-Shannon, Hellinger etc.). 
+
+Definition 3.1 (𝑓 -divergence) . Let 𝒫 and 𝒬 are two distributions, then for a convex function 𝑓 : [0 , +∞) →
+
+(−∞ , +∞) such that 𝑓 (𝑥 ) is finite for all 𝑥 > 0, and 𝑓 (1) = 0 , the 𝑓 -divergence of 𝒫 from 𝒬 is defined as 
+
+𝐷 𝑓 (𝒫‖𝒬 ) = ∫︁ Ω
+
+𝑓 ( d𝒫 
+
+d𝒬 )d 𝒬 . (6) 
+
+LAD: Minimizing the divergence between 𝒫 𝜋 𝜃 and 𝒫 𝒜 . Using this measure of distributional discrepancy, we propose to train the policy by minimizing the 𝑓 -divergence between 𝒫 𝜋 𝜃 and 𝒫 𝒜 , thereby encouraging the policy to learn the advantage distribution. This divergence-minimization objective constitutes the central novelty of LAD: 
+
+ℒtheorem LAD = E𝑥 ∼𝜌 ∑︁ 𝑦 
+
+𝑒 𝐴 (𝑥,𝑦 )
+
+> 𝜂
+
+𝑍 𝐴 (𝑥 ) 𝑓 ( 
+
+> 𝜋 𝜃 (𝑦 |𝑥 )
+> 𝜋 old (𝑦 |𝑥 )
+
+𝑒 𝐴 (𝑥,𝑦 )
+
+> 𝜂
+
+· 𝑍 𝐴 (𝑥 )
+
+𝑍 𝜋 𝜃 (𝑥 ) ). (7) Importantly, minimizing the LAD objective preserves the same optimal policy as standard trust-region policy optimization, namely 𝜋 * ∝ 𝜋 old · 𝑒 𝐴 (𝑥,𝑦 ) 
+
+> 𝜂
+
+. While the resulting theoretical formulation is principled, it involves normalization terms 𝑍 𝐴 (𝑥 ) and 𝑍 𝜋 𝜃 (𝑥 ) that are intractable for large action spaces such as those encountered in large language models. To address this challenge, we introduce a practical surrogate objective in the next section that is computationally tractable while preserving the same optimal policy. 
+
+> 4LAD: Learning Advantage Distribution for Reasoning
+
+# 3.2. Practical Implementations 
+
+Instead of approximating the intractable normalization constants directly, our key insight is that the optimal policy of an 𝑓 -divergence objective depends only on the relative structure of its weighting functions. This allows us to replace the theoretical LAD objective with a surrogate loss that is tractable yet induces the same optimal policy. To facilitate this transition, we introduce the following lemma. 
+
+Lemma 3.2 (Linking loss formulations to their induced optimal policies.) . Let ℒ = E𝑥 ∼𝜌 ∑︀ 𝑦 𝑔 2(𝑥, 𝑦 )𝑓 ( 𝑝 𝜃 (𝑦 |𝑥 ) 
+
+> 𝑔 1(𝑥,𝑦 )
+
+),where 𝑝 𝜃 (·) is a probability measure with ∑︀ 𝑦 𝑝 (𝜋 ) = 1 . 𝑔 1(𝑥, 𝑦 ), 𝑔 2(𝑥, 𝑦 ) are functions independent of 𝑝 𝜃 .If the ratio 𝑔 2(𝑥,𝑦 ) 
+
+> 𝑔 1(𝑥,𝑦 )
+
+= 𝑍 𝑔 (𝑥 ) depends only on 𝑥 and is independent of 𝑦 , then any optimal solution 𝑝 * 
+
+> 𝜃
+
+of ℒ
+
+satisfies 𝑝 *
+
+> 𝜃
+
+(𝑦 |𝑥 ) ∝ 𝑔 1(𝑥, 𝑦 ).
+
+Interpretation. Applying Lemma 3.2 to the theoretical LAD objective immediately yields the optimal policy 𝜋 * 
+
+> 𝜃
+
+∝ 𝜋 old · 𝑒 𝐴 (𝑥,𝑦 ) 
+
+> 𝜂
+
+. Crucially, the lemma also implies that this optimal policy can be recovered by alternative loss formulations, provided that the induced ratio between the weighting functions remains invariant with respect to 𝑦 . In particular, when setting 𝑝 𝜃 = 𝜋 𝜃 and choosing 𝑔 1(𝑥, 𝑦 ) = 𝑔 2(𝑥, 𝑦 ) = 𝜋 old · 𝑒 𝐴 (𝑥,𝑦 ) 
+
+> 𝜂
+
+,the resulting objective admits the same optimal policy, 𝜋 * 
+
+> 𝜃
+
+∝ 𝜋 old · 𝑒 𝐴 (𝑥,𝑦 ) 
+
+> 𝜂
+
+, while avoiding the intractable normalization terms present in the theoretical LAD loss. This observation enables transforming the theoretical LAD objective into a practical surrogate that is computationally tractable while preserving the same optimal policy. 
+
+LAD practical objective: 
+
+ℒLAD = E𝑥 ∼𝜌,𝑦 ∼𝜋 old (·| 𝑥 )𝑒 𝐴 (𝑥,𝑦 ) 
+
+> 𝜂
+
+𝑓 ( 
+
+> 𝜋 𝜃 (𝑦 |𝑥 )
+> 𝜋 old (𝑦 |𝑥 )
+
+𝑒 𝐴 (𝑥,𝑦 )
+
+> 𝜂
+
+). (8) This practical objective admits the same optimal policy as the theoretical loss ℒtheorem LAD , while exhibiting favorable optimization behavior and closely approximating it in practice. 
+
+# 3.3. Analyses and Discussions 
+
+ℒLAD yields desirable loss behavior with implicit regularization. The gradient of the practical LAD loss with respect to the policy parameters ∇𝜃 ℒLAD can be written as, 
+
+E𝑥 ∼𝜌,𝑦 ∼𝜋 𝜃 (·| 𝑥 )𝑓 ′( 
+
+> 𝜋 𝜃 (𝑦 |𝑥 )
+> 𝜋 old (𝑦 |𝑥 )
+
+𝑒 𝐴 (𝑥,𝑦 )
+
+> 𝜂
+
+) · ∇ 𝜃 log 𝜋 𝜃 (𝑦 |𝑥 ). (9) In contrast to the vanilla policy gradient in Eq. (1) , which increases the log-likelihood of all actions with positive advantage, the weighting term in the LAD gradient, 𝑓 ′( 𝜋 𝜃 (𝑦 |𝑥 ) 
+
+> 𝜋 old (𝑦 |𝑥 )
+
+· 𝑒 −𝐴 (𝑥,𝑦 ) 
+
+> 𝜂
+
+) depends jointly on the advantage 𝐴 (𝑥, 𝑦 ) and the likelihood ratio 𝜋 𝜃 (𝑦 |𝑥 ) 
+
+> 𝜋 old (𝑦 |𝑥 )
+
+. As a result, even when a trajectory (𝑥, 𝑦 ) has a large positive advantage, the LAD gradient naturally suppresses further increases in log 𝜋 𝜃 (𝑦 |𝑥 ) once the likelihood ratio becomes sufficiently large. This adaptive weighting prevents uncontrolled amplification of action probabilities and induces an implicit regularization effect, leading to more stable optimization and improved diversity preservation. Unlike PPO-style clipping as detailed in Appendix B.4, which enforces hard constraints on likelihood ratios, LAD induces a soft, advantage-aware suppression mechanism that emerges naturally from distribution matching. 
+
+> 5
+
+LAD: Learning Advantage Distribution for Reasoning 0.8 0.6 0.4 0.2 0.0     
+
+> 0.0
+> 0.5
+> 1.0
+> 1.5
+> 2.0
+> 0.04967
+> 0.05079
+> 0.05190
+> 0.05301
+> 0.05412
+> 0.05524
+> 0.05635
+> 0.05746
+> 0.05857
+> 0.05969
+> 0.06080
+> 0.06191
+> 0.06302
+> 0.06414
+> 0.06525
+> 0.06636
+> 0.06748
+> 0.06859
+> 0.06970
+> 0.07081
+> 0.07193
+> 0.07304
+> 0.07415
+> 0.07526
+> 0.07638 0.8 0.6 0.4 0.2 0.0
+> 0.0
+> 0.5
+> 1.0
+> 1.5
+> 2.0
+> 0.02474 0.02528
+> 0.02583
+> 0.02637
+> 0.02692
+> 0.02746
+> 0.02801
+> 0.02855
+> 0.02910
+> 0.02964
+> 0.03019
+> 0.03074
+> 0.03128
+> 0.03183
+> 0.03237
+> 0.03292
+> 0.03346
+> 0.03401
+> 0.03455
+> 0.03510
+> 0.03564
+> 0.03619
+> 0.03673
+> 0.03728
+> 0.03782
+
+Figure 2 | Learning dynamics of GRPO, the theoretical LAD loss, and the practical LAD loss. The loss landscape is constructed with the practical LAD loss. Top: LAD loss under Hellinger distance. Bottom: LAD loss under Jensen–Shannon divergence. 
+
+ℒLAD is a close surrogate to the theoretical LAD objective ℒtheorem LAD . Beyond inducing desirable gradient behavior, the practical LAD objective also closely approximates the theoretical LAD formulation, thereby serving as a principled and reliable surrogate. A formal bound is given in Theorem B.1, and additional discus-sion and empirical validation are provided in Appendix B.3. Finally, we summarize several representative choices of divergence functions within the LAD framework in Table 5. 
+
+# 4. Experiments 
+
+We empirically evaluate LAD to answer three key questions: (i) Does the LAD objective successfully learn advantage distributions in controlled settings? (ii) Does this translate into improvements on large-scale reasoning tasks? (iii) How do different divergence choices and hyperparameters influence performance? To this end, we begin with a controlled distribution-matching task, followed by extensive LLM experiments, and conclude with a set of ablation studies. 
+
+# 4.1. Controlled Experiments 
+
+We begin with a controlled bandit environment to visualize the behavior of different objectives. This setting 
+
+allows us to directly compare the learned policy distribution against the ground-truth advantage distribution ,revealing whether an objective genuinely performs distribution matching. 
+
+Settings. We design a 50-bandit problem. The policy model is parameterized by a 1 × 50 vector, where each entry represents the probability of selecting a corresponding arm. The policy model 𝜋 𝜃 and the behavior model 𝜋 old are initialized to the uniform distribution. The underlying advantage distribution is constructed as a mixture of three Gaussian distributions, resulting in three distinct modes. Training is performed for 4000 steps. At each step, the behavior policy 𝜋 old is sampled 32 times with a sampling temperature of 1.5. The behavior policy is updated twice throughout training. We use a learning rate of 5e-3. For LAD loss variants, 
+
+𝜂 is set to 1. For GRPO, we additionally apply a KL-divergence regularization between 𝜋 and 𝜋 old with weight 1. Under this setting, the theoretical optimal policy of GRPO coincides with that of the LAD objective, enabling a fair comparison. 
+
+LAD loss successfully matches the two distributions. Figure 1 visualizes the final learned policy distri-butions alongside the ground-truth advantage distribution. The advantage distribution is shown in orange, while the learned policy distribution is shown in blue. The LAD objective ℒLAD enables the policy-induced 
+
+6LAD: Learning Advantage Distribution for Reasoning 
+
+Table 1 | Performance of different losses on math reasoning benchmarks. The best two results under Avg@32 are highlighted in bold and underlined. Methods MATH Olympiad Bench Minerva AIME 2024 AIME 2025 AMC Average GRPO (Shao et al., 2024) 75.57 39.47 36.32 14.03 4.86 53.44 37.28 EntAdv (Cheng et al., 2025) 76.60 41.16 35.68 15.00 7.23 52.97 38.11 KLCov (Cui et al., 2025b) 76.40 40.13 36.28 14.66 9.81 53.45 38.46 ClipCov (Cui et al., 2025b) 76.03 40.30 37.58 16.29 7.39 52.27 38.31 FlowRL (Zhu et al., 2025) 77.17 40.80 36.21 14.67 7.51 47.34 37.28 LAD 77.66 41.25 36.68 19.60 8.84 56.45 40.08 
+
+Table 2 | Performance of different losses on code reasoning benchmarks. The best two results under a specific metric are highlighted in bold and underlined. Method LiveCodeBench HumanEval+ CodeForces Avg@16 Pass@16 Avg@16 Pass@16 Rating Percentile GRPO (Shao et al., 2024) 32.46 51.25 80.90 93.25 1355.35 70.30 % EntAdv (Cheng et al., 2025) 32.75 50.90 81.05 95.09 1382.78 72.20% KLCov (Cui et al., 2025b) 29.50 50.18 80.75 95.09 1373.07 71.60% ClipCov (Cui et al., 2025b) 32.10 51.97 81.48 94.49 1473.09 79.20% FLowRL (Zhu et al., 2025) 33.24 51.61 81.29 95.09 1364.70 71.00% LAD 33.51 51.97 82.29 95.71 1533.64 82.50% 
+
+distribution 𝒫 𝜋 𝜃 to closely match the target advantage distribution 𝒫 𝐴 , faithfully recovering all three modes. In contrast, the advantage-maximization objective of GRPO concentrates probability mass on a single arm. This leads to a collapse of the policy distribution and a substantial reduction in generative diversity during training, ultimately resulting in suboptimal performance on the less preferred arm. 
+
+LAD loss ℒLAD is an accurate surrogate of ℒtheorem LAD . We further examine the learning dynamics induced by ℒLAD , ℒtheorem LAD and GRPO. The corresponding trajectories are visualized in Figure 2. To construct the loss landscape, we use the practical LAD objective and project the model parameters from each training step onto this landscape. As shown in Figure 2, the optimization trajectories induced by the practical loss and the theoretical loss closely align, exhibiting highly similar learning dynamics. In contrast, GRPO follows a markedly different trajectory, deviating from the geometry implied by the theoretical LAD objective. These results empirically confirm that the practical LAD loss serves as a faithful and accurate surrogate for the theoretical formulation. 
+
+Comparison with FlowRL. Concurrent with our work, FlowRL (Zhu et al., 2025) proposes to move beyond reward maximization by adopting a reward-matching objective derived from the trajectory balance loss in GFlowNets (Bengio et al., 2023). While this formulation departs from conventional reward-maximization objectives, Figure 1 (middle) shows that FlowRL fails to fully align the advantage-induced distribution 𝒫 𝒜 
+
+and the policy-induced distribution 𝒫 𝜋 𝜃 . As detailed in Appendix B.5, FlowRL can in fact be cast as a special case of the LAD framework, but only under substantially stricter conditions on policy updates and parameter scaling. In contrast, LAD provides a more general and theoretically grounded framework that directly learns the advantage distribution through principled 𝑓 -divergence minimization, thus allowing LAD to more faithfully capture the full structure of the advantage distribution. 
+
+> 7LAD: Learning Advantage Distribution for Reasoning
+
+Table 3 | Performance of LAD and FlowRL on different LLM backbones. The best result is highlighted in 
+
+bold .Methods MATH Olympiad Bench Minerva AIME 2024 AIME 2025 AMC Average                                                         
+
+> OpenMath-Nemotron-1.5B: Avg@32
+> FlowRL 80.43 45.81 21.02 21.36 22.66 55.47 41.13 LAD 86.81 55.63 22.98 32.70 26.47 68.71 48.88
+> OpenMath-Nemotron-1.5B: Pass@32
+> FlowRL 94.60 65.93 38.24 56.35 37.60 80.65 66.98 LAD 97.20 78.52 42.28 72.29 54.38 89.08 72.29
+> Thinkless-DeepScaleR-1.5B: Avg@32
+> FlowRL 80.90 42.71 34.11 19.41 16.90 54.80 41.47 LAD 83.01 46.08 33.71 21.85 20.13 59.38 44.03
+> Thinkless-DeepScaleR-1.5B: Pass@32
+> FlowRL 96.40 69.19 56.62 51.56 43.64 84.79 67.03 LAD 95.60 69.93 60.66 55.52 42.60 86.62 68.49
+
+Table 4 | Generative diversity results of on rollouts of AIME 24/25 problems. The best two results under a specific metric are highlighted in bold and underlined. Methods dist-3( ↑) dist-4( ↑) GPT4-Judge( ↑)GRPO 0.2306 0.2902 2.04 EntAdv 0.2978 0.3782 2.07 KLCov 0.2471 0.3262 2.07 ClipCov 0.3315 0.4171 2.10 FLowRL 0.2878 0.3654 2.38 LAD 0.3498 0.4442 2.58 
+
+# 4.2. LLM Experiments 
+
+Having verified that LAD recovers the target distribution in a toy setting, we now test whether these benefits translate to real-world LLM tasks. 
+
+Experimental settings. We experiment on both the math and code domains. For the math domain, we use Qwen2.5-7B (Qwen et al., 2025) as our LLM backbone and DAPO-MATH (Yu et al., 2025) as our training dataset. The experimental protocol follows Cui et al. (2025b) with a dynamic sampling strategy and the clip-higher technique (Yu et al., 2025). Evaluation is conducted on a diverse set of mathematical reasoning benchmarks, including MATH500 (Lightman et al., 2023), AIME 2024, AIME 2025 (Li et al., 2024), AMC (Li et al., 2024), OlympiadBench (He et al., 2024), and Minerva (Lewkowycz et al., 2022). For the code domain, we use DeepSeek-R1-Distill-7B as our LLM backbone and DeepCoder (Luo et al., 2025b) as our training dataset. We follow the experimental protocol of (Zhu et al., 2025), and evaluate the performance on LiveCodeBench (Jain et al., 2025), CodeForces (Penedo et al., 2025), and HumanEval+ (Chen et al., 2021). For both domains, we employ GRPO as the advantage estimator and use Jensen-Shannon divergence to implement LAD loss. The learning rate is set to 1e-6. More implementation details are in Appendix C.2. 
+
+Baselines. We compare against the latest methods designed to mitigate entropy collapse and improve generative diversity, including EntAdv, KLCov, and ClipCov (Cui et al., 2025b), as well as FlowRL (Zhu et al., 2025). EntAdv, KLCov, and ClipCov are regulation-based approaches that introduce additional regularization terms into the loss function; however, they retain expected advantage maximization as the primary optimization objective. In contrast, FlowRL represents the most recent departure from advantage maximization by explicitly learning a reward-matching objective.           
+
+> 8LAD: Learning Advantage Distribution for Reasoning 1/2 124816
+> 1/
+> 36
+> 37
+> 38
+> 39
+> 40
+> Avg@16
+> GRPO = 37.29 1/2 124816
+> 1/
+> 54
+> 56
+> 58
+> 60
+> 62
+> Pass@16
+> GRPO = 54.44
+
+Figure 3 | Average Avg@16 and Pass@16 scores over six mathematical benchmarks with different values of the hy-perparameter 𝜂 .KL JF rKL TV HD JS       
+
+> 35
+> 36
+> 37
+> 38
+> 39
+> 40
+> Avg@32
+> KL JF rKL TV HD JS
+> 60
+> 62
+> 64
+> 66
+> Pass@32
+> non-strict divergence strict divergence
+
+Figure 4 | The average math reasoning perfor-mance of LAD loss variants under different 𝑓 -divergence classes. The dashed lines represent the average performances of the strict and non-strict divergence classes. 
+
+LAD leads to superior reasoning performance. Table 1 reports the performance of different training objectives on a suite of mathematical reasoning benchmarks. Across nearly all benchmarks, LAD consistently outperforms prior methods, achieving the best average performance under both evaluation protocols. In particular, LAD attains the highest Avg@32 score overall (40.08), with substantial gains on challenging benchmarks such as AIME 2024 (+3.31 over the strongest baseline) and AMC (+3). Performance under the Pass@32 metric is also reported in Appendix C.3, where LAD achieves a new state-of-the-art average score of 65.76, outperforming FlowRL by 2.63 points and regulation-based methods by an even larger margin. A similar performance advantage is observed on code reasoning tasks (Table 2), where LAD achieves the best results on LiveCodeBench and HumanEval+ and the highest CodeForces percentile (82.50%), indicating not only improved reasoning accuracy but also superior generalization to real-world programming problem difficulty. Taken together, these results demonstrate that LAD is broadly effective at improving both mathematical and code reasoning across diverse benchmarks and evaluation settings. 
+
+LAD boosts generative diversity. To evaluate the effectiveness of LAD in enhancing response diversity, we follow Zhu et al. (2025) and assess logical diversity using an LLM-as-a-Judge framework with GPT-4-Turbo on AIME 2024/2025 as detailed in Appendix C.2. In addition to logical diversity, we measure lexical diversity using standard automatic metrics, distinct-𝑛 with 𝑛 =3,4. As shown in Table 4, LAD attains the highest distinct-3 and distinct-4 scores, indicating substantially richer lexical variation than all baselines. Meanwhile, LAD achieves the highest GPT-4 Judge score among all methods, suggesting that a diverse logical pattern accompanies its increased diversity. 
+
+LAD can be extended to different LLM backbones. Besides the Qwen2.5-7B for math reasoning and DeepSeek-R1-Distill-7B for code reasoning, we further include two other LLM backbones, OpenMath-Nemotron-1.5B and Thinkless-DeepScaleR-1.5B. As shown in Table 3, LAD still outperforms FlowRL on both backbones. 
+
+# 4.3. Further Studies 
+
+Effect of divergence classes: strict divergences outperform weaker ones. The math reasoning perfor-mances of all LAD variants are shown in Figure 4. We comprehensively consider the KL divergence (KL), the reverse KL divergence (rKL), the Jeffreys divergence (JF), the total variation distance (TV), the Hellinger Distance (HD), and the Jensen-Shannon divergence (JS). Among all the divergence classes in our experiments, TV, HD, and JS are strict divergences that force exact matching at their minimum. On the contrary, KL, rKL, 
+
+> 9LAD: Learning Advantage Distribution for Reasoning
+
+and JF are weaker divergences. Minimizing them does not necessarily imply distributional equality in practice. Overall, strict divergences generally lead to higher overall performance because they penalize discrepancies symmetrically, thereby helping LAD learn the advantage distribution more faithfully, which in turn leads to improved reasoning outcomes. 
+
+Effect of 𝜂 . To evaluate the sensitivity of LAD to 𝜂 , we train models with six values of 𝜂 ∈ { 0.5, 1, 2, 4, 8, 16 }.Figure 3 reports the average Avg@16 and Pass@16 scores across six mathematical reasoning benchmarks. These results suggest that LAD consistently outperforms GRPO under a broad range of 𝜂 , indicating that its effectiveness is not critically dependent on precise tuning of 𝜂 .GRPO EntAdv KLCov ClipCov FlowRL LAD 
+
+> 2.4
+> 2.6
+> 2.8
+> 3.0
+> 3.2
+> 3.4
+> 3.6
+> Timing per Token (× 0.001s)
+
+Figure 5 | The distribution of GPU time per token throughout the training process. 
+
+Computational cost of LAD is comparable to GRPO. Figure 5 compares the training costs of LAD with those of the baseline methods. FlowRL and KLCov incur the highest computational over-head, as both require additional evaluations of the reference model probabilities; moreover, FlowRL introduces an extra auxiliary module to approxi-mate an otherwise intractable term in its objective. In contrast, LAD does not require any additional model components or extra forward passes. Its im-plementation involves only a minimal modification to the loss function, resulting in a training cost that is comparable to that of the vanilla GRPO baseline. 
+
+# 5. Related Works 
+
+Reinforcement learning has emerged as a major approach for LLM post-training (Grattafiori et al., 2024; Qwen et al., 2025; Team et al., 2023), which have been widely applied to various domains, including instruction following (Ouyang et al., 2022; Stiennon et al., 2020) and human-value alignment (Azar et al., 2024; Dong et al., 2024; Meng et al., 2024; Rafailov et al., 2024). More recently, reinforcement learning has demonstrated substantial gains in enhancing the reasoning capabilities of LLMs (Cui et al., 2025a; Li and Li, 2025; Yuan et al., 2025). In this context, reinforcement learning with verifiable rewards (RLVR) has emerged as a particularly effective approach, owing to its robust and reliable reward signals (Hu et al., 2025; Wang et al., 2024; Yue et al., 2025; Zeng et al., 2025; Zhang et al., 2025; Zhao et al., 2025). Despite these advances, most existing RL methods for LLMs continue to rely on advantage maximization as the core training objective, which inherently biases policies toward a small set of high-reward responses and limits generative diversity (Cui et al., 2025b; Liu et al., 2025a). Concurrent with our work, FlowRL (Zhu et al., 2025) also moves beyond advantage maximization to learn reward-matching. However, as evidenced in Figure 1 and Appendix B.5, FlowRL exhibits limited distribution matching behavior and can be interpreted as a special case of our LAD framework under stricter conditions. Additional related work and detailed comparisons with traditional RL paradigms, including distributional RL, risk-sensitive RL and multi-objective RL, are provided in Appendix A. 
+
+# 6. Conclusion 
+
+Current RL objectives for large-model reasoning primarily maximize expected rewards, which encourages overfitting to dominant outcomes and suppresses viable alternative reasoning paths. We instead introduce 
+
+> 10 LAD: Learning Advantage Distribution for Reasoning
+
+Learning Advantage Distributions (LAD), a distribution-matching framework that optimizes policy updates by minimizing an 𝑓 -divergence between the policy and the advantage-induced action distribution. This approach preserves multiple promising reasoning modes and avoids mode collapse without additional regularization. Experiments on multiple math and code reasoning benchmarks show that LAD consistently improves both accuracy and generative diversity over strong RLVR baselines. 
+
+# Acknowledgement 
+
+We thank Changdae Oh and Yu Wang for their valuable suggestions on the paper. This work is supported in part by the AFOSR Young Investigator Program under award number FA9550-23-1-0184, National Science Foundation under awards IIS-2237037 and IIS-2331669, Office of Naval Research under grant number N00014-23-1-2643, Schmidt Sciences Foundation, Open Philanthropy, Alfred P. Sloan Fellowship, and gifts from Google and Amazon. 
+
+# Limitations 
+
+While LAD demonstrates promising improvements in performance and diversity, several limitations remain. First, our work focuses on post-training scenarios where responses can be evaluated with verifiable signals (e.g., mathematical or programmatic correctness). Although this setting is common in recent RL research for LLMs, extending LAD to domains without objective verifiers, such as open-ended dialogue or creative writing, may require additional mechanisms for reward signal quality. This represents an orthogonal challenge rather than a failure of the method itself. Second, our empirical evaluations focus on mathematical and code reasoning benchmarks. These bench-marks are representative of RLVR-style settings but do not encompass all possible LLM capabilities. Broader evaluation across multimodal tasks, multilingual reasoning, and agentic decision-making is left for future work. Meanwhile, our evaluation is conducted on 1.5B- and 7B-scale models. These sizes are standard for research-stage RL studies, but we do not presume automatic transfer to 30B–70B+ or frontier-scale models. Scaling studies are left for future work and are expected to be influenced by factors such as sampling budgets, hyperparameters, and verifier reliability, rather than limitations of LAD itself. Finally, although LAD provides theoretical justification, we do not claim formal convergence guarantees for all divergence classes or optimization schedules. This is a standard limitation shared with most large-model RL methods, and strengthening theoretical guarantees remains an interesting direction for future research rather than a missing requirement for practical validity. 
+
+# Ethic Considerations 
+
+This work focuses on reinforcement learning for reasoning tasks, where correctness can be automatically evaluated. As such, our experiments are conducted exclusively in domains with objective ground-truth verification to reduce risks associated with generating misleading or harmful content. Our approach of learning advantage distribution (LAD) introduced here operate purely at the optimization and distribution-learning level and do not involve new data sources, new modalities, or sensitive information. In deployment settings, LAD should be paired with standard safety practices for LLMs (e.g., alignment checks, content filtering, and supervised oversight), which are orthogonal to the contributions of this work. 
+
+> 11 LAD: Learning Advantage Distribution for Reasoning
+
+# References 
+
+A. Abels, D. Roijers, T. Lenaerts, A. Nowé, and D. Steckelmacher. Dynamic weights in multi-objective deep reinforcement learning. In International conference on machine learning , pages 11–20. PMLR, 2019. A. Ahmadian, C. Cremer, M. Gallé, M. Fadaee, J. Kreutzer, O. Pietquin, A. Üstün, and S. Hooker. Back to basics: Revisiting reinforce-style optimization for learning from human feedback in llms. In Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) ,pages 12248–12267, 2024. M. G. Azar, Z. D. Guo, B. Piot, R. Munos, M. Rowland, M. Valko, and D. Calandriello. A general theoretical paradigm to understand learning from human preferences. In International Conference on Artificial Intelligence and Statistics , pages 4447–4455. PMLR, 2024. M. G. Bellemare, W. Dabney, and R. Munos. A distributional perspective on reinforcement learning. In 
+
+International conference on machine learning , pages 449–458. PMLR, 2017. Y. Bengio, S. Lahlou, T. Deleu, E. J. Hu, M. Tiwari, and E. Bengio. Gflownet foundations. Journal of Machine Learning Research , 24(210):1–55, 2023. S. Cen, J. Mei, K. Goshvadi, H. Dai, T. Yang, S. Yang, D. Schuurmans, Y. Chi, and B. Dai. Value-incentivized preference optimization: A unified approach to online and offline RLHF. CoRR , abs/2405.19320, 2024. doi: 10.48550/ARXIV.2405.19320. URL https://doi.org/10.48550/arXiv.2405.19320 .M. Chen, J. Tworek, H. Jun, Q. Yuan, H. P. de Oliveira Pinto, J. Kaplan, H. Edwards, Y. Burda, N. Joseph, G. Brockman, A. Ray, R. Puri, G. Krueger, M. Petrov, H. Khlaaf, G. Sastry, P. Mishkin, B. Chan, S. Gray, N. Ryder, M. Pavlov, A. Power, L. Kaiser, M. Bavarian, C. Winter, P. Tillet, F. P. Such, D. Cummings, M. Plappert, F. Chantzis, E. Barnes, A. Herbert-Voss, W. H. Guss, A. Nichol, A. Paino, N. Tezak, J. Tang, I. Babuschkin, S. Balaji, S. Jain, W. Saunders, C. Hesse, A. N. Carr, J. Leike, J. Achiam, V. Misra, E. Morikawa, A. Radford, M. Knight, M. Brundage, M. Murati, K. Mayer, P. Welinder, B. McGrew, D. Amodei, S. McCandlish, I. Sutskever, and W. Zaremba. Evaluating large language models trained on code. CoRR , abs/2107.03374, 2021. URL https://arxiv.org/abs/2107.03374 .D. Cheng, S. Huang, X. Zhu, B. Dai, W. X. Zhao, Z. Zhang, and F. Wei. Reasoning with exploration: An entropy perspective. arXiv preprint arXiv:2506.14758 , 2025. G. Cui, L. Yuan, Z. Wang, H. Wang, W. Li, B. He, Y. Fan, T. Yu, Q. Xu, W. Chen, et al. Process reinforcement through implicit rewards. arXiv preprint arXiv:2502.01456 , 2025a. G. Cui, Y. Zhang, J. Chen, L. Yuan, Z. Wang, Y. Zuo, H. Li, Y. Fan, H. Chen, W. Chen, et al. The entropy mechanism of reinforcement learning for reasoning language models. arXiv preprint arXiv:2505.22617 ,2025b. J. Da, C. Wang, X. Deng, Y. Ma, N. Barhate, and S. Hendryx. Agent-rlvr: Training software engineering agents via guidance and environment rewards. arXiv preprint arXiv:2506.11425 , 2025. W. Dabney, M. Rowland, M. Bellemare, and R. Munos. Distributional reinforcement learning with quantile regression. In Proceedings of the AAAI conference on artificial intelligence , volume 32, 2018. N. Das, S. Chakraborty, A. Pacchiano, and S. R. Chowdhury. Active preference optimization for sample efficient rlhf. In ICML 2024 Workshop on Theoretical Foundations of Foundation Models . OpenReview.net, 2024. J. Deng, J. Chen, Z. Chen, W. X. Zhao, and J.-R. Wen. Decomposing the entropy-performance exchange: The missing keys to unlocking effective reinforcement learning. arXiv preprint arXiv:2508.02260 , 2025. 
+
+> 12 LAD: Learning Advantage Distribution for Reasoning
+
+G. Dong, H. Mao, K. Ma, L. Bao, Y. Chen, Z. Wang, Z. Chen, J. Du, H. Wang, F. Zhang, et al. Agentic reinforced policy optimization. arXiv preprint arXiv:2507.19849 , 2025. H. Dong, W. Xiong, B. Pang, H. Wang, H. Zhao, Y. Zhou, N. Jiang, D. Sahoo, C. Xiong, and T. Zhang. RLHF workflow: From reward modeling to online RLHF. CoRR , abs/2405.07863, 2024. Y. Fei, Z. Yang, and Z. Wang. Risk-sensitive reinforcement learning with function approximation: A debiasing approach. In International Conference on Machine Learning , pages 3198–3207. PMLR, 2021. A. Grattafiori, A. Dubey, A. Jauhri, A. Pandey, A. Kadian, A. Al-Dahle, A. Letman, A. Mathur, A. Schelten, A. Vaughan, et al. The llama 3 herd of models. arXiv preprint arXiv:2407.21783 , 2024. D. Guo, D. Yang, H. Zhang, J. Song, R. Zhang, R. Xu, Q. Zhu, S. Ma, P. Wang, X. Bi, et al. Deepseek-r1: Incentivizing reasoning capability in llms via reinforcement learning. arXiv preprint arXiv:2501.12948 ,2025. C. F. Hayes, R. R˘ adulescu, E. Bargiacchi, J. Källström, M. Macfarlane, M. Reymond, T. Verstraeten, L. M. Zintgraf, R. Dazeley, F. Heintz, et al. A practical guide to multi-objective reinforcement learning and planning. arXiv preprint arXiv:2103.09568 , 2021. C. He, R. Luo, Y. Bai, S. Hu, Z. Thai, J. Shen, J. Hu, X. Han, Y. Huang, Y. Zhang, et al. Olympiadbench: A challenging benchmark for promoting agi with olympiad-level bilingual multimodal scientific problems. In 
+
+Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , pages 3828–3850, 2024. J. Hu, Y. Zhang, Q. Han, D. Jiang, X. Zhang, and H.-Y. Shum. Open-reasoner-zero: An open source approach to scaling up reinforcement learning on the base model. arXiv preprint arXiv:2503.24290 , 2025. G. Huang, T. Xu, M. Wang, Q. Yi, X. Gong, S. Li, R. Xiong, K. Li, Y. Jiang, and B. Zhou. Low-probability to-kens sustain exploration in reinforcement learning with verifiable reward. arXiv preprint arXiv:2510.03222 ,2025. A. Jaech, A. Kalai, A. Lerer, A. Richardson, A. El-Kishky, A. Low, A. Helyar, A. Madry, A. Beutel, A. Carney, et al. Openai o1 system card. arXiv preprint arXiv:2412.16720 , 2024. N. Jain, K. Han, A. Gu, W. Li, F. Yan, T. Zhang, S. Wang, A. Solar-Lezama, K. Sen, and I. Stoica. Live-codebench: Holistic and contamination free evaluation of large language models for code. In The Thirteenth International Conference on Learning Representations, ICLR 2025, Singapore, April 24-28, 2025 . OpenRe-view.net, 2025. K. Ji, J. He, and Q. Gu. Reinforcement learning from human feedback with active queries. CoRR ,abs/2402.09401, 2024. doi: 10.48550/ARXIV.2402.09401. URL https://doi.org/10.48550/arXiv. 2402.09401 .X. Jiang, Y. Dong, M. Liu, H. Deng, T. Wang, Y. Tao, R. Cao, B. Li, Z. Jin, W. Jiao, et al. Coderl+: Improving code generation via reinforcement with execution semantics alignment. arXiv preprint arXiv:2510.18471 ,2025a. Y. Jiang, Y. Li, G. Chen, D. Liu, Y. Cheng, and J. Shao. Rethinking entropy regularization in large reasoning models. arXiv preprint arXiv:2509.25133 , 2025b. P. Kyriakis, J. Deshmukh, and P. Bogdan. Pareto policy adaptation. In International Conference on Learning Representations , 2022. 
+
+> 13 LAD: Learning Advantage Distribution for Reasoning
+
+P. La and M. Ghavamzadeh. Actor-critic algorithms for risk-sensitive mdps. Advances in neural information processing systems , 26, 2013. A. Lewkowycz, A. Andreassen, D. Dohan, E. Dyer, H. Michalewski, V. Ramasesh, A. Slone, C. Anil, I. Schlag, T. Gutman-Solo, et al. Solving quantitative reasoning problems with language models. Advances in neural information processing systems , 35:3843–3857, 2022. J. Li, E. Beeching, L. Tunstall, B. Lipkin, R. Soletskyi, S. Huang, K. Rasul, L. Yu, A. Q. Jiang, Z. Shen, et al. Numinamath: The largest public dataset in ai4maths with 860k pairs of competition math problems and solutions. Hugging Face repository , 13(9):9, 2024. W. Li and Y. Li. Process reward model with q-value rankings. In The Thirteenth International Conference on Learning Representations , 2025. W. Li, C. Oh, and Y. Li. General exploratory bonus for optimistic exploration in rlhf. arXiv preprint arXiv:2510.03269 , 2025. H. Lightman, V. Kosaraju, Y. Burda, H. Edwards, B. Baker, T. Lee, J. Leike, J. Schulman, I. Sutskever, and K. Cobbe. Let’s verify step by step. In The Twelfth International Conference on Learning Representations ,2023. S. H. Lim and I. Malik. Distributional reinforcement learning for risk-sensitive policies. Advances in Neural Information Processing Systems , 35:30977–30989, 2022a. S. H. Lim and I. Malik. Distributional reinforcement learning for risk-sensitive policies. Advances in Neural Information Processing Systems , 35:30977–30989, 2022b. M. Liu, S. Diao, J. Hu, X. Lu, X. Dong, H. Zhang, A. Bukharin, S. Zhang, J. Zeng, M. N. Sreedhar, et al. Scaling up rl: Unlocking diverse reasoning in llms via prolonged training. arXiv preprint arXiv:2507.12507 ,2025a. Z. Liu, C. Chen, C. Du, W. S. Lee, and M. Lin. Sample-efficient alignment for llms. arXiv preprint arXiv:2411.01493 , 2024. Z. Liu, C. Chen, W. Li, P. Qi, T. Pang, C. Du, W. S. Lee, and M. Lin. Understanding r1-zero-like training: A critical perspective. arXiv preprint arXiv:2503.20783 , 2025b. K. Luo, H. Qian, Z. Liu, Z. Xia, S. Xiao, S. Bao, J. Zhao, and K. Liu. Infoflow: Reinforcing search agent via reward density optimization. arXiv preprint arXiv:2510.26575 , 2025a. M. Luo, S. Tan, R. Huang, A. Patel, A. Ariyak, Q. Wu, X. Shi, R. Xin, C. Cai, M. Weber, et al. Deepcoder: A fully open-source 14b coder at o3-mini level. Notion Blog , 2025b. X. Ma, J. Chen, L. Xia, J. Yang, Q. Zhao, and Z. Zhou. Dsac: Distributional soft actor-critic for risk-sensitive reinforcement learning. Journal of Artificial Intelligence Research , 83, 2025. B. Mavrin, H. Yao, L. Kong, K. Wu, and Y. Yu. Distributional reinforcement learning for efficient exploration. In International conference on machine learning , pages 4424–4434. PMLR, 2019. Y. Meng, M. Xia, and D. Chen. Simpo: Simple preference optimization with a reference-free reward. 
+
+Advances in Neural Information Processing Systems , 37:124198–124235, 2024. O. Mihatsch and R. Neuneier. Risk-sensitive reinforcement learning. Machine learning , 49(2):267–290, 2002. M. Mirzanejad, M. Ebrahimi, P. Vamplew, and H. Veisi. An online scalarization multi-objective reinforcement learning algorithm: Topsis q-learning. The Knowledge Engineering Review , 37:e7, 2022. 
+
+> 14 LAD: Learning Advantage Distribution for Reasoning
+
+H. Mossalam, Y. M. Assael, D. M. Roijers, and S. Whiteson. Multi-objective deep reinforcement learning. 
+
+arXiv preprint arXiv:1610.02707 , 2016. L. Ouyang, J. Wu, X. Jiang, D. Almeida, C. Wainwright, P. Mishkin, C. Zhang, S. Agarwal, K. Slama, A. Ray, et al. Training language models to follow instructions with human feedback. Advances in neural information processing systems , 35:27730–27744, 2022. G. Penedo, A. Lozhkov, H. Kydlíˇ cek, L. B. Allal, E. Beeching, A. P. Lajarín, Q. Gallouédec, N. Habib, L. Tunstall, and L. von Werra. Codeforces. https://huggingface.co/datasets/open-r1/codeforces ,2025. M. Pirotta, S. Parisi, and M. Restelli. Multi-objective reinforcement learning with continuous pareto frontier approximation. In Proceedings of the AAAI conference on artificial intelligence , volume 29, 2015. Qwen, :, A. Yang, B. Yang, B. Zhang, B. Hui, B. Zheng, B. Yu, C. Li, D. Liu, F. Huang, H. Wei, H. Lin, J. Yang, J. Tu, J. Zhang, J. Yang, J. Yang, J. Zhou, J. Lin, K. Dang, K. Lu, K. Bao, K. Yang, L. Yu, M. Li, M. Xue, P. Zhang, Q. Zhu, R. Men, R. Lin, T. Li, T. Tang, T. Xia, X. Ren, X. Ren, Y. Fan, Y. Su, Y. Zhang, Y. Wan, Y. Liu, Z. Cui, Z. Zhang, and Z. Qiu. Qwen2.5 technical report, 2025. R. Rafailov, A. Sharma, E. Mitchell, C. D. Manning, S. Ermon, and C. Finn. Direct preference optimization: Your language model is secretly a reward model. Advances in Neural Information Processing Systems , 36, 2024. D. M. Roijers, P. Vamplew, S. Whiteson, and R. Dazeley. A survey of multi-objective sequential decision-making. Journal of Artificial Intelligence Research , 48:67–113, 2013. M. Rowland, R. Dadashi, S. Kumar, R. Munos, M. G. Bellemare, and W. Dabney. Statistics and samples in distributional reinforcement learning. In International Conference on Machine Learning , pages 5528–5536. PMLR, 2019. M. Sato, H. Kimura, and S. Kobayashi. Td algorithm for the variance of return and mean-variance re-inforcement learning. Transactions of the Japanese Society for Artificial Intelligence , 16(3):353–362, 2001. J. Schulman, S. Levine, P. Abbeel, M. Jordan, and P. Moritz. Trust region policy optimization. In International conference on machine learning , pages 1889–1897. PMLR, 2015. J. Schulman, F. Wolski, P. Dhariwal, A. Radford, and O. Klimov. Proximal policy optimization algorithms. 
+
+arXiv preprint arXiv:1707.06347 , 2017. R. Shao, S. S. Li, R. Xin, S. Geng, Y. Wang, S. Oh, S. S. Du, N. Lambert, S. Min, R. Krishna, et al. Spurious rewards: Rethinking training signals in rlvr. arXiv preprint arXiv:2506.10947 , 2025. Z. Shao, P. Wang, Q. Zhu, R. Xu, J. Song, X. Bi, H. Zhang, M. Zhang, Y. Li, et al. Deepseekmath: Pushing the limits of mathematical reasoning in open language models. arXiv preprint arXiv:2402.03300 , 2024. Y. Shen, M. J. Tobia, T. Sommer, and K. Obermayer. Risk-sensitive reinforcement learning. Neural computation , 26(7):1298–1328, 2014. R. Shi, R. Zhou, and S. S. Du. The crucial role of samplers in online direct preference optimization. CoRR ,abs/2409.19605, 2024. doi: 10.48550/ARXIV.2409.19605. URL https://doi.org/10.48550/arXiv. 2409.19605 .N. Stiennon, L. Ouyang, J. Wu, D. Ziegler, R. Lowe, C. Voss, A. Radford, D. Amodei, and P. F. Christiano. Learning to summarize with human feedback. Advances in Neural Information Processing Systems , 33: 3008–3021, 2020. 
+
+> 15 LAD: Learning Advantage Distribution for Reasoning
+
+R. S. Sutton. Learning to predict by the methods of temporal differences. Machine learning , 3(1):9–44, 1988. F. Tajwar, A. Singh, A. Sharma, R. Rafailov, J. Schneider, T. Xie, S. Ermon, C. Finn, and A. Kumar. Preference fine-tuning of llms should leverage suboptimal, on-policy data. In Forty-first International Conference on Machine Learning, ICML 2024, Vienna, Austria, July 21-27, 2024 . OpenReview.net, 2024. URL 
+
+https://openreview.net/forum?id=bWNPx6t0sF .G. Team, R. Anil, S. Borgeaud, J.-B. Alayrac, J. Yu, R. Soricut, J. Schalkwyk, A. M. Dai, A. Hauth, K. Millican, et al. Gemini: a family of highly capable multimodal models. arXiv preprint arXiv:2312.11805 , 2023. K. Van Moffaert and A. Nowé. Multi-objective reinforcement learning using sets of pareto dominating policies. The Journal of Machine Learning Research , 15(1):3483–3512, 2014. K. Van Moffaert, M. M. Drugan, and A. Nowé. Scalarized multi-objective reinforcement learning: Novel design techniques. In 2013 IEEE symposium on adaptive dynamic programming and reinforcement learning (ADPRL) , pages 191–199. IEEE, 2013. J. Wang, M. Fang, Z. Wan, M. Wen, J. Zhu, A. Liu, Z. Gong, Y. Song, L. Chen, L. M. Ni, et al. Openr: An open source framework for advanced reasoning with large language models. arXiv preprint arXiv:2410.09671 ,2024. K. Wang, N. Kallus, and W. Sun. Near-minimax-optimal risk-sensitive reinforcement learning with cvar. In 
+
+International Conference on Machine Learning , pages 35864–35907. PMLR, 2023. S. Wang, L. Yu, C. Gao, C. Zheng, S. Liu, R. Lu, K. Dang, X. Chen, J. Yang, Z. Zhang, et al. Beyond the 80/20 rule: High-entropy minority tokens drive effective reinforcement learning for llm reasoning. arXiv preprint arXiv:2506.01939 , 2025a. Y. Wang, L. Yang, Y. Tian, K. Shen, and M. Wang. Co-evolving llm coder and unit tester via reinforcement learning. arXiv preprint arXiv:2506.03136 , 2025b. Y. Wang, Q. Yang, Z. Zeng, L. Ren, L. Liu, B. Peng, H. Cheng, X. He, K. Wang, J. Gao, et al. Reinforcement learning for reasoning in large language models with one training example. arXiv preprint arXiv:2504.20571 ,2025c. R. J. Williams. Simple statistical gradient-following algorithms for connectionist reinforcement learning. 
+
+Machine learning , 8(3):229–256, 1992. F. Wu and Y. Choi. The invisible leash: Why rlvr may not escape its origin. In 2nd AI for Math Workshop@ ICML 2025 , 2025. T. Xie, D. J. Foster, A. Krishnamurthy, C. Rosset, A. Awadallah, and A. Rakhlin. Exploratory preference optimization: Harnessing implicit q*-approximation for sample-efficient RLHF. CoRR , abs/2405.21046, 2024. A. Yang, A. Li, B. Yang, B. Zhang, B. Hui, B. Zheng, B. Yu, C. Gao, C. Huang, C. Lv, et al. Qwen3 technical report. arXiv preprint arXiv:2505.09388 , 2025. R. Yang, X. Sun, and K. Narasimhan. A generalized algorithm for multi-objective reinforcement learning and policy adaptation. Advances in neural information processing systems , 32, 2019. R. Yang, X. Pan, F. Luo, S. Qiu, H. Zhong, D. Yu, and J. Chen. Rewards-in-context: Multi-objective alignment of foundation models with dynamic preference adjustment. arXiv preprint arXiv:2402.10207 , 2024. Q. Yu, Z. Zhang, R. Zhu, Y. Yuan, X. Zuo, Y. Yue, W. Dai, T. Fan, G. Liu, L. Liu, et al. Dapo: An open-source llm reinforcement learning system at scale. arXiv preprint arXiv:2503.14476 , 2025. 
+
+> 16 LAD: Learning Advantage Distribution for Reasoning
+
+L. Yuan, W. Li, H. Chen, G. Cui, N. Ding, K. Zhang, B. Zhou, Z. Liu, and H. Peng. Free process rewards without process labels. In Forty-second International Conference on Machine Learning , 2025. Y. Yue, Z. Chen, R. Lu, A. Zhao, Z. Wang, S. Song, and G. Huang. Does reinforcement learning really incentivize reasoning capacity in llms beyond the base model? arXiv preprint arXiv:2504.13837 , 2025. W. Zeng, Y. Huang, Q. Liu, W. Liu, K. He, Z. Ma, and J. He. Simplerl-zoo: Investigating and taming zero reinforcement learning for open base models in the wild. arXiv preprint arXiv:2503.18892 , 2025. Q. Zhang, H. Wu, C. Zhang, P. Zhao, and Y. Bian. Right question is already half the answer: Fully unsupervised llm reasoning incentivization. arXiv preprint arXiv:2504.05812 , 2025. S. Zhang, B. Liu, and S. Whiteson. Mean-variance policy iteration for risk-averse reinforcement learning. In 
+
+Proceedings of the AAAI Conference on Artificial Intelligence , volume 35, pages 10905–10913, 2021. S. Zhang, D. Yu, H. Sharma, Z. Yang, S. Wang, H. Hassan, and Z. Wang. Self-exploring language models: Active preference elicitation for online alignment. CoRR , abs/2405.19332, 2024. doi: 10.48550/ARXIV. 2405.19332. URL https://doi.org/10.48550/arXiv.2405.19332 .A. Zhao, Y. Wu, Y. Yue, T. Wu, Q. Xu, M. Lin, S. Wang, Q. Wu, Z. Zheng, and G. Huang. Absolute zero: Reinforced self-play reasoning with zero data. arXiv preprint arXiv:2505.03335 , 2025. T. Zheng, T. Xing, Q. Gu, T. Liang, X. Qu, X. Zhou, Y. Li, Z. Wen, C. Lin, W. Huang, et al. First return, entropy-eliciting explore. arXiv preprint arXiv:2507.07017 , 2025. X. Zhu, D. Cheng, D. Zhang, H. Li, K. Zhang, C. Jiang, Y. Sun, E. Hua, Y. Zuo, X. Lv, et al. Flowrl: Matching reward distributions for llm reasoning. arXiv preprint arXiv:2509.15207 , 2025. 
+
+# A. Related Works 
+
+# A.1. Traditional RL beyond Expected-Scalar Maximization 
+
+Beyond the standard formulation of reinforcement learning (RL) as maximizing expected cumulative scalar reward or advantage, a substantial body of work has explored alternative objectives that encode richer behavioral preferences. 
+
+Distributional RL. Distributional reinforcement learning (RL) (Bellemare et al., 2017; Dabney et al., 2018; Lim and Malik, 2022b; Mavrin et al., 2019; Rowland et al., 2019) departs from expectation-based value estimation by modeling the full distribution of returns and optimizing distributional objectives, thereby enabling finer-grained control over outcome profiles. Despite the similarity in terminology, distributional RL and learning the advantage distribution (LAD) address fundamentally different problems. In distributional RL, the learned distribution 𝑍 𝜋 (𝑥, 𝑦 ) captures the stochasticity of returns for a fixed state–action pair, reflecting randomness induced by the environment and transition dynamics. The return distribution thus serves as an intermediate representation to improve value estimation, while policy optimization remains expectation-based through E𝜋 [𝑍 𝜋 (𝑥, 𝑦 )] . In contrast, LAD models the distribution over the entire action space induced by advantage values. This distribution appears directly in the learning objective, which minimizes a divergence of the form min 𝜋 D𝑓 (𝒫 𝒜 ‖𝒫 𝜋 ), and therefore plays a central role in policy optimization rather than serving as an auxiliary estimator. 
+
+> 17 LAD: Learning Advantage Distribution for Reasoning
+
+Risk-sensitive RL. Risk-sensitive RL (Fei et al., 2021; Lim and Malik, 2022b; Ma et al., 2025; Mihatsch and Neuneier, 2002; Shen et al., 2014) extends the standard RL objective by optimizing criteria that reflect attitudes toward uncertainty rather than mean performance alone. In many classical formulations (La and Ghavamzadeh, 2013; Sato et al., 2001; Zhang et al., 2021), risk sensitivity is introduced by augmenting the expected return with an additional term that penalizes variability or tail risk. More recent approaches include variance-constrained actor–critic methods and distributional techniques that explicitly model the return distribution and optimize risk-aware criteria such as conditional value-at-risk (CVaR) within that framework (Lim and Malik, 2022a; Wang et al., 2023). Nevertheless, similar to distributional RL, the distributions considered in risk-sensitive RL are induced by environmental stochasticity, and policy optimization typically retains an expectation-based form, albeit with a modified objective reflecting risk preferences. 
+
+Multi-objective RL. Multi-objective reinforcement learning (MORL) (Abels et al., 2019; Hayes et al., 2021; Mossalam et al., 2016; Van Moffaert et al., 2013; Yang et al., 2019, 2024) generalizes the standard RL framework by considering vector-valued reward functions and learning policies that optimize trade-offs among multiple, potentially conflicting objectives. Common solution concepts include learning Pareto-optimal policies (Kyriakis et al., 2022; Van Moffaert and Nowé, 2014), approximating Pareto fronts (Pirotta et al., 2015), or optimizing scalarized objectives defined by linear or nonlinear combinations of the individual reward components (Mirzanejad et al., 2022; Roijers et al., 2013). In these approaches, the multiple objectives are typically specified exogenously and correspond to distinct semantic criteria (e.g., performance, cost, safety), and policy optimization proceeds by reducing the vector-valued returns to a scalar objective through scalarization or preference weights. In contrast, learning the advantage distribution (LAD) does not assume multiple predefined reward dimensions. Instead, LAD induces a distribution over actions from scalar advantage values and directly matches this distribution in the learning objective. As a result, LAD modifies the policy objective through distributional alignment over actions rather than through explicit multi-criteria optimization or scalarization of vector-valued rewards. 
+
+# A.2. Exploration-exploitation trade-off in RL for LLMs 
+
+The exploration–exploitation trade-off (Sutton, 1988) is a foundational challenge in reinforcement learning. In the context of large language models (LLMs), most existing work has focused on improving exploitation through increasingly sophisticated objectives. However, a growing body of research argues that insufficient ex-ploration substantially limits the effectiveness of current RL-based fine-tuning methods for LLMs, motivating explicit mechanisms to promote exploration during training. 
+
+Optimistic exploration in RLHF. Several recent works (Tajwar et al., 2024; Xie et al., 2024) in reinforce-ment learning from human feedback (RLHF) emphasize the importance of deliberate exploration during policy optimization. These approaches introduce structured exploration mechanisms to mitigate mode collapse and premature convergence, including modifying sampling strategies during rollouts (Shi et al., 2024; Xie et al., 2024) and selecting training samples based on uncertainty estimates (Das et al., 2024; Dong et al., 2024; Ji et al., 2024). Other methods explicitly encourage exploration by optimizing objectives beyond immediate reward maximization, such as incorporating uncertainty-aware rewards (Liu et al., 2024) or adding exploration bonuses derived from disagreement or novelty signals (Cen et al., 2024; Li et al., 2025; Zhang et al., 2024). Collectively, these works demonstrate that, in the LLM setting, exploration is not merely a training stability issue but a critical factor for discovering high-quality and diverse generations under sparse, noisy, or biased reward signals. While effective, many of these methods rely on computationally expensive uncertainty estimation or auxiliary models. In contrast, LAD promotes sustained exploration by reformulating the advantage maximization objective as a distribution-matching objective, naturally maintaining higher policy entropy throughout training without additional uncertainty modeling. 
+
+> 18 LAD: Learning Advantage Distribution for Reasoning
+
+Entropy collapse and regulation in RLVR. A related line of work (Cui et al., 2025b; Deng et al., 2025; Huang et al., 2025) identifies rapid entropy collapse in the early stages of reinforcement learning with verifiable rewards (RLVR), motivating approaches that encourage exploration by augmenting advantage maximization with entropy-based regularization (Cheng et al., 2025; Jiang et al., 2025b; Wang et al., 2025a; Zheng et al., 2025). However, these methods retain advantage maximization as the primary objective, limiting the extent to which entropy regularization can counteract exploitation-dominated updates. Moreover, entropy regularization generally alters the optimization landscape and may shift the optimum away from the original policy improvement objective. In contrast, LAD directly reformulates the learning objective by shifting from advantage maximization to learning the advantage distribution, while preserving the same optimal policy implied by trust-region policy optimization. This reformulation enables principled exploration without introducing auxiliary regularizers or modifying the target optimum. 
+
+# B. Analyses & Proofs 
+
+# B.1. Proofs of Lemma 3.1 
+
+Lemma 3.1. Let 𝜋 𝜃 denote the current policy parameterized by 𝜃 , and let 𝜋 old be the behavior model. Suppose that 𝜋 𝜃 is optimized using a trust-region constrained reinforcement learning algorithm (e.g., PPO (Schulman et al., 2017)) as in Eq. 2. There exists a Lagrange multiplier 𝜂 > 0, such that the policy update satisfies  
+
+> 𝜋 𝜃 (𝑦 |𝑥 )
+> 𝜋 old (𝑦 |𝑥 )
+
+𝑍 𝜋 (𝑥 ) = 𝑒 𝐴 (𝑥,𝑦 )
+
+> 𝜂
+
+𝑍 𝐴 (𝑥 ) , (10) 
+
+where 𝜂 is a Lagrangian multiplier, 𝑍 𝜋 (𝑥 ) = ∑︀ 𝑦 𝜋 𝜃 (𝑦 |𝑥 ) 
+
+> 𝜋 old (𝑦 |𝑥 )
+
+and 𝑍 𝐴 (𝑥 ) = ∑︀ 𝑦 𝑒 𝐴 (𝑥,𝑦 ) 
+
+> 𝜂
+
+are two normalizations. Proof. Consider one step of policy improvement that maximizes the expected advantage under the new policy while staying close to the old policy 𝜋 old (trust-region). For each prompt 𝑥 , we can formulate a constrained maximization problem as 
+
+max 
+
+> 𝜋 𝜃
+
+∑︁ 𝑦 
+
+𝐴 (𝑥, 𝑦 )𝜋 𝜃 (𝑦 |𝑥 ) s.t.∑︁ 
+
+> 𝑦
+
+𝜋 𝜃 (𝑦 |𝑥 ) = 1 and 𝐷 KL (𝜋 𝜃 (·| 𝑥 )‖𝜋 old (·| 𝑥 )) ≤ 𝜖. (11) We can form the per-state Lagrangian with multipliers 𝜂 ≥ 0 and 𝜆 as follows, 
+
+𝐿 =∑︁ 
+
+> 𝑦
+
+𝐴 (𝑥, 𝑦 )𝜋 𝜃 (𝑦 |𝑥 ) + 𝜆 (∑︁ 
+
+> 𝑦
+
+𝜋 𝜃 (𝑦 |𝑥 ) − 1) 
+
+− 𝜂 ∑︁ 
+
+> 𝑦
+
+(𝜋 𝜃 (𝑦 |𝑥 ) log 𝜋 𝜃 (𝑦 |𝑥 )
+
+𝜋 old (𝑦 |𝑥 ) ) − 𝜖. (12) Stationarity w.r.t. 𝜋 𝜃 gives 
+
+𝐴 (𝑥, 𝑦 ) − 𝜂 (log 𝜋 𝜃 (𝑦 |𝑥 )
+
+𝜋 old (𝑦 |𝑥 ) + 1) + 𝜆 = 0 , (13) which equals log 𝜋 𝜃 (𝑦 |𝑥 ) 
+
+> 𝜋 old (𝑦 |𝑥 )
+
+= 𝐴 (𝑥,𝑦 )+ 𝜆 −𝜂 𝜂 . With some algebra, we have 
+
+> 𝜋 (𝑦 |𝑥 )
+> 𝜋 old (𝑦 |𝑥 )
+
+𝑍 𝜋 (𝑥 ) = 𝑒 𝐴 (𝑥,𝑦 )
+
+> 𝜂
+
+𝑍 𝐴 (𝑥 ) , (14) where 𝑍 𝜋 (𝑥 ) = ∑︀ 𝑦 𝜋 (𝑦 |𝑥 ) 
+
+> 𝜋 old (𝑦 |𝑥 )
+
+and 𝑍 𝐴 (𝑥 ) = ∑︀ 𝑦 𝑒 𝐴 (𝑥,𝑦 ) 
+
+> 𝜂
+
+are two normalizations. 
+
+> 19 LAD: Learning Advantage Distribution for Reasoning
+
+# B.2. Proofs of Lemma 3.2 
+
+Lemma 2. Let ℒ = E𝑥 ∼𝜌 ∑︀ 𝑦 𝑔 2(𝑥, 𝑦 )𝑓 ( 𝑝 𝜃 (𝑦 |𝑥 ) 
+
+> 𝑔 1(𝑥,𝑦 )
+
+), where 𝑝 𝜃 (·) is a probability measure with ∑︀ 𝑦 𝑝 (𝜋 ) = 1 .
+
+𝑔 1(𝑥, 𝑦 ), 𝑔 2(𝑥, 𝑦 ) are two functions independent to 𝑝 𝜃 . 𝑝 𝜃 (𝑦 |𝑥 ) always satisfy 𝑝 𝜃 (𝑦 |𝑥 ) ∝ 𝑔 1(𝑥, 𝑦 ) as long as the fraction 𝑔 2(𝑥,𝑦 ) 
+
+> 𝑔 1(𝑥,𝑦 )
+
+= 𝑍 𝑔 (𝑥 ) is irrespective to 𝑦 .Proof. Similar to Lemma 3.1, we adopt the same constrained maximization problem with Lagrange multipliers, and the stationarity condition can be formulated as 
+
+𝑔 2(𝑥, 𝑦 )
+
+𝑔 1(𝑥, 𝑦 ) 𝑓 ′( 𝑝 (𝜋 (𝑦 |𝑥 )) 
+
+𝑔 1(𝑥, 𝑦 ) ) = 𝜆, (15) where 𝜆 is a Lagrange multiplier of ∑︀ 𝑦 𝑝 (𝜋 (𝑦 |𝑥 )) = 1 . Since 𝑓 ′ is an increasing function according to the definition in Definition 3.1, we have for a fixed state 𝑥 , ∀𝑦, 𝑝 (𝜋 (𝑦 |𝑥 ))  
+
+> 𝑔 1(𝑥,𝑦 )
+
+is a constant, thus 𝑝 𝜃 (𝑦 |𝑥 ) ∝ 𝑔 1(𝑥, 𝑦 ).
+
+# B.3. LAD is an 𝒪 (𝛿 )-accurate surrogate of the theoretical LAD objective 
+
+First, we made some standard assumptions for the following proofs. 
+
+Assumption B.1 (finite actions with uniform lower bound 𝑝 min ). For any policy 𝜋 and any state-action pair 
+
+𝑥, 𝑦 , 1 ≥ 𝑝 max ≥ 𝜋 (𝑦 |𝑥 ) ≥ 𝑝 min > 0.
+
+Assumption B.2 (bounded advantage) . For any state-action pair (𝑥, 𝑦 ), the advantage value is bounded by a small value |𝐴 (𝑥, 𝑦 )| < 𝛾 
+
+Assumption B.3 (small update per step) . Under a small learning rate, we assume that for any (𝑥, 𝑦 ),⃒⃒⃒  
+
+> 𝜋 (𝑦 |𝑥 )
+> 𝜋 old (𝑦 |𝑥 )
+
+− 1⃒⃒⃒ < 𝛿 
+
+The first assumption is generally established in the LLM setting due to a finite vocabulary size. For the second assumption, the advantage scale is controllable by constraining the reward scale and normalization, which are generally adopted in existing implementations like GRPO (Shao et al., 2024). For the third assumption, since the sampling distribution 𝜋 old is frequently updated (generally within ten steps), the overall distribution of 𝜋 would not have a sharp change compared to 𝜋 old . Hence, Assumption B.3 also holds empirically, especially considering that standard RL implementations for LLMs generally have small learning rates and gradient clipping mechanisms. With the above assumptions, we obtain the following conditions, ⃒⃒⃒ 
+
+𝑍 𝐴 (𝑥 )
+
+𝑍 𝜋 (𝑥 ) − 1⃒⃒⃒ < 𝒪 (𝛾 + 𝛿 )1 + 𝒪 (𝛿 ) (16) Holding this inequality, we can then prove that the practical LAD loss in Eq. 8 is an 𝒪 (𝛿 )-accurate surrogate of the theoretical LAD objective in Eq. 7. 
+
+Theorem B.1 (LAD is an 𝒪 (𝛿 )-accurate surrogate of the theoretical LAD objective) . Under Assumptions B.1,B.2,B.3, the gap between the theoretical LAD objective ℒtheorem LAD and the practical LAD objective ℒLAD is bounded by ⃒⃒⃒ 
+
+ℒtheorem LAD − ℒ LAD ⃒⃒⃒ < 𝒪 (𝛾 + 𝛿 ) (17) 
+
+> 20 LAD: Learning Advantage Distribution for Reasoning
+
+Proof. In the proof, we denote 𝑐 𝜃 = 𝜋 𝜃 (𝑦 |𝑥 ) 
+
+> 𝜋 old (𝑦 |𝑥 )
+
+· 𝑒 −𝐴 (𝑥,𝑦 ) 
+
+> 𝜂
+
+for simplicity. First, we re-express the expectations in 
+
+ℒtheorem LAD and ℒLAD with respect to a common base distribution 𝜇 𝑥 , and absorb the differences into weights. 
+
+ℒtheorem LAD = E𝑥 ∼𝜌,𝑦 ∼𝜇 𝑥 
+
+𝑒 𝐴 (𝑥,𝑦 )
+
+> 𝜂
+
+𝜇 𝑥 (𝑦 )𝑍 𝐴 (𝑥 ) 𝑓 (𝑐 𝜃 
+
+𝑍 𝐴 (𝑥 )
+
+𝑍 𝜋 𝜃 (𝑥 ) ),
+
+ℒLAD = E𝑥 ∼𝜌,𝑦 ∼𝜇 𝑥 
+
+𝑒 𝐴 (𝑥,𝑦 )
+
+> 𝜂
+
+𝜇 𝑥 (𝑦 ) 𝜋 old (𝑦 |𝑥 )𝑓 (𝑐 𝜃 ).
+
+Now, both objectives are written as expectations over the same uniform distribution 𝜇 𝑥 = 1 /𝑁 , where 𝑁 is the number of all possible actions. Then we can have the following subtraction, ⃒⃒⃒ 
+
+ℒtheorem LAD − ℒ LAD ⃒⃒⃒ ≤ E𝑥 ∼𝜌,𝑦 ∼𝜇 𝑥 ⃒⃒⃒ 𝑒 𝐴 (𝑥,𝑦 )
+
+> 𝜂
+
+𝜇 𝑥 (𝑦 ) 𝐹 (𝑥, 𝑦 )⃒⃒⃒ 
+
+𝐹 (𝑥, 𝑦 ) = 1
+
+𝑍 𝐴 (𝑥 ) 𝑓 ( 𝑐 𝜃 𝑍 𝐴 (𝑥 )
+
+𝑍 𝜋 𝜃 (𝑥 ) ) − 𝜋 old (𝑦 |𝑥 )𝑓 (𝑐 𝜃 )
+
+where we use the triangle inequality here. With Assumption B.1 and Assumption B.2, for any (𝑥, 𝑦 ), we have ⃒⃒⃒ 
+
+𝑒 𝐴 (𝑥,𝑦 )
+
+> 𝜂
+
+𝜇 𝑥 (𝑦 ) 𝐹 (𝑥, 𝑦 )⃒⃒⃒ ≤ 𝐶 ⃒⃒⃒ 𝑓 (𝑐 𝜃 · 𝑍 𝐴 (𝑥 )
+
+𝑍 𝜋 𝜃 (𝑥 ) ) − 𝑓 (𝑐 𝜃 )⃒⃒⃒ 
+
+where 𝐶 = 𝑒 𝛾 𝜂 · 𝑁 · max( 𝑝 max , 𝑒 𝛾 𝜂  
+
+> 𝑁
+
+) is a constant. Next, we write the Taylor expansion of 𝑓 (𝑐 𝜃 · 𝑍 𝐴 (𝑥 )  
+
+> 𝑍 𝜋 𝜃 (𝑥 )
+
+) to bound the right term. 
+
+𝑓 (𝑐 𝜃 · 𝑍 𝐴 (𝑥 )
+
+𝑍 𝜋 𝜃 (𝑥 ) ) = 𝑓 (𝑐 𝜃 ) + 𝑓 ′(𝜁 )𝑐 𝜃 ( 𝑍 𝐴 (𝑥 )
+
+𝑍 𝜋 𝜃 (𝑥 ) − 1) ,
+
+where 𝜁 is a value between 𝑐 𝜃 and 𝑐 𝜃 𝑍 𝐴 (𝑥 )  
+
+> 𝑍 𝜋 𝜃 (𝑥 )
+
+. Hence, for any (𝑥, 𝑦 ), we can obtain ⃒⃒⃒ 
+
+ℒtheorem LAD −ℒ LAD ⃒⃒⃒ 
+
+≤ 𝐶 𝑁 E𝑥 ∼𝜌 ∑︁ 𝑦 ⃒⃒⃒ 
+
+𝑓 ′(𝜁 )𝑐 𝜃 ( 𝑍 𝐴 (𝑥 )
+
+𝑍 𝜋 𝜃 (𝑥 ) − 1) ⃒⃒⃒ 
+
+Thus, we have ⃒⃒⃒ 
+
+ℒtheorem LAD − ℒ LAD ⃒⃒⃒ < 𝒪 (𝛾 + 𝛿 )
+
+The empirical validation for assumptions To empirically validate our assumption hold true, we show the average advantage value and the log-ratio of | log 𝜋 𝜃 (𝑦 |𝑥 ) 
+
+> 𝜋 old (𝑦 |𝑥 )
+
+| during the training process of three LAD variants under strict divergence classes. As shown in Figure 6, advantage values are empirically bounded by a small value, i.e., 𝛾 in Assupmtion B.2 is small. Meanwhile, the 𝜋 𝜃 (𝑦 |𝑥 ) 
+
+> 𝜋 old (𝑦 |𝑥 )
+
+is indeed near 1, i.e., 𝜖 in Assumption B.3 is close to 0. Therefore, the bound of ⃒⃒⃒ ℒtheorem LAD − ℒ LAD ⃒⃒⃒ as proved in Theorem B.1 is small, which indicates that ℒLAD is indeed a close surrogate of ℒtheorem LAD .          
+
+> 21 LAD: Learning Advantage Distribution for Reasoning 0200 400 600 800 1000
+> Steps
+> 0.4
+> 0.2
+> 0.0
+> 0.2
+> 0.4
+> advantage
+> LAD-HD
+> LAD-JS
+> LAD-TV 0200 400 600 800 1000
+> Steps
+> 0.20
+> 0.15
+> 0.10
+> 0.05
+> 0.00
+> 0.05
+> 0.10
+> 0.15
+> 0.20
+> |log-ratio|
+> LAD-HD
+> LAD-JS
+> LAD-TV
+
+Figure 6 | The average advantage value and the log-ratio of | log 𝜋 𝜃 (𝑦 |𝑥 ) 
+
+> 𝜋 old (𝑦 |𝑥 )
+
+| throughout the training. 
+
+# B.4. Gradient Comparisons 
+
+Beyond the main paper’s comparison between the gradients of the LAD loss and the vanilla policy gradient, we further analyze how the LAD gradient differs from both the PPO gradient and the theoretical LAD formulation. In practice, PPO enforces trust-region constraints through a clipped surrogate objective. The resulting gradient can be written as 
+
+E𝑥 ∼𝜌,𝑦 ∼𝜋 𝜃 (·| 𝑥 )[︂ −sg( 𝜋 𝜃 
+
+𝜋 old 
+
+,𝜖 )𝐴 (𝑥,𝑦 )∇𝜃 log 𝜋 𝜃 (𝑦 |𝑥 )]︂ ,
+
+where sg( 𝜋 𝜃  
+
+> 𝜋 old
+
+, 𝜖 ) is a binary signal function that equals 1 when (𝐴 (𝑥, 𝑦 ) > 0 ∧ 𝜋 𝜃  
+
+> 𝜋 old
+
+≤ 1 + 𝜖 ) ∨ (𝐴 (𝑥, 𝑦 ) <
+
+0 ∧ 𝜋 𝜃  
+
+> 𝜋 old
+
+≥ 1 − 𝜖 ), and 0 otherwise. Compared with the vanilla policy gradient in Eq. (1) , PPO introduces an additional gating mechanism that suppresses excessively large updates. However, once the gate is active, the update direction remains proportional to the advantage. As a result, PPO still predominantly increases the likelihood of responses with larger advantages, reinforcing already high-probability actions. Although this clipping improves stability, it does not fundamentally alter the advantage-maximization nature of the objective, and therefore still tends to reduce generative diversity in a manner similar to the vanilla policy gradient. For the theoretical LAD objective, the gradient takes the following form ∇𝜃 ℒtheorem LAD is 
+
+E𝑥 ∼𝜌,𝑦 ∼𝒫 𝜋 𝜃 (·| 𝑥 )𝑓 ′( 𝜋 𝜃 (𝑦 |𝑥 )
+
+𝜋 old (𝑦 |𝑥 ) · 𝑒 −𝐴 (𝑥,𝑦 ) 
+
+> 𝜂
+
+· 𝑍 𝐴 (𝑥 )
+
+𝑍 𝜋 (𝑥 ) )·
+
+(∇𝜃 log 𝜋 𝜃 (𝑦 |𝑥 ) − E𝑦 ′∼𝒫 𝜋 𝜃 (·| 𝑥 )∇𝜃 log 𝜋 𝜃 (𝑦 ′|𝑥 )) ,
+
+where 𝒫 𝜋 𝜃 is the policy-induced distribution defined in Eq. 4. Compared to the gradient of the practical LAD loss, this gradient includes an explicit centering term that subtracts the expected score function under the policy-induced distribution. This structure enforces competition among actions and prevents any single response from dominating the update solely due to a large advantage. Nevertheless, the practical LAD loss retains the core behavior of the theoretical gradient while removing intractable normalization terms. Compared with the theoretical LAD gradient, the practical LAD gradient omits the expectation-centering term but preserves the crucial dependence on both the advantage and the likelihood ratio. As a result, practical LAD continues to suppress updates for actions whose probabilities are already sufficiently large, even when their advantages remain high. This mechanism fundamentally differs from advantage maximization and enables LAD to maintain stable optimization while preserving generative diversity. 
+
+# B.5. FlowRL is a special case in our framework, but with stricter conditions 
+
+FlowRL (Zhu et al., 2025) proposes to learn a reward-matching objective by directly regressing the log policy ratio onto advantage values using a mean-squared-error loss inspired by GFlowNets (Bengio et al., 2023). 
+
+> 22
+
+LAD: Learning Advantage Distribution for Reasoning 
+
+In contrast, LAD provides a more general and theoretically grounded framework, within which FlowRL arises as a special case under restrictive assumptions on policy updates and parameter scaling. Specifically, under a small-step learning regime where the updated policy 𝜋 𝜃 remains close to the behavior policy 𝜋 old ,the likelihood ratio 𝜋 𝜃 (𝑦 |𝑥 )
+
+𝜋 old (𝑦 |𝑥 ) stays near 1. If we further assume that this ratio satisfies 𝜋 𝜃 (𝑦 |𝑥 )
+
+𝜋 old (𝑦 |𝑥 ) > 1
+
+𝑒 , then the function 𝑓 (𝑥 ) = 𝑥 (log 𝑥 )2 convex over the relevant domain 𝑥 > 1
+
+𝑒 . The convexity ensures that the corresponding 𝑓 -divergence objective is well-defined. Further, when 𝜂 → ∞ , 𝑒 𝐴 𝜂 → 1 + 𝐴 𝜂 . Therefore, for each 𝑥 ∼ 𝜌 , the LAD loss can be formulated as 
+
+E𝑦 ∼𝜋 𝜃 (·| 𝑥 )[log 𝑍 (𝑥 ) + log 𝜋 𝜃 (𝑦 |𝑥 )
+
+𝜋 old (𝑦 |𝑥 ) − 𝐴 (𝑥, 𝑦 )
+
+𝜂 ]2, (18) where 𝑍 (𝑥 ) = 𝑍 𝐴 (𝑥 )
+
+𝑒𝑍 𝜋 𝜃 (𝑥 ) . Eq. 18 is exactly the objective optimized by FlowRL, showing that FlowRL can be viewed as a special instantiation of LAD. 
+
+# C. Experiments 
+
+Table 5 | LAD losses under different divergences. The * represents the corresponding divergence class is a strict divergence that forces exact matching at its minimum. 
+
+Divergence 𝑓 (𝑥 ) ℒLAD 
+
+KL divergence 𝑥 log 𝑥 E𝑥 ∼𝜌,𝑦 ∼𝜋 old (·| 𝑥 ) 𝜋 𝜃 (𝑦 |𝑥 )
+
+> 𝜋 old (𝑦 |𝑥 )
+
+(︁ log 𝜋 𝜃 (𝑦 |𝑥 ) 
+
+> 𝜋 old (𝑦 |𝑥 )
+
+− 𝐴 (𝑥,𝑦 )
+
+> 𝜂
+
+)︁ 
+
+reverse KL divergence − log 𝑥 E𝑥 ∼𝜌,𝑦 ∼𝜋 old (·| 𝑥 ) − 𝑒 𝐴 (𝑥,𝑦 ) 
+
+> 𝜂
+
+log 𝜋 𝜃 (𝑦 |𝑥 )
+
+Jeffreys divergence (𝑥 − 1) log 𝑥 E𝑥 ∼𝜌,𝑦 ∼𝜋 old (·| 𝑥 )( 𝜋 𝜃 (𝑦 |𝑥 ) 
+
+> 𝜋 old (𝑦 |𝑥 )
+
+− 𝑒 𝐴 (𝑥,𝑦 ) 
+
+> 𝜂
+
+) log[ 𝜋 𝜃 (𝑦 |𝑥 ) 
+
+> 𝜋 old (𝑦 |𝑥 )
+
+𝑒 −𝐴 (𝑥,𝑦 ) 
+
+> 𝜂
+
+]
+
+Total Variance Distance * |𝑥 − 1| E𝑥 ∼𝜌,𝑦 ∼𝜋 old (·| 𝑥 )𝑒 𝐴 (𝑥,𝑦 )
+
+> 𝜂
+
+⃒⃒⃒ 𝜋 𝜃 (𝑦 |𝑥 ) 
+
+> 𝜋 old (𝑦 |𝑥 )
+
+· 𝑒 −𝐴 (𝑥,𝑦 ) 
+
+> 𝜂
+
+− 1⃒⃒⃒ 
+
+Hellinger Distance * 12 (√𝑡 − 1) 2 E𝑥 ∼𝜌,𝑦 ∼𝜋 old (·| 𝑥 )𝑒 𝐴 (𝑥,𝑦 ) 
+
+> 𝜂
+
+(√︁ 𝜋 𝜃 (𝑦 |𝑥 ) 
+
+> 𝜋 old (𝑦 |𝑥 )
+
+· 𝑒 −𝐴 (𝑥,𝑦 )2𝜂 − 1) 2
+
+Jensen–Shannon divergence * 12 (𝑥 log 𝑥 − (𝑥 + 1) log 𝑥 +1 2 )
+
+> E𝑥 ∼𝜌,𝑦 ∼𝜋 old (·| 𝑥 )𝑒
+> 𝐴 (𝑥,𝑦 )
+> 𝜂
+
+(︁ 𝜋 𝜃 (𝑦 |𝑥 )             
+
+> 𝜋 old (𝑦 |𝑥 )𝑒
+> −𝐴 (𝑥,𝑦 )
+> 𝜂 log( 𝜋 𝜃 (𝑦 |𝑥 )
+> 𝜋 old (𝑦 |𝑥 )
+> ·𝑒
+> −𝐴 (𝑥,𝑦 )
+> 𝜂 )−(𝜋 𝜃 (𝑦 |𝑥 )
+> 𝜋 old (𝑦 |𝑥 )𝑒
+> 𝐴 (𝑥,𝑦 )
+> 𝜂 +1) log( 𝜋 𝜃 (𝑦 |𝑥 )2𝜋 old (𝑦 |𝑥 )𝑒
+> 𝐴 (𝑥,𝑦 )
+> 𝜂 )
+
+)︁ 
+
+# C.1. Loss Instances 
+
+All the instances involved in our experiments are listed in Table 5. It reveals that LAD loss is highly extensible to different divergence classes. As the star sign indicated, Jensen–Shannon divergence, Hellinger Distance, and Total Variance Distance are strict divergences, while KL divergence, the reverse KL divergence, and Jeffreys divergence are not strict divergences. As analyzed in §4.3, the strict divergence classes are recommended, which generally yield better overall performance. 
+
+# C.2. Implementation Details 
+
+Math reasoning. The experiments on math reasoning tasks are all conducted on two NVIDIA H200 140GB. We train our models on the DAPO-MATH dataset (Yu et al., 2025), following the experimental protocol of Cui et al. (2025b). We use Qwen2.5-7B (Qwen et al., 2025) as our LLM backbone, and Jensen-Shannon divergence to implement LAD loss in the main experiments. At each rollout step, we sample 8 responses with 
+
+23 LAD: Learning Advantage Distribution for Reasoning 
+
+Table 6 | The detailed math reasoning performances of LAD with different hyperparameters. Methods 1/𝜂 MATH Olympiad Bench Minerva AIME 2024 AIME 2025 AMC Average Avg@16 GRPO - 75.71 39.24 36.63 13.89 4.90 53.39 37.29 LAD-JS 1/4 75.24 38.83 35.59 15.68 5.70 50.34 36.90 1/2 76.20 38.02 38.07 18.15 6.73 53.08 38.38 1 74.84 37.16 39.84 14.95 11.28 55.98 39.00 2 76.90 36.50 34.93 18.67 9.13 55.12 38.54 4 77.60 41.29 36.81 19.59 8.71 56.37 40.06 8 77.15 42.06 35.64 14.54 12.11 49.34 38.47 16 74.89 39.30 36.01 18.54 12.40 51.60 38.79 32 76.47 40.02 34.74 14.15 9.33 51.08 37.63 Pass@16 GRPO - 89.80 57.78 53.31 27.60 23.23 74.92 54.44 LAD-JS 1/4 92.20 64.44 55.88 34.38 25.83 79.82 58.76 1/2 91.60 61.93 58.46 35.63 26.67 80.16 59.08 1 87.4 53.78 55.15 35.42 32.92 78.65 57.22 2 91.40 57.33 57.35 40.42 30.42 80.91 59.64 4 92.40 64.15 56.62 40.63 30.73 84.30 61.47 8 93.00 68.15 52.57 34.58 31.04 79.78 59.85 16 91.60 65.33 56.99 37.50 29.79 80.08 60.22 32 94.40 65.63 57.72 38.13 29.79 81.36 61.17 Table 7 | Pass@32 performance of different losses on math reasoning benchmarks. The best two results under a specific metric are highlighted in bold and underlined. Methods MATH Olympiad Bench Minerva AIME 2024 AIME 2025 AMC Average GRPO (Shao et al., 2024) 90.60 60.15 55.88 30.52 26.77 80.50 57.40 EntAdv (Cheng et al., 2025) 90.60 62.51 55.51 35.83 34.27 81.93 60.10 KLCov (Cui et al., 2025b) 92.80 64.15 56.99 36.25 41.25 85.99 63.04 ClipCov (Cui et al., 2025b) 91.40 61.48 60.29 37.40 32.08 80.61 60.54 FlowRL (Zhu et al., 2025) 94.20 69.04 59.56 37.50 35.52 82.94 63.13 LAD 93.80 67.70 59.93 47.19 37.08 88.86 65.76 
+
+a max length of 8192 tokens per prompt for a batch of 256 prompts using a sampling temperature of 1, and subsequently perform 8 policy update steps using the collected trajectories with the learning rate 1e-6. We apply the dynamic sampling strategy and the clip-higher technique from DAPO (Yu et al., 2025) uniformly across all baselines to ensure a fair comparison. Evaluation is conducted on a diverse set of mathematical reasoning benchmarks, including MATH500 (Lightman et al., 2023), AIME 2024, AIME 2025 (Li et al., 2024), AMC (Li et al., 2024), OlympiadBench (He et al., 2024), and Minerva (Lewkowycz et al., 2022). These settings ensure direct comparability with prior work. We follow Zhu et al. (2025) to assess logical diversity using an LLM-as-a-Judge framework with GPT-4-Turbo. Specifically, we generate 16 responses per question on AIME 2024/2025 and use the same evaluation prompt as shown in Box C.1. For the two 1.5B models, we change the max lengths to 4096 and keep other settings the same. For the ablation studies of the hyperparameter value, we kept all settings the same, except for the 𝜂 . For the ablation studies of the divergence class, we conduct a hyperparameter search among 1/𝜂 ∈ { 0.25 , 1, 4, 16 }. For all baseline methods, we adopt the default hyperparameters identified as optimal through the hyperparameter searches described in the original papers. 
+
+> 24 LAD: Learning Advantage Distribution for Reasoning
+
+Code reasoning. The experiments on math reasoning tasks are all conducted on eight NVIDIA A100 80GB. We train our models on the dataset of DeepCoder (Luo et al., 2025b), following the experimental protocol of (Zhu et al., 2025). We use DeepSeek-R1-Distill-Qwen-7B as our LLM backbone, and Jensen-Shannon divergence to implement LAD loss in the main experiments. The batch size is set to 64, and the learning rate is set to 1e-6. For all baseline methods, we adopt the default hyperparameters identified as optimal through the hyperparameter searches described in the original papers. We evaluate the code reasoning performance on LiveCodeBench (Jain et al., 2025), CodeForces (Penedo et al., 2025), and HumanEval+ (Chen et al., 2021). 
+
+Evaluation metrics. Pass@k is a common metric in reasoning tasks. It measures the probability that at least one correct solution appears among the top k generated outputs. Higher Pass@k means the model is more likely to produce a correct answer within its top candidates. Avg@k represents the average accuracy over the top k generated outputs. Unlike Pass@k, which is binary (pass/fail), Avg@k captures overall quality across multiple candidates. Lexical diversity measures the variety of vocabulary used in a text. Higher lexical diversity indicates less repetition and a broader range of words, often used to assess richness or creativity in language generation. Logical Diversity evaluates the variety of reasoning patterns, argument structures, or logical paths in generated outputs. Higher logical diversity suggests the model can approach a problem from multiple valid reasoning perspectives rather than repeating the same logic. 
+
+# C.3. Experimental Results 
+
+Supplemented results of the main experiments on math reasoning. As shown in Table 7, for the evaluation metric Pass@32. Across six benchmarks, LAD achieves the best average performance (65.76), outperforming the second-best method (63.13). 
+
+Supplemented results of the ablation studies on divergence classes. As shown in Table 6, the perfor-mances of LAD variants with stricter divergence classes are generally better than ones with non-stricter divergence classes. 
+
+Supplemented results of the ablation studies on the hyperparameter 𝜂 . As shown in Table 6, LAD can perform well in a large range of 𝜂 values. Notably, across nearly all settings, LAD consistently outperforms GRPO, indicating that its effectiveness is not critically dependent on precise tuning of 𝜂 .
+
+> 25 LAD: Learning Advantage Distribution for Reasoning
+
+Table 8 | Performance of different losses on math reasoning benchmarks. The best two results under a specific metric are highlighted in bold and underlined. Methods 𝑘 MATH Olympiad Bench Minerva AIME 2024 AIME 2025 AMC Average Avg@ 𝑘 
+
+LAD-KL @1 76.80 37.33 38.97 20.00 5.83 51.13 38.01 @16 76.35 36.93 39.18 20.03 4.64 51.74 38.15 @32 76.20 36.83 38.73 19.91 4.68 51.63 37.99 LAD-JF @1 72.60 32.74 37.13 15.52 7.50 53.69 36.20 @16 72.65 32.54 34.92 15.96 7.23 53.47 36.13 @32 72.83 32.67 34.60 15.79 7.24 53.48 36.10 LAD-rKL @1 73.20 37.62 37.50 11.67 8.33 46.15 35.41 @16 73.86 36.63 36.28 12.21 8.03 45.93 35.49 @32 73.82 36.76 36.12 12.25 8.10 46.08 35.52 LAD-TV @1 76.80 40.59 35.66 15.31 6.25 55.61 38.37 @16 77.00 40.92 38.14 14.98 7.58 55.27 38.98 @32 76.83 40.66 37.74 14.96 7.61 55.19 38.83 LAD-HD @1 77.60 39.70 35.29 15.63 7.92 57.34 38.91 @16 76.88 39.06 36.83 16.27 8.08 57.40 39.08 @32 76.83 38.98 36.74 16.18 7.29 57.40 38.90 LAD-JS @1 76.80 40.30 36.40 19.38 8.65 57.00 39.76 
+
+@16 77.60 41.29 36.81 19.59 8.71 56.37 40.06 
+
+@32 77.66 41.25 36.68 19.60 8.84 56.45 40.08 
+
+Pass@ 𝑘 
+
+LAD-KL @1 86.40 51.11 56.25 34.48 17.92 66.19 52.39 @16 87.80 55.26 60.29 39.69 22.50 71.16 56.12 @32 88.60 57.19 61.40 43.85 26.46 76.02 58.92 LAD-JF @8 88.2 51.56 54.04 32.50 21.25 77.18 54.12 @16 90.4 56.74 58.09 38.85 26.98 82.38 58.90 @32 92.2 60.59 59.93 46.04 33.85 86.71 63.22 LAD-rKL @8 89.60 58.67 53.68 29.06 25.41 72.29 54.78 @16 91.20 64.30 59.93 34.90 30.83 79.97 60.19 @32 93.60 68.89 62.87 43.75 37.50 86.07 65.45 LAD-TV @8 87.60 55.70 55.51 26.35 26.04 73.53 54.12 @16 90.20 58.96 60.29 29.79 31.15 77.67 58.01 @32 91.60 62.07 62.50 34.06 35.00 81.36 61.10 LAD-HD @8 88.20 56.59 54.41 31.04 25.42 75.00 55.11 @16 91.00 60.89 59.93 36.04 31.67 79.71 59.87 @32 93.00 64.74 62.50 42.71 38.23 84.22 64.23 LAD-JS @8 89.00 59.56 54.04 35.00 25.42 78.58 56.93 
+
+@16 92.40 64.15 56.62 40.63 30.73 84.30 61.47 
+
+@32 93.80 67.70 59.93 47.19 37.08 88.86 65.76 
+
+> 26 LAD: Learning Advantage Distribution for Reasoning
+
+Box C.0: GPT-4 prompt for diversity judgement 
+
+<System Prompt> You are evaluating the DIVERSITY of solution approaches for a mathematics competition problem. Focus on detecting even SUBTLE differences in methodology that indicate different problem-solving strategies. <User Prompt> PROBLEM: {problem} 16 SOLUTION ATTEMPTS: {formatted responses} EVALUATION CRITERIA - Rate diversity from 1 to 5: Score 1 - Minimal Diversity: • 14+ responses use essentially identical approaches • Same mathematical setup, same variable choices, same solution path • Only trivial differences (arithmetic, notation, wording) • Indicates very low exploration/diversity in the generation process Score 2 - Low Diversity: • 11-13 responses use the same main approach • 1-2 alternative approaches appear but are rare • Minor variations within the dominant method (different substitutions, orderings) • Some exploration but heavily biased toward one strategy Score 3 - Moderate Diversity: • 7-10 responses use the most common approach • 2-3 distinct alternative approaches present • Noticeable variation in problem setup or mathematical techniques • Balanced mix showing reasonable exploration Score 4 - High Diversity: • 4-6 responses use the most common approach • 3-4 distinct solution strategies well-represented • Multiple mathematical techniques and problem framings • Strong evidence of diverse exploration strategies Score 5 - Maximum Diversity: • No single approach dominates ( ≤ 3 responses use same method) • 4+ distinctly different solution strategies • Wide variety of mathematical techniques and creative approaches • Excellent exploration and generation diversity IMPORTANT: Focusing on the DIVERSITY of the attempted approaches. Return ONLY a number from 1 to 5.

@@ -1,0 +1,667 @@
+Title: Efficient RLVR Training via Weighted Mutual Information Data Selection
+
+URL Source: https://arxiv.org/pdf/2603.01907v1
+
+Published Time: Tue, 03 Mar 2026 04:05:37 GMT
+
+Number of Pages: 15
+
+Markdown Content:
+# Efficient RLVR Training via Weighted Mutual Information Data Selection 
+
+Xinyu Zhou 1 Boyu Zhu 2 Haotian Zhang 3 Huiming Wang 3 Zhijiang Guo 1 4 
+
+## Abstract 
+
+Reinforcement learning (RL) plays a central role in improving the reasoning and alignment of large language models, yet its efficiency critically de-pends on how training data are selected. Existing online selection strategies predominantly rely on difficulty-based heuristics, favouring datapoints with intermediate success rates, implicitly equat-ing difficulty with informativeness and neglecting epistemic uncertainty arising from limited evi-dence. We introduce I NSIGHT , an IN formation-guided data Sampl InG met Hod for RL Training, grounded in a weighted mutual information objec-tive. By modeling data outcomes with Bayesian latent success rates, we show that expected uncer-tainty reduction decomposes into complementary difficulty- and evidence-dependent components, revealing a fundamental limitation of difficulty-only selection. Leveraging this observation, INSIGHT constructs a stable acquisition score based on the mean belief of datapoints’ success rather than noisy sampled outcomes, and natu-rally extends to multi-rollout settings common in reinforcement learning with verifiable rewards (RLVR). Extensive experiments demonstrate that INSIGHT consistently achieves state-of-the-art performance and improves training efficiency, in-cluding a +1.41 average gain on Planning & Math-matics benchmarks, +1.01 improvement on gen-eral reasoning, and up to ∼2.2x acceleration, with negligible additional computational overhead. 
+
+## 1. Introduction 
+
+Reinforcement learning (RL) has emerged as a central paradigm for aligning Large Language Models (LLMs) with human preferences and improving their reasoning abilities (Shao et al., 2024; DeepSeek-AI et al., 2025; Zeng et al., 2025; Luo et al., 2025b). Despite its success, RL is sensitive      
+
+> 1HKUST(GZ) 2UCL 3Kuaishou Technology 4HKUST. Cor-respondence to: Zhijiang Guo <zhijiangguo@hkust-gz.edu.cn >,Huiming Wang <huiming wang@mymail.sutd.edu.sg >.
+> Preprint. March 3, 2026.
+
+to the choice of training data samples (Parashar et al., 2025; Qu et al., 2025; Shen et al., 2025a;b), and is also expensive in computations and memory usage for policy evaluation and updates, since it requires massive rollouts, especially in GRPO-style training (DeepSeek-AI et al., 2025). Train-ing on static and uniformly sampled data distributions is inherently inefficient: substantial computation is wasted on tasks that the model has already mastered or that remain intractable given its current capability (Yu et al., 2025; Bae et al., 2025). Beyond increased training cost, this mismatch degrades optimization stability by reducing the effective batch size. Consequently, a key challenge in RL is to adap-tively select tasks of appropriate difficulty, ensuring that learning remains efficient as the model’s capabilities evolve. A growing body of work has explored data selection strate-gies to improve the efficiency of RL training. Early ap-proaches primarily adopt offline curricula (Parashar et al., 2025; Wen et al., 2025; Shen et al., 2025b), organizing training data along a predefined progression from easy to hard. While effective in controlled settings, such curricula are fixed prior to training and therefore do not adapt to the model’s evolving capabilities. Motivated by this limitation, several recent works propose online data selection methods (Qu et al., 2025; Shen et al., 2025a; Yu et al., 2025) that dynamically select datapoints based on the current policy. These methods, however, face an inherent trade-off between the cost of acquiring informative signals and the accuracy with which data utility can be estimated. Oversampling-based approaches (Yu et al., 2025; Bae et al., 2025) ad-dress uncertainty by executing enlarged rollout batches to obtain reliable performance estimates, but this strategy in-troduces substantial computational overhead. In contrast, non-oversampling methods typically rely on a single proxy signal. In particular, difficulty-based heuristics (Shen et al., 2025a; Qu et al., 2025) prioritize datapoints whose empiri-cal success rates lie near a target value (e.g., 0.5), implicitly treating difficulty as a surrogate for informativeness. While such heuristics can be effective during early stages of train-ing, their utility may diminish as evidence accumulates: data can remain difficult yet provide a limited additional learn-ing signal once uncertainty has been sufficiently reduced. Consequently, existing approaches either incur significant evaluation costs to maintain accurate estimates or rely on simplified heuristics that do not fully reflect the evolving 1    
+
+> arXiv:2603.01907v1 [cs.LG] 2 Mar 2026 Efficient RLVR Training via Weighted Mutual Information Data Selection
+> Figure 1. Overview of the I NSIGHT pipeline. I NSIGHT maintains a Bayesian belief over data success rates, scores candidate datapoints using Weighted Mutual Information (WMI), and selects the top-Mdatapoints for RL training. Observed rewards update the posterior beliefs, enabling adaptive data selection that jointly accounts for data difficulty and accumulated evidence, unlike difficulty-only heuristics.
+
+uncertainty structure during training. To address the limitations, we propose I NSIGHT , an efficient information-aware data selection method available for all RL training, based on a weighted mutual information objec-tive. Unlike prior online methods that rely on empirical or sampled success rates and implicitly equate difficulty with informativeness, I NSIGHT jointly considers both data diffi-culty and mutual information as shown in Figure 1, which yields an acquisition score prioritizing datapoints that are expected to produce the greatest reduction in uncertainty. We further provide a theoretical analysis showing how in-formation gain decays with accumulated evidence while preserving meaningful data-dependent structure. Across a range of benchmarks, I NSIGHT consistently achieves state-of-the-art performance (e.g., up to +1.41 gain on Planning & Mathmatics benchmarks and +1.01 improvement on general reasoning), and improves the efficiency by ∼2.2x acceler-ation, establishing a principled and effective alternative to difficulty-only data selection. 
+
+## 2. Related Work 
+
+RL for LLMs. RL has become a central paradigm for aligning LLMs with desired behaviors and unlock reason-ing ability. Recently, Reinforcement Learning with Veri-fiable Rewards (RLVR) has demonstrated strong gains in structured reasoning domains (Li et al., 2025b), where re-ward signals can be automatically evaluated (DeepSeek-AI et al., 2025; Qwen et al., 2025; Luo et al., 2025a; Yang et al., 2025a). Among RL algorithms, GRPO (Shao et al., 2024) has attracted increasing attention by eliminating the costly value network. Building on these foundations, recent work has focused on mitigating training instability and bias, reducing computational overhead, and improving sample efficiency (Yu et al., 2025; Yue et al., 2025; Yang et al., 2025c;b). Furthermore, many recent studies have continued to advance the performance frontier across a wide range of domains and model scales (Luo et al., 2025c; Liang et al., 2025; Ma et al., 2025; Meng et al., 2025), while comple-mentary efforts focus on building scalable infrastructure for RL training (Sheng et al., 2025). 
+
+Data Selection for RL. Data selection has long been recog-nized as a critical factor in improving training efficiency and generalization in large-scale learning. A substantial body of work studies data selection in the context of pretraining and SFT, focusing on identifying informative, or high-quality samples (Xia et al., 2024; Zhou et al., 2025; Kwon et al., 2024; Koh & Liang, 2020; Ghorbani & Zou, 2019). RL is substantially more expensive than SFT due to repeated rollouts, policy evaluation, and credit assignment, making uniform sampling highly inefficient. As a result, selecting informative prompts is crucial for both training stability and computational efficiency. Early approaches adopt of-fline filtering, preselecting prompts based on heuristics such as difficulty or diversity (Li et al., 2025a; Ye et al., 2025). However, these methods lack adaptivity and often incur ad-ditional overhead for prompt assessment. To address this, re-cent work explores online data selection strategies that adapt to the current policy. Oversampling-based methods identify suitable data by executing oversized rollout batches and dis-carding uninformative samples (Yu et al., 2025; Liu et al., 2025), but this substantially increases computational cost. To reduce evaluation overhead, several methods attempt to predict task success rates and select prompts accordingly. Some frame task selection as a non-stationary multi-armed bandit problem (Shen et al., 2025a; Qu et al., 2025). How-ever, these approaches typically rely on sampled or empiri-cal success rates and implicitly equate difficulty with infor-mativeness, neglecting how accumulated evidence reduces epistemic uncertainty over time. In contrast, our method INSIGHT explicitly selects data by maximizing expected variance reduction. This principled formulation decouples difficulty from accumulated evidence, enabling adaptive and information-aware data selection without auxiliary rollouts or heuristic difficulty prediction. 2Efficient RLVR Training via Weighted Mutual Information Data Selection 
+
+## 3. Preliminary 
+
+Setup & Notations. A datapoint τ in the reasoning tasks can be a form of a mathematical or logical problem, which belongs to the full pool of dataset T = {τi}Ni=1 . The parameters of the LLM at t-th training step is denoted as πθt . The selected data batch at t-th training step is 
+
+T Mt = {τt,i }Mi=1 ⊂ T , where M is the batch size. At t-th time step, for a datapoint τ , the policy model πθt generates 
+
+K independent response rollouts ytτ = {yt,j τ }Kj=1 .
+
+Data Difficulty Modeling. For each datapoint τ , we as-sociate it with a success rate ϕtτ ∈ [0 , 1] to demonstrate its difficulty under the current policy, which is unknown and thus regarded as a latent variable (Shen et al., 2025a; Qu et al., 2025). RLVR usually leverages a binary reward 
+
+r ∈ { 0, 1} as the training signal. Therefore, each response 
+
+yt,j τ is examined with the ground-truth and scored with a binary reward: 
+
+rt,j τ ∈ { 0, 1} ∼ Bernoulli (ϕtτ ) (1) For each datapoint τ , rtτ = {rt,j τ }Kj=1 denotes the set of rewards for K independent generated responses, and RMt =
+
+{rtτt,i }Mi=1 denotes the collected rewards for the data batch at step t. Thus, the likelihood of observing rtτ given ϕtτ is binomial: 
+
+p(rtτ |ϕtτ ) = 
+
+KStτ
+
+
+
+(ϕtτ )Stτ (1 − ϕtτ )K−Stτ (2) where Stτ = PKj=1 rt,j τ means the success counts. The entire optimization history up to step t is noted as Ht =
+
+{T Mi , RMi }ti=0 
+
+Bayesian Online Data Selection. A Bayesian surrogate model is widely adopted to dynamically estimate the success rate ϕtτ , and sample the most informative datapoints without requiring additional LLM inference (Shen et al., 2025a; Qu et al., 2025). Each datapoint τ is modeled as an arm in a stochastic multi-armed bandit, with an unknown success rate ϕtτ ∈ [0 , 1] . Selecting an arm corresponds to querying the current policy πθt on datapoint τ and observing binary feedback rτ ∈ { 0, 1} indicating success or failure. Unlike standard bandit formulations that aim to maximize cumu-lative reward, our objective is to adaptively select data that yield the most informative learning signals for updating the model (Bae et al., 2025; Chen et al., 2021). A natural way to model the initial success rate is via a Beta prior distribution (Shen et al., 2025a; Qu et al., 2025), due to the straightforward inference and closed-form posterior updates: 
+
+ϕ0 
+
+> τ
+
+∼ Beta (α0 
+
+> τ
+
+, β 0 
+
+> τ
+
+) (3) where α0 
+
+> τ
+
+and β0 
+
+> τ
+
+represent the accumulated counts of suc-cesses and failures, respectively, which are typically set to 
+
+(1 , 1) for a uniform prior. Then, the posterior distribution of 
+
+ϕtτ given observations is formulated as: 
+
+p(ϕtτ |H t) ∝ p(rtτ |ϕtτ ) · p(ϕtτ |H t−1) (4) Note that p(ϕtτ |H t−1) ∼ Beta (αtτ , β tτ ) represents the con-ditional prior. The posterior of ϕ would also follow the Beta distribution, since the Beta distribution is conjugate to the Bernoulli likelihood in Equation 2: 
+
+ϕtτ |H t ∼ Beta (αtτ + Stτ , β tτ + K − Stτ ) (5) Then αt+1  
+
+> τ
+
+= αtτ + Stτ , β t+1  
+
+> τ
+
+= βtτ + K − Stτ serve as the prior for the next step. The temporal discounting techniques are also applied for better stability: 
+
+αt+1  
+
+> τ
+
+= λ · αtτ + (1 − λ) · α0 
+
+> τ
+
++ Stτ ,βt+1  
+
+> τ
+
+= λ · βtτ + (1 − λ) · β0 
+
+> τ
+
++ K − Stτ
+
+(6) Previous works (Bae et al., 2025; Qu et al., 2025; Shen et al., 2025a) all claim that the problems with mid-level difficulty (i.e., near a target value ϕ∗ ≈ 0.5) can yield the most informative gradients for RL training, from empirical experiments. As a result, those problems whose sampled success rate ˆϕtτ is closest to ϕ∗, will be ranked as top and selected for the following training. 
+
+## 4. Limitation of Difficulty-Only Data Selection 
+
+While potentially effective in early training, difficulty-only heuristics primarily target aleatoric uncertainty (i.e., the intrinsic stochasticity of reward outcomes for a given dat-apoint) by favoring prompts with high outcome variabil-ity, implicitly equating difficulty with informativeness, but ignore the epistemic uncertainty , which arises from lim-ited rollouts and captures uncertainty about the data latent success rate under the current policy (Chan et al., 2024; H ¨ullermeier & Waegeman, 2021). As evidence accumu-lates, epistemic uncertainty about the underlying success rate diminishes, and prompts may remain difficult yet yield limited gains for parameter estimation. We posit that a more accurate estimation of ϕtτ leads to more data-efficient selection for policy optimization. In RLVR, policy gradients are driven by reward feedback from sampled trajectories. When the surrogate estimate of task success is noisy or poorly calibrated, the resulting learn-ing signal becomes unreliable. Prioritizing datapoints that maximize expected uncertainty reduction in ϕtτ would pro-mote the collection of reward signals that are more reliable and discriminative, yielding gradients that better reflect true task difficulty and thereby improving downstream policy learning performance. To quantify the improvement in the estimation of ϕ after observing the reward signal r, we consider the expected variance reduction for ϕ as follows: 
+
+∆V (τ ) = Var prior (ϕτ ) − Er [Var posterior (ϕτ |r)] (7) 3Efficient RLVR Training via Weighted Mutual Information Data Selection       
+
+> Figure 2. Expected variance reduction as a function of prior mean
+> ¯ϕτand accumulated evidence n. While difficulty-based heuristics focus solely on ¯ϕτ≈0.5, the expected uncertainty reduction decays rapidly with evidence, revealing a fundamental limitation of difficulty-only selection.
+
+which captures the expected decrease in uncertainty of ϕτ
+
+after observing all possible reward outcomes. Without loss of generality, we consider the binary reward signal and K =1, which is well-suited to most common RLVR settings and used to illustrate evidence-dependent decay. According to conditional expectation, we can expand Equa-tion 7 and simplify it as: 
+
+∆V (τ ) = αβ 
+
+(α + β)2(α + β + 1) 2 = ¯ϕτ · (1 − ¯ϕτ )(n + 1) 2 (8) where n = α + β and ¯ϕτ = αα+β represents the mean of ϕ’s distribution. The full derivation is included in Appendix A. 
+
+Analysis. Existing difficulty-based data selection relies on a sampled success rate ˆϕtτ , and prioritize data whose sampled value lies closest to a target difficulty level ϕ∗. However, as visualized in Figure 2, expected variance reduction de-pends not only on ¯ϕτ but also critically on the accumulated evidence n = α + β. In particular, even when ¯ϕτ ≈ 0.5,the contribution to uncertainty reduction becomes negligi-ble once n is large. In conclusion, while ˆϕtτ concentrates around ¯ϕτ in expectation, the difficulty heuristic ignores both sampling variability and the evidence-dependent decay, which would repeatedly select well-estimated yet mid-level difficult data, producing limited information gain in prac-tice. 
+
+## 5. Method 
+
+The preceding analysis exposes a key limitation of difficulty-only data selection: by relying on sampled success rates, purely difficulty-based heuristics conflate outcome variabil-ity with informativeness, optimizing only a partial aspect of uncertainty reduction. Our derivation shows that the distri-butional mean of the prior belief and accumulated evidence governs informativeness. Motivated by the decomposition of expected variance reduction into a difficulty-dependent and another evidence-dependent component, we decouple these two factors and design a new acquisition score: 
+
+A(τ ) ∝ w(·)
+
+|{z} 
+
+> Aleatoric Exploitation
+
+· I(·)
+
+|{z} 
+
+> Epistemic Exploration
+
+(9) In the following, we detail the two components of the pro-posed acquisition score. 
+
+5.1. Mutual Information for Epistemic Exploration 
+
+Mutual information provides a principled measure of the uncertainty reduction, as it directly captures the expected decrease in posterior uncertainty about ϕτ induced by obser-vations. Let Φτ denote the random variable corresponding to the latent success rate ϕτ , and let R denote the reward outcome. The mutual information between R and Φτ is defined as: 
+
+I(R; Φ τ ) = H(Φ τ ) − ER[H(Φ τ |R = r)] (10) This represents the expected reduction in uncertainty about 
+
+Φτ caused by observing the reward, indicating “how infor-mative will this datapoint be”, which serves the Epistemic Exploration term in Equation 9. H(·) denotes the entropy: 
+
+H(Φ τ ) = −
+
+Z 10
+
+f (ϕτ ) ln f (ϕτ )dϕ τ
+
+= ln B(ατ , β τ ) + ( ατ + βτ − 2) ψ(ατ + βτ )
+
+− (ατ − 1) ψ(ατ ) − (βτ − 1) ψ(βτ )
+
+(11) where f (·) denotes the probability density function, B(α, β )
+
+is the beta function, and ψ(·) denotes the digamma function. Full derivation is in Appendix B. 
+
+Extend to multi-rollouts. In practice, for example, using GRPO for RLVR training, each datapoint τ is typically evaluated multiple times to obtain K independent responses. To account for this, we extend the above single-observation mutual information and variance reduction derivations to the multi-rollout setting. Let Sτ = PKk=1 Rk denote the number of successes ob-served, given K independent responses with the correspond-ing rewards R1: K = ( R1, ..., R K ) at a datapoint τ , which follows the Binomial distribution as in Equation 2. Then we further derive it as follows:                       
+
+> P(Sτ=s|K, α τ, β τ) =
+> Z10
+> P(Sτ=s|Φτ=ϕ, K )P(Φ = ϕ)dϕ
+> =
+> Ks
+> B(ατ+s, β τ+K−s)
+> B(ατ, β τ)
+
+(12) 4Efficient RLVR Training via Weighted Mutual Information Data Selection 
+
+Algorithm 1 INSIGHT Online Data Selection 
+
+Input: Datapoint pool T = {τ }Ni=1 ; Prior Beta parame-ters α, β ; Hyperparameters of weighted function ( w( ¯ϕτ ))
+
+η, μ ; Larger candidate batch size ˆM ; selected batch size 
+
+M ; Policy model πθ0 ; Total training steps T .
+
+Output: Finetuned model πθT
+
+∀τ ∈ T , initialize Beta parameters (α0 
+
+> τ
+
+, β 0 
+
+> τ
+
+) ← (α, β );
+
+for t = 0 to T − 1 do 
+
+Randomly sample a larger candidate set T ˆMt ⊂ T ;
+
+for ˆτt,j ∈ T ˆMt do 
+
+Compute WMI score A(ˆ τt,j ) via Equation 16; 
+
+end for 
+
+# Rank Datapoints by WMI Score Select top datapoints set T Mt ⊂ T ˆMt by Equation 17; 
+
+for τt,i ∈ T Mt do 
+
+# Generate Responses and Compute Rewards Generate responses ytτt,i = {yt,j τt,i }Kj=1 by πθt ;Compute rewards rtτt,i = {rt,j τt,i }Kj=1 ;
+
+end for 
+
+Update θt to θt+1 with an RL algorithm; # Posterior Update 
+
+for τt,i ∈ T Mt do 
+
+Update (αt+1  
+
+> τ
+
+, β t+1  
+
+> τ
+
+) via Equation 6; 
+
+end for end for 
+
+Therefore, the mutual information can be written as:                                          
+
+> I(R1: K; Φ τ) = H(Φ τ)−ESτ[H(Φ τ|Sτ)] =H(Φ τ)−
+> KX
+> s=0
+> P(Sτ=s|K, α τ, β τ)H(Φ τ|Sτ=s)=H(Φ τ)−
+> KX
+> s=0
+> Ks
+> B( ατ+s, β τ+K−s)B( ατ, β τ)H(Φ τ|Sτ=s)
+
+(13) This expression demonstrates that the information gain from 
+
+K rollouts is governed by the expected reduction in posterior uncertainty about the latent success rate, averaged over all possible success counts. 
+
+5.2. Asymptotic Analysis of Mutual Information 
+
+We next analyze the asymptotic behavior of the mutual information to characterize how epistemic uncertainty about the latent success rate decays as evidence accumulates. 
+
+Proposition 5.1. Let Φτ ∼ Beta (ατ , β τ ) denote the latent success rate of a datapoint τ , and R ∈ { 0, 1} be a Bernoulli reward conditioned on Φτ . Define nτ = ατ + βτ . Then, as 
+
+nτ → ∞ , we have 
+
+I(R; Φ τ ) ≈ O ( 1
+
+nτ
+
+) (14) A complete derivation is provided in Appendix C.     
+
+> Figure 3. Weighted functions w( ¯ϕ)under different η, μ .
+
+Interpretation. This result demonstrates that the informa-tion gained from an additional observation decreases as prior evidence accumulates, reflecting the diminishing epistemic uncertainty of well-understood datapoints. 
+
+5.3. Weighted Function for Aleatoric Exploitation 
+
+While mutual information provides a principled measure of epistemic uncertainty reduction, it is agnostic to task difficulty and treats all outcome regimes symmetrically. To account for this, we introduce a weighted function w(·) that modulates the epistemic acquisition term with a controlled preference for informative difficulty regimes. 
+
+Motivation. The design of it is motivated by two com-plementary factors. First, effective data selection should favor prompts with sufficient outcome variability, as near-deterministic regimes provide a limited learning signal. Sec-ond, learning dynamics in reinforcement learning are known to benefit from curriculum-like progression (Parashar et al., 2025; Bae et al., 2025), and trivial tasks may mislead the model to exploit shortcuts to bypass meaningful reasoning (Laidlaw et al., 2025; Parashar et al., 2025). Inspired from Equation 8, unlike difficulty-only methods that operate on a sampled success rate, our weighting func-tion is defined over the mean of the current prior belief of the latent success rate: ¯ϕτ = E[ϕτ ], providing an expectation-based characterization of task difficulty. As a result, we design the weighted function as (shown in Figure 3): 
+
+w( ¯ϕτ ) =   ¯ϕτ
+
+ 1 − ¯ϕτ
+
+ | {z }
+
+> High Variance Filter
+
+· exp 
+
+
+
+−η  ¯ϕτ − μ2| {z } 
+
+> Bias to Difficulty μ
+
+(15) where the first term focuses on regions with high outcome variability, the second term introduces a smooth bias towards a beneficial difficulty level μ, and another hyperparameter η
+
+controls the sharpness of curriculum bias. 
+
+5.4. Weighted Mutual Information–Based Selection 
+
+Combining the preceding components, we define the fi-nal acquisition score, named Weighted Mutual Information 5Efficient RLVR Training via Weighted Mutual Information Data Selection 
+
+Table 1. Evaluation results across planning and mathematics benchmarks. Accuracy is computed as the average pass@1 over 16 independent generations per problem. Bold indicates the best results, and gray denotes the oracle baseline. ↑ (↓) indicates the improvement(degradation) compared to the R ANDOM baseline.                                                                                                                 
+
+> MODELS METHODS COUNT DOWN AIME24 AMC23 MATH500 MINERVA .OLYMPIAD .AVG .
+> RANDOM 71.57 10.41 43.90 71.30 21.60 34.20 42.16 QWEN 3-0.6B MOPPS 76.28 10.83 44.16 70.60 21.60 34.25 42.95 INVERSE -E VIDENCE 72.13 10.60 42.50 71.80 21.70 34.80 42.25 INSIGHT (Ours) 76.70 (5.13 ↑)11.90 (1.49 ↑)44.30 (0.40 ↑)71.75 (0.45 ↑)21.94 (0.34 ↑)34.80 (0.60 ↑)43.56 (1.40 ↑)
+> RANDOM 84.90 51.45 78.01 91.22 41.13 56.24 67.16 QWEN 3-4B MOPPS 87.80 50.00 77.41 90.82 41.59 56.45 67.35 INVERSE -E VIDENCE 83.59 52.22 77.18 91.23 41.49 56.20 66.99 INSIGHT (Ours) 87.96 (3.06 ↑)53.75 (2.30 ↑)79.00 (0.99 ↑)91.22 (0.00 ↑)41.80 (0.67 ↑)57.00 (0.76 ↑)68.46 (1.30 ↑)
+> DS 83.05 50.62 80.79 90.82 38.39 53.38 66.17 RANDOM 79.02 46.25 77.90 90.50 37.98 51.80 63.90 R1-D ISTILL -Q WEN -7B MOPPS 81.66 47.20 77.86 90.40 38.02 52.01 64.52 INVERSE -E VIDENCE 78.32 47.00 77.70 90.40 37.93 52.07 63.90 EXPECTED -D IFFICULTY 81.20 47.50 78.10 90.43 38.39 52.25 64.64 INSIGHT (Ours) 81.73 (2.71 ↑)47.71 (1.46 ↑)78.40 (0.50 ↑)90.45 (0.05 ↓)39.06 (1.08 ↑)52.50 (0.70 ↑)64.98 (1.08 ↑)
+
+(WMI), for a datapoint τ as: 
+
+A(τ ) = w( ¯ϕτ ) · I(R1: K , Φτ ) (16) At each iteration, we will select the datapoints correspond-ing to the largest WMI score. Formally, given a larger candidate set T ˆMt , we choose: 
+
+T Mt = Top-M
+
+n 
+
+τ ∈ T ˆMt |A (τ )
+
+o 
+
+(17) where ˆM ≫ M . Then top-M selected datapoints are used for rollouts and policy training. The full algorithm of I N-SIGHT is described in Algorithm 1, which can be easily integrated with any RLVR algorithm. 
+
+## 6. Experiments 
+
+In this section, we conduct comprehensive experiments to evaluate various data selection approaches on RL training and validate the effectiveness of our proposed method. 
+
+6.1. Experimental Setup 
+
+We evaluate I NSIGHT across representative reasoning tasks: planning, mathematics, and general reasoning. To exam-ine its effectiveness, we adopt diverse LLMs with different scales, from 0.6B to 7B in size. For RL tuning, we choose one of the most commonly used algorithms: GRPO (Shao et al., 2024). Test accuracy is reported as average pass@1 
+
+over 16 independent generations per problem. More imple-mentation details are included in Appendix D. 
+
+Reasoning Tasks. (1) Planning: We adopt the Countdown task, which requires combining given numbers using ba-sic arithmetic operations to reach a target value. Training is conducted on the subset of the Countdown dataset (Pan et al., 2025), and test is evaluated on the held-out split. (2) Mathematics: We train the LLMs on the DeepScaler train-ing dataset (Luo et al., 2025b), which consists of approx-imately 40.3K mathematics problem-answer pairs. Then we evaluate the final performance on common benchmarks, including AIME24, AMC23, MATH500 (Lightman et al., 2023), Minerva Math (Minerva.) (Lewkowycz et al., 2022), and OlympiadBench (Olympiad.) (He et al., 2024). (3) General Reasoning: We utilize the WebInstruct-verified dataset (Ma et al., 2025), which encompasses a broad range of domains (e.g., physics, chemistry, finance), and evaluate the performances on MMLU and GPQA-Main (Hendrycks et al., 2021; Rein et al., 2023). 
+
+Models. For Countdown and Mathematics tasks, we in-clude three LLMs in different scales: Qwen3-0.6B, Qwen3-4B (Yang et al., 2025a), and DeepSeek-R1-Distil-Qwen-7B; and for General Reasoning, we also use three LLMs: Qwen3-0.6B, Qwen3-1.7B, and Qwen3-4B (Yang et al., 2025a). 
+
+Baselines. (1) RANDOM , which selects datapoints uni-formly at random, serving as a non-adaptive baseline; (2) 
+
+MOPPS (Qu et al., 2025), a recent state-of-the-art Bayesian online sampling method, prioritizes datapoints whose esti-mated success rates are closest to targeted difficulty (i.e., 
+
+0.5); (3) INVERSE -E VIDENCE , which is a theory-inspired heuristic baseline derived from the expected variance re-duction in Equation 8. It selects datapoints based solely on the inverse of accumulated evidence, favoring prompts with smaller nτ , under the intuition that less-observed dat-apoints carry higher epistemic uncertainty, while ignoring task difficulty; (4) EXPECTED -D IFFICULTY , which selects datapoints whose mean success rate is closest to the target difficulty 0.5, removing sampling variance in M OPPS but still ignoring evidence accumulation; and (5) Dynamic Sam-pling (DS) (Yu et al., 2025), which over-samples datapoints and filter out those without effective gradients based on their exact evaluation. It is worth noting that DS is extremely time-consuming, and we view it as an oracle baseline rather than outperforming it in test accuracy (refer to Appendix E 6Efficient RLVR Training via Weighted Mutual Information Data Selection 
+
+Table 2. Evaluation results across general-reasoning benchmarks, via LM-Evaluation-Harness framework. Bold indicates the best results. 
+
+↑ indicates the improvement compared to the R ANDOM baseline. 
+
+MODELS METHODS MMLU GPQA AVG .
+
+HUMANITIES OTHER SOCIAL -S CI . STEM RANDOM 38.83 47.22 52.32 40.95 26.34 41.13 QWEN 3-0.6B MOPPS 39.17 47.12 51.12 38.69 27.90 40.80 INVERSE -E VIDENCE 38.55 45.19 49.76 36.95 29.46 39.98 INSIGHT (Ours) 39.21 (0.38 ↑) 47.34 (0.12 ↑) 52.84 (0.52 ↑) 41.80 (0.85 ↑) 29.50 (3.16 ↑) 42.14 (1.01 ↑)
+
+RANDOM 48.63 60.41 64.09 53.47 30.20 51.36 QWEN 3-1.7B MOPPS 48.63 60.32 64.38 53.35 30.10 51.35 INVERSE -E VIDENCE 48.80 60.40 64.41 54.14 29.69 51.48 INSIGHT (Ours) 49.00 (0.37 ↑) 60.83 (0.42 ↑) 65.00 (0.91 ↑) 54.61 (1.14 ↑) 30.36 (0.16 ↑) 51.96 (0.60 ↑)
+
+RANDOM 59.13 71.07 77.87 68.25 34.38 62.14 MOPPS 59.62 71.00 78.00 69.01 33.26 62.17 QWEN 3-4B INVERSE -E VIDENCE 59.36 71.12 78.03 68.79 33.48 62.16 EXPECTED -D IFFICULTY 59.60 71.22 77.93 68.63 33.50 62.17 INSIGHT (Ours) 59.70 (0.57 ↑) 71.13 (0.06 ↑) 78.10 (0.23 ↑) 69.14 (0.89 ↑) 35.04 (0.66 ↑) 62.62 (0.48 ↑)
+
+Figure 4. Performance comparisons among different methods on the Countdown task. Our proposed I NSIGHT outperforms the existing SOTA (M OPPS) and other baselines in both training efficiency and performance. 
+
+for the performance and runtime cost comparisons in detail). 
+
+6.2. Main results Planning & Mathematics. Table 1 reports results on plan-ning and mathematical reasoning benchmarks for models from 0.6B to 7B parameters. Across all scales, I NSIGHT 
+
+consistently outperforms R ANDOM and M OPPS, achiev-ing the highest average accuracy in every setting. Gains are most pronounced on CountDown and AIME24, with improvements of up to +5.13 and +2.30 over R ANDOM ,respectively. The largest average improvement occurs on the 0.6B model ( +1.40 ), with gains gradually diminishing as model size increases, though I NSIGHT still yields a +1.08 
+
+average improvement on R1-Distill-Qwen-7B. 
+
+General Reasoning. Table 2 presents results on MMLU and GPQA. While absolute improvements are smaller than in mathematical reasoning, I NSIGHT consistently achieves the strongest or near-strongest performance across all model sizes. Notable gains are observed on MMLU-STEM and GPQA, reaching +1.14 on Qwen3-1.7B and +3.16 on Qwen3-0.6B, respectively. 
+
+Discussions. First, improvements decrease with model scale across all benchmarks, reflecting reduced headroom as larger models exhibit stronger priors and reasoning capa-bilities. Second, E XPECTED -D IFFICULTY consistently out-performs M OPPS, indicating that using the mean difficulty provides a more stable acquisition signal than sampling-based heuristics. In contrast, I NVERSE -E VIDENCE per-forms comparably or even worse than R ANDOM , suggesting that epistemic uncertainty alone is insufficient when decou-pled from task difficulty. On general reasoning tasks, where outcome noise is higher, R ANDOM occasionally surpasses MOPPS, highlighting the sensitivity of sampling-based dif-ficulty heuristics to noisy surrogate signals. Finally, we evaluate training efficiency on CountDown, an in-domain benchmark drawn from the same distribu-tion as the RL training data, providing a controlled set-ting for comparing training efficiency. As shown in Fig-ure 4, I NSIGHT reaches competitive or superior performance with fewer training steps, yielding up to ∼2.2x , ∼1.5x ,and ∼1.6x speedups on Qwen3-0.6B, Qwen3-4B, and R1-Distill-Qwen-7B, respectively. Although M OPPS exhibits similar convergence behavior, I NSIGHT demonstrates more consistent early-stage gains and slightly stronger final per-7Efficient RLVR Training via Weighted Mutual Information Data Selection 
+
+Table 3. Evaluation comparisons of WMI components across different models. Bold indicates the best results.                                                         
+
+> MODELS COMPONENT AIME24 AMC23 OLYMPIAD .
+> I(R1: K,Φτ)9.37 43.52 34.01 QWEN 3-0.6B w( ¯ϕτ)·I(R1: K,Φτ)11.90 44.30 34.80
+> I(R1: K,Φτ)51.66 76.43 56.24 QWEN 3-4B w( ¯ϕτ)·I(R1: K,Φτ)53.75 79.00 57.00
+> w( ¯ϕτ)46.67 77.33 52.25 R1-D ISTILL -7B I(R1: K,Φτ)46.67 77.90 52.35
+> w( ¯ϕτ)·I(R1: K,Φτ)47.71 78.40 52.50
+
+formance, indicating that jointly modeling difficulty and epistemic uncertainty improves gradient efficiency. 
+
+## 7. Ablation Analysis 
+
+7.1. Effects of WMI Components 
+
+We first analyze the contribution of each component (e.g., weighted function w( ¯ϕτ ) and mutual information 
+
+I(R1: K , Φτ )) in the WMI score of I NSIGHT .
+
+Results. Table 3 reports the component-wise ablation. Mu-tual information alone consistently underperforms the full WMI objective. While MI captures epistemic uncertainty in the latent success rate, it does not account for whether this uncertainty lies in difficulty regimes that yield informa-tive policy gradients. Conversely, the difficulty weighting alone performs competitively but lacks explicit uncertainty awareness. Combining both components yields the most consistent performance across all benchmarks, demonstrat-ing that jointly modeling epistemic uncertainty and task difficulty is crucial for effective data selection in RL. 
+
+7.2. Expected vs. Sampled Difficulty in WMI 
+
+According to Equation 8 and Equation 15, WMI relies on the mean of the underlying success-rate distribution. In this experiment, we explore the effect of replacing ¯ϕτ with 
+
+ˆϕτ ∼ Beta (ατ , β τ ), which is always used in previous work. 
+
+Results. As shown in Table 4, using the mean success rate 
+
+¯ϕτ consistently outperforms the sampled variant ˆϕτ across all models and benchmarks. This aligns with our theoretical analysis: expected variance reduction depends on the mean belief and accumulated evidence, whereas sampling intro-duces unnecessary noise that destabilizes data ranking. The results confirm that mean-based estimation yields a more re-liable and effective acquisition signal than sampled success rates used in prior work. 
+
+7.3. Effect of Difficulty Bias μ in WMI 
+
+The WMI objective incorporates a difficulty bias that favors tasks near a target success rate μ. We study the sensitiv-ity of WMI to this design choice by varying μ, assessing both robustness and the trade-off between exploration and curriculum shaping. 
+
+Table 4. Evaluation comparisons between ¯ϕτ and ˆϕτ variants in WMI across different models. Bold indicates the best results.                            
+
+> MODELS ¯ϕτ/ˆϕτAIME24 AMC23 OLYMPIAD .
+> ˆϕτ10.41 43.22 34.25 QWEN 3-0.6B ¯ϕτ11.90 44.30 34.80
+> ˆϕτ51.45 77.48 56.33 QWEN 3-4B ¯ϕτ53.75 79.00 57.00
+> ˆϕτ46.25 77.93 52.37 R1-D ISTILL -7B ¯ϕτ47.71 78.40 52.50
+
+Table 5. Evaluation comparisons of different μ in weighted func-tion across different models. Bold indicates the best results.                                   
+
+> MODELS μAIME24 AMC23 OLYMPIAD .
+> 0.110.41 44.80 34.75 QWEN 3-0.6B 0.311.90 44.30 34.80
+> 0.710.41 42.62 33.09
+> 0.150.83 77.03 56.32 QWEN 3-4B 0.353.75 79.00 57.00
+> 0.752.91 77.41 56.58
+> 0.146.87 78.23 52.08 R1-D ISTILL -7B 0.347.71 78.40 52.50
+> 0.747.91 78.46 52.25
+
+Results. Table 5 shows LLMs’ behavior under the choices of the difficulty bias μ. Generally, μ = 0 .3 achieves the strongest or near-strongest performance, indicating that pri-oritizing moderately challenging tasks provides an effective balance between exploration and curriculum shaping. In contrast, more extreme settings ( μ = 0 .1 or 0.7) tend to underperform, suggesting that overemphasizing very easy or very difficult tasks is less effective, and this phenomenon is more significant in smaller models (e.g., Qwen3-4B’s AIME24 score drops to 50.83 from 53.75 when μ = 0 .1). The sensitivity to μ further diminishes as model size in-creases, with the 7B model exhibiting only minor variations, reflecting greater inherent robustness. We further analyze the impact of the candidate batch size ˆM on model perfor-mance, with a detailed discussion provided in Appendix F. 
+
+## 8. Conclusion 
+
+We introduced I NSIGHT , an information-guided data se-lection framework for efficient reinforcement learning of large language models. By analyzing expected variance reduction, we revealed why difficulty-only heuristics fail to capture true informativeness as evidence accumulates, and motivated a weighted mutual information objective that jointly accounts for task difficulty and epistemic uncertainty. INSIGHT operationalizes this insight using stable mean pos-terior beliefs and naturally extends to multi-rollout RLVR settings. Experiments across planning, mathematical, and general reasoning benchmarks show that I NSIGHT consis-tently improves training efficiency and final performance over strong online baselines, particularly in smaller-model 8Efficient RLVR Training via Weighted Mutual Information Data Selection 
+
+and low-resource regimes. These results demonstrate that principled, information-aware data selection offers a robust alternative to heuristic difficulty-based sampling. 
+
+## Impact Statements 
+
+This paper presents work whose goal is to advance the field of machine learning by improving the efficiency of rein-forcement learning through principled data selection. The proposed method focuses on algorithmic efficiency and does not introduce new model capabilities or application domains. While more efficient training may reduce computational costs and resource usage, we do not identify any specific societal or ethical risks beyond those commonly associated with large language model development. 
+
+## References 
+
+Bae, S., Hong, J., Lee, M. Y., Kim, H., Nam, J., and Kwak, D. Online difficulty filtering for reasoning oriented re-inforcement learning, 2025. URL https://arxiv. org/abs/2504.03380 .Chan, M. A., Molina, M. J., and Metzler, C. A. Esti-mating epistemic and aleatoric uncertainty with a sin-gle model, 2024. URL https://arxiv.org/abs/ 2402.03478 .Chen, M., Tworek, J., Jun, H., Yuan, Q., de Oliveira Pinto, H. P., Kaplan, J., Edwards, H., Burda, Y., Joseph, N., Brockman, G., Ray, A., Puri, R., Krueger, G., Petrov, M., Khlaaf, H., Sastry, G., Mishkin, P., Chan, B., Gray, S., Ryder, N., Pavlov, M., Power, A., Kaiser, L., Bavar-ian, M., Winter, C., Tillet, P., Such, F. P., Cummings, D., Plappert, M., Chantzis, F., Barnes, E., Herbert-Voss, A., Guss, W. H., Nichol, A., Paino, A., Tezak, N., Tang, J., Babuschkin, I., Balaji, S., Jain, S., Saun-ders, W., Hesse, C., Carr, A. N., Leike, J., Achiam, J., Misra, V., Morikawa, E., Radford, A., Knight, M., Brundage, M., Murati, M., Mayer, K., Welinder, P., Mc-Grew, B., Amodei, D., McCandlish, S., Sutskever, I., and Zaremba, W. Evaluating large language models trained on code, 2021. URL https://arxiv.org/abs/ 2107.03374 .DeepSeek-AI, Guo, D., Yang, D., Zhang, H., Song, J., Zhang, R., Xu, R., Zhu, Q., Ma, S., Wang, P., Bi, X., Zhang, X., Yu, X., Wu, Y., Wu, Z. F., Gou, Z., Shao, Z., Li, Z., Gao, Z., Liu, A., Xue, B., Wang, B., Wu, B., Feng, B., Lu, C., Zhao, C., Deng, C., Zhang, C., Ruan, C., Dai, D., Chen, D., Ji, D., Li, E., Lin, F., Dai, F., Luo, F., Hao, G., Chen, G., Li, G., Zhang, H., Bao, H., Xu, H., Wang, H., Ding, H., Xin, H., Gao, H., Qu, H., Li, H., Guo, J., Li, J., Wang, J., Chen, J., Yuan, J., Qiu, J., Li, J., Cai, J. L., Ni, J., Liang, J., Chen, J., Dong, K., Hu, K., Gao, K., Guan, K., Huang, K., Yu, K., Wang, L., Zhang, L., Zhao, L., Wang, L., Zhang, L., Xu, L., Xia, L., Zhang, M., Zhang, M., Tang, M., Li, M., Wang, M., Li, M., Tian, N., Huang, P., Zhang, P., Wang, Q., Chen, Q., Du, Q., Ge, R., Zhang, R., Pan, R., Wang, R., Chen, R. J., Jin, R. L., Chen, R., Lu, S., Zhou, S., Chen, S., Ye, S., Wang, S., Yu, S., Zhou, S., Pan, S., Li, S. S., Zhou, S., Wu, S., Ye, S., Yun, T., Pei, T., Sun, T., Wang, T., Zeng, W., Zhao, W., Liu, W., Liang, W., Gao, W., Yu, W., Zhang, W., Xiao, W. L., An, W., Liu, X., Wang, X., Chen, X., Nie, X., Cheng, X., Liu, X., Xie, X., Liu, X., Yang, X., Li, X., Su, X., Lin, X., Li, X. Q., Jin, X., Shen, X., Chen, X., Sun, X., Wang, X., Song, X., Zhou, X., Wang, X., Shan, X., Li, Y. K., Wang, Y. Q., Wei, Y. X., Zhang, Y., Xu, Y., Li, Y., Zhao, Y., Sun, Y., Wang, Y., Yu, Y., Zhang, Y., Shi, Y., Xiong, Y., He, Y., Piao, Y., Wang, Y., Tan, Y., Ma, Y., Liu, Y., Guo, Y., Ou, Y., Wang, Y., Gong, Y., Zou, Y., He, Y., Xiong, Y., Luo, Y., You, Y., Liu, Y., Zhou, Y., Zhu, Y. X., Xu, Y., Huang, Y., Li, Y., Zheng, Y., Zhu, Y., Ma, Y., Tang, Y., Zha, Y., Yan, Y., Ren, Z. Z., Ren, Z., Sha, Z., Fu, Z., Xu, Z., Xie, Z., Zhang, Z., Hao, Z., Ma, Z., Yan, Z., Wu, Z., Gu, Z., Zhu, Z., Liu, Z., Li, Z., Xie, Z., Song, Z., Pan, Z., Huang, Z., Xu, Z., Zhang, Z., and Zhang, Z. Deepseek-r1: Incentivizing reasoning capability in llms via reinforcement learning, 2025. URL 
+
+https://arxiv.org/abs/2501.12948 .Gao, L., Tow, J., Abbasi, B., Biderman, S., Black, S., DiPofi, A., Foster, C., Golding, L., Hsu, J., Le Noac’h, A., Li, H., McDonell, K., Muennighoff, N., Ociepa, C., Phang, J., Reynolds, L., Schoelkopf, H., Skowron, A., Sutawika, L., Tang, E., Thite, A., Wang, B., Wang, K., and Zou, A. The language model evaluation harness, 07 2024. URL 
+
+https://zenodo.org/records/12608602 .Ghorbani, A. and Zou, J. Data shapley: Equitable valuation of data for machine learning, 2019. URL https:// arxiv.org/abs/1904.02868 .He, C., Luo, R., Bai, Y., Hu, S., Thai, Z. L., Shen, J., Hu, J., Han, X., Huang, Y., Zhang, Y., Liu, J., Qi, L., Liu, Z., and Sun, M. Olympiadbench: A challeng-ing benchmark for promoting agi with olympiad-level bilingual multimodal scientific problems, 2024. URL 
+
+https://arxiv.org/abs/2402.14008 .Hendrycks, D., Burns, C., Basart, S., Critch, A., Li, J., Song, D., and Steinhardt, J. Aligning ai with shared human values. Proceedings of the International Conference on Learning Representations (ICLR) , 2021. H ¨ullermeier, E. and Waegeman, W. Aleatoric and epis-temic uncertainty in machine learning: an introduc-tion to concepts and methods. Machine Learning , 110 (3):457–506, March 2021. ISSN 1573-0565. doi: 9Efficient RLVR Training via Weighted Mutual Information Data Selection 
+
+10.1007/s10994-021-05946-3. URL http://dx.doi. org/10.1007/s10994-021-05946-3 .Koh, P. W. and Liang, P. Understanding black-box pre-dictions via influence functions, 2020. URL https: //arxiv.org/abs/1703.04730 .Kwon, Y., Wu, E., Wu, K., and Zou, J. Datainf: Effi-ciently estimating data influence in lora-tuned llms and diffusion models, 2024. URL https://arxiv.org/ abs/2310.00902 .Laidlaw, C., Singhal, S., and Dragan, A. Correlated proxies: A new definition and improved mitigation for reward hacking, 2025. URL https://arxiv.org/abs/ 2403.03185 .Lewkowycz, A., Andreassen, A., Dohan, D., Dyer, E., Michalewski, H., Ramasesh, V., Slone, A., Anil, C., Schlag, I., Gutman-Solo, T., Wu, Y., Neyshabur, B., Gur-Ari, G., and Misra, V. Solving quantitative rea-soning problems with language models, 2022. URL 
+
+https://arxiv.org/abs/2206.14858 .Li, X., Zou, H., and Liu, P. Limr: Less is more for rl scaling, 2025a. URL https://arxiv.org/abs/ 2502.11886 .Li, Z.-Z., Zhang, D., Zhang, M.-L., Zhang, J., Liu, Z., Yao, Y., Xu, H., Zheng, J., Wang, P.-J., Chen, X., et al. From system 1 to system 2: A survey of reasoning large lan-guage models. arXiv preprint arXiv:2502.17419 , 2025b. Liang, X., Li, Z., Gong, Y., Shen, Y., Wu, Y. N., Guo, Z., and Chen, W. Beyond pass@ 1: Self-play with varia-tional problem synthesis sustains rlvr. arXiv preprint arXiv:2508.14029 , 2025. Lightman, H., Kosaraju, V., Burda, Y., Edwards, H., Baker, B., Lee, T., Leike, J., Schulman, J., Sutskever, I., and Cobbe, K. Let’s verify step by step. arXiv preprint arXiv:2305.20050 , 2023. Liu, M., Diao, S., Lu, X., Hu, J., Dong, X., Choi, Y., Kautz, J., and Dong, Y. Prorl: Prolonged reinforcement learning expands reasoning boundaries in large language mod-els, 2025. URL https://arxiv.org/abs/2505. 24864 .Loshchilov, I. and Hutter, F. Decoupled weight decay regu-larization, 2019. URL https://arxiv.org/abs/ 1711.05101 .Luo, M., Tan, S., Huang, R., Patel, A., Ariyak, A., Wu, Q., Shi, X., Xin, R., Cai, C., Weber, M., Zhang, C., Li, L. E., Popa, R. A., and Stoica, I. Deepcoder: A fully open-source 14b coder at o3-mini level, 2025a. Notion Blog. Luo, M., Tan, S., Wong, J., Shi, X., Tang, W., Roongta, M., Cai, C., Luo, J., Zhang, T., Li, E., Popa, R. A., and Stoica, I. Deepscaler: Surpassing o1-preview with a 1.5b model by scaling rl, 2025b. Notion Blog. Luo, X., Huang, J., Zheng, W., Zhu, Q., Xu, M., Xu, Y., Fan, Y., Qin, L., and Che, W. How many code and test cases are enough? evaluating test cases generation from a binary-matrix perspective, 2025c. URL https: //arxiv.org/abs/2510.08720 .Ma, X., Liu, Q., Jiang, D., Zhang, G., MA, Z., and Chen, W. General-Reasoner: Advancing LLM reasoning across all domains. In The Thirty-ninth Annual Conference on Neu-ral Information Processing Systems , 2025. URL https: //openreview.net/forum?id=pBFVoll8Xa .Meng, F., Du, L., Liu, Z., Zhou, Z., Lu, Q., Fu, D., Han, T., Shi, B., Wang, W., He, J., Zhang, K., Luo, P., Qiao, Y., Zhang, Q., and Shao, W. Mm-eureka: Exploring the frontiers of multimodal reasoning with rule-based reinforcement learning, 2025. URL https://arxiv. org/abs/2503.07365 .Pan, J., Zhang, J., Wang, X., Yuan, L., Peng, H., and Suhr, A. Tinyzero. https://github.com/Jiayi-Pan/TinyZero, 2025. Accessed: 2025-01-24. Parashar, S., Gui, S., Li, X., Ling, H., Vemuri, S., Olson, B., Li, E., Zhang, Y., Caverlee, J., Kalathil, D., and Ji, S. Curriculum reinforcement learning from easy to hard tasks improves llm reasoning, 2025. URL https:// arxiv.org/abs/2506.06632 .Qu, Y., Wang, Q., Mao, Y., Hu, V. T., Ommer, B., and Ji, X. Can prompt difficulty be online predicted for accelerating rl finetuning of reasoning models?, 2025. URL https: //arxiv.org/abs/2507.04632 .Qwen, :, Yang, A., Yang, B., Zhang, B., Hui, B., Zheng, B., Yu, B., Li, C., Liu, D., Huang, F., Wei, H., Lin, H., Yang, J., Tu, J., Zhang, J., Yang, J., Yang, J., Zhou, J., Lin, J., Dang, K., Lu, K., Bao, K., Yang, K., Yu, L., Li, M., Xue, M., Zhang, P., Zhu, Q., Men, R., Lin, R., Li, T., Tang, T., Xia, T., Ren, X., Ren, X., Fan, Y., Su, Y., Zhang, Y., Wan, Y., Liu, Y., Cui, Z., Zhang, Z., and Qiu, Z. Qwen2.5 technical report, 2025. URL https: //arxiv.org/abs/2412.15115 .Rein, D., Hou, B. L., Stickland, A. C., Petty, J., Pang, R. Y., Dirani, J., Michael, J., and Bowman, S. R. Gpqa: A graduate-level google-proof q&a benchmark, 2023. URL 
+
+https://arxiv.org/abs/2311.12022 .Shao, Z., Wang, P., Zhu, Q., Xu, R., Song, J., Bi, X., Zhang, H., Zhang, M., Li, Y. K., Wu, Y., and Guo, 10 Efficient RLVR Training via Weighted Mutual Information Data Selection 
+
+D. Deepseekmath: Pushing the limits of mathemat-ical reasoning in open language models, 2024. URL 
+
+https://arxiv.org/abs/2402.03300 .Shen, Q., Chen, D., Huang, Y., Ling, Z., Li, Y., Ding, B., and Zhou, J. Bots: A unified framework for bayesian online task selection in llm reinforcement finetuning. arXiv preprint arXiv:2510.26374 , 2025a. Shen, W., Pei, J., Peng, Y., Song, X., Liu, Y., Peng, J., Sun, H., Hao, Y., Wang, P., Zhang, J., and Zhou, Y. Skywork-r1v3 technical report, 2025b. URL https://arxiv. org/abs/2507.06167 .Sheng, G., Zhang, C., Ye, Z., Wu, X., Zhang, W., Zhang, R., Peng, Y., Lin, H., and Wu, C. Hybridflow: A flexible and efficient rlhf framework. In Proceedings of the Twentieth European Conference on Computer Systems , EuroSys ’25, pp. 1279–1297. ACM, March 2025. doi: 10.1145/ 3689031.3696075. URL http://dx.doi.org/10. 1145/3689031.3696075 .Wen, C., Guo, T., Zhao, S., Zou, W., and Li, X. Sari: Struc-tured audio reasoning via curriculum-guided reinforce-ment learning, 2025. URL https://arxiv.org/ abs/2504.15900 .Xia, M., Malladi, S., Gururangan, S., Arora, S., and Chen, D. Less: Selecting influential data for targeted instruc-tion tuning, 2024. URL https://arxiv.org/abs/ 2402.04333 .Yang, A., Li, A., Yang, B., Zhang, B., Hui, B., Zheng, B., Yu, B., Gao, C., Huang, C., Lv, C., Zheng, C., Liu, D., Zhou, F., Huang, F., Hu, F., Ge, H., Wei, H., Lin, H., Tang, J., Yang, J., Tu, J., Zhang, J., Yang, J., Yang, J., Zhou, J., Zhou, J., Lin, J., Dang, K., Bao, K., Yang, K., Yu, L., Deng, L., Li, M., Xue, M., Li, M., Zhang, P., Wang, P., Zhu, Q., Men, R., Gao, R., Liu, S., Luo, S., Li, T., Tang, T., Yin, W., Ren, X., Wang, X., Zhang, X., Ren, X., Fan, Y., Su, Y., Zhang, Y., Zhang, Y., Wan, Y., Liu, Y., Wang, Z., Cui, Z., Zhang, Z., Zhou, Z., and Qiu, Z. Qwen3 technical report, 2025a. URL https: //arxiv.org/abs/2505.09388 .Yang, Z., Guo, Z., Huang, Y., Liang, X., Wang, Y., and Tang, J. Treerpo: Tree relative policy optimization. arXiv preprint arXiv:2506.05183 , 2025b. Yang, Z., Guo, Z., Huang, Y., Wang, Y., Xie, D., Li, H., Wang, Y., Liang, X., and Tang, J. Depth-breadth synergy in rlvr: Unlocking llm reasoning gains with adaptive exploration. arXiv preprint arXiv:2508.13755 , 2025c. Ye, Y., Huang, Z., Xiao, Y., Chern, E., Xia, S., and Liu, P. Limo: Less is more for reasoning, 2025. URL https: //arxiv.org/abs/2502.03387 .Yu, Q., Zhang, Z., Zhu, R., Yuan, Y., Zuo, X., Yue, Y., Dai, W., Fan, T., Liu, G., Liu, L., Liu, X., Lin, H., Lin, Z., Ma, B., Sheng, G., Tong, Y., Zhang, C., Zhang, M., Zhang, W., Zhu, H., Zhu, J., Chen, J., Chen, J., Wang, C., Yu, H., Song, Y., Wei, X., Zhou, H., Liu, J., Ma, W.-Y., Zhang, Y.-Q., Yan, L., Qiao, M., Wu, Y., and Wang, M. Dapo: An open-source llm reinforcement learning system at scale, 2025. URL https://arxiv.org/ abs/2503.14476 .Yue, Y., Yuan, Y., Yu, Q., Zuo, X., Zhu, R., Xu, W., Chen, J., Wang, C., Fan, T., Du, Z., Wei, X., Yu, X., Liu, G., Liu, J., Liu, L., Lin, H., Lin, Z., Ma, B., Zhang, C., Zhang, M., Zhang, W., Zhu, H., Zhang, R., Liu, X., Wang, M., Wu, Y., and Yan, L. Vapo: Efficient and reliable reinforce-ment learning for advanced reasoning tasks, 2025. URL 
+
+https://arxiv.org/abs/2504.05118 .Zeng, W., Huang, Y., Liu, Q., Liu, W., He, K., Ma, Z., and He, J. Simplerl-zoo: Investigating and taming zero reinforcement learning for open base models in the wild, 2025. URL https://arxiv.org/abs/ 2503.18892 .Zhou, X., Fan, S., and Jaggi, M. Hyperinf: Unleashing the hyperpower of the schulz’s method for data influence estimation, 2025. URL https://arxiv.org/abs/ 2410.05090 .11 Efficient RLVR Training via Weighted Mutual Information Data Selection 
+
+## A. Derivation of Expected Variance Reduction 
+
+In this section, we include the complete derivation of expected variance reduction in section 4. We know that ϕ ∼ Beta (α, β ),and the variance of it is: Var (ϕ) = αβ 
+
+(α + β)2(α + β + 1) (18) For the posterior distribution of ϕ, we first apply the Bayes’ rule: 
+
+p(ϕ|r) = p(r|ϕ)p(ϕ)
+
+p(r) ∝ p(r|ϕ)p(ϕ) (19) The likelihood for a single reward observation r ∈ { 0, 1} is: 
+
+p(r|ϕ) = ϕr (1 − ϕ)1−r (20) Therefore, the posterior of ϕ also follows the Beta distribution: 
+
+ϕ|r ∼ Beta (α + r, β + 1 − r) (21) Now let n = α + β, plug these into Equation 7, and obtain: 
+
+∆V (τ ) = Var prior (ϕτ ) − X
+
+> r′∈{ 0,1}
+
+Pr (r = r′)Var posterior (ϕτ |r = r′) (22) 
+
+= αβ n2(n + 1) − [ αn · (α + 1) β
+
+(n + 1) 2(n + 2) + βn · α(β + 1) (n + 1) 2(n + 2) ] (23) 
+
+= αβ n2(n + 1) − αβ n(n + 1) 2 (24) 
+
+= αβ n2(n + 1) 2 (25) 
+
+## B. Derivation of Entropy of the Beta Distribution 
+
+Let Φ ∼ Beta (α, β ) be a continous random variable with density: 
+
+f (ϕ) = 1
+
+B(α, β ) ϕα−1(1 − ϕ)β−1 (26) where B (α, β ) is the beta function. By definition of entropy, we have: 
+
+H(Φ) = −E[ln f (Φ)] (27) Then we can simplify it as: 
+
+H(Φ) = ln B(α, β ) − (α − 1) E[ln Φ] − (β − 1) E[ln (1 − Φ)] (28) The expectation E[ln Φ] and E[ln (1 − Φ)] admit closed-form expressions in terms of the digamma function ψ(·):
+
+E[ln Φ] = ψ(α) − ψ(α + β), E[ln (1 − Φ)] = ψ(β) − ψ(α + β) (29) Substituting these identities and simplifying gives the closed-form entropy: 
+
+H(Φ) = ln B(α, β ) − (α − 1)( ψ(α) − ψ(α + β)) − (β − 1)( ψ(β) − ψ(α + β)) = ln B(α, β ) − (α − 1) ψ(α) − (β − 1) ψ(β) + ( α + β − 2) ψ(α + β) (30) 12 Efficient RLVR Training via Weighted Mutual Information Data Selection 
+
+## C. Proof of Asymptotic Scaling of Mutual Information 
+
+For a sufficiently large nτ = ατ + βτ , the Beta distribution would converge to a Gaussian distribution. The entropy of a Gaussian variable is given by: 
+
+H(Φ τ ) ≈ 12 ln(2 πe · Var (Φ τ )) (31) Then the Mutual Information can be approximated as the expected log-ratio of variance: 
+
+I(R; Φ τ ) ≈ 12 ER
+
+
+
+ln 
+
+ Var (Φ τ )
+
+Var (Φ τ |R)
+
+ 
+
+(32) During RL training, when nτ is large, the posterior variance Var (Φ τ |R) concentrates tightly around its expectation. Denoting the expected variance reduction by: 
+
+∆V (τ ) = ER [Var (Φ τ ) − Var (Φ τ |R)] (33) For large nτ , the ratio ∆V (τ )  
+
+> Var (Φ τ)
+
+is small. Then apply the Taylor expansion ln (1 /(1 − x)) ≈ x for x ≈ 0:
+
+I(R; Φ τ ) ≈ 12 ER
+
+
+
+ln 
+
+ Var (Φ τ )
+
+Var (Φ τ |R)
+
+ 
+
+≈ 12
+
+
+
+ln 
+
+ Var (Φ τ )
+
+Var (Φ τ ) − ∆V (τ )
+
+ 
+
+= 12
+
+ln 
+
+ 11 − ∆V (τ ) 
+
+> Var (Φ τ)
+
+
+
+≈ 12
+
+ ∆V (τ )
+
+Var (Φ τ )
+
+ 
+
+(34) Now substituting the exact expressions from Equation 18 and Equation 25 yields: 
+
+I(R; Φ τ ) ≈ 12 · ατ βτ
+
+n2 
+
+> τ
+
+(nτ + 1) 2 · n2 
+
+> τ
+
+(nτ + 1) 
+
+ατ βτ
+
+= 12( nτ + 1) ∼ O ( 1
+
+nτ
+
+)
+
+(35) 
+
+## D. Implementation Details 
+
+D.1. Datasets Details CountDown. We adopt the Countdown Number Game, which requires combining given numbers using basic arithmetic operations to reach a target value. In detail, we randomly selected 2,000 samples from the CountDown-34 dataset 1 for training, and evaluated performances on a 512-problem held-out test set. In CountDown-34, each problem provides either 3 or 4 source numbers, and the distribution is balanced. We set the reward function as the follows: 
+
+r =
+
+
+
+1, if response is correct ,
+
+0.1, if response is incorrect but with correct formatting ,
+
+0, otherwise .
+
+(36) 
+
+DeepScaler. We train LLMs on the training set of the DeepScaleR dataset 2 (Luo et al., 2025b), which consists of approximately 40,000 unique mathematics problem-answer pairs. For evaluation, we conduct it on a suite of math benchmarks: AIME24, AMC23, MATH500 (Lightman et al., 2023), Minerva Math (Lewkowycz et al., 2022), and OlympiadBench (He et al., 2024), using the datasets provided by DeepScaler (Luo et al., 2025b). We report the average 
+
+> 1https://huggingface.co/datasets/BlackBeenie/simple-countdown
+> 2https://huggingface.co/datasets/agentica-org/DeepScaleR-Preview-Dataset
+
+13 Efficient RLVR Training via Weighted Mutual Information Data Selection 
+
+pass@1 over 16 samples for each problem. Following the default setting in Sheng et al. (2025),we use a binary reward function that assigns a reward of 1 for a correct answer and 0 otherwise. 
+
+WebInstruct-verified. We train LLMs on the training set of WebInstruct-verified (Ma et al., 2025), which is a diverse and high-quality dataset to enhance robust reasoning capabilities across a broad range of domains, including physics, chemistry, and more. For evaluation, we apply the LM-Evaluation-Harness (Gao et al., 2024), a unified framework to test generative language models on different evaluation tasks. For RL training, we adopt the rule-based reward function as used in the above mathematics task. 
+
+D.2. Training Details 
+
+We adopt the widely used GRPO (Shao et al., 2024), implemented in the VeRL framework (Sheng et al., 2025), as our default algorithm. It is worth noting that our method I NSIGHT can be integrated into any other RLVR algorithms. We set training steps as 100 during RL training. At each training step, we set k = 8 responses per prompt for estimating advantages, using temperature 1.0 and top p = 1.0. Evaluation is based on pass@1 , computed from 16 independent generations per prompt with temperature 0.6 and top p = 0.95, keeping the same setting as in Luo et al. (2025b). Training batch sizes are set to 256, while the mini-batch sizes are 128 and 64 for Mathematics&General-reasoning and Countdown, respectively. Optimization is performed by AdamW (Loshchilov & Hutter, 2019), with learning rate 1e − 6, weight decay 
+
+0.1, beta (0 .9, 0.999) . For online data selection methods, (including M OPPS, I NSIGHT , I NVERSE -E VIDENCE , E XPECTED -DIFFICULTY ), we set ˆM is 16x of the selected batch size M , and λ = 1 .0. For our I NSIGHT , we set η = 3 .0, μ = 3 .0. All experiments are conducted on 8x NVIDIA H-series GPUs. 
+
+## E. Performance and Runtime Comparisons Between I NSIGHT and Dynamic Sampling 
+
+In this section, we compare the performance and runtime (i.e., total training hours) between I NSIGHT and Synamic Sampling (DS), where the training setting is the same as described above. I NSIGHT precomputes the WMI scores for each datapoint, which is significantly faster than DS, since DS requires the LLM to over-sample the data and keep only effective datapoints after exact generation and evaluations.                                   
+
+> Table 6. Evaluation results across mathematics benchmarks. Accuracy is computed as the average pass@1 over 16 independent generations per problem.
+> MODELS METHODS AIME24 AMC23 MATH500 MINERVA .OLYMPIAD .TRAINING HOURS
+> DS 50.62 80.79 90.82 38.39 53.38 ∼30.5 Hours R1-D ISTILL -Q WEN -7B RANDOM 46.25 77.90 90.50 37.98 51.80 ∼12.5 Hours INSIGHT (Ours) 47.71 78.40 90.45 39.06 52.50 ∼12.5 Hours
+
+Analysis. Table 6 shows the comparisons on R1-Distill-Qwen-7B, where we set the 
+
+trainer.total training steps=100 in VeRL (Sheng et al., 2025) training for fair comparison. As ex-pected, DS incurs substantially higher computational cost, requiring more than 2x the total training hours of I NSIGHT . This overhead arises from DS’s reliance on oversampling, followed by full generation and reward evaluation to filter effective datapoints. Despite this additional cost, DS achieves only marginal performance gains over I NSIGHT and, in some benchmarks, performs comparably or even worse. In contrast, I NSIGHT consistently improves over R ANDOM while matching or exceeding DS on most metrics, without introducing any extra training-time overhead. These results highlight that information-aware selection based on Bayesian uncertainty can recover much of the benefit of oversampling-based methods, while being significantly more computationally efficient. Overall, this comparison underscores the practical advantage of I NSIGHT : it achieves strong performance gains comparable to expensive dynamic sampling strategies, yet preserves the runtime efficiency of standard RL training pipelines. 
+
+## F. Ablation Analysis of the Effect of Larger Candidate Batch Size ˆM
+
+In this section, we further study the effect of the larger candidate batch size ˆM in Algorithm 1. We conduct experiments on 
+
+ˆM = 8x, 12x, and 16x (our original setting) to compare the performances. 14 Efficient RLVR Training via Weighted Mutual Information Data Selection      
+
+> Table 7. Evaluation comparisons of different ˆMacross different models, on mathematics benchmarks. Bold indicates the best results.
+
+MODELS METHODS ˆM AIME24 AMC23 MATH500 MINERVA . OLYMPIAD .
+
+MOPPS 8x 10.20 44.42 71.46 21.64 34.07 INSIGHT 8x 10.20 44.50 72.53 21.69 35.07 
+
+QWEN 3-0.6B INSIGHT 12x 10.83 43.30 70.85 22.20 34.33 INSIGHT 16x 11.90 44.30 71.75 21.94 34.80 MOPPS 8x 52.29 77.71 91.08 41.40 56.70 INSIGHT 8x 52.29 78.54 91.09 41.73 56.91 QWEN 3-4B INSIGHT 12x 51.25 78.31 91.27 41.43 56.92 INSIGHT 16x 53.75 79.00 91.22 41.80 57.00 
+
+INSIGHT 8x 46.45 77.10 90.33 38.37 51.98 R1-D ISTILL -7B INSIGHT 12x 46.67 78.01 90.48 38.46 52.51 
+
+INSIGHT 16x 47.71 78.40 90.45 39.06 52.50 
+
+Analysis. Table 7 examines the effect of the larger candidate batch size ˆM on mathematical reasoning benchmarks across different model scales. We observe a non-monotonic trend for smaller models and a more consistent preference for larger 
+
+ˆM as model size increases. For Q WEN 3-0.6B, intermediate candidate sizes (8x or 12x) achieve the best performance on several benchmarks, occasion-ally outperforming 16x. This behavior suggests that, for smaller models, excessively large candidate pools may introduce additional variance or overly challenging samples that exceed the model’s effective learning capacity. In this regime, a moderately sized candidate set strikes a better balance between exploration and learnability, allowing I NSIGHT to select informative yet tractable datapoints. In contrast, as model capacity increases (e.g., Q WEN 3-4B and R1-D ISTILL -7B), performance improves more consistently with larger ˆM , and 16x becomes the strongest setting across most benchmarks. Larger models are better able to exploit increased candidate diversity and accurately estimate epistemic uncertainty, enabling more reliable ranking of high-information datapoints from a broader pool. Overall, these results indicate that the optimal ˆM depends on model capacity: smaller models benefit from moderate candidate sizes that avoid over-exploration, while larger models can effectively leverage larger pools to improve selection quality. This adaptive behavior further highlights the robustness of I NSIGHT across model scales and practical training settings. 15

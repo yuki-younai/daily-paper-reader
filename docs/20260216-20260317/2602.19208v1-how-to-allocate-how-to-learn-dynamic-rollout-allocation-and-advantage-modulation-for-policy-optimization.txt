@@ -1,0 +1,1605 @@
+Title: How to Allocate, How to Learn? Dynamic Rollout Allocation and Advantage Modulation for Policy Optimization
+
+URL Source: https://arxiv.org/pdf/2602.19208v1
+
+Published Time: Tue, 24 Feb 2026 02:00:58 GMT
+
+Number of Pages: 17
+
+Markdown Content:
+# How to Allocate, How to Learn? Dynamic Rollout Allocation and Advantage Modulation for Policy Optimization 
+
+Yangyi Fang 1,2,* , Jiaye Lin 1,* , Xiaoliang Fu 1,3,* , Cong Qin 1,4 , Haolin Shi 2,Chaowen Hu 1, Lu Pan 1, Ke Zeng 1, Xunliang Cai 1, †
+
+> 1
+
+Meituan 2Tsinghua University 3Fudan University 4Peking University 
+
+{fangyangyi, linjiaye}@meituan.com 
+
+Abstract 
+
+Reinforcement Learning with Verifiable Re-wards (RLVR) has proven effective for Large Language Model (LLM) reasoning, yet current methods face key challenges in resource allo-cation and policy optimization dynamics: (i) uniform rollout allocation ignores gradient vari-ance heterogeneity across problems, and (ii) the softmax policy structure causes gradient at-tenuation for high-confidence correct actions, while excessive gradient updates may destabi-lize training. Therefore, we propose DynaMO ,a theoretically-grounded dual-pronged opti-mization framework. At the sequence level , we prove that uniform allocation is suboptimal and derive variance-minimizing allocation from the first principle, establishing Bernoulli variance as a computable proxy for gradient informative-ness. At the token level , we develop gradient-aware advantage modulation grounded in theoretical analysis of gradient magnitude bounds. Our framework compensates for gra-dient attenuation of high-confidence correct actions while utilizing entropy changes as computable indicators to stabilize excessive update magnitudes. Extensive experiments conducted on a diverse range of mathemat-ical reasoning benchmarks demonstrate con-sistent improvements over strong RLVR base-lines. Our implementation is available at: https://anonymous.4open.science/r/dynamo. 
+
+1 Introduction 
+
+Reinforcement Learning with Verifiable Rewards (RLVR) has emerged as a powerful paradigm for advancing Large Language Model (LLM) reason-ing (Ouyang et al., 2022; Bai et al., 2022). Recent breakthrough models, such as OpenAI o1 (Jaech et al., 2024) and DeepSeek-R1 (Guo et al., 2025), demonstrate emergent capabilities like long-form chain-of-thought and self-reflection. Building on these successes, numerous works have explored    
+
+> *Equal contribution. †Corresponding author.
+
+RLVR methods, most commonly combining the GRPO algorithm (Shao et al., 2024) or its vari-ants (Liu et al., 2025; Yu et al., 2025) with outcome-based rewards for reinforcement learning. How-ever, despite these advances, fundamental chal-lenges persist in both computational resource allo-cation and policy optimization dynamics. Current RLVR methods uniformly distribute roll-out budgets across training instances (Shao et al., 2024), ignoring heterogeneous gradient informa-tiveness among various problems. This overlooks a fundamental trade-off: while high-variance prob-lems contribute more informative learning signals, they simultaneously introduce greater estimation noise that may destabilizes model performance. Ex-isting adaptive strategies either prioritize sample selection over resource allocation (Bengio et al., 2009; Schaul et al., 2015; Tong et al., 2024) or target different optimization frameworks (Dong et al., 2023; Yao et al., 2025), leaving the variance-informativeness trade-off in policy gradient meth-ods unaddressed. Moreover, this limitation is par-ticularly pronounced on datasets with diverse diffi-culties, where effective allocation requires dynami-cally balancing informativeness and noise. Compounding this resource allocation challenge, the policy gradient dynamics in RLVR training ex-pose fundamental token-level optimization issues. Theoretical analysis shows that the mathematical structure of the softmax policy induces an inherent tension (Li, 2025): high-confidence correct actions naturally yield smaller gradient magnitudes, lead-ing to insufficient learning signals, whereas exces-sive gradient updates may destabilize training (Luo et al., 2025). Our analysis further reveals that gradi-ent magnitude is upper-bounded by policy entropy, allowing entropy changes to serve as computable in-dicators of such instability. Existing approaches at-tempt mitigation via ratio clipping (Yu et al., 2025; Yang et al., 2025), sample reweighting (Zhu et al., 2025), or entropy-induced advantages (Cheng et al., 1
+
+> arXiv:2602.19208v1 [cs.LG] 22 Feb 2026
+
+2025; Tan and Pan, 2025; Wang et al., 2025), but these coarse-grained interventions lack a unified theoretical grounding and even amplify rather than stabilize training fluctuations. To address these key challenges, we propose Dy-naMO , a dual-pronged optimization framework grounded in variance minimization theory and pol-icy gradient analysis. At the sequence level , we derive dynamic rollout allocation that explicitly balances the informativeness-noise trade-off by gra-dient variance minimization specifically for policy gradient methods, establishing Bernoulli variance as a lightweight computable proxy. At the token level , we introduce gradient-aware advantage mod-ulation through integrated compensation and stabi-lization mechanisms based on our gradient-entropy analysis: compensation for gradient attenuation in high-confidence correct actions and stabilization against excessive update magnitudes by monitoring entropy changes as an indicator. Our core contribu-tions in this paper are summarized as follows: • We prove that uniform allocation is suboptimal and subsequently derive variance-minimizing rollout allocation with a lightweight proxy. • We establish the gradient-entropy relationship through theoretical analysis, enabling gradient-aware advantage modulation with compensation and stabilization mechanisms. • Extensive experiments across six benchmarks and three LLM scales demonstrate consistent improvements, with comprehensive ablations validating each component and visualizations revealing stable optimization dynamics. 
+
+2 Related Works 
+
+2.1 Reinforcement Learning for LLMs 
+
+Reinforcement learning has emerged as a dominant paradigm for LLM post-training, with RLHF and RLVR demonstrating significant success (Ouyang et al., 2022; Bai et al., 2022; Schulman et al., 2017). Recent breakthrough models, including DeepSeek-R1 (Guo et al., 2025), DeepSeekMath (Shao et al., 2024), OpenAI o1 (Jaech et al., 2024), and Kimi k1.5 (Team et al., 2025), further demonstrate the effectiveness of RLVR on reasoning tasks with ver-ifiable rewards. While subsequent works have in-troduced algorithmic refinements (Liu et al., 2025; Yu et al., 2025; Chu et al., 2025; Hu et al., 2025), fundamental challenges in computational efficiency and optimization stability still persist. 
+
+2.2 Entropy Dynamics in Policy Optimization 
+
+Entropy regularization balances exploration and exploitation (Haarnoja et al., 2018; Mnih et al., 2016), yet its role in LLM training remains con-tentious (Ouyang et al., 2022; Shao et al., 2024; Yu et al., 2025; Chu et al., 2025). A central chal-lenge is entropy collapse (Luo et al., 2025), motivat-ing mitigation strategies such as ratio clipping (Yu et al., 2025; Yang et al., 2025), sample reweight-ing (Zhu et al., 2025), or entropy-induced advan-tages (Cheng et al., 2025; Tan and Pan, 2025; Wang et al., 2025). Beyond entropy control, Li (2025) demonstrates that high-confidence actions yield at-tenuated gradient magnitudes, inducing asymmet-ric learning dynamics. However, existing methods lack unified theoretical grounding: coarse-grained interventions may amplify fluctuations, while the interplay between gradient attenuation and entropy dynamics remains underexplored. Our work ad-dresses these challenges through gradient-aware policy update control grounded in the gradient-entropy relationship, where entropy serves as a computable indicator of update magnitude rather than a direct optimization target. 
+
+2.3 Sample Efficiency 
+
+Sample efficiency is critical for RLVR training, where generating multiple rollouts per problem in-curs substantial cost. Standard methods employ uniform rollout budgets (Shao et al., 2024), over-looking heterogeneous gradient informativeness. Recent works explore adaptive strategies from different perspectives: curriculum learning (Ben-gio et al., 2009) and prioritized experience re-play (Schaul et al., 2015) strategically choose which problems to train on, but emphasize sam-ple ordering rather than resource allocation. Of-fline budget allocation methods (Tong et al., 2024) repeatedly sample until obtaining a fixed number of correct responses per prompt, lacking dynamic scheduling for iterative online training. EM-based methods (Dong et al., 2023; Gulcehre et al., 2023; Yao et al., 2025) enhance efficiency via iterative rejection sampling with dynamic allocation, yet require gradient norm computations and target the EM framework rather than policy gradient methods. In contrast, we derive optimal rollout allocation by minimizing gradient variance specifically for policy gradient methods, establishing theoretical conver-gence guarantees with a lightweight, gradient-free proxy that relies on historical success statistics. 2Gradient -Aware Advantage Modulation Dynamic Rollout Allocation             
+
+> Total
+> Answers
+> Correct
+> Answers
+> Problem Outputs Rewards Advantages
+> Policy
+> Model
+> Token Level:
+> Gradient -Aware Advantage Modulation
+> Sequence Level:
+> Dynamic Rollout Allocation
+> Tokens
+> Water -Level
+> Allocation
+> Problem
+> Reward
+> Function Output
+> . . .
+> Allocate Less
+> Allocate Less
+> Allocate More
+> Difficult
+> Problem
+> Outputs Rewards Advantages
+> 0
+> 0
+> 1
+> Easy
+> Problem
+> Outputs Rewards Advantages
+> 1
+> 1
+> 0
+> Moderate
+> Problem
+> Outputs Rewards Advantages
+> 1
+> 1
+> 0
+> 0
+> . . .
+> Policy Entropy
+> Steps
+> Brake
+> Ours
+> Update Magnitude
+> Stabilization
+> Gradient Norm
+> More
+> Stable
+> Steps
+> Chosen Action Other Action
+> Gradient
+> Compensation
+> For Correct Actions:
+> Higher Confidence →Weaker Updates
+
+Figure 1: Overview of DynaMO, which operates at both the sequence and token levels, enabling fine-grained control over optimization. (i) Left: Dynamic allocation concentrates the rollout budget on high-variance problems. (ii) Right: Gradient-aware advantage modulation compensates for attenuated gradients and stabilizes excessive updates. 
+
+3 Preliminaries 
+
+Policy Optimization in RLVR. Formally, given a prompt q sampled from the training data D, let 
+
+πθ denotes the policy model parameterized by θ. In the context of RLVR, the model autoregressively generates a response o = {o1, o 2, . . . , o T }, where each token ot represents an action taken at step t
+
+and T represents the sequence length. The final objective is to maximize the expected reward: 
+
+J(θ) = Eq∼D ,o ∼πθ (·| q)[R(o)] , (1) 
+
+where R(·) is the reward function that evaluates the quality of the generated response o.To reduce variance, GRPO (Shao et al., 2024) samples G responses {oi}Gi=1 per prompt, estimat-ing advantages via group-wise normalization: 
+
+Ai,t = R(oi) − mean ({R(oj )}Gj=1 )
+
+std ({R(oj )}Gj=1 ) , (2) 
+
+where R(oi) denotes the reward for response oi,evaluated by the reward function R(·). mean (·)
+
+and std (·) denote the mean and standard deviation of the rewards within the group. With the advantage Ai,t shared across all tokens, GRPO maximizes the clipped surrogate objective: 
+
+L(θ) = Eq∼D ,{oi}Gi=1 ∼πold (·| q)
+
+"
+
+1
+
+PGi=1 |oi|
+
+> G
+
+X
+
+> i=1
+> |oi|
+
+X
+
+> t=1
+
+min 
+
+
+
+ri,t Ai,t , clip (ri,t , 1 − ϵ, 1 + ϵ)Ai,t 
+
+#
+
+,
+
+(3) 
+
+where ri,t = πθ (oi,t |q,o i,<t )
+
+πold (oi,t |q,o i,<t ) is the importance sam-pling ratio and ϵ is the clipping parameter. Consis-tent with prior works (Yu et al., 2025; Liu et al., 2025), we omit the KL divergence penalty term and do not elaborate further on this component. 
+
+Policy Entropy. Policy entropy quantifies the un-certainty in the model’s action selection process, serving as a key indicator of exploration in rein-forcement learning. Given a policy model πθ and training data D, the policy entropy is defined as: 
+
+H(πθ , D) = Eq∼D ,{oi}Gi=1 ∼πθ (·| q)
+
+ 1
+
+PGi=1 |oi|
+
+> G
+
+X
+
+> i=1
+> |oi|
+
+X
+
+> t=1
+
+− X
+
+> v∈V
+
+πθ (v|q, o i,<t ) log πθ (v|q, o i,<t )
+
+!# 
+
+,
+
+(4) 
+
+where V represents the vocabulary. This entropy metric reflects the model’s confidence distribution: higher values indicate greater uncertainty and ex-ploration potential, whereas lower values suggest more deterministic behavior selection. 34 Methodology 
+
+4.1 Overview 
+
+To effectively address the challenges of inefficient resource allocation and policy optimization dy-namics highlighted in Section 1, we propose Dy-naMO (Dyna mic Rollout Allocation and Advan-tage Modulation for Policy Optimization). As il-lustrated in Figure 1, this dual-pronged framework operates at both the sequence and token levels, en-abling fine-grained control over optimization. Notably, DynaMO comprises two key compo-nents: (i) dynamic rollout allocation that adaptively distributes computational budget based on gradi-ent variance minimization, concentrating resources on problems with balanced success-failure distri-butions where learning signals are most informa-tive, and (ii) gradient-aware advantage modulation based on the gradient-entropy upper bound rela-tionship, which compensates for gradient attenua-tion in high-confidence actions while using entropy changes to stabilize excessive updates. 
+
+4.2 Dynamic Rollout Allocation 
+
+We establish a theoretical framework for optimal rollout allocation by formulating it as a gradient variance minimization problem, which considers a training dataset D with N prompts {qi}Ni=1 .
+
+4.2.1 Optimization Theory 
+
+For a prompt qi with ni rollout budget, the cor-responding gradient estimator ˆgi = 1
+
+> ni
+
+Pni 
+
+> k=1
+
+gi,k 
+
+has variance Var [ˆ gi] = σ2 
+
+> i
+
+/n i. Minimizing the total estimation variance P 
+
+> i
+
+Var [ˆ gi] under budget con-straint P 
+
+> i
+
+ni = B yields (proof in Appendix C):       
+
+> n∗
+> i=B·σi
+> PNk=1 σk
+> .(5)
+
+This principle allocates more rollouts to prob-lems with higher gradient variance. To implement this, we use Bernoulli variance Pi as a practical proxy for σi (derivation in Appendix C). 
+
+4.2.2 Bernoulli Variance as Practical Proxy 
+
+For binary rewards, the variance follows p(1 − p),where p represents the success probability. Then, we estimate this via historical statistics with ki
+
+correct responses out of Gi total rollouts generated:             
+
+> Pi=ki(Gi−ki)
+> Gi(Gi−1) ,E[Pi] = pi(1 −pi).(6)
+
+This unbiased estimator can be efficiently com-puted from historical success counts, with prob-
+
+Algorithm 1 Variance-Driven Dynamic Allocation                                                               
+
+> Require: Historical statistics {(Gi, k i)}Ni=1 , total rollout budget B, allocation bounds [Gmin , G max ]
+> 1: Compute priorities Pi=ki(Gi−ki)/[Gi(Gi−1)]
+> 2: Initialize Gnew
+> i=Gmin ,Brem =B−N·Gmin
+> 3: while Brem >0and ∃i:Gnew
+> i< G max do
+> 4: E={i:Gnew
+> i< G max }
+> 5: for i∈ E do
+> 6: ∆Gi= min
+> j Brem PiP
+> j∈E Pj
+> k
+> , G max −Gnew
+> i
+> 
+> 7: Gnew
+> i←Gnew
+> i+ ∆ Gi
+> 8: Brem ←Brem −∆Gi
+> 9: end for
+> 10: end while
+> 11: return {Gnew
+> 1, . . . , G new
+> N}
+
+lems that maximize Pi (characterized by balanced correct/incorrect responses) exhibiting large σi.
+
+Water-Level Implementation. Algorithm 1 im-plements the proportional budget allocation ni ∝
+
+Pi with the boundary constraints Gmin (ensuring minimum coverage) and Gmax (preventing over-concentration). After each training iteration, we incrementally update the statistics via Gi ← Gi +
+
+Gnew  
+
+> i
+
+and ki ← ki + knew  
+
+> i
+
+, thereby enabling an adaptive allocation as model proficiency evolves. Notably, the dynamic allocation strategy provably reduces variance against the conventional uniform allocation, with theoretical justification and opera-tional details in Appendix C and D. 
+
+4.3 Gradient-Aware Advantage Modulation 
+
+Beyond resource allocation, the softmax policy structure causes high-confidence correct actions to produce attenuated gradient magnitudes, while excessive gradient updates may undermine train-ing stability. Grounded in theoretical analysis of gradient dynamics, we design an integrated com-pensation and stabilization mechanism. 
+
+4.3.1 Gradient Compensation 
+
+Our gradient analysis, detailed in Appendix B, re-veals the fundamental relationship between the up-date magnitude and token-level entropy. Specifi-cally, considering a softmax policy parameterized by logits z(s) at state s = ( q, o <t ), the advantage-weighted updates with learning rate η satisfy:              
+
+> Eak∼πθ(·| s)
+> ∥∆z(s)∥22
+> =η2E[A2]
+> 
+> 1−
+> |V|
+> X
+> k=1
+> π2
+> k
+> 
+> ≤η2E[A2]
+> 
+> 1−exp  − H (πθ|s)
+> ,
+> (7)
+
+where H(πθ|s) = − P 
+
+> v∈V
+
+πθ(v|s) log πθ(v|s) is the token-level entropy and P|V|  
+
+> k=1
+
+π2 
+
+> k
+
+measures pol-icy concentration. Accordingly, high-confidence 4tokens ( πk ≈ 1) produce minimal expected update magnitudes ( P|V|  
+
+> j=1
+
+π2 
+
+> j
+
+≈ 1), resulting in gradient attenuation for confident correct actions—an ob-servation that constitutes the theoretical basis for gradient compensation in our method. To effectively mitigate this gradient attenuation phenomenon for the confident correct actions, we introduce a gradient compensation factor:           
+
+> βcomp
+> i,t =I[Ai,t >0] ·g(Hi,t ) + I[Ai,t ≤0] ,(8)
+
+where the compensation function g(·) is designed to scale inversely with the entropy:       
+
+> g(H) = 1 + α·Hmax − H Hmax − H min
+> .(9)
+
+Here, α determines the maximum compensation factor, while Hmin and Hmax represent the min-imum and maximum token-level entropy within the current training batch. This asymmetric design targets the confidence–update-magnitude asymme-try: for positive-advantage tokens, the compen-sation function scales inversely with entropy to counteract gradient attenuation, moderately ampli-fying learning signals for high-confidence correct actions; for negative-advantage tokens, compen-sation is bypassed to preserve the natural penalty signals. Furthermore, for uncertain actions with high entropy, the function returns to unity, main-taining natural update dynamics. 
+
+4.3.2 Update Magnitude Stabilization 
+
+While gradient compensation addresses the attenua-tion for high-confidence actions, excessive gradient updates still may destabilize the training dynam-ics. By leveraging the gradient-entropy relationship established above, we utilize entropy changes as an indicator to detect such optimization instability. Specifically, our policy update decomposition re-veals that changes in logits induce corresponding entropy changes through a factorized form:           
+
+> ∆H(πkθ|s)≈ − ηX
+> a
+> πkθ(a|s)2·Λkθ(a|s)·ξi,t (a),(10)
+
+where Λkθ (a|s) denotes the centered log-probability (Definition 2) that captures the deviation of action 
+
+a’s log-probability from the policy’s average en-tropy. ξi,t (a) = Iclip · ri,t · Ai,t represents the com-posite update coefficient combining clipping, im-portance sampling, and advantage estimation. The complete derivation is provided in Appendix A. This decomposition shows that when both the policy concentration πkθ (a|s)2 and the composite coefficient magnitude |ξi,t (a)| are large, entropy changes become substantial. Building upon the es-tablished gradient-entropy relationship, such large entropy changes indicate excessive gradient mag-nitudes that may destabilize training. Accordingly, we define the token-level instability indicator:      
+
+> Ξi,t =∆H(πkθ|si,t ),(11)
+
+which quantitatively measures the estimated contri-bution of each token to overall update instability. To stabilize tokens exhibiting excessive entropy changes while simultaneously maintaining learning efficiency, we formulate a stabilization factor:      
+
+> βstab
+> i,t =f
+> Ξi,t
+> max jΞj,t
+> 
+> ,(12)
+
+where f (·) is a sigmoid-based decay function de-signed to reduce the modulation factor for tokens with large normalized entropy changes:            
+
+> f(x) = λmin + (1 −λmin )·σ(−γ(x−τ)) .(13)
+
+In this formulation, σ(z) = 11+exp( −z) is the sig-moid function, γ > 0 controls the transition sharp-ness between stable and unstable regions, τ ∈ [0 , 1] 
+
+determines the entropy change threshold triggering the decay activation, and λmin = 1 − α establishes a lower bound for the stabilization factor. 
+
+4.3.3 Integrated Advantage Modulation 
+
+Our complete approach integrates both compensa-tion and stabilization mechanisms through a unified advantage modulation formulation as:         
+
+> Afinal
+> i,t =Ai,t ·βcomp
+> i,t ·βstab
+> i,t .(14)
+
+Subsequently, the training objective incorporates these modulated advantages:          
+
+> LDynaMO (θ) = Eq∼D ,{oi}ni=1 ∼πold (·| q)
+> "
+> 1
+> Pni=1 |oi|
+> nX
+> i=1
+> |oi|
+> X
+> t=1
+> min
+> 
+> ri,t Afinal
+> i,t ,clip (ri,t ,1−ϵ, 1 + ϵ)Afinal
+> i,t
+> #
+> ,
+> (15)
+
+where n denotes the rollout budget allocated to prompt q via dynamic allocation, with the prompt subscript omitted for notational brevity. This integrated approach addresses both chal-lenges, leveraging the gradient-entropy relation-ship: the compensation mechanism maintains suffi-cient learning signals for high-confidence positive actions, while the stabilization mechanism prevents training instability by dampening tokens with ex-cessive entropy changes that indicate large gradient magnitudes, with both mechanisms unified through a single hyperparameter α for simplified tuning. 5Table 1: Comparison of benchmark results across Qwen2.5-Math-1.5B and Qwen2.5-Math-7B. Pass@K (%) is abbreviated as P@K. The best results are bold, and the second-best results are underlined, respectively.                                                                                                                                                                                                                                                                                 
+
+> Method AIME24 AIME25 AMC23 MATH500 Minerva Olympiad Avg.
+> P@1 P@32 P@1 P@32 P@1 P@32 P@1 P@32 P@1 P@32 P@1 P@32 P@1 P@32
+> Qwen2.5-Math-1.5B
+> GRPO 13.2 32.3 7.6 31.5 56.0 90.0 54.4 79.2 17.2 42.8 25.6 47.0 29.0 53.8 Clip-Higher 12.4 34.7 6.4 30.6 50.6 89.9 56.8 80.2 16.8 41.3 26.4 46.8 28.2 53.9 Entropy Loss 12.6 33.7 5.8 28.4 55.6 86.9 56.3 78.5 17.6 43.6 25.4 46.4 28.9 52.9 Fork Tokens 9.4 32.0 5.9 31.4 52.5 85.6 54.3 74.2 16.6 36.8 25.5 45.2 27.4 50.9 Entropy Advantages 15.7 35.8 8.9 33.4 62.0 86.4 59.7 76.2 18.2 43.0 25.9 44.9 31.7 53.3 Clip-COV 13.5 36.4 6.6 34.4 59.5 89.7 57.6 75.6 15.8 44.3 25.8 47.6 29.8 54.7 KL-COV 12.6 33.9 9.0 33.4 55.8 91.3 54.2 78.1 14.8 40.3 25.4 48.1 28.6 54.2 W-REINFORCE 15.3 35.3 8.5 31.7 63.0 85.7 56.7 77.7 18.2 40.3 24.4 46.2 31.0 52.8
+> DynaMO (Ours) 17.2 37.2 9.8 32.5 63.6 91.9 58.8 81.0 19.4 44.0 27.2 47.1 32.7 55.6
+> Qwen2.5-Math-7B
+> GRPO 28.8 52.5 11.7 34.8 68.3 90.8 63.3 75.0 22.6 45.4 28.6 44.7 37.2 57.2 Clip-Higher 27.0 51.9 12.1 39.5 67.8 89.9 64.2 83.6 24.0 46.1 28.1 46.3 37.2 59.6 Entropy Loss 30.6 54.6 13.2 40.6 66.0 87.0 60.6 79.6 23.3 45.9 30.2 41.1 37.3 58.1 Fork Tokens 27.1 52.5 13.4 43.5 71.0 87.3 65.8 79.3 26.1 42.4 30.9 47.3 39.1 58.7 Entropy Advantages 27.5 49.7 9.4 39.2 67.9 85.2 65.3 83.3 23.7 43.7 30.4 47.3 37.4 58.1 Clip-COV 32.2 52.7 13.2 40.4 72.7 89.3 64.3 76.8 25.4 45.9 29.5 44.6 39.5 58.3 KL-COV 32.8 53.3 11.7 36.1 70.6 88.5 64.6 75.3 24.5 39.9 30.2 44.2 39.1 56.2 W-REINFORCE 31.8 55.4 14.3 41.0 72.5 89.8 64.9 84.0 26.4 49.5 30.9 46.7 40.1 61.1
+> DynaMO (Ours) 34.4 59.0 15.4 46.8 74.4 92.9 66.4 84.0 27.3 47.2 31.6 50.1 41.6 63.3
+
+5 Experiments 
+
+5.1 Experimental Setup Training Configuration. We conduct experi-ments on three different LLM scales: Qwen2.5-Math-1.5B, Qwen2.5-Math-7B, and Qwen3-14B. Our implementation builds upon the VeRL training framework (Sheng et al., 2025), adapting it to in-corporate our dual-pronged approach. Our training data is DAPO-Math-17k (Yu et al., 2025), which consists of mathematical reasoning problems with verifiable integer answers, ensuring reliable reward signals for RLVR optimization. Training is per-formed with top-p sampling at p=1.0 and temper-ature set to 1.0 to maintain exploration diversity. More details are provided in Appendix E. 
+
+Benchmarks and Metrics. We evaluate Dy-naMO on six mathematical reasoning benchmarks: AIME24, AIME25 (MAA, 2025), AMC23 (MAA, 2023), MATH500 (Hendrycks et al., 2021), Min-erva (Lewkowycz et al., 2022), and Olympiad (He et al., 2024), covering various problem difficulties and types. Detailed descriptions of these bench-marks are presented in Appendix F. We report average Pass@1 and Pass@32 across three independent training runs with different random seeds, using Math-Verify (HuggingFace, 2025) for answer verification and top-p=1.0, tem-perature=1.0 for diverse generation. Following Yue et al. (2025), Pass@K equals 1 if at least one of K sampled outputs passes verification, with unbi-ased estimation from Chen et al. (2021) to mitigate variance. 
+
+Baseline Methods. We compare DynaMO with strong baselines, including standard GRPO (Shao et al., 2024) and various entropy intervention tech-niques: Clip-Higher (Yu et al., 2025), Entropy Loss (Cheng et al., 2025), Fork Tokens (Wang et al., 2025), Entropy Advantages (Cheng et al., 2025), coverage-based methods (Clip-COV, KL-COV) (Zhu et al., 2025), and W-REINFORCE (Tan and Pan, 2025). All experiments use consistent hy-perparameters for fair comparison. 
+
+5.2 Main Results 
+
+Table 1 presents the comprehensive comparison results across six mathematical reasoning bench-marks on Qwen2.5-Math-1.5B and Qwen2.5-Math-7B. DynaMO consistently outperforms all baseline methods by effectively addressing two complemen-tary challenges: the variance-driven rollout alloca-6Table 2: Ablation study on Qwen2.5-Math-7B with Pass@1 (%). DRA: Dynamic Rollout Allocation, UMS: Update Magnitude Stabilization, GC: Gradient Compensation, w/o ALL: standard GRPO 
+
+Method AIME24 AIME25 AMC23 MATH500 Minerva Olympiad Avg. DynaMO 34.4 15.4 74.4 66.4 27.3 31.6 41.6 
+
+- w/o GC 33.8 15.0 71.9 65.0 26.7 29.3 40.3 - w/o UMS 33.2 14.7 71.9 64.9 25.9 30.2 40.1 - w/o DRA 31.9 15.2 73.4 65.7 23.0 30.4 39.9 - w/o GC & DRA 31.9 14.5 69.0 64.4 23.7 29.7 38.9 - w/o GC & UMS 30.5 14.3 70.2 63.5 22.2 29.4 38.4 - w/o UMS & DRA 30.0 13.8 70.1 61.6 19.9 30.2 37.6 - w/o ALL 28.8 11.7 68.3 63.3 22.6 28.6 37.2 0 400 800 1200 1600 2000                
+
+> Gradient Steps
+> 0
+> 5
+> 10
+> 15
+> 20
+> 25
+> 30
+> 35
+> 40
+> Pass@1 (%)
+> DynaMO (8 rollouts)
+> w/o DRA (8 rollouts) 0400 800 1200 1600 2000
+> Gradient Steps
+> 0
+> 5
+> 10
+> 15
+> 20
+> 25
+> 30
+> 35
+> 40
+> Pass@1 (%)
+> DynaMO (24 rollouts)
+> w/o DRA (24 rollouts) 0400 800 1200 1600 2000
+> Gradient Steps
+> 0
+> 5
+> 10
+> 15
+> 20
+> 25
+> 30
+> 35
+> 40
+> Pass@1 (%)
+> DynaMO (16 rollouts)
+> w/o DRA (16 rollouts) 0400 800 1200 1600 2000
+> Gradient Steps
+> 0
+> 5
+> 10
+> 15
+> 20
+> 25
+> 30
+> 35
+> 40
+> Pass@1 (%)
+> DynaMO (32 rollouts)
+> w/o DRA (32 rollouts)
+
+Figure 2: Impact of DRA across different computational budgets on AIME24 with average Pass@1 (%). Solid lines denote the full DynaMO, and dashed lines are the variant that substitutes DRA with uniform allocation. 
+
+tion concentrates computational budget on prob-lems with balanced success-failure distributions where Bernoulli variance signals high gradient in-formativeness, while the gradient-aware advantage modulation provides compensation for gradient at-tenuation in high-confidence correct actions and stabilization against excessive update magnitudes signaled by large entropy changes. Furthermore, a comparison with entropy intervention baselines re-veals their critical limitations: coarse-grained clip-ping and sequence-level reweighting methods like Clip-Higher, Clip-COV, and KL-COV lack fine-grained control over token-level dynamics, while entropy-induced advantage methods such as En-tropy Advantages and W-REINFORCE introduce training instability without principled stabilization mechanisms. Results on Qwen3-14B demonstrat-ing effective scaling are presented in Section 5.5. 
+
+5.3 Ablation Study 5.3.1 Overall Component Analysis 
+
+Table 2 conducts systematic ablation on Qwen2.5-Math-7B. DynaMO integrates three components: Dynamic Rollout Allocation (DRA), Update Mag-nitude Stabilization (UMS), and Gradient Com-AIME24 (Bar) AMC23 (Bar) AIME24 (Line) AMC23 (Line) 0.0 0.1 0.2 0.3 0.4 0.5              
+
+> (a)
+> 0
+> 10
+> 20
+> 30
+> 40
+> AIME24 Pass@1 (%)
+> 0
+> 20
+> 40
+> 60
+> 80
+> 100
+> AMC23 Pass@1 (%) 10 25 50 100 200
+> (c)
+> 0
+> 10
+> 20
+> 30
+> 40
+> 50
+> AIME24 Pass@1 (%)
+> 70
+> 75
+> 80
+> 85
+> 90
+> AMC23 Pass@1 (%) 46810 12 20 22 24 26 28
+> (b) Rollout Budget Bounds
+> 0
+> 10
+> 20
+> 30
+> 40
+> 50
+> AIME24 Pass@1 (%)  Gmin (fix Gmax )Gmax (fix Gmin )
+> 0
+> 20
+> 40
+> 60
+> 80
+> 100
+> AMC23 Pass@1 (%) 0.30
+> 0.50
+> 0.70
+> 0.80
+> 0.90
+> 0.95
+> 0.97
+> 0.99
+> (d)
+> 20
+> 30
+> 40
+> 50
+> AIME24 Pass@1 (%)
+> 70
+> 75
+> 80
+> 85
+> 90
+> AMC23 Pass@1 (%)
+
+Figure 3: Hyperparameter sensitivity analysis on Qwen2.5-Math-7B across AIME24 and AMC23. 
+
+pensation (GC). Removing individual components degrades average performance, with DRA showing the largest impact on Minerva, GC on Olympiad, and UMS providing stability across benchmarks. Removing multiple components reveals synergis-tic effects: w/o GC & UMS degrades more than the sum of individual removals, indicating UMS stabilizes the amplified gradients from GC. 
+
+5.3.2 Impact of Dynamic Rollout Allocation 
+
+Figure 2 evaluates DRA across varying computa-tional budgets, specifically ranging from an average of 8 to 32 rollouts per problem. The results demon-strate that DRA provides stable performance gains across all configurations. During early training, limited historical statistics result in similar alloca-tions across problems. However, as variance data accumulates, DRA progressively concentrates the budget on problems with balanced success-failure distributions where Bernoulli variance peaks. Cru-cially, these problems reside within the capability gap, being neither trivially solved nor currently in-accessible, where both positive and negative advan-7AIME24 AIME25 AMC23 MATH500 Minerva Olympiad 
+
+> 0
+> 20
+> 40
+> 60
+> 80
+> 100
+> Pass@1 (%)
+> Qwen3-14B + DynaMO
+> Qwen3-14B + GRPO
+> Qwen2.5-Math-7B + DynaMO
+> Qwen2.5-Math-7B + GRPO
+> Qwen2.5-Math-1.5B + DynaMO
+> Qwen2.5-Math-1.5B + GRPO
+
+Figure 4: Performance comparison across different LLM scales (1.5B/7B/14B) with DynaMO and GRPO. 
+
+tage signals are actively generated, thereby maxi-mizing learning signal quality per computational unit. In contrast, uniform allocation continues wast-ing resources on problems outside this optimal learning zone throughout training. 
+
+5.4 Hyperparameter Analysis 
+
+Figure 3 illustrates the hyperparameter sensitiv-ity analysis on Qwen2.5-Math-7B across AIME24 and AMC23. The unified modulation parameter α
+
+exhibits an inverted-U pattern: performance de-grades without modulation at α = 0 , peaks at moderate values, and subsequently declines at ex-cessive settings, validating that insufficient mod-ulation fails to address gradient attenuation while over-intervention constrains the learning process. Allocation bounds Gmin and Gmax demonstrate stable performance across wide ranges, confirming variance-driven allocation avoids under-sampling issues with minimal tuning. Similarly, the stabi-lization sharpness γ exhibits a flat plateau around its optimal values, balancing selective intervention against learning flexibility. Entropy threshold τ
+
+displays smooth variation characterized by a broad optimal region, thereby demonstrating the reliabil-ity in identifying problematic tokens. 
+
+5.5 Scaling to Larger Models 
+
+To validate scalability, we extend experiments to Qwen3-14B across all benchmarks in Figure 4. Dy-naMO consistently outperforms GRPO with widen-ing gaps as scale increases: moderate gains at 1.5B, amplified substantially at 7B, and expanded further at 14B. This trend confirms that our theoretically-grounded mechanisms become increasingly effec-tive at larger scales, as variance-driven allocation and gradient-aware modulation better exploit the enhanced representational capacity while mitigat-ing intensified optimization instabilities. GRPO DynaMO 0 500 1000 1500 2000     
+
+> Gradient Steps
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> Gradient Norm 0500 1000 1500 2000
+> Gradient Steps
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> Policy Entropy
+
+Figure 5: Training dynamics comparison. DynaMO maintains stable gradient norms and smooth entropy evolution, while GRPO exhibits severe spikes and fluc-tuations. Shaded regions show raw data range. 
+
+6 Case Study 
+
+To provide a deeper insight into the effectiveness of DynaMO, we compare it with GRPO through training dynamics analysis. As visually depicted in Figure 5, GRPO suffers from severe gradient spikes and erratic entropy fluctuations, whereas DynaMO maintains stable dynamics across both metrics. Two core components of DynaMO con-tribute to this stability: dynamic rollout allocation concentrates the budget on high-variance problems, while gradient-aware modulation prevents exces-sive update magnitudes. Notably, despite follow-ing similar overall trends, DynaMO achieves sub-stantially smoother transitions in gradient norms and policy entropy, indicating more controlled op-timization process throughout training. These phe-nomena confirm that DynaMO mitigates training instability at both sequence and token levels while simultaneously achieving superior performance. 
+
+7 Conclusion 
+
+In this paper, we propose DynaMO , a theoretically-grounded dual-pronged framework designed to systematically address fundamental RLVR chal-lenges. At the sequence level , we prove that uni-form allocation is suboptimal and subsequently derive a variance-minimizing allocation strategy to concentrate computational resources on high-informativeness problems. At the token level , we es-tablish the gradient-entropy relationship, enabling an integrated advantage modulation mechanism that compensates for gradient attenuation while sta-bilizing excessive updates. Extensive experiments conducted across multiple reasoning benchmarks and varying LLM scales demonstrate consistent improvements over strong baselines, with compre-hensive ablation studies validating the independent contributions from both mechanisms. 8Limitations 
+
+Our evaluation is conducted on the Qwen model family, spanning three distinct scales (1.5B, 7B, and 14B). Although we have not systematically evaluated other model families, it is important to note that our method operates at the algorithmic level—modifying rollout allocation and advantage computation—without relying on any architecture-specific features, suggesting transferability poten-tial. Future work could extend this evaluation to additional model architectures and scales to further demonstrate the generalizability of DynaMO. 
+
+References 
+
+Yuntao Bai, Andy Jones, Kamal Ndousse, Amanda Askell, Anna Chen, Nova DasSarma, Dawn Drain, Stanislav Fort, Deep Ganguli, Tom Henighan, and 1 others. 2022. Training a helpful and harmless assis-tant with reinforcement learning from human feed-back. arXiv preprint arXiv:2204.05862 .Yoshua Bengio, Jérôme Louradour, Ronan Collobert, and Jason Weston. 2009. Curriculum learning. In International Conference on Machine Learning (ICML) .Mark Chen, Jerry Tworek, Heewoo Jun, Qiming Yuan, Henrique Ponde De Oliveira Pinto, Jared Kaplan, Harri Edwards, Yuri Burda, Nicholas Joseph, Greg Brockman, and 1 others. 2021. Evaluating large language models trained on code. arXiv preprint arXiv:2107.03374 .Daixuan Cheng, Shaohan Huang, Xuekai Zhu, Bo Dai, Wayne Xin Zhao, Zhenliang Zhang, and Furu Wei. 2025. Reasoning with exploration: An entropy per-spective. arXiv preprint arXiv:2506.14758 .Xiangxiang Chu, Hailang Huang, Xiao Zhang, Fei Wei, and Yong Wang. 2025. Gpg: A simple and strong reinforcement learning baseline for model reasoning. 
+
+arXiv preprint arXiv:2504.02546 .Hanze Dong, Wei Xiong, Deepanshu Goyal, Yihan Zhang, Winnie Chow, Rui Pan, Shizhe Diao, Jipeng Zhang, Kashun Shum, and Tong Zhang. 2023. Raft: Reward ranked finetuning for generative foundation model alignment. arXiv preprint arXiv:2304.06767 .Caglar Gulcehre, Tom Le Paine, Srivatsan Srini-vasan, Ksenia Konyushkova, Lotte Weerts, Abhishek Sharma, Aditya Siddhant, Alex Ahern, Miaosen Wang, Chenjie Gu, and 1 others. 2023. Reinforced self-training (rest) for language modeling. arXiv preprint arXiv:2308.08998 .Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song, Ruoyu Zhang, Runxin Xu, Qihao Zhu, Shi-rong Ma, Peiyi Wang, Xiao Bi, and 1 others. 2025. Deepseek-r1: Incentivizing reasoning capability in llms via reinforcement learning. arXiv preprint arXiv:2501.12948 .Tuomas Haarnoja, Aurick Zhou, Pieter Abbeel, and Sergey Levine. 2018. Soft actor-critic: Off-policy maximum entropy deep reinforcement learning with a stochastic actor. In International Conference on Machine Learning (ICML) .Chaoqun He, Renjie Luo, Yuzhuo Bai, Shengding Hu, Zhen Leng Thai, Junhao Shen, Jinyi Hu, Xu Han, Yujie Huang, Yuxiang Zhang, and 1 oth-ers. 2024. Olympiadbench: A challenging bench-mark for promoting agi with olympiad-level bilin-gual multimodal scientific problems. arXiv preprint arXiv:2402.14008 .Dan Hendrycks, Collin Burns, Saurav Kadavath, Akul Arora, Steven Basart, Eric Tang, Dawn Song, and Ja-cob Steinhardt. 2021. Measuring mathematical prob-lem solving with the math dataset. arXiv preprint arXiv:2103.03874 .Jingcheng Hu, Yinmin Zhang, Qi Han, Daxin Jiang, Xi-angyu Zhang, and Heung-Yeung Shum. 2025. Open-reasoner-zero: An open source approach to scaling up reinforcement learning on the base model. arXiv preprint arXiv:2503.24290 .HuggingFace. 2025. Math-verify. Aaron Jaech, Adam Kalai, Adam Lerer, Adam Richard-son, Ahmed El-Kishky, Aiden Low, Alec Helyar, Aleksander Madry, Alex Beutel, Alex Carney, and 1 others. 2024. Openai o1 system card. arXiv preprint arXiv:2412.16720 .Aitor Lewkowycz, Anders Andreassen, David Dohan, Ethan Dyer, Henryk Michalewski, Vinay Ramasesh, Ambrose Slone, Cem Anil, Imanol Schlag, Theo Gutman-Solo, and 1 others. 2022. Solving quan-titative reasoning problems with language models. 
+
+Conference on Neural Information Processing Sys-tems (NeurIPS) .Yingru Li. 2025. Logit dynamics in softmax policy gradient methods. arXiv preprint arXiv:2506.12912 .Zichen Liu, Changyu Chen, Wenjun Li, Penghui Qi, Tianyu Pang, Chao Du, Wee Sun Lee, and Min Lin. 2025. Understanding r1-zero-like training: A critical perspective. arXiv preprint arXiv:2503.20783 .Michael Luo, Sijun Tan, Justin Wong, Xiaoxiang Shi, William Y Tang, Manan Roongta, Colin Cai, Jef-frey Luo, Tianjun Zhang, Li Erran Li, and 1 others. 2025. Deepscaler: Surpassing o1-preview with a 1.5 b model by scaling rl. Notion Blog .MAA. 2023. American mathematics competitions -amc. MAA. 2025. American invitational mathematics exami-nation - aime. 
+
+9Volodymyr Mnih, Adria Puigdomenech Badia, Mehdi Mirza, Alex Graves, Timothy Lillicrap, Tim Harley, David Silver, and Koray Kavukcuoglu. 2016. Asyn-chronous methods for deep reinforcement learning. In International Conference on Machine Learning (ICML) .Long Ouyang, Jeffrey Wu, Xu Jiang, Diogo Almeida, Carroll Wainwright, Pamela Mishkin, Chong Zhang, Sandhini Agarwal, Katarina Slama, Alex Ray, and 1 others. 2022. Training language models to follow instructions with human feedback. Conference on Neural Information Processing Systems (NeurIPS) .Tom Schaul, John Quan, Ioannis Antonoglou, and David Silver. 2015. Prioritized experience replay. arXiv preprint arXiv:1511.05952 .John Schulman, Filip Wolski, Prafulla Dhariwal, Alec Radford, and Oleg Klimov. 2017. Proxi-mal policy optimization algorithms. arXiv preprint arXiv:1707.06347 .Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, YK Li, Yang Wu, and 1 others. 2024. Deepseekmath: Pushing the limits of mathematical reasoning in open language models. arXiv preprint arXiv:2402.03300 .Guangming Sheng, Chi Zhang, Zilingfeng Ye, Xibin Wu, Wang Zhang, Ru Zhang, Yanghua Peng, Haibin Lin, and Chuan Wu. 2025. Hybridflow: A flexible and efficient rlhf framework. In European Confer-ence on Computer Systems (EuroSys) .Richard Sutton and Andrew Barto. 2018. Reinforce-ment learning: an introduction. Hongze Tan and Jianfei Pan. 2025. Gtpo and grpo-s: Token and sequence-level reward shaping with policy entropy. arXiv preprint arXiv:2508.04349 .Kimi Team, Angang Du, Bofei Gao, Bowei Xing, Changjiu Jiang, Cheng Chen, Cheng Li, Chenjun Xiao, Chenzhuang Du, Chonghua Liao, and 1 others. 2025. Kimi k1. 5: Scaling reinforcement learning with llms. arXiv preprint arXiv:2501.12599 .Yuxuan Tong, Xiwen Zhang, Rui Wang, Ruidong Wu, and Junxian He. 2024. Dart-math: Difficulty-aware rejection tuning for mathematical problem-solving. 
+
+Conference on Neural Information Processing Sys-tems (NeurIPS) .Shenzhi Wang, Le Yu, Chang Gao, Chujie Zheng, Shix-uan Liu, Rui Lu, Kai Dang, Xionghui Chen, Jianxin Yang, Zhenru Zhang, and 1 others. 2025. Beyond the 80/20 rule: High-entropy minority tokens drive effective reinforcement learning for llm reasoning. 
+
+arXiv preprint arXiv:2506.01939 .Shihui Yang, Chengfeng Dou, Peidong Guo, Kai Lu, Qiang Ju, Fei Deng, and Rihui Xin. 2025. Dcpo: Dy-namic clipping policy optimization. arXiv preprint arXiv:2509.02333 .Jiarui Yao, Yifan Hao, Hanning Zhang, Hanze Dong, Wei Xiong, Nan Jiang, and Tong Zhang. 2025. Opti-mizing chain-of-thought reasoners via gradient vari-ance minimization in rejection sampling and rl. arXiv preprint arXiv:2505.02391 .Qiying Yu, Zheng Zhang, Ruofei Zhu, Yufeng Yuan, Xiaochen Zuo, Yu Yue, Tiantian Fan, Gaohong Liu, Lingjun Liu, Xin Liu, and 1 others. 2025. Dapo: An open-source llm reinforcement learning system at scale. arXiv preprint arXiv:2503.14476 .Yang Yue, Zhiqi Chen, Rui Lu, Andrew Zhao, Zhaokai Wang, Shiji Song, and Gao Huang. 2025. Does re-inforcement learning really incentivize reasoning ca-pacity in llms beyond the base model? arXiv preprint arXiv:2504.13837 .Xinyu Zhu, Mengzhou Xia, Zhepei Wei, Wei-Lin Chen, Danqi Chen, and Yu Meng. 2025. The surprising effectiveness of negative reinforcement in llm reason-ing. arXiv preprint arXiv:2506.01347 .
+
+A Derivation of Entropy Change Estimation for Gradient-Aware Advantage Modulation 
+
+We derive the first-order entropy change estimation for tabular softmax policy through a factorized de-composition approach. Let the actor policy πθ be a tabular softmax policy where each state-action pair (s, a ) is associated with an individual logit parameter zs,a = θs,a .
+
+A.1 Preliminary Definitions Definition 1 (Policy Concentration Measure) . For a policy πθ(·| s) at state s, we define the concentra-tion coefficient:     
+
+> Φ( πθ|s) := X
+> a
+> πθ(a|s)2.(16)
+
+This measures the degree of policy concentration, with higher values indicating a more deterministic policy. 
+
+Definition 2 (Entropy-Weighted Log-Probability) .
+
+We define the centered log-probability for action a
+
+under policy πθ at state s:      
+
+> Λθ(a|s) := log πθ(a|s) + H(πθ|s).(17)
+
+This represents the deviation of action a’s log-probability from the policy’s average entropy, cap-turing the information-theoretic distance from uni-form randomness. 
+
+10 A.2 Entropy Gradient Derivation 
+
+We use Taylor’s expansion under first-order approx-imation: 
+
+H(πk+1  
+
+> θ
+
+| s)
+
+≈ H (πkθ | s)+ ⟨∇H (πkθ | s), (zk+1 − zk )⟩.
+
+(18) 
+
+To derive ∇H (πkθ | s), we start from the defini-tion of entropy: 
+
+∇θ H(πθ | s)= ∇θ
+
+ −Ea∼πθ (·| s)[log πθ (a | s)] 
+
+= −∇ θ Ea∼πθ (·| s)[log πθ (a | s)] = −Ea∼πθ (·| s)[∇θ log πθ (a | s)] 
+
+− Ea∼πθ (·| s)[log πθ (a | s)
+
+× ∇ θ log πθ (a | s)] = 0 − Ea∼πθ (·| s)[log πθ (a | s)
+
+× ∇ θ log πθ (a | s)] = −Ea∼πθ (·| s)[log πθ (a | s)
+
+× ∇ θ log πθ (a | s)] .
+
+(19) 
+
+The first term equals zero because 
+
+Ea∼πθ (·| s)[∇θ log πθ(a | s)] = ∇θ
+
+P
+
+a πθ(a |
+
+s) = ∇θ1 = 0 .
+
+A.3 Softmax Derivative and Centered Logit Updates 
+
+For a softmax policy πθ(a | s) = exp( zs,a )P 
+
+> a′′
+
+exp( zs,a ′′ ) ,the derivative of the log-probability with respect to any logit parameter zs,a ′ is: 
+
+∂ log πθ (a | s)
+
+∂z s,a ′
+
+= 1{a = a′}−πθ (a′ | s).
+
+(20) 
+
+We now introduce a centered form of logit up-dates that exploits the translation invariance of soft-max: 
+
+Definition 3 (Centered Logit Change) . Define the centered logit change as: 
+
+δz s,a := zk+1  
+
+> s,a
+
+− zks,a 
+
+− Ea′∼πkθ (·| s)[zk+1  
+
+> s,a ′
+
+− zks,a ′ ]. (21) 
+
+This removes the global translation component, which does not affect softmax probabilities. 
+
+Using Equation (20) , we can express the first-order entropy change: 
+
+⟨∇ θ H(θk | s), (zk+1 − zk )⟩
+
+= −Ea∼πkθ (·| s)
+
+h
+
+log πkθ (a | s)
+
+× X
+
+> a′
+
+ 1{a = a′} − πkθ (a′ | s)
+
+× (zk+1  
+
+> s,a ′
+
+− zks,a ′ )
+
+i
+
+= −Ea∼πkθ (·| s)
+
+h
+
+log πkθ (a | s)
+
+×  zk+1  
+
+> s,a
+
+− zks,a 
+
+− X
+
+> a′
+
+πkθ (a′ | s)( zk+1  
+
+> s,a ′
+
+− zks,a ′ )i
+
+= −Ea∼πkθ (·| s)[log πkθ (a | s) · δz s,a ].
+
+(22) 
+
+Expanding further and using the covariance de-composition E[XY ] = E[X]E[Y ] + Cov (X, Y ):
+
+⟨∇ θ H(θk | s), (zk+1 − zk )⟩
+
+= −Ea∼πkθ (·| s)[log πkθ (a | s)
+
+× (zk+1  
+
+> s,a
+
+− zks,a )] + Ea∼πkθ (·| s)[log πkθ (a | s)] 
+
+× Ea′∼πkθ (·| s)[zk+1  
+
+> s,a ′
+
+− zks,a ′ ]= −Ea∼πkθ (·| s)
+
+h  log πkθ (a | s)
+
+− Ea∼πkθ (·| s)[log πkθ (a | s)] 
+
+× δz s,a 
+
+i
+
+= −Ea∼πkθ (·| s)[Λ kθ (a|s) · δz s,a ],
+
+(23) 
+
+where we used Definition 2 in the last step, noting that −E[log πθ] = H(πθ|s).
+
+A.4 GRPO Update Coefficient 
+
+For GRPO, we define the composite update coeffi-cient : ξi,t (a) := Iclip · ri,t · Ai,t , (24) 
+
+where Iclip is the clipping indicator function, ri,t =
+
+πθ (ai,t |si,t )
+
+πref (ai,t |si,t ) is the importance sampling ratio, and 
+
+Ai,t is the advantage estimate. This coefficient combines three essential components: clipping for stability, importance weighting for off-policy cor-rection, and advantage for policy improvement di-rection. 
+
+Lemma 1 (Centered Logit Update for GRPO) . Un-der the GRPO update rule, the per-sample stochas-tic logit update satisfies: 
+
+zk+1  
+
+> s,k
+
+− zks,k = η ξ i,t 
+
+ 1{a = k} − πθ (k | s). (25) 
+
+Specifically, for the sampled action a and other actions a′̸ = a:
+
+zk+1  
+
+> s,a
+
+− zks,a = η ξ i,t (1 − πθ (a | s)) 
+
+zk+1  
+
+> s,a ′
+
+− zks,a ′ = −η ξ i,t πθ (a′ | s). (26) 
+
+11 Remark 1. By the definition of advantage func-tions (Sutton and Barto, 2018) and GRPO’s group normalization (Shao et al., 2024), advantages sat-isfy Ea∼πθ (·| s)[Ai,t ] = 0 .
+
+A.5 Factorized Entropy Change Formula 
+
+Substituting Lemma 1 into Equation (23): 
+
+⟨∇ θ H(θk | s), (zk+1 − zk )⟩
+
+= − X
+
+> k
+
+πkθ (k | s) Λ kθ (k|s) zk+1  
+
+> s,k
+
+− zks,k 
+
+
+
+= −η ξ i,t 
+
+h
+
+πkθ (a | s) Λ kθ (a|s)
+
+− X
+
+> k
+
+πkθ (k | s)2 Λkθ (k|s)
+
+i
+
+.
+
+(27) 
+
+Taking expectation over a ∼ πkθ (· | s) under GRPO’s group normalization, the entropy change is dominated by: 
+
+∆H(πkθ |s) ≈ − η Ea∼πkθ
+
+h
+
+πkθ (a | s)Λ kθ (a|s) ξi,t (a)
+
+i
+
+.
+
+(28) 
+
+We now state our main result: 
+
+Theorem 1 (Factorized Entropy Change) . Follow-ing GRPO’s design (Shao et al., 2024) with stan-dard clipping, the first-order entropy change ad-mits: 
+
+∆H(πkθ |s) ≈ − η X
+
+> a
+
+πkθ (a|s)2
+
+| {z }
+
+> Concentration
+
+× Λkθ (a|s)
+
+| {z }
+
+> Info Deviation
+
+× ξi,t (a)
+
+| {z } 
+
+> Update Coeff.
+
+(29) 
+
+where Λkθ (a|s) = log πkθ (a|s) + H(πkθ |s) (Defini-tion 2), and: 
+
+• πkθ (a|s)2: Policy concentration 
+
+• Λkθ (a|s): Info-theoretic deviation 
+
+• ξi,t (a) = Iclip · ri,t · Ai,t : Update coefficient (Eq. 24) Proof. From Equation (28): 
+
+∆H(πkθ |s)
+
+≈ − η Ea∼πkθ
+
+h
+
+πkθ (a | s)Λ kθ (a|s) ξi,t (a)
+
+i
+
+= −η X
+
+> a
+
+πkθ (a|s) · πkθ (a | s) × Λkθ (a|s) ξi,t (a)= −η X
+
+> a
+
+πkθ (a|s)2Λkθ (a|s) · ξi,t (a),
+
+(30) 
+
+where the second line expands the expectation as 
+
+Ea∼π[f (a)] = P 
+
+> a
+
+π(a|s) · f (a), and the third line simplifies the product. Substituting Definition 2 yields the boxed form. 
+
+Remark 2. This factorization reveals three or-thogonal mechanisms governing entropy dynam-ics: (i) concentration amplifies updates for high-probability actions, (ii) information deviation di-rects change based on distance from maximum en-tropy, and (iii) update coefficient modulates the magnitude via clipped importance-weighted advan-tages. The multiplicative structure implies that en-tropy change vanishes when any factor approaches zero, providing natural regularization. 
+
+B Gradient-Entropy Relationship: Proof of Expected Gradient Norm Upper Bound 
+
+This appendix establishes the relationship between the score function’s squared L2 norm and pol-icy entropy in softmax policies, then extends it to advantage-weighted updates. 
+
+Core Result. For softmax policy 
+
+πθ(·| s) = (π1, . . . , π |V| ) with log-its z(s) = (z1(s), . . . , z |V| (s)) where 
+
+πk = exp( zk)/ P 
+
+> j
+
+exp( zj ), the gradient of 
+
+log πk with respect to logits is ∂ log πk 
+
+> ∂z i
+
+= δik − πi
+
+(Kronecker delta δik ). The squared norm for action k is: 
+
+∥∇ z log πk ∥2 =
+
+> |V|
+
+X
+
+> i=1
+
+(δik − πi)2
+
+= (1 − πk )2 + X
+
+> i̸=k
+
+π2
+
+> i
+
+= 1 − 2πk +
+
+> |V|
+
+X
+
+> j=1
+
+π2 
+
+> j
+
+.
+
+(31) 
+
+Taking expectation over actions sampled from 
+
+πθ:
+
+Eak ∼πθ (·| s)
+
+∥∇ z log πk ∥2
+
+=
+
+> |V|
+
+X
+
+> k=1
+
+πk
+
+1 − 2πk +
+
+> |V|
+
+X
+
+> j=1
+
+π2
+
+> j
+
+
+
+=
+
+> |V|
+
+X
+
+> k=1
+
+πk − 2
+
+> |V|
+
+X
+
+> k=1
+
+π2
+
+> k
+
++
+
+
+
+> |V|
+
+X
+
+> j=1
+
+π2
+
+> j
+
+
+
+> |V|
+
+X
+
+> k=1
+
+πk
+
+| {z } 
+
+> =1
+
+= 1 −
+
+> |V|
+
+X
+
+> k=1
+
+π2 
+
+> k
+
+.
+
+(32) 
+
+The term P|V|  
+
+> k=1
+
+π2 
+
+> k
+
+is the collision probability (probability that two independent samples from πθ
+
+are identical), ranging from 1/|V| (uniform) to 1
+
+(deterministic). 12 Entropy Upper Bound. To connect collision probability to Shannon entropy, apply Jensen’s inequality. Since x 7 → log x is concave, P 
+
+> k
+
+πk log πk ≤ log( P 
+
+> k
+
+π2
+
+> k
+
+). Multiplying by −1
+
+and exponentiating: 
+
+H(πθ |s) = −
+
+> |V|
+
+X
+
+> k=1
+
+πk log πk
+
+≥ − log 
+
+
+
+> |V|
+
+X
+
+> k=1
+
+π2
+
+> k
+
+
+
+⇒
+
+> |V|
+
+X
+
+> k=1
+
+π2 
+
+> k
+
+≥ e−H (πθ |s).
+
+(33) 
+
+Thus Eak ∼πθ (·| s)[∥∇ z log πk∥2] =1 − P|V|  
+
+> k=1
+
+π2 
+
+> k
+
+≤ 1 − e−H (πθ |s). High en-tropy ( H(πθ|s) ≫ 0) yields e−H ≈ 0 and gradient norm ≈ 1 (vigorous learning); low entropy (H(πθ|s) ≈ 0) yields e−H ≈ 1 and gradient norm 
+
+≈ 0 (stable convergence). 
+
+Advantage-Weighted Update Magnitude. For policy gradient update with learning rate η and advantage A, the logit update for sampled action 
+
+ak is ∆z(s) = ηA (ek − πθ(·| s)) where ek is the one-hot vector. The squared L2 norm is: 
+
+∥∆z(s)∥22 = η2A2
+
+1 − 2πk +
+
+> |V|
+
+X
+
+> j=1
+
+π2
+
+> j
+
+
+
+. (34) 
+
+Taking expectation over ak ∼ πθ gives 
+
+E[∥∆z(s)∥22] = η2E[A2(1 − 2πk + P 
+
+> j
+
+π2 
+
+> j
+
+)] . Fol-lowing GRPO’s design (Shao et al., 2024) where advantages are sequence-level, the dependence be-tween A and per-token probabilities πk is negligi-ble, allowing the approximation: 
+
+Eak ∼πθ (·| s)
+
+∥∆z(s)∥22
+
+
+
+= η2E[A2]
+
+1 −
+
+> |V|
+
+X
+
+> k=1
+
+π2
+
+> k
+
+
+
+≤ η2E[A2]
+
+
+
+1 − exp   − H (πθ |s)
+
+.
+
+(35) 
+
+This combines logit dynamics with advantage-weighted scaling and entropy bounds. High-confidence tokens ( πk ≈ 1) produce small ex-pected update magnitudes ( P 
+
+> j
+
+π2 
+
+> j
+
+≈ 1), creat-ing gradient attenuation for confident correct ac-tions—the theoretical basis for gradient compensa-tion in our method. 
+
+C Gradient Variance Minimization for Dynamic Rollout Allocation 
+
+This appendix provides the complete derivation of the optimal rollout allocation formula. 
+
+Optimal Allocation via Lagrange Multipli-ers. For prompt qi with ni rollouts, the gra-dient estimator ˆgi = 1
+
+> ni
+
+Pni 
+
+> k=1
+
+gi,k (where 
+
+gi,k = 1
+
+> G
+
+PGj=1 ˆAj,k ∇θ log πθ(oj,k |qi) with ˆAj,k 
+
+the group-normalized advantage) has variance Var [ˆ gi] = σ2 
+
+> i
+
+/n i where σ2 
+
+> i
+
+= E[∥gi,k ∥22] is the single-sample gradient variance. Minimizing total variance PNi=1 σ2 
+
+> i
+
+/n i subject to budget constraint P 
+
+> i
+
+ni = B, we construct La-grangian L = P 
+
+> i
+
+σ2 
+
+> i
+
+/n i + λ(P 
+
+> i
+
+ni − B). The first-order condition ∂L/∂n i = −σ2 
+
+> i
+
+/n 2 
+
+> i
+
++ λ = 0 
+
+gives ni = σi/√λ. Substituting into the constraint P 
+
+> i
+
+σi/√λ = B yields √λ = ( P 
+
+> k
+
+σk)/B , thus: 
+
+n∗ 
+
+> i
+
+= B · σi
+
+PNk=1 σk
+
+. (36) 
+
+Variance Decomposition. To implement this principle, we decompose σ2 
+
+> i
+
+= E[∥gi,k ∥22] where 
+
+gi,k = 1
+
+> G
+
+PGj=1 Aj,k ∇θ log πθ(oj,k |qi). The squared norm is: 
+
+∥gi,k ∥22 = 1
+
+G2
+
+> G
+
+X
+
+> j=1
+
+Aj,k × ∇ θ log πθ (oj,k |qi) 22
+
+. (37) 
+
+Following the treatment in high-dimensional gra-dient estimation (Schulman et al., 2017; Yao et al., 2025), E[⟨∇ j , ∇j′ ⟩] ≈ 0, yielding: 
+
+E[∥gi,k ∥22] ≈ 1
+
+G E
+
+h
+
+A2∥∇ θ log πθ (o|qi)∥22
+
+i
+
+. (38) 
+
+For GRPO with group-normalized advan-tages (Shao et al., 2024), the gradient variance exhibits positive correlation with both reward vari-ance and expected gradient magnitude: 
+
+E[∥gi,k ∥22] ∝ Var (R)E[∥∇ θ log πθ (o|qi)∥22]. (39) 
+
+For response o = {o1, . . . , o T }, the pol-icy gradient decomposes as ∇θ log πθ(o|qi) =PTt=1 ∇θ log πθ(ot|qi, o <t ). Applying the same approximation to token-level gradients: 
+
+E[∥∇ θ log πθ (o|qi)∥22] ≈ E
+
+h TX
+
+> t=1
+
+∥∇ θ log πθ (ot|qi, o <t )∥22
+
+i
+
+.
+
+(40) 
+
+From Appendix B, the expected squared gradient norm for token t is E[∥∇ θ log πθ(ot|qi, o <t )∥22] = 1−C(Pt) where C(Pt) = P|V|  
+
+> k=1
+
+π2
+
+> k
+
+(qi, o <t ) is the collision probability. Defining average collision 
+
+¯Ci = Eo∼πθ (·| qi)[ 1
+
+> |o|
+
+P|o| 
+
+> t=1
+
+C(Pt)] :
+
+σ2 
+
+> i
+
+∝ Var (R) · (1 − ¯Ci). (41) 
+
+13 Computing C(Pt) = P|V|  
+
+> k=1
+
+π2 
+
+> k
+
+for all to-kens is expensive. Since high entropy corre-sponds to low collision probability (uniform dis-tributions have low C(P ), concentrated distri-butions have high C(P )), we use entropy as a proxy. Defining average per-token entropy ¯Hi =
+
+Eo∼πθ (·| qi)
+
+h 1
+
+> |o|
+
+P|o| 
+
+> t=1
+
+H(πθ|qi, o <t )
+
+i
+
+, we approxi-mate: σi ∝ std (R) · f ( ¯Hi) (42) 
+
+where f (·) is an increasing function. Using 
+
+f (H) = √1 − e−H captures the relationship: higher entropy leads to larger gradient variance. 
+
+Connection to Bernoulli Variance. For binary rewards, Var (R) = p(1 − p) where p is success probability. The unbiased estimator using histori-cal statistics ( ki correct responses out of Gi total rollouts) is:             
+
+> Pi=ki(Gi−ki)
+> Gi(Gi−1) ,E[Pi] = pi(1 −pi).(43)
+
+This Pi serves as a proxy for σi because: (i) it directly estimates Var (R) through Bernoulli vari-ance, (ii) empirical accuracy ˆpi = ki/G i near the variance-maximizing value correlates with high policy entropy (models actively exploring multi-ple solution paths), and (iii) together, Pi identifies high-σi problems per the variance decomposition. The water-level allocation algorithm implements 
+
+n∗ 
+
+> i
+
+∝ Pi with constraints Gmin , G max .
+
+Variance Reduction Guarantee. The opti-mal allocation achieves total variance Var ∗ = 
+
+> 1
+> B
+
+(P 
+
+> i
+
+σi)2, while uniform allocation ( ni = B/N )yields Var uniform = NB
+
+P 
+
+> i
+
+σ2 
+
+> i
+
+. Their ratio is:      
+
+> Var ∗
+> Var uniform
+> = (P
+> iσi)2
+> NP
+> iσ2
+> i
+> ≤1,(44)
+
+where the inequality follows from Cauchy-Schwarz, with equality only when all σi are equal. When gradient variances are heterogeneous across problems (typical in RLVR), this adaptive alloca-tion provides substantial variance reduction. 
+
+D Dynamic Rollout Allocation: Operational Details. 
+
+Our allocation mechanism determines rollout quan-tities for each prompt in the training batch, op-erating independently of prompt selection strate-gies (e.g., random sampling, curriculum learning). Given a batch of N prompts and total rollout bud-get B, the water-level algorithm distributes ni roll-outs per prompt proportionally to variance proxies 
+
+Pi while respecting minimum and maximum con-straints. The allocation process guarantees complete bud-get utilization through iterative refinement. Ini-tially, each prompt receives a baseline allocation based on its Pi value. When constraints become active (some prompts hit minimum or maximum bounds), residual budget is redistributed among un-constrained prompts using the same proportional rule. This continues until all budget is assigned and P 
+
+> i
+
+ni = B holds exactly. If the total min-imum requirement exceeds available budget, we proportionally scale down the minimum allocation to ensure feasibility. For prompts with insufficient historical data (few prior observations), computing reliable variance proxies Pi is infeasible. In such cases, we apply uniform allocation as a fallback strategy, distribut-ing rollouts equally among data-scarce prompts. As prompts accumulate responses through repeated se-lection in training batches, their historical statistics become sufficient to support adaptive allocation. This transition from uniform to variance-driven distribution occurs naturally as the Pi estimates stabilize with increased sample counts. The proportional allocation naturally adapts to estimation errors. If historical Pi overestimates current variance (due to policy improvement), sub-sequent rollouts reveal lower empirical variance, which updates Pi for future allocations. Conversely, underestimated prompts exhibit higher gradient variance, triggering increased allocation in later iterations. This feedback loop ensures the distri-bution tracks evolving problem difficulty without manual tuning. In boundary cases where all Pi
+
+values become negligibly small (indicating near-deterministic outcomes), the algorithm defaults to uniform distribution to maintain numerical stabil-ity. 
+
+E Detailed Training Configuration 
+
+All experiments are conducted on 8× NVIDIA A100 80GB GPUs per node (1-2 nodes depend-ing on model scale) with mixed precision training (bfloat16) and FSDP for distributed training. The actor model uses Tensor Parallelism (TP=2) during rollout generation with vLLM for efficient infer-ence. Training prompts are left-truncated to 2048 tokens if exceeding the maximum length, and we apply Math-Verify (HuggingFace, 2025) for answer verification during training and evaluation. The 14 0 400 800 1200 1600 2000 2400 
+
+## Gradient Steps       
+
+> 200
+> 300
+> 400
+> 500
+> 600
+> 700
+> 800
+> Time per Step (s)  GRPO
+> Entropy Advantages
+> Clip-COV
+> Ours (a) Qwen2.5-Math-1.5B 0400 800 1200 1600 2000 2400
+
+## Gradient Steps  
+
+> 600
+> 800
+> 1000
+> 1200
+> Time per Step (s)  GRPO
+> Entropy Advantages
+> Clip-COV
+> Ours (b) Qwen2.5-Math-7B
+
+Figure 6: Per-step training time on Qwen2.5-Math models. Bold lines: smoothed; light lines: raw measurements. 
+
+training dataset is shuffled at the beginning of each epoch, and rollout budget allocation is updated dynamically based on historical success statistics accumulated across iterations. Table 3 presents the complete hyperparameters and configuration details for our experiments. 
+
+F Detailed Description of Benchmarks 
+
+To comprehensively evaluate mathematical reason-ing capabilities, we employ six widely-adopted benchmarks spanning competition-level challenges (AIME, AMC), curriculum-aligned assessments (MATH), and specialized STEM domains (Min-erva, OlympiadBench). These benchmarks encom-pass diverse mathematical subfields and problem formats, enabling rigorous evaluation across mul-tiple dimensions of reasoning proficiency. Table 4 summarizes the key characteristics of each bench-mark. 
+
+G Efficiency Analysis 
+
+Figure 6 presents per-step training time across model scales. DynaMO maintains comparable effi-ciency to baselines on both 1.5B and 7B models, as the additional computations—Bernoulli variance estimation, water-level allocation, and token-level modulation—involve only lightweight arithmetic operations on existing logits and statistics, incur-ring negligible overhead relative to model infer-ence. 15 Table 3: Detailed training configuration for DynaMO experiments. 
+
+Category Parameter Value 
+
+Training Hyperparameters 
+
+Batch Configuration Generation Batch Size 512 Update Batch Size 32 PPO Mini-batch Size 32 Rollout Allocation Average Rollouts per Prompt 16 Dynamic Range [8, 24] Optimization Learning Rate (Actor) 1 × 10 −6
+
+Learning Rate (Critic) 1 × 10 −5
+
+Weight Decay 0.1 / 0.01 Gradient Clipping 1.0 Warmup Steps 10 Warmup Style constant 
+
+GRPO-Specific Settings 
+
+Clipping Clip Ratio 0.2 Entropy Entropy Coefficient 0KL Penalty KL Coefficient 0.0 Advantage Estimator Type GRPO Normalize by Std True Gamma (Discount Factor) 1.0 Lambda (GAE) 1.0 
+
+Inference & Rollout 
+
+Sampling Strategy Temperature 1.0 Top-p 1.0 Top-k -1 (disabled) Sequence Lengths Max Prompt Length 2048 Max Response Length 8192 Rollout Engine Backend vLLM Tensor Parallel Size 2GPU Memory Utilization 0.8 Max Num Sequences 1024 Max Batched Tokens 10240 16 Benchmark Core Description Key Characteristics AIME American Invitational Mathemat-ics Examination - high school competition • 15 challenging problems per round • Integer answers (0-999) • Algebra, Geometry, Number Theory, Combina-torics • Multi-step reasoning required • Top AMC performers participate 
+
+AMC American Mathematics Competi-tions - tiered assessment system • Three tiers (AMC 8/10/12) for different grades • 25 multiple-choice problems per tier • Curriculum-aligned design • Comprehensive secondary mathematics cover-age • Standardized difficulty progression 
+
+MATH-500 Curated subset from MATH dataset • 500 problems from comprehensive collection • Seven domains (Algebra, Geometry, Number Theory, etc.) • Five difficulty levels • Formal mathematical reasoning • Step-by-step solution verification 
+
+Minerva Math Technical STEM benchmark • Undergraduate to graduate difficulty • Physics, Chemistry, Biology applications • Symbolic manipulation and formula derivation • Domain-specific knowledge integration • Quantitative problem-solving 
+
+OlympiadBench Bilingual Olympiad-level bench-mark • Large-scale competition problem collection • Bilingual (English and Chinese) • Mathematics, Physics, Chemistry, Biology • Theorem-proving and open-ended problems • Multimodal inputs (text, diagrams, equations) 
+
+> Table 4: Characteristics of mathematical reasoning benchmarks used in our evaluation. These benchmarks provide comprehensive coverage across difficulty levels (secondary to graduate), problem formats (multiple-choice, integer answers, open-ended), and mathematical domains (pure and applied mathematics), enabling thorough assessment of reasoning capabilities.
+
+17

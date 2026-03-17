@@ -1,0 +1,1531 @@
+Title: SOTAlign: Semi-Supervised Alignment of Unimodal Vision and Language Models via Optimal Transport
+
+URL Source: https://arxiv.org/pdf/2602.23353v1
+
+Published Time: Fri, 27 Feb 2026 02:24:02 GMT
+
+Number of Pages: 25
+
+Markdown Content:
+# SOTAlign: Semi-Supervised Alignment of Unimodal Vision and Language Models via Optimal Transport 
+
+Simon Roschmann * 1 2 3 4 Paul Krzakala * 5 6 Sonia Mazelet 6 Quentin Bouniot 1 2 3 4 Zeynep Akata 1 2 3 4 
+
+## Abstract 
+
+The Platonic Representation Hypothesis posits that neural networks trained on different modal-ities converge toward a shared statistical model of the world. Recent work exploits this convergence by aligning frozen pretrained vision and language models with lightweight alignment layers, but typically relies on contrastive losses and millions of paired samples. In this work, we ask whether meaningful alignment can be achieved with substantially less supervision. We introduce a semi-supervised setting in which pretrained unimodal encoders are aligned using a small number of image–text pairs together with large amounts of unpaired data. To address this challenge, we propose SOTAlign, a two-stage framework that first recovers a coarse shared geometry from limited paired data using a linear teacher, then refines the alignment on unpaired samples via an optimal-transport-based diver-gence that transfers relational structure without overconstraining the target space. Unlike existing semi-supervised methods, SOTAlign effectively leverages unpaired images and text, learning robust joint embeddings across datasets and encoder pairs, and significantly outperforming supervised and semi-supervised baselines. 
+
+## 1. Introduction 
+
+Vision-language models (VLMs) learn a shared embedding space for images and text, enabling zero-shot transfer to unseen concepts and domains. Since CLIP (Radford et al., 2021) and ALIGN (Jia et al., 2021), the dominant paradigm has relied on large-scale contrastive training on paired image-text data, with performance improving predictably as supervision scales. While effective, this approach requires 
+
+> *
+
+Equal contribution 1Helmholtz Munich 2Technical University of Munich 3Munich Center for Machine Learning 4Munich Data Science Institute 5T ´el ´ecom Paris 6 ´Ecole Polytechnique. Corre-spondence to: Simon Roschmann <simon.roschmann@tum.de >.
+
+Preprint. February 27, 2026. 1                       
+
+> acat in the grass
+> ablue car is driving
+> -1 -1
+> -1 -1
+> people are celebrating
+> ashopping mall
+> animals in the zoo
+> 100
+> 010
+> 001
+> “a cat sitting in the grass”
+> “a running brown dog”
+> “a blue car is driving”
+> “people are celebrating”
+> “a shopping mall”
+> “animals in the zoo”
+> -1
+> -1
+> -1
+> -1
+> -1
+> -1
+> -1 -1
+> -1
+> -1 1
+> Few pairs
+> Unpaired images
+
+Figure 1. Semi-Supervised Vision-Language Alignment. We tackle the alignment of frozen unimodal encoders where paired data (red blocks) is scarce but unpaired data is abundant. The key challenge is: how to define a training signal for unpaired data when ground-truth cross-modal correspondences are missing? 
+
+hundreds of millions of paired samples (Cherti et al., 2023), making VLMs costly to train and difficult to adapt when paired data are limited. This issue arises in many critical applications, such as specialized scientific, medical, or industrial domains, where collecting large-scale annotations is expensive, time-consuming, or infeasible. In this paper, we investigate vision–language alignment be-yond large-scale supervision, asking whether meaningful alignment can be achieved from pretrained encoders using only a small number of paired samples together with abun-dant unimodal data. We posit that, under the Platonic Rep-resentation Hypothesis (Huh et al., 2024), unimodal models should already encode compatible semantic structures, mak-ing such alignment possible with minimal supervision. 
+
+SOTAlign Overview. We focus on training lightweight alignment layers on top of pretrained unimodal encoders. In this setting, we first demonstrate that meaningful cross-modal alignment can be recovered from very few paired sam-ples using simple linear methods, providing empirical sup-port for the Platonic Representation Hypothesis. Then, we introduce SOTAlign (Semi-supervised Optimal Transport-based Alignment), a simple approach that enables to further refine such alignment by leveraging large unimodal datasets ,achieving state-of-the-art results in this semi-supervised 
+
+setting. SOTAlign relies on KLOT, an optimal-transport-based divergence that enables to transfer the initial geomet-ric structure of the linear teacher while allowing sufficient 1
+
+> arXiv:2602.23353v1 [cs.LG] 26 Feb 2026 Semi-Supervised Alignment of Unimodal Vision and Language Models via Optimal Transport
+
+flexibility to avoid underfitting. Critically, we derive the 
+
+explicit gradient of KLOT divergence, removing the mem-ory bottlenecks that have limited the scalability of previ-ously optimal-transport-based alignment methods. In the experimental section, we implement strong supervised and semi-supervised baselines and demonstrate the superior per-formances of SOTAlign across a wide range of downstream tasks. We carefully explore the robustness of SOTAlign to a variety of factors such as the number of paired samples, the number of unimodal samples, and the pretrained unimodal models. Critically, we also show that SOTAlign can leverage samples from multiple sources simultaneously, for example combining unimodal images from ImageNet and captions from CC12M to improve performances on COCO despite a significant distribution shift. In short, we make the following contributions: • We show that meaningful vision–language alignment can be recovered from very few paired samples using simple linear methods. • We introduce SOTAlign, a semi-supervised approach that leverages unpaired unimodal data to achieve state-of-the-art alignment. • We propose KLOT, a novel optimal-transport-based divergence, and fully address the memory bottlenecks that plagued prior OT-based methods. • We validate the robustness of SOTAlign through exten-sive experiments across tasks, datasets, and encoders. 
+
+## 2. Related Work 
+
+Vision–Language Models. VLMs learn a joint embedding space for images and text, enabling zero-shot transfer across downstream tasks. CLIP (Radford et al., 2021) established this paradigm through large-scale contrastive pretraining on 400 million image–text pairs, demonstrating that strong alignment can emerge from frozen pretrained encoders. Subsequent work has focused on scaling data and refining contrastive objectives to improve performance. ALIGN (Jia et al., 2021) leveraged noisy web-scale supervision, while SigLIP (Zhai et al., 2023) and SigLIPv2 (Tschannen et al., 2025) introduced alternative losses and massive multilingual datasets, with SigLIPv2 training on WebLI, comprising 10 billion images and 12 billion alt-texts across 109 languages. These efforts are consistent with empirical scaling laws observed for CLIP-style models (Cherti et al., 2023), but also highlight a central limitation: achieving state-of-the-art performance requires millions or billions of paired samples ,which is impractical in many settings and modalities. More recently, OT-CLIP (Shi et al., 2024) proposed an Opti-mal Transport (OT) interpretation of the InfoNCE objective (Oord et al., 2018), viewing contrastive learning as inverse OT with a fixed identity transport plan. We adopt this per-spective in the present work, but extend it beyond fully supervised settings by allowing target transport plans that are not restricted to the identity. Moreover, we derive an explicit expression for the gradient of the resulting objective (Theorem 5.1), removing the memory bottlenecks that have limited OT-based approaches to small batch sizes. 
+
+The Platonic Representation Hypothesis. Huh et al. (2024) posit that neural networks trained on different modal-ities, architectures, or objectives tend to converge toward compatible latent representations that reflect shared under-lying structure in the data. In the context of vision-language models, this perspective suggests that pretrained unimodal image and text encoders may already produce semantically aligned representations, even in the absence of explicit cross-modal training. This observation motivates an alternative approach to VLM construction, in which the pretrained en-coders are kept frozen and only lightweight alignment layers are learned to reconcile their representation spaces. Several recent works adopt this paradigm, demonstrating that strong vision–language performance can be achieved by align-ing frozen pretrained unimodal encoders rather than train-ing multimodal models from scratch (Vouitsis et al., 2024; Zhang et al., 2025a; Maniparambil et al., 2025; Huang et al., 2025). Our work follows this line of research, but focuses on regimes where paired supervision is severely limited. 
+
+Low-Supervision Alignment. A growing body of work has explored alignment under weak, limited, or absent su-pervision. In unimodal settings, Jha et al. (2025) show that text embeddings can be aligned across representation spaces without paired data. Extending this idea to cross-modal alignment, Maniparambil et al. (2024) and Schnaus et al. (2025) demonstrate that vision–language representa-tions can also be matched without supervision, but rely on quadratic assignment problem solvers that scale only to a few hundred samples, limiting applicability. Closer to our setting, S-CLIP (Mo et al., 2023) introduces a semi-supervised framework in which optimal transport de-fines target similarities between unpaired images and paired captions, with promising results for domain adaptation of CLIP. In contrast, we define target similarities even between unpaired images and unpaired captions, enabling effective use of large-scale unimodal data on both sides (Figure 1). SUE (Yacobi et al., 2025) also considers semi-supervised vision–language alignment, but is limited to a single dataset and a single downstream task. Our work generalizes this setting across tasks, datasets, and encoder combinations. Finally, STRUCTURE (Gr ¨oger et al., 2025) augments In-foNCE with a regularization term encouraging preservation of unimodal geometry. While evaluated in supervised set-tings, this idea could in principle leverage unpaired data and is therefore included as a baseline in our experiments. 2Semi-Supervised Alignment of Unimodal Vision and Language Models via Optimal Transport 
+
+## 3. Methodology 
+
+Notations. For u, v ∈ Rd, we denote the cosine similarity by k(u, v ) = ⟨u,v ⟩∥u∥∥ v∥ . We stack batches of n vectors as matrices in Rn×d. Given U ∈ Rn×d and V ∈ Rm×d, we define the affinity matrix K[U, V ] ∈ Rn×m with entries 
+
+K[U, V ]i,j = k(Ui, V j ).
+
+We define the (row-wise) Softmax normalization as 
+
+Softmax ε(K)i,j = exp( Ki,j /ε)
+
+Pnk=1 exp( Ki,k /ε) .
+
+3.1. Problem Formulation 
+
+We denote dx (resp. dy ) the latent dimension of the pre-trained vision (resp. language) encoder. We consider the problem of learning alignment layers fθ1 : Rdx → Rd and 
+
+gθ2 : Rdy → Rd that encode vision and language into a shared space of dimension d, parametrized by θ = ( θ1, θ 2).In this setting, the training objective is often formulated as minimizing the divergence between the geometry of the shared space and a target geometry. Formally, given a dataset of image and language embeddings X ∈ Rn×dx
+
+and Y ∈ Rn×dy , the goal is to minimize 
+
+L(θ; X, Y ) = DIV( K[fθ1 (X), g θ2 (Y )] || K∗[X, Y ]) , (1) where K∗ denotes the “target geometry” and DIV is some divergence between two affinity matrices. In the fully su-pervised setting, the dataset is made of pairs i.e. Yi is the caption of Xi and the target similarity is set to the identity 
+
+K∗[X, Y ] = In. (2) For instance, the InfoNCE loss (Oord et al., 2018) 
+
+− 1
+
+n
+
+> n
+
+X
+
+> i=1
+
+log exp 
+
+
+
+K[f (X), g (Y )] i,i 
+
+Pnj=1 exp 
+
+
+
+K[f (X), g (Y )] i,j 
+
+ , (3) is a special case of (1) for K∗ = In and DIV( K || K∗) = lim ε→0 KL(Softmax ε(K∗) || Softmax 1(K)) .Thus, the main challenge to extend these approaches to unsupervised data is to introduce a target K∗[X, Y ] that is defined even if we don’t assume that X and Y are pairs. 
+
+3.2. Semi-Supervised Setting 
+
+We consider a semi-supervised setting with three types of data. First, we observe a small set of paired samples 
+
+(A, B ), where A ∈ Rnp×dx and B ∈ Rnp×dy , and each row of A is aligned with the corresponding row of B. In 
+
+Algorithm 1 SOTAlign Training 
+
+Require: (A, B ), X, Y  
+
+> 1:
+
+(Wx, W y ) ← LinearAlignement (A, B ) 
+
+> 2:
+
+Initialize encoders f and g 
+
+> 3:
+
+for i = 1 , . . . , T do  
+
+> 4:
+
+Sample Xb ∼ X # Sample batch of image embeddings 5: Sample Yb ∼ Y # Sample batch of text embeddings 6: K∗ ← cosine (XbW ⊤ 
+
+> x
+
+, Y bW ⊤ 
+
+> y
+
+) 
+
+> 7:
+
+K ← cosine (f (Xb), g (Yb))  
+
+> 8:
+
+Kp ← cosine (f (A), g (B))  
+
+> 9:
+
+L ← SigLIP( Kp, I np ) + α KLOT( K, K ∗) 
+
+> 10:
+
+Update f, g using ∇L  
+
+> 11:
+
+end for 
+
+addition, we have access to large collections of unpaired data: unlabeled images X ∈ Rnx×dx and unlabeled text 
+
+Y ∈ Rny ×dy . Finally, we assume that the number of supervised pairs is limited, i.e., np ≪ nx and np ≪ ny .
+
+This setting is motivated by two considerations. First, it allows us to study how far supervision can be reduced while still enabling the recovery of a meaningful alignment between modalities, providing a direct test of the Platonic Representation Hypothesis. Second, such a regime reflects many practical scenarios in multimodal learning, where collecting paired data is expensive or infeasible and only a small number of aligned samples is available. 
+
+3.3. SOTAlign 
+
+We address this setting with a two step approach: First, we fit a a simple linear alignment model with the supervised pairs (A, B ). We denote Wx ∈ Rdx×d′
+
+and 
+
+Wy ∈ Rdy ×d′
+
+the linear projections produced by this model. An important finding of this work is that such linear models already yield surprisingly strong alignment . We dedicate Section 4 to this fundamental component of our method. Then we use this linear model to regularize the training of the final alignment layers fθ1 and gθ2 in a pseudo-labeling fashion. More precisely, we constrain the geometry of the learned shared space to stay close to that produced by the linear teacher. This regularization writes as 
+
+Ω( θ; X, Y ) = DIV  K [fθ1 (X), g θ2 (Y )]) K[XW Tx , Y W Ty ] , (4) where the choice of the divergence DIV is the second core component of the method and is discussed in Section 5. Finally, our training loss is 
+
+Lα(θ; A, B, X, Y ) = L(θ; A, B ) + αΩ( θ; X, Y ), (5) where α controls the strength of the regularization. 3Semi-Supervised Alignment of Unimodal Vision and Language Models via Optimal Transport Image        
+
+> Encoder
+> Image
+> Encoder
+> Text
+> Encoder
+> Text
+> Encoder
+> Cosine
+> Sim.
+> Cosine
+> Sim.
+> Supervised Loss
+> Unsupervised Regularization
+> Large image dataset
+> Large text dataset
+> Cosine
+> Sim.
+> Image
+> Encoder
+> Text
+> Encoder
+> Small pairs dataset
+> Step 1: Fit Linear Alignment Model
+> (Fully Supervised)
+> Step 2: Use it to regularize training
+> (Semi-Supervised)
+> "A running
+> brown dog " "A beautiful cat sitting"
+> "A panda
+> eating
+> bamboo"
+> "A professor teaching"
+> "A bright desk lamp"
+> "People at
+> a party"
+> "A running
+> brown dog "
+> "A beautiful cat sitting"
+> Linear Alignment
+> CCA, Procrustes,
+> or Contrastive
+
+Figure 2. SOTAlign is a two-step method for the alignment of pretrained unimodal image and text encoders. First, we fit a linear alignment model only using the limited amount of available image-text pairs. Then, we use this linear model as a teacher to regularize the training of alignment layers f and g for a joint embedding space leveraging unimodal (unpaired) data. 
+
+## 4. Linear Alignment Model 
+
+The first core component of the proposed method is the lin-ear alignment model. This model is trained with the limited amount of pairs available and then used as a teacher to reg-ularize the training of the full semi-supervised model. As highlighted in the experimental section, such linear models achieve surprisingly strong alignment performances. We now discuss a selection of suitable candidates. 
+
+Procrustes Alignment. In the Orthogonal Procrustes prob-lem, one tries to align two point clouds by looking for the orthogonal transformation that minimizes the RMSE (Sch ¨onemann, 1966). We slightly adapt its formulation to our setting by looking for two orthogonal transformations that map the pairs (A, B ) to a shared space. Formally, 
+
+(Wx, W y ) = arg max  
+
+> P,Q
+
+⟨AP ⊤, BQ ⊤⟩
+
+s.t. P P ⊤ = QQ ⊤ = Id′
+
+(6) This formulation assumes that the data is first centered and normalized which is omitted here for the sake of simplicity. 
+
+Canonical Correlation Analysis. In statistics, CCA is used to find a space in which two random variable are max-imally correlated which each others (Mardia et al., 2024). Transposing to our setting, the two random variables are the text and image embeddings and CCA writes as 
+
+(Wx, W y ) = arg max  
+
+> P,Q
+
+⟨AP ⊤, BQ ⊤⟩
+
+s.t. (AP ⊤)⊤(AP ⊤) = ( BQ ⊤)⊤(BQ ⊤) = Id′
+
+(7) The main difference from Procrustes is that the orthogonality constraint is applied to the shared space directions instead of the transformation itself. The solutions to Equation (6) and (7) are provided in Appendix C.1. 
+
+Contrastive Learning. Finally, perhaps the most natu-ral choice is to consider a linear projection trained with a classical contrastive learning approach, formally 
+
+(Wx, W y ) = arg min  
+
+> P,Q
+
+DIV  K[AP T , BQ T ] Inp
+
+ , (8) where DIV is the InfoNCE loss defined in equation (3) or an alternative such as the SigLIP loss (Zhai et al., 2023). 
+
+## 5. Choice of Divergence 
+
+The second core component of our method is the choice of a divergence DIV( K || K∗), where K, K ∗ ∈ Rn×n denote, respectively, the affinity matrix induced by the trainable shared representation and the target affinity matrix. This section examines several possible choices for this divergence and discusses their respective strengths and limitations. 
+
+Centered Kernel Alignment. One of the most popular ways to compare affinity/kernel matrices is Centered Kernel Alignment (CKA) (Cristianini et al., 2001). Denoting H =
+
+In − 11 T , CKA writes as CKA (K, K ∗) = ⟨KH, HK ∗⟩
+
+p⟨KH, HK ⟩⟨ K∗H, HK ∗⟩ . (9) CKA admits a linear-time computation in the batch size 4Semi-Supervised Alignment of Unimodal Vision and Language Models via Optimal Transport 
+
+n when implemented via kernel factorizations (Proposi-tion C.6), which constitutes a non-negligible practical prop-erty for alignment methods operating with large batches (Zhang et al., 2025a). However, CKA also suffers from known limitations (Davari et al., 2022) and, more impor-tantly in our setting, enforces a strong constraint of the form 
+
+K ≈ K∗. This can be overly restrictive when K∗ is only in-tended as a regularizing signal provided by a linear teacher, rather than an exact target geometry. 
+
+Generalized InfoNCE. As highlighted above, it might be beneficial to use a regularization that does not enforce 
+
+K to be exactly aligned with K∗. To this end, one can consider the generalized InfoNCE loss (Shi et al., 2024) as it only enforces that arg max j Ki,j ≈ arg max j K∗ 
+
+> i,j
+
+.This is achieved by first applying a Softmax on the affinity matrices before comparing them, i.e., 
+
+InfoNCE( K || K∗) = KL(Softmax ϵ∗ (K∗) || Softmax ϵ(K)) . (10) The classical version is recovered for ε∗ → 0 and K∗ = In.
+
+KLOT. Given the previous interpretation of InfoNCE, we consider a natural extension that seeks the preservation of the entire Optimal Transport (OT) plan instead of only the nearest neighbor. Introducing Πn =  P ∈ Rn×n 
+
+> +
+
+P 1 =
+
+1, P ⊤1 = 1 , the OT plan is defined as 
+
+OT ϵ(K) = arg min  
+
+> P∈Πn
+
+−⟨ P, K ⟩ + ϵH (P ), (11) where H(P ) = ⟨P, log P ⟩ is the negative entropy. Note that it is a natural extension of Softmax as Softmax ϵ(K) = arg min P 1=1 −⟨ P, K ⟩ + ϵH (P ) and, similarly to Softmax, setting ϵ = 0 recovers a strict one-to-one mapping. More details about OT are available in Appendix C.2. Then, we define the KLOT divergence as 
+
+KLOT( K || K∗) = KL( OT ϵ∗ (K∗) || OT ϵ(K)) . (12) This formulation is similar to that proposed by Van Assel et al. (2023) for the purpose of dimensionality reduction and generalizes (Shi et al., 2024) beyond K∗ = In.The main limitation of KLOT (5) is that OT ϵ(K) does not admit a closed-form solution. While the Sinkhorn algo-rithm (Cuturi, 2013) provides fast convergence on GPUs, computing the gradient ∇K OT ϵ(K) remains challenging. Existing approaches rely either on backpropagating through the Sinkhorn iterations by unrolling the algorithm (Genevay et al., 2018), which induces a severe memory bottleneck, or on implicit differentiation techniques (Eisenberger et al., 2022), which significantly increase time complexity. We 
+
+fully address this limitation by deriving an explicit expres-sion for the gradient (Theorem 5.1).    
+
+> Figure 3. GPU memory usage for a batchsize n= 10 k when computing the gradient of the OT-based divergence with naive solver unrolling (blue) and the provided explicit gradient formula (orange). Additionnal results are reported in appendix B.1.
+
+Theorem 5.1. For any transport plan P ∈ Πn,
+
+∇K KLOT( K || K∗) = OT ϵ(K) − OT ϵ∗ (K∗)
+
+ϵ∗ . (13) 
+
+Proof is provided in Appendix C.2. 
+
+As illustrated in Figure 3, our approach removes the memory bottleneck inherent to Sinkhorn unrolling and can be up to 
+
+50 × faster than implicit differentiation (Figure 6). This is a general result that could potentially apply to a range of OT-based methods using similar objectives, including recent approaches in model alignment and contrastive learning (Van Assel et al., 2023; Mo et al., 2023; Shi et al., 2024). 
+
+## 6. Experiments 
+
+Experimental Setting. We train all models using a maximum batch size of 32k, composed of up to 10k paired samples and completed with unpaired images and text. We use the LION optimizer (Chen et al., 2023) with a cosine annealing learning-rate schedule, a maximum learning rate of 10 −4, and a weight decay of 10 −5, and train for 2000 iter-ations. For the supervised component of the loss, we employ the SigLIP objective, initializing the logit scale to 20 and the logit bias to −10 , with both parameters learned during training. Unless otherwise specified, we use DINOv3 ViT-L (Sim´ eoni et al., 2025) and NV-Embed-v2 (Lee et al., 2025) as the pretrained vision and language encoders, respectively. By default, experiments are conducted with 10k paired samples and, when applicable, up to 1M unpaired images and texts drawn from CC3M (Sharma et al., 2018). We vary the weight of the regularization in Equation (5) over 
+
+α ∈ { 10 −3, 10 −4, 10 −5} and select it based on retrieval performance on CC3M, accounting for different ratios of su-pervised to unsupervised data. We show in Section 6.2 that comparable results can be obtained with alternative settings. By default, the metric that we report is the average of the text-to-image (T2I) and image-to-text (I2T) retrieval (Recall@1) performance on the COCO validation set which we denote MeanR@1. 5Semi-Supervised Alignment of Unimodal Vision and Language Models via Optimal Transport                 
+
+> Table 1. Comparison of linear methods across different divergences. Zero-shot retrieval on COCO (MeanR@1). “None” indicates the standalone performances of the linear method.
+> Linear Method Divergence Procrustes CCA Contrastive None 21.1 21.5 24.2 CKA 23.5 23.5 24.2 InfoNCE 23.9 24.1 26.5 KLOT 30.0 30.3 28.5
+
+6.1. Ablation Studies Linear Methods. SOTAlign employs a linear teacher which can be fit using the methods described in Section 4. We report the standalone zero-shot retrieval performance of these linear models when trained on only 10k image-text pairs from CC3M in the first row of Table 1. Notably, even the closed form models (CCA and Procrustes) reach MeanR@1 scores larger than 21%. The linear contrastive approach (SigLIP loss, SAIL baseline) reaches 24.2% and will serve as the main supervised baseline. 
+
+Divergences. To align the teacher’s affinity matrix with the affinity matrix in the learnable shared space, SOTAlign can utilize any of the three divergences detailed in Section 5. Ta-ble 1 displays all combinations of linear methods and diver-gences. Critically, we observe that the proposed OT-based divergence KLOT systematically outperforms the classical alternatives. The best results is achieved for CCA and KLOT and we select this setting for the next experiments. 
+
+6.2. Robustness of SOTAlign Number of Supervised Pairs. We first analyze how the number of paired image–text samples affects downstream performance. In this experiment, we fix the amount of un-paired data to 1M images and 1M text samples from CC3M, and vary the number of paired examples from 10 2 to 10 5.Figure 4 reports zero-shot retrieval results. Across all super-vision levels, SOTAlign consistently outperforms the super-vised SAIL baseline, with gains of up to +10% accuracy in the intermediate regime between 10 3 and 10 4 pairs. As ex-pected, these gains diminish as the number of paired samples increases, and both methods fail under extremely sparse su-pervision (100 pairs). Overall, SOTAlign reaches the same performances as SAIL with roughly 4 times less supervision. 
+
+Number of Unsupervised Samples. Next, we investigate the effect of unpaired data on downstream performance. In this experiment, we fix the number of pairs to 10k, and vary the number of additional unpaired image and text samples between 10 4 and 10 6. Figure 4 shows that our method successfully leverages unpaired data for zero-shot retrieval. We observe consistent gains from the unpaired data up to 500k unpaired samples. 
+
+Unsupervised Data Source. We further evaluate our method in a challenging cross-dataset regime where unpaired images and texts originate from entirely different sources (Table 7). Using a fixed set of 10k paired samples from CC3M, we introduce unpaired unimodal data from CC12M, COCO, and ImageNet-1k, as well as synthetic captions. Despite these shifts in the data distributions, our approach consistently outperforms the supervised baseline. Notably, incorporating ImageNet-1k images improves classification performance, while leveraging COCO samples yields retrieval gains by narrowing the gap to the test distribution. These results demonstrate that our framework can effectively exploit unpaired data even when the visual and textual modalities are drawn from disjoint, heterogeneous corpora. 
+
+Quantifying the Distribution Shift. Motivated by these results, we next seek to quantify the effect of distribution shift and relate it to the observed performance gains. Given a source of unpaired data D = ( X, Y ) and the paired dataset 
+
+Dp = ( A, B ), we define the distribution shift as 
+
+d( D, Dp) = SSW( X, A ) + SSW( Y, B ), (14) where SSW denotes the Spherical Sliced Wasserstein dis-tance (Liu et al., 2024), with details in Appendix C.2. We adopt this metric because it is scalable to large datasets, well suited to unit-normalized embeddings, and does not require X and A (or Y and B) to be aligned. As shown in Figure 5, this distance strongly correlates with downstream performance: unpaired data that are closer to the paired dis-tribution consistently yield larger performance gains when incorporated during training. 
+
+Supervised Data Source. We next study the impact of the paired data source on SOTAlign performance (Table 2), while fixing the unpaired data to 1M samples from CC3M. Varying the source of the 10k image–text pairs reveals that higher-quality supervision can substantially influence align-ment. In particular, using CC3M pairs with synthetic cap-tions yields a notable improvement in retrieval performance (+4.8% T2I R@1), suggesting that cleaner textual supervi-sion better guides the exploitation of noisy unpaired data. While pairs drawn from the larger CC12M corpus improve ImageNet classification, the strongest retrieval performance is obtained when using COCO pairs. 
+
+Unimodal Encoders. In the same vein, we examine the im-pact of the choice of unimodal encoders on zero-shot classifi-cation and retrieval performance. We fix the training data to the standard setting of 10k paired samples and 1M unpaired samples from CC3M, and vary only the vision and lan-guage encoders. As reported in Table 3, aligning DINOv3 ViT-L with NV-Embed-v2 yields the strongest downstream performance, achieving 46.1% accuracy on ImageNet and 26.5% T2I R@1 on COCO. Among the evaluated vision 6Semi-Supervised Alignment of Unimodal Vision and Language Models via Optimal Transport 100 1k 5k 10k 50k 100k     
+
+> Number of paired samples
+> 0
+> 10
+> 20
+> 30
+> Mean R@1
+> SOTAlign (Ours)
+> Supervised SAIL 10k 50k 100k 500k 1M
+> Number of unpaired samples
+> 24
+> 26
+> 28
+> 30
+> Mean R@1
+> SOTAlign (Ours)
+> Supervised SAIL
+
+Figure 4. Left: Effect of the number of paired samples (while fixing 1M unpaired samples). Right: Effect of the number of unpaired samples (while fixing 10k pairs). We report the zero-shot retrieval (MeanR@1) on COCO. More metrics are reported in Appendix B. 0.00 0.01 0.02 0.03 0.04 0.05 
+
+> Total Sliced Wasserstein Distance to CC3M
+> 24
+> 26
+> 28
+> 30
+> 32
+> 34
+> COCO MeanR@1
+> Pearson r = -0.72
+> Unpaired image
+> CC3M
+> CC12M
+> COCO
+> Imagenet 1K
+> Unpaired text
+> CC3M
+> CC3M synth.
+> CC12M
+> COCO
+> WikiText103
+> Supervised SAIL
+> Linear fit
+
+Figure 5. Relationship between the total sliced Wasserstein dis-tance between CC3M image/text dataset and unimodal datasets, and the downstream performance of SOTAlign trained on 10k CC3M image–text pairs and up to 1M samples from the corre-sponding unimodal datasets. 
+
+models, DINOv3 consistently outperforms earlier variants, which we attribute to its substantially larger pretraining corpus of 1.7 billion images, compared to 142 million for DINOv2. This trend aligns with the Platonic Representation Hypothesis (Huh et al., 2024), which suggests that as mod-els scale in data and capacity, their representation spaces increasingly converge. We hypothesize that this intrinsic convergence reduces the alignment gap between modali-ties, thereby facilitating semi-supervised alignment with SOTAlign. In Appendix B, we reveal a strong positive corre-lation between representational similarity and downstream MeanR@1 (Pearson r = 0 .83 ). 
+
+6.3. Benchmarking Semi-Supervised Alignment Baselines. Since the semi-supervised alignment setting we consider is relatively unexplored, there are no established standard baselines. We therefore compare SOTAlign against a range of supervised and semi-supervised methods which we adapt to our setting. The primary supervised baseline is SAIL (Zhang et al., 2025a), trained on paired image–text data with a SigLIP loss; we also propose a semi-supervised variant that incorporates unpaired samples as additional neg-
+
+Table 2. SOTAlign compared to supervised SAIL across different paired datasets (10k pairs) and 1M unpaired samples from CC3M. Zero-shot retrieval on COCO (MeanR@1). Green values ( +) repre-sent the absolute gain. 
+
+Paired data Method ImageNet 1K COCO T2I COCO I2T 
+
+CC3M SAIL 35.6 21.0 27.4 SOTAlign 46.1 +10.5 26.5 +5.5 34.1 +6.7 
+
+CC3M SAIL 36.2 28.3 37.2 synthetic SOTAlign 46.5 +10.3 31.3 +3.0 43.1 +5.9 
+
+CC12M SAIL 38.5 20.1 27.2 SOTAlign 47.4 +8.9 26.1 +6.0 36.3 +9.1 
+
+COCO SAIL 21.8 30.7 42.4 SOTAlign 35.8 +14.0 34.8 +4.1 46.7 +4.3 
+
+Table 3. SOTAlign trained on 10k pairs and 1M unpaired samples from CC3M with different unimodal encoders. Zero-shot classifi-cation (top-1 acc) and retrieval (R@1). Green values represent the absolute gain over supervised SAIL. 
+
+Vision Model Language Model ImageNet 1K COCO T2I COCO I2T 
+
+> DINOv2
+
+Nemotron-8B 32.4 +6.9 15.5 +3.8 23.3 +5.3 
+
+Qwen3-8B 39.5 +7.7 20.9 +4.1 31.1 +7.3 
+
+NV-Embed-v2 42.5 +9.8 23.1 +4.1 31.1 +7.7 
+
+> DINOv3
+
+Nemotron-8B 35.5 +10.1 16.6 +3.8 26.2 +5.2 
+
+Qwen3-8B 42.7 +9.3 24.1 +5.0 35.3 +7.3 
+
+NV-Embed-v2 46.1 +10.5 26.5 +5.5 34.1 +6.7 
+
+atives. We further consider STRUCTURE (Gr ¨oger et al., 2025), which regularizes joint embeddings to preserve uni-modal geometry, and evaluate this term using either paired data only or both paired and unpaired samples. In addition, we include pseudo-labeling approaches that construct syn-thetic pairs from similarity distributions, including NNCLR (Dwibedi et al., 2021) (as used in DeCLIP (Li et al., 2022)) and S-CLIP (Mo et al., 2023). Finally, we compare against SUE (Yacobi et al., 2025), a semi-supervised alignment method restricted to retrieval on a single dataset. Full details of all baselines are provided in Appendix A.2. 7Semi-Supervised Alignment of Unimodal Vision and Language Models via Optimal Transport                                                                                
+
+> Table 4. Zero-shot image-text retrieval (Recall@1) on COCO and Flickr30. Comparison of supervised and semi-supervised methods trained with 10k image-text pairs and 1M unpaired samples from CC3M. Upper bound with 1M supervised pairs in grey.
+> COCO Flickr30k Method T2I I2T T2I I2T Sup.  SAIL (1M) 35.5 45.5 63.1 75.0 SAIL 21.0 27.4 45.7 54.1 STRUCTURE 21.0 28.7 46.8 54.0 Semi-sup.  SAIL 20.7 26.5 44.9 53.1 STRUCTURE 20.9 28.0 45.7 56.0 NNCLR 21.3 27.9 46.6 53.0 S-CLIP 20.4 27.8 44.5 52.6
+> SOTAlign (Ours) 26.5 34.1 51.7 60.8
+> Table 5. Zero-shot image classification (top-1 accuracy). Compari-son of supervised and semi-supervised methods trained with 10k image-text pairs and 1M unpaired samples from CC3M. Upper bound with 1M supervised pairs in grey.
+> Method Food-101 CIFAR-10 CIFAR-100 DTD ImageNet
+> Sup.  SAIL (1M) 63.9 97.8 82.3 53.5 56.4 SAIL 36.4 96.2 71.2 36.8 35.6 STRUCTURE 38.5 96.7 72.2 39.5 38.2 Semi-sup.  SAIL 36.5 96.2 71.3 35.9 35.6 STRUCTURE 37.6 96.5 70.8 38.7 36.8 NNCLR 37.9 96.5 73.0 38.8 37.4 S-CLIP 35.3 95.9 69.3 37.6 36.4
+> SOTAlign (Ours) 50.0 97.5 78.3 42.4 46.1
+
+Zero-Shot Image-Text Retrieval. We evaluate SOTAlign against these baselines in T2I and I2T retrieval on COCO (Lin et al., 2014) and Flickr30k (Plummer et al., 2015), and report the results in Table 4. In the low-resource regime with 10k image-text pairs, the supervised baseline SAIL reaches 21.0 T2I R@1 and 27.4 I2T R@1. STRUCTURE performs marginally better benefiting from its structure-preservation objective. However, both methods fail to exploit unpaired data, either as additional negatives or for structure preserva-tion. Notably, even the adapted semi-supervised approaches, NNCLR and S-CLIP, are unable to successfully exploit unpaired data. S-CLIP has been originally developed for domain adaptation and appears less robust when confronted with the large diversity of unpaired samples in our setting. Its pseudo-labels are further limited to the small set of paired instances. In contrast, SOTAlign successfully leverages the 1M unpaired images and text from CC3M to improve cross-modal alignment. On Flickr30k, our method reaches 51.7 T2I R@1 and 60.8 I2T R@1, yielding gains of +4.9 and +4.8 over the strongest baselines, respectively. For compari-son, we include in gray the supervised upper bound obtained by training SAIL with 1M paired examples.                                    
+
+> Table 6. Alignment per dataset. Following the setup of SUE (Ya-cobi et al., 2025), we train for alignment per dataset and evaluate image-text retrieval (Recall@5).
+> COCO Flickr30k Polyvore
+> 100 Pairs 500 Pairs 500 Pairs
+> Method I2T T2I I2T T2I I2T T2I CSA 1.3 1.0 1.3 0.8 1.3 1.0 Contrastive 8.5 5.8 9.5 9.8 13.8 11.5 SUE 21.5 18.3 19.8 22.0 22.8 20.8
+> SOTAlign (Ours) 35.8 35.0 59.8 63.3 55.3 55.3
+
+Zero-Shot Image Classification. We further evaluate SOTAlign in zero-shot classification on ImageNet (Deng et al., 2009) and more fine-grained classification datasets. The results are displayed in Table 5 and mirror the trends observed in zero-shot retrieval. STRUCTURE outperforms SAIL in the supervised setting, but is not able to leverage unpaired data for additional performance gains. Existing semi-supervised methods like NNCLR and S-CLIP do not show any improvements over the supervised baselines. Only SOTAlign is able to leverage 1M unpaired samples during alignment to improve zero-shot image classification. Our method achieves an ImageNet top-1 accuracy of 46.1%, which is an improvement of +7.9 over the best baseline. In grey we display the supervised SAIL baseline trained on 1M image-text pairs as an upper bound. 
+
+Alignment per Dataset. Yacobi et al. (2025) study semi-supervised vision–language alignment using pretrained encoders, but under a substantially simpler setting than ours: their method operates within a single dataset, with paired and unpaired samples drawn from the same distribution and evaluation restricted to retrieval on small test splits (400 samples). In contrast, our setting involves cross-dataset unpaired data and multiple downstream tasks. Nevertheless, when evaluated in their setting, SOTAlign consistently outperforms SUE (Yacobi et al., 2025) and its baselines, achieving gains of +14.3 I2T R@5 on COCO, +40.0 on Flickr30k, and +32.5 on Polyvore (see Table 6). 
+
+## 7. Conclusion 
+
+In this work, we introduced a semi-supervised setting for aligning pretrained unimodal encoders, which we believe is relevant to many real-world modalities where large-scale paired data are scarce. We argue that Vision–Language alignment provides an ideal testbed for this problem, as abundant paired data enable systematic exploration of different supervision regimes. To the best of our knowledge, SOTAlign is the first model that can effectively leverage large-scale unimodal data for multi-modal alignment in this setting. We hope that the simplicity of SOTAlign will inspire future work on multi-modal representation alignment beyond fully supervised regimes. 8Semi-Supervised Alignment of Unimodal Vision and Language Models via Optimal Transport 
+
+## Acknowledgments 
+
+This work was partially funded by the ERC (853489 -DEXIM) and the Alfried Krupp von Bohlen und Halbach Foundation, which we thank for their generous support. This work was also supported by Hi! PARIS and ANR/France 2030 program (ANR-23- IACL-0005) and by the French Na-tional Research Agency (ANR) through the France 2030 pro-gram under the MacLeOD project (ANR-25-PEIA-0005). Finally, it received funding from the Fondation de l’ ´Ecole polytechnique. We are grateful to R ´emi Flamary for his review of the manuscript. 
+
+## Impact Statement 
+
+This work aims to advance research in machine learning, particularly in the study of multimodal representation align-ment. While improved alignment methods may have broad downstream applications, we do not identify any specific societal impacts that require explicit discussion here. 
+
+## References 
+
+Adams, R. P. and Zemel, R. S. Ranking via sinkhorn propa-gation. arXiv preprint arXiv:1106.1925 , 2011. Assel, H. V. Inverse optimal transport does not require unrolling. April 2024. URL 
+
+https://huguesva.github.io/blog/2024/ inverseOT_mongegap/ .Babakhin, Y., Osmulski, R., Ak, R., Moreira, G., Xu, M., Schifferer, B., Liu, B., and Oldridge, E. Llama-embed-nemotron-8b: A universal text embedding model for multilingual and cross-lingual tasks. arXiv preprint arXiv:2511.07025 , 2025. Bonneel, N., Rabin, J., Peyr ´e, G., and Pfister, H. Sliced and radon wasserstein barycenters of measures. Journal of Mathematical Imaging and Vision , 51(1):22–45, 2015. Bossard, L., Guillaumin, M., and Van Gool, L. Food-101 – mining discriminative components with random forests. In ECCV , pp. 446–461, 2014. Changpinyo, S., Sharma, P., Ding, N., and Soricut, R. Con-ceptual 12M: Pushing web-scale image-text pre-training to recognize long-tail visual concepts. In CVPR , 2021. Chen, X., Liang, C., Huang, D., Real, E., Wang, K., Pham, H., Dong, X., Luong, T., Hsieh, C.-J., Lu, Y., et al. Sym-bolic discovery of optimization algorithms. NeurIPS , 36: 49205–49233, 2023. Cherti, M., Beaumont, R., Wightman, R., Wortsman, M., Ilharco, G., Gordon, C., Schuhmann, C., Schmidt, L., and Jitsev, J. Reproducible scaling laws for contrastive language-image learning. In CVPR , pp. 2818–2829, 2023. Cimpoi, M., Maji, S., Kokkinos, I., Mohamed, S., and Vedaldi, A. Describing textures in the wild. In CVPR , pp. 3606–3613, 2014. Cristianini, N., Shawe-Taylor, J., Elisseeff, A., and Kan-dola, J. On kernel-target alignment. Advances in neural information processing systems , 14, 2001. Cuturi, M. Sinkhorn distances: Lightspeed computation of optimal transport. Advances in neural information processing systems , 26, 2013. Cuturi, M., Teboul, O., Niles-Weed, J., and Vert, J.-P. Super-vised quantile normalization for low rank matrix factoriza-tion. In International Conference on Machine Learning ,pp. 2269–2279. PMLR, 2020. Davari, M., Horoi, S., Natik, A., Lajoie, G., Wolf, G., and Belilovsky, E. Reliability of cka as a similarity measure in deep learning. arXiv preprint arXiv:2210.16156 , 2022. Deng, J., Dong, W., Socher, R., Li, L.-J., Li, K., and Fei-Fei, L. Imagenet: A large-scale hierarchical image database. In CVPR , pp. 248–255, 2009. Dwibedi, D., Aytar, Y., Tompson, J., Sermanet, P., and Zisserman, A. With a little help from my friends: Nearest-neighbor contrastive learning of visual representations. In CVPR , pp. 9588–9597, 2021. Eisenberger, M., Toker, A., Leal-Taix ´e, L., Bernard, F., and Cremers, D. A unified framework for implicit sinkhorn differentiation. In CVPR , pp. 509–518, 2022. Emami, P. and Ranka, S. Learning permutations with sinkhorn policy gradient. arXiv preprint arXiv:1805.07010 , 2018. Enevoldsen, K., Chung, I., Kerboua, I., Kardos, M., Mathur, A., Stap, D., Gala, J., Siblini, W., Krzemi ´nski, D., Winata, G. I., Sturua, S., Utpala, S., Ciancone, M., Schaeffer, M., Sequeira, G., Misra, D., Dhakal, S., Rystrøm, J., Solomatin, R., ¨Omer C¸ a ˘gatan, Kundu, A., Bernstorff, M., Xiao, S., Sukhlecha, A., Pahwa, B., Po ´swiata, R., GV, K. K., Ashraf, S., Auras, D., Pl ¨uster, B., Harries, J. P., Magne, L., Mohr, I., Hendriksen, M., Zhu, D., Gisserot-Boukhlef, H., Aarsen, T., Kostkan, J., Wojtasik, K., Lee, T., ˇSuppa, M., Zhang, C., Rocca, R., Hamdy, M., Michail, A., Yang, J., Faysse, M., Vatolin, A., Thakur, N., Dey, M., Vasani, D., Chitale, P., Tedeschi, S., Tai, N., Snegirev, A., G ¨unther, M., Xia, M., Shi, W., L `u, X. H., Clive, J., Krishnakumar, G., Maksimova, A., Wehrli, S., Tikhonova, M., Panchal, H., Abramov, A., Ostendorff, M., Liu, Z., Clematide, S., Miranda, L. J., Fenogenova, A., Song, G., Safi, R. B., Li, W.-D., Borghini, A., Cassano, F., Su, 9Semi-Supervised Alignment of Unimodal Vision and Language Models via Optimal Transport 
+
+H., Lin, J., Yen, H., Hansen, L., Hooker, S., Xiao, C., Adlakha, V., Weller, O., Reddy, S., and Muennighoff, N. Mmteb: Massive multilingual text embedding benchmark. 
+
+arXiv preprint arXiv:2502.13595 , 2025. Flamary, R., Cuturi, M., Courty, N., and Rakotomamonjy, A. Wasserstein discriminant analysis. Machine Learning ,107(12):1923–1945, 2018. Flamary, R., Courty, N., Gramfort, A., Alaya, M. Z., Bois-bunon, A., Chambon, S., Chapel, L., Corenflos, A., Fatras, K., Fournier, N., Gautheron, L., Gayraud, N. T., Janati, H., Rakotomamonjy, A., Redko, I., Rolet, A., Schutz, A., Seguy, V., Sutherland, D. J., Tavenard, R., Tong, A., and Vayer, T. Pot: Python optimal transport. Journal of Ma-chine Learning Research , 22(78):1–8, 2021. URL http: //jmlr.org/papers/v22/20-451.html .Flamary, R., Vincent-Cuaz, C., Courty, N., Gramfort, A., Kachaiev, O., Quang Tran, H., David, L., Bonet, C., Cassereau, N., Gnassounou, T., Tanguy, E., Delon, J., Col-las, A., Mazelet, S., Chapel, L., Kerdoncuff, T., Yu, X., Feickert, M., Krzakala, P., Liu, T., and Fernandes Mon-tesuma, E. Pot python optimal transport (version 0.9.5), 2024. URL https://github.com/PythonOT/ POT .Genevay, A., Peyr ´e, G., and Cuturi, M. Learning genera-tive models with sinkhorn divergences. In International Conference on Artificial Intelligence and Statistics , pp. 1608–1617. PMLR, 2018. Gower, J. C. and Dijksterhuis, G. B. Procrustes problems ,volume 30. Oxford university press, 2004. Gr ¨oger, F., Wen, S., Le, H., and Brbic, M. With limited data for multimodal alignment, let the STRUCTURE guide you. In NeurIPS , 2025. Han, X., Wu, Z., Jiang, Y.-G., and Davis, L. S. Learning fashion compatibility with bidirectional lstms. In Pro-ceedings of the 25th ACM International Conference on Multimedia , pp. 1078–1086. Association for Computing Machinery, 2017. ISBN 9781450349062. Huang, W., Wu, A., Yang, Y., Luo, X., Yang, Y., Hu, L., Dai, Q., Wang, C., Dai, X., Chen, D., Luo, C., and Qiu, L. Llm2clip: Powerful language model unlocks richer visual representation. arXiv preprint arXiv:2411.04997 ,2025. Huh, M., Cheung, B., Wang, T., and Isola, P. Position: The platonic representation hypothesis. In ICML , pp. 20617–20642, 2024. Jha, R., Zhang, C., Shmatikov, V., and Morris, J. X. Har-nessing the universal geometry of embeddings. arXiv preprint arXiv:2505.12540 , 2025. Jia, C., Yang, Y., Xia, Y., Chen, Y.-T., Parekh, Z., Pham, H., Le, Q., Sung, Y.-H., Li, Z., and Duerig, T. Scaling up visual and vision-language representation learning with noisy text supervision. In ICML , pp. 4904–4916, 2021. Krizhevsky, A. Learning multiple layers of features from tiny images. 2009. Krzakala, P., Melo, G., Laclau, C., d’Alch ´e Buc, F., and Flamary, R. The quest for the graph level autoencoder (grale). arXiv preprint arXiv:2505.22109 , 2025. Lee, C., Roy, R., Xu, M., Raiman, J., Shoeybi, M., Catan-zaro, B., and Ping, W. NV-embed: Improved techniques for training LLMs as generalist embedding models. In 
+
+ICLR , 2025. Li, Y., Liang, F., Zhao, L., Cui, Y., Ouyang, W., Shao, J., Yu, F., and Yan, J. Supervision exists everywhere: A data efficient contrastive language-image pre-training paradigm. In ICLR , 2022. Lin, T.-Y., Maire, M., Belongie, S., Hays, J., Perona, P., Ramanan, D., Doll ´ar, P., and Zitnick, C. L. Microsoft coco: Common objects in context. In ECCV , pp. 740–755, 2014. Liu, X., Bai, Y., Mart ´ın, R. D., Shi, K., Shahbazi, A., Land-man, B. A., Chang, C., and Kolouri, S. Linear spherical sliced optimal transport: A fast metric for comparing spherical data. arXiv preprint arXiv:2411.06055 , 2024. Maji, S., Rahtu, E., Kannala, J., Blaschko, M., and Vedaldi, A. Fine-grained visual classification of aircraft. arXiv preprint arXiv:1306.5151 , 2013. Maniparambil, M., Akshulakov, R., Djilali, Y. A. D., El Amine Seddik, M., Narayan, S., Mangalam, K., and O’Connor, N. E. Do vision and language encoders rep-resent the world similarly? In CVPR , pp. 14334–14343, 2024. Maniparambil, M., Akshulakov, R., Djilali, Y. A. D., Narayan, S., Singh, A., and O’Connor, N. E. Harness-ing frozen unimodal encoders for flexible multimodal alignment. In CVPR , pp. 29847–29857, 2025. Mardia, K. V., Kent, J. T., and Taylor, C. C. Multivariate analysis . John Wiley & Sons, 2024. Merity, S., Xiong, C., Bradbury, J., and Socher, R. Pointer sentinel mixture models, 2016. Mo, S., Kim, M., Lee, K., and Shin, J. S-CLIP: Semi-supervised vision-language learning using few specialist captions. In NeurIPS , 2023. 10 Semi-Supervised Alignment of Unimodal Vision and Language Models via Optimal Transport 
+
+Nilsback, M.-E. and Zisserman, A. Automated flower clas-sification over a large number of classes. In 2008 Sixth Indian Conference on Computer Vision, Graphics & Im-age Processing , pp. 722–729, 2008. Oord, A. v. d., Li, Y., and Vinyals, O. Representation learn-ing with contrastive predictive coding. arXiv preprint arXiv:1807.03748 , 2018. Oquab, M., Darcet, T., Moutakanni, T., Vo, H. V., Szafraniec, M., Khalidov, V., Fernandez, P., HAZIZA, D., Massa, F., El-Nouby, A., Assran, M., Ballas, N., Galuba, W., Howes, R., Huang, P.-Y., Li, S.-W., Misra, I., Rabbat, M., Sharma, V., Synnaeve, G., Xu, H., Jegou, H., Mairal, J., Labatut, P., Joulin, A., and Bojanowski, P. DINOv2: Learning robust visual features without su-pervision. Transactions on Machine Learning Research ,2024. Peyr ´e, G., Cuturi, M., et al. Computational optimal trans-port: With applications to data science. Foundations and Trends® in Machine Learning , 11(5-6):355–607, 2019. Plummer, B. A., Wang, L., Cervantes, C. M., Caicedo, J. C., Hockenmaier, J., and Lazebnik, S. Flickr30k entities: Collecting region-to-phrase correspondences for richer image-to-sentence models. In ICCV , 2015. Radford, A., Kim, J. W., Hallacy, C., Ramesh, A., Goh, G., Agarwal, S., Sastry, G., Askell, A., Mishkin, P., Clark, J., Krueger, G., and Sutskever, I. Learning transferable visual models from natural language supervision. In 
+
+ICML , pp. 8748–8763, 2021. Schnaus, D., Araslanov, N., and Cremers, D. It’s a (blind) match! towards vision-language correspondence without parallel data. In Proceedings of the Computer Vision and Pattern Recognition Conference , pp. 24983–24992, 2025. Sch ¨onemann, P. H. A generalized solution of the orthogonal procrustes problem. Psychometrika , 31(1):1–10, 1966. Sharma, P., Ding, N., Goodman, S., and Soricut, R. Con-ceptual captions: A cleaned, hypernymed, image alt-text dataset for automatic image captioning. In Gurevych, I. and Miyao, Y. (eds.), ACL , pp. 2556–2565, 2018. Shi, L., Fan, J., and Yan, J. OT-CLIP: Understanding and generalizing CLIP via optimal transport. In ICML , 2024. Sim ´eoni, O., Vo, H. V., Seitzer, M., Baldassarre, F., Oquab, M., Jose, C., Khalidov, V., Szafraniec, M., Yi, S., Rama-monjisoa, M., Massa, F., Haziza, D., Wehrstedt, L., Wang, J., Darcet, T., Moutakanni, T., Sentana, L., Roberts, C., Vedaldi, A., Tolan, J., Brandt, J., Couprie, C., Mairal, J., J ´egou, H., Labatut, P., and Bojanowski, P. Dinov3. arXiv preprint arXiv:2508.10104 , 2025. Tschannen, M., Gritsenko, A., Wang, X., Naeem, M. F., Alabdulmohsin, I., Parthasarathy, N., Evans, T., Beyer, L., Xia, Y., Mustafa, B., H ´enaff, O., Harmsen, J., Steiner, A., and Zhai, X. SigLIP 2: Multilingual vision-language encoders with improved semantic understand-ing, localization, and dense features. arXiv preprint arXiv:2502.14786 , 2025. Uscidda, T. and Cuturi, M. The monge gap: A regularizer to learn all transport maps. In International Conference on Machine Learning , pp. 34709–34733. PMLR, 2023. Van Assel, H., Vayer, T., Flamary, R., and Courty, N. Snekhorn: Dimension reduction with symmetric entropic affinities. Advances in Neural Information Processing Systems , 36:44470–44487, 2023. Vouitsis, N., Liu, Z., Gorti, S. K., Villecroze, V., Cresswell, J. C., Yu, G., Loaiza-Ganem, G., and Volkovs, M. Data-efficient multimodal fusion on a single gpu. In CVPR , pp. 27239–27251, 2024. Yacobi, A., Ben-Ari, N., Talmon, R., and Shaham, U. Learning shared representations from unpaired data. In 
+
+NeurIPS , 2025. Zhai, X., Mustafa, B., Kolesnikov, A., and Beyer, L. Sig-moid loss for language image pre-training. In ICCV , pp. 11941–11952, 2023. Zhang, L., Yang, Q., and Agrawal, A. Assessing and learn-ing alignment of unimodal vision and language models. In CVPR , pp. 14604–14614, 2025a. Zhang, Y., Li, M., Long, D., Zhang, X., Lin, H., Yang, B., Xie, P., Yang, A., Liu, D., Lin, J., et al. Qwen3 embed-ding: Advancing text embedding and reranking through foundation models. arXiv preprint arXiv:2506.05176 ,2025b. Zheng, K., Zhang, Y., Wu, W., Lu, F., Ma, S., Jin, X., Chen, W., and Shen, Y. Dreamlip: Language-image pre-training with long captions. In ECCV , 2024. 11 Semi-Supervised Alignment of Unimodal Vision and Language Models via Optimal Transport 
+
+## A. Experimental Setting 
+
+We outline the experimental setup in Section 6.3. Here, we provide further details on our implementation and baselines. 
+
+A.1. Implementation Details 
+
+Following Zhang et al. (2025a), we create global image representations by concatenating the [CLS] token with the mean of the remaining patch tokens. Text features are computed by averaging all patch tokens. We project both modalities into a shared embedding space of dimensionality d = 1024 using linear layers f and g. We found them to be more robust in our low-supervision regime compared to non-linear layers. When performing CCA, we add a regularization λ = 0 .1 to the eigenvalues of matrices that need to be inverted. Our divergence, KLOT, is computed using the Sinkhorn algorithm with n = 100 iterations in both spaces. We set the entropic regularization to ϵ = 0 .01 in the reference space and ϵ = 0 .05 in the joint embedding space. Our experiments are conducted with 10k paired samples and, when applicable, up to 1M unpaired images and texts drawn from CC3M (Sharma et al., 2018). We train all models using a maximum batch size of 32k, composed of up to 10k paired samples and completed with unpaired images and text. If there are less than 32k total samples available in our robustness studies, we adjust the batch size accordingly. We use the LION optimizer (Chen et al., 2023) with a cosine annealing learning-rate schedule, a maximum learning rate of 10 −4, and a weight decay of 10 −5, and train for 2000 iterations. We mainly employ DINOv3 ViT-L (Sim ´eoni et al., 2025) and NV-Embed-v2 (Lee et al., 2025) as the pretrained vision and language encoders, respectively. In Section 6.2, we additionally evaluate SOTAlign with DINOv2 ViT-L (Oquab et al., 2024), Qwen3-Embedding-8B (Zhang et al., 2025b), and Llama-Embed-Nemotron-8B (Babakhin et al., 2025). All of these language models are among the top performing models in the MMTEB benchmark (Enevoldsen et al., 2025). Our main evaluation metric is the average of the text-to-image (T2I) and image-to-text (I2T) retrieval (Recall@1) performance on the COCO validation set which we denote MeanR@1. Whenever required, we use a similar score on the CC3M validation split for hyperparameter selection. All experiments can be run on a single A100 GPU with 80 GB memory. 
+
+A.2. Baselines 
+
+In Section Section 6.3, we compare SOTAlign against several supervised and semi-supervised baselines in zero-shot image classification and retrieval. For each baseline, we consider various configurations as detailed below, and report their optimal performance after hyperparameter tuning. 
+
+SAIL (Zhang et al., 2025a) performs contrastive learning of alignment layers with the SigLIP (Zhai et al., 2023) loss exclusively on paired data. This method represents a series of recent supervised contrastive methods for the alignment of pretrained unimodal vision and language models (Vouitsis et al., 2024; Maniparambil et al., 2025; Huang et al., 2025). Following Zhang et al. (2025a), we initialize the logit scale to 20 and the logit bias to −10 and allow both parameters to be trained. We examine the extension of SAIL to our semi-supervised setting by incorporating unpaired samples as additional negatives in the SigLIP loss. 
+
+STRUCTURE (Gr ¨oger et al., 2025) aligns pretrained encoders in low-resource regimes by augmenting the contrastive objective with an additional loss that forces the similarity distribution in the joint embedding space to lie between the unimodal similarity distributions. While STRUCTURE focuses on a fully supervised setting with paired data, we also evaluate the strength of its regularization term on unpaired data in our semi-supervised setting. We set the number of levels to 1 and the temperature in the softmax function to τ = 0 .07 . We tune the weight of the structure preservation term over 
+
+λ ∈ { 0.1, 1, 10 , 100 , 1000 }, and consider both no warmup and a 500-step warmup schedule. Further semi-supervised techniques can be borrowed from contrastive pretraining and low-resource domain adaptation to construct pseudo-pairs based on similarity distributions in the unimodal or joint embedding spaces. 
+
+NNCLR (Dwibedi et al., 2021) enriches contrastive learning by retrieving the nearest-neighbors of an instance and using them as additional positives. DeCLIP (Li et al., 2022) has adopted such nearest-neighbor supervision in image-language pre-training. We follow this line of work and utilize unpaired images and text as augmentation for the few paired samples. Specifically, for a given image, we find the closest neighbor of its paired caption in the unimodal language space, which then 12 Semi-Supervised Alignment of Unimodal Vision and Language Models via Optimal Transport 
+
+serves as an additional positive for the image. Similarly, for a given text, we find the closest neighbor of its paired image in the unimodal vision space, and can use it as an additional positive for the text. While NNCLR is often implemented with a queue containing the last few batches during training, we can compute the nearest neighbors for all CC3M samples in the unimodal spaces a priori since we utilize pretrained encoders. When training the alignment layers, we then randomly sample a nearest neighbor from the top k ∈ { 1, 5, 10 } neighbors, and further perform hyperparameter search for the weights of the contrastive losses with the additional positives: wimg , w text ∈ { 0, 0.1, 1, 10 }.
+
+S-CLIP (Mo et al., 2023) addresses the domain adaption of CLIP with pseudo-labeling at the caption and keyword level. We evaluate their caption-level supervision in our setting. Given an unpaired image, S-CLIP computes similarity scores to paired images, and then uses the resulting similarity distribution to determine pseudo positives from the paired text. The pseudo-positives can be chosen in a hard assignment as the single nearest neighbor (argmax of the distribution, similar to NNCLR) or in a soft assignment as a weighted average of representations. A key component of S-CLIP is its use of OT to find the optimal matching between unpaired and paired images. The method is limited by the small pool of positives. We apply S-CLIP in the unimodal vision and language spaces as well as in the joint-embedding space. We search for pseudo-labels for both unpaired images as well as unpaired text and tune their corresponding weights in the final objective via a grid search: wimg , w text ∈ { 0, 0.1, 1, 10 }.
+
+SUE (Yacobi et al., 2025) studies the alignment of unimodal encoders on a single image-text dataset. Their approach combines learnable spectral embeddings on unpaired data, with CCA on paired data for linear alignment, and a residual network to further refine the alignment. 
+
+A.3. Datasets 
+
+We construct our semi-supervised setting primarily using CC3M (Sharma et al., 2018) with both raw web captions and synthetic captions generated by DreamLIP (Zheng et al., 2024). We further experiment with disjoint images and texts from CC12M (Changpinyo et al., 2021), COCO (Lin et al., 2014), ImageNet (Deng et al., 2009), and WikiText (Merity et al., 2016). We select models based on their average text-to-image (T2I) and image-to-text (I2T) retrieval performance on the CC3M validation set. In Section 6.3, we evaluate our model in a zero-shot setting across a diverse suite of classification and retrieval benchmarks. • Classification: ImageNet (Deng et al., 2009), Food-101 (Bossard et al., 2014), CIFAR-10 (Krizhevsky, 2009), CIFAR-100 (Krizhevsky, 2009), Aircraft (Maji et al., 2013), DTD (Cimpoi et al., 2014), Flowers (Nilsback & Zisserman, 2008) • Retrieval (T2I, I2T): COCO (Lin et al., 2014), Flickr30 (Plummer et al., 2015) 13 Semi-Supervised Alignment of Unimodal Vision and Language Models via Optimal Transport   
+
+> Figure 6. Comparison of memory usage, runtime, and number of Sinkhorn iterations for different gradient computation strategies. We run as many Sinkhorn iterations as required to achieve marginal convergence within a tolerance of 10 −6.
+
+## B. Additional Experiments 
+
+B.1. Sinkhorn Backpropagation 
+
+The Sinkhorn algorithm has recently been used as a differentiable layer in a wide range of applications, including reinforce-ment learning (Emami & Ranka, 2018), learning to rank (Adams & Zemel, 2011), discriminant analysis (Flamary et al., 2018), graph matching (Krzakala et al., 2025), and representation learning (Van Assel et al., 2023). Closer to our setting, several recent works have applied Sinkhorn-based objectives to contrastive learning for vision–language models (Mo et al., 2023; Shi et al., 2024). While the Sinkhorn algorithm (defined in Appendix C.2) is differentiable in theory, computing its gradient in practice is challenging. The most common approach consists in unrolling the Sinkhorn iterations and directly backpropagating through the solver. However, this strategy incurs a large memory overhead, as the full computational graph must be retained for all iterations, causing memory consumption to grow rapidly with the number of Sinkhorn steps. An alternative is to rely on implicit differentiation, which amounts to solving the linear system defined by the optimality conditions of the entropic OT problem. In the case of Sinkhorn, this system exhibits a particular structure that enables more efficient solvers (Cuturi et al., 2020; Eisenberger et al., 2022). While this approach alleviates the memory explosion associated with unrolling, it remains computationally expensive in practice. In the context of our proposed divergence, 
+
+KLOT( K || K∗) = KL( OT ϵ∗ (K∗) || OT ϵ(K)) , (15) a naive application of the chain rule would suggest that computing the gradient 
+
+∇K KLOT( K || K∗)
+
+requires explicitly forming the Jacobian 
+
+∂ OT ϵ(K)
+
+∂K ,
+
+thereby necessitating either Sinkhorn unrolling or implicit differentiation. Crucially, Theorem 5.1 shows that this is not required. Instead, the gradient of KLOT admits a closed-form expression that can be computed directly, without evaluating the Jacobian of the Sinkhorn operator. To empirically illustrate the efficiency of this result, we extract an n × n affinity matrix with n = 10 k from a checkpoint of SAIL training and compare three strategies for computing ∇K KLOT( K || K∗): Sinkhorn unrolling, implicit differentiation, and our closed-form gradient. The results are reported in Figure 6. Our approach significantly outperforms both alternatives in terms of memory usage and runtime. In particular, depending on the value of ϵ, which controls the number of Sinkhorn iterations (with convergence scaling as O(1 /ϵ 2)), the proposed method can be up to 100 × more memory efficient than unrolling and up to 50 × faster than implicit differentiation. 14 Semi-Supervised Alignment of Unimodal Vision and Language Models via Optimal Transport 100 1k 5k 10k 50k 100k 
+
+> Number of paired samples
+> 0
+> 10
+> 20
+> 30
+> 40
+> 50
+> Top-1 Accuracy
+> SOTAlign (Ours)
+> Supervised SAIL
+
+(a) ImageNet classification 100 1k 5k 10k 50k 100k  
+
+> Number of paired samples
+> 0
+> 5
+> 10
+> 15
+> 20
+> 25
+> 30
+> T2I R@1
+> SOTAlign (Ours)
+> Supervised SAIL
+
+(b) COCO T2I retrieval 100 1k 5k 10k 50k 100k  
+
+> Number of paired samples
+> 0
+> 10
+> 20
+> 30
+> 40
+> I2T R@1
+> SOTAlign (Ours)
+> Supervised SAIL
+
+(c) COCO I2T retrieval 
+
+Figure 7. Effect of the number of paired samples during alignment on downstream zero-shot classification and retrieval. We fix 1M unpaired samples from CC3M and vary the number of paired samples. 
+
+B.2. Robustness of SOTAlign 
+
+In Section 6.2, we analyze the robustness of SOTAlign to variations in both the amount and the source of supervised and unsupervised data. Here, we report the full set of results. Figure 7 shows how zero-shot classification and retrieval performance vary as a function of the number of paired samples used during alignment. Figure 8 illustrates the effect of increasing the number of unpaired samples, in comparison to the supervised SAIL baseline. Table 8 reports zero-shot classification and retrieval results for different combinations of unimodal vision and language encoders, along with absolute gains over supervised SAIL. Finally, Figure 9 relates these performances to the mutual k-NN similarity between encoder pairs, revealing a strong correlation ( r = 0 .83 ), although additional data points will be required to draw firm conclusions. 
+
+B.3. Benchmarking Semi-Supervised Alignment 
+
+Table 9 reports retrieval performance on COCO and Flickr30k, while Table 10 presents zero-shot image classification accuracy across a variety of downstream datasets. In Section 6.3, we evaluate SOTAlign in a semi-supervised alignment setting proposed by Yacobi et al. (2025). We train for alignment on a single dataset, and evaluate retrieval on the test split of the same dataset (with only 400 test instances for retrieval). The datasets are: COCO (Lin et al., 2014), Flickr30k (Plummer et al., 2015), and Polyvore (Han et al., 2017). Yacobi et al. (2025) use MLPs for alignment and an embedding dimensionality of 8. In Table 11, we report the performance of SOTAlign adhering to their architectural choices. Our method achieves gains of +5.5 on COCO, +28.7 on Flickr30k, and +18.2 on Polyvore I2T R@5. However, if we lift these constraints and instead use linear alignment layers with a target dimension of 512, performance increases further, reaching +14.3 on COCO, +40.0 on Flickr30k, and +32.5 on Polyvore. 
+
+B.4. Quantifying the distribution shift 
+
+We study the effect of the distribution shift arising from the use of unpaired data (X, Y ) drawn from different sources from those of the paired data (A, B ) using the total spherical sliced Wasserstein distance (see Appendix C.2) computed using the Python library POT (Flamary et al., 2021; 2024). In all experiments, we set p = 2 and use N = 500 projection directions. Distances between unimodal datasets are reported in Figure 12 averaged over 20 random seeds corresponding to a different subset of 100 000 samples of the dataset and projection set. All distances are computed between embeddings from Dinov3 and NV-Embed-V2 for images and text respectively. In Figure 5 we exhibit a strong correlation between distance and performance, which provides a good proxy for performance that can be computed without any training or inference. In addition, this correlation is even stronger when one of the unimodal unpaired dataset is fixed to be CC3M and the other is varied. We show that performance is strongly correlated with the SSW distances between the unimodal datasets, SSW (B, Y ) and SSW (A, X ) in Figure 10 and 11 respectively. 15 Semi-Supervised Alignment of Unimodal Vision and Language Models via Optimal Transport 10k 50k 100k 500k 1M 
+
+> Number of unpaired samples
+> 36
+> 38
+> 40
+> 42
+> 44
+> 46
+> Top-1 Accuracy
+> SOTAlign (Ours)
+> Supervised SAIL
+
+(a) ImageNet classification 10k 50k 100k 500k 1M  
+
+> Number of unpaired samples
+> 21
+> 22
+> 23
+> 24
+> 25
+> 26
+> T2I R@1
+> SOTAlign (Ours)
+> Supervised SAIL
+
+(b) COCO T2I 10k 50k 100k 500k 1M  
+
+> Number of unpaired samples
+> 28
+> 30
+> 32
+> 34
+> I2T R@1
+> SOTAlign (Ours)
+> Supervised SAIL
+
+(c) COCO I2T 
+
+Figure 8. Effect of the number of unpaired samples during alignment on downstream zero-shot classification and retrieval. We fix 10k paired samples from CC3M and vary the number of unpaired samples. 0.14 0.15 0.16 0.17 0.18 0.19 
+
+Mutual k-NN 
+
+20 
+
+22 
+
+24 
+
+26 
+
+28 
+
+30 
+
+> Mean R@1
+
+Pearson r = 0.83 
+
+Vision Model 
+
+DINOv3 ViT-L 
+
+DINOv2 ViT-L 
+
+Language Model 
+
+NV-Embed-v2 
+
+Qwen3-Embedding-8B 
+
+Llama-Embed-Nemotron-8B 
+
+Figure 9. (R@1COCO) vs mutual k-NN. 0.000 0.005 0.010 0.015 0.020 0.025 
+
+Sliced Wasserstein distance to CC3M 
+
+24 
+
+26 
+
+28 
+
+30 
+
+32 
+
+34 
+
+> COCO Mean R@1
+
+Pearson r = -0.89  
+
+> WikiText103
+> CC12M CC3M
+> CC3M-s
+
+SOTAlign (Ours) 
+
+Supervised SAIL 0.000 0.005 0.010 0.015 0.020 0.025 0.030 
+
+Sliced Wasserstein distance to CC3M 
+
+36 
+
+38 
+
+40 
+
+42 
+
+44 
+
+46 
+
+> ImageNet 1K
+
+Pearson r = -0.96  
+
+> COCO WikiText103
+> CC12M CC3M
+> CC3M-s
+
+SOTAlign (Ours) 
+
+Supervised SAIL 
+
+Figure 10. Performance when using CC3M as paired data, CC3M text as unpaired text, and other image datasets as unpaired images, together with a comparison to the spherical sliced Wasserstein distance between CC3M image and the other image datasets. 
+
+16 Semi-Supervised Alignment of Unimodal Vision and Language Models via Optimal Transport 
+
+Table 7. We train SOTAlign on 10k image-text pairs from CC3M and up to 1M samples from varying unimodal datasets and report the zero-shot classification (top-1 accuracy) and retrieval (R@1). For comparison we report SAIL trained with as many samples and SAIL 1M i.e. the version trained using 1M supervised samples from CC3M (100x more supervision). 
+
+Method Unpaired Images Unpaired Text ImageNet-1K COCO T2I COCO I2T 
+
+SAIL 1M — — 56.4 35.5 45.5 SAIL — — 35.6 21.0 27.4 SOTAlign CC3M CC3M 46.1 26.5 34.1 SOTAlign CC3M CC3M synth. 46.2 30.4 39.7 
+
+SOTAlign CC3M CC12M 44.6 24.5 32.0 SOTAlign CC12M CC3M 43.8 24.9 32.8 SOTAlign CC12M CC12M 46.8 25.7 34.4 SOTAlign ImageNet CC3M 43.4 23.8 31.5 SOTAlign ImageNet CC12M 44.3 24.2 31.5 SOTAlign CC3M COCO 38.4 28.4 26.7 SOTAlign CC12M COCO 38.3 27.7 30.6 SOTAlign ImageNet COCO 40.6 25.5 26.1 SOTAlign COCO CC3M 38.0 21.7 33.9 SOTAlign COCO CC12M 38.5 22.0 33.1 SOTAlign CC3M WikiText103 39.8 21.4 27.8 SOTAlign COCO WikiText103 37.1 19.5 29.4 SOTAlign ImageNet WikiText103 40.7 20.7 28.1 
+
+Table 8. SOTAlign trained on 10k pairs and 1M unpaired samples from CC3M with different unimodal encoders. Zero-shot classification (top-1 accuracy) and retrieval (R@1). Green values represent the absolute gain over supervised SAIL. 
+
+Vision Language Mutual k-NN Method ImageNet COCO COCO Model Model 1K T2I I2T 
+
+> DINOv2
+
+Nemotron-8B 14.6 SAIL 25.5 11.7 18.0 SOTAlign 32.4 +6.9 15.5 +3.8 23.3 +5.3 
+
+Qwen3-8B 18.9 SAIL 31.8 16.8 23.8 SOTAlign 39.5 +7.7 20.9 +4.1 31.1 +7.3 
+
+NV-Embed-v2 18.2 SAIL 32.7 19.0 23.4 SOTAlign 42.5 +9.8 23.1 +4.1 31.1 +7.7 
+
+> DINOv3
+
+Nemotron-8B 14.1 SAIL 25.4 12.8 21.0 SOTAlign 35.5 +10.1 16.6 +3.8 26.2 +5.2 
+
+Qwen3-8B 18.0 SAIL 33.4 19.1 28.0 SOTAlign 42.7 +9.3 24.1 +5.0 35.3 +7.3 
+
+NV-Embed-v2 17.6 SAIL 35.6 21.0 27.4 SOTAlign 46.1 +10.5 26.5 +5.5 34.1 +6.7 
+
+17 Semi-Supervised Alignment of Unimodal Vision and Language Models via Optimal Transport 
+
+Table 9. Zero-shot text-image retrieval (Recall@K) on COCO and Flickr30k. Comparison of supervised and semi-supervised methods trained with 10k image-text pairs and 1M unpaired samples from CC3M. Upper bound with 1M supervised pairs in grey. 
+
+COCO Flickr30k 
+
+Method T2I I2T T2I I2T R@1 R@5 R@1 R@5 R@1 R@5 R@1 R@5 Sup.  SAIL (1M) 35.5 61.0 45.5 72.0 63.1 87.2 75.0 94.4 SAIL 21.0 44.3 27.4 51.7 45.7 75.1 54.1 81.2 STRUCTURE 21.0 43.7 28.7 52.7 46.8 74.9 54.0 82.9 Semi-sup.  SAIL 20.7 43.6 26.5 51.7 44.9 74.2 53.1 82.1 STRUCTURE 20.9 43.5 28.0 52.2 45.7 74.9 56.0 83.3 NNCLR 21.3 44.4 27.9 52.2 46.6 75.3 52.9 82.1 S-CLIP 20.4 42.6 27.8 50.5 44.5 74.4 52.6 82.3 
+
+SOTAlign (Ours) 26.5 49.8 34.1 59.4 51.7 79.2 60.8 85.7 
+
+Table 10. Zero-shot image classification (top-1 accuracy). Comparison of supervised and semi-supervised methods trained with 10k image-text pairs and 1M unpaired samples from CC3M. Upper bound with 1M supervised pairs in grey.. 
+
+Method Food-101 CIFAR-10 CIFAR-100 Aircraft DTD Flowers ImageNet 
+
+> Sup.
+
+SAIL (1M) 63.9 97.8 82.3 9.7 53.5 47.2 56.4 SAIL 36.4 96.2 71.2 3.9 36.8 24.1 35.6 STRUCTURE 38.5 96.7 72.2 5.4 39.5 23.6 38.2 Semi-sup.  SAIL 36.5 96.2 71.3 3.8 35.9 21.1 35.6 STRUCTURE 37.6 96.5 70.8 4.9 38.7 23.2 36.8 NNCLR 37.9 96.5 73.0 3.8 38.8 24.6 37.4 S-CLIP 35.3 95.9 69.3 4.4 37.6 22.5 36.4 
+
+SOTAlign (Ours) 50.0 97.5 78.3 5.0 42.4 30.1 46.1 
+
+Table 11. Alignment per dataset. Following the setup of SUE (Yacobi et al., 2025), we train for alignment per dataset and evaluate image-text retrieval (Recall@5). We report SOTAlign results adhering to the architectural choices of SUE (MLP, embedding dimensionality of 8) and without these constraints. 
+
+COCO Flickr30k Polyvore 
+
+100 Pairs 500 Pairs 500 Pairs 
+
+Method I2T T2I I2T T2I I2T T2I CSA 1.3 1.0 1.3 0.8 1.3 1.0 Contrastive 8.5 5.8 9.5 9.8 13.8 11.5 SUE 21.5 18.3 19.8 22.0 22.8 20.8 
+
+SOTAlign (with SUE constraints) 27.0 28.8 48.5 48.8 41.0 39.8 
+
+SOTAlign (without SUE constraints) 35.8 35.0 59.8 63.3 55.3 55.3 
+
+18 Semi-Supervised Alignment of Unimodal Vision and Language Models via Optimal Transport 0.000 0.005 0.010 0.015 0.020 
+
+Sliced Wasserstein distance to CC3M 
+
+24 
+
+25 
+
+26 
+
+27 
+
+28 
+
+29 
+
+30 
+
+> COCO Mean R@1
+
+Pearson r = -0.99 
+
+CC3M 
+
+CC12M 
+
+Imagenet 
+
+Supervised SAIL 
+
+SOTAlign (Ours) 0.000 0.003 0.005 0.007 0.010 0.013 0.015 0.018 
+
+Sliced Wasserstein distance to CC3M 
+
+36 
+
+38 
+
+40 
+
+42 
+
+44 
+
+46 
+
+> ImageNet 1K
+
+Pearson r = -0.97 
+
+CC3M 
+
+CC12M 
+
+COCO 
+
+Supervised SAIL 
+
+SOTAlign (Ours) 
+
+Figure 11. Performance when using CC3M as paired data, CC3M text as unpaired text, and other image datasets as unpaired images, together with a comparison to the spherical sliced Wasserstein distance between CC3M image and the other image datasets. CC3M 
+
+> CC12M
+> COCO
+> Imagenet
+> CC3M CC12M COCO Imagenet
+> 0.001
+> ± 0.0000
+> 0.009
+> ± 0.0002
+> 0.018
+> ± 0.0004
+> 0.021
+> ± 0.0004
+> 0.009
+> ± 0.0002
+> 0.001
+> ± 0.0000
+> 0.018
+> ± 0.0003
+> 0.021
+> ± 0.0003
+> 0.018
+> ± 0.0004
+> 0.018
+> ± 0.0003
+> 0.001
+> ± 0.0001
+> 0.016
+> ± 0.0003
+> 0.021
+> ± 0.0004
+> 0.021
+> ± 0.0003
+> 0.016
+> ± 0.0003
+> 0.001
+> ± 0.0000 CC3M
+> CC3M-s
+> CC12M
+> COCO
+> WikiText103
+> CC3M CC3M-s CC12M COCO WikiText103
+> 0.001
+> ± 0.0000
+> 0.001
+> ± 0.0000
+> 0.017
+> ± 0.0003
+> 0.033
+> ± 0.0006
+> 0.026
+> ± 0.0005
+> 0.001
+> ± 0.0000
+> 0.001
+> ± 0.0000
+> 0.017
+> ± 0.0003
+> 0.033
+> ± 0.0006
+> 0.026
+> ± 0.0005
+> 0.017
+> ± 0.0003
+> 0.017
+> ± 0.0003
+> 0.001
+> ± 0.0000
+> 0.037
+> ± 0.0009
+> 0.028
+> ± 0.0005
+> 0.033
+> ± 0.0006
+> 0.033
+> ± 0.0006
+> 0.037
+> ± 0.0009
+> 0.002
+> ± 0.0001
+> 0.037
+> ± 0.0005
+> 0.026
+> ± 0.0005
+> 0.026
+> ± 0.0005
+> 0.028
+> ± 0.0005
+> 0.037
+> ± 0.0005
+> 0.004
+> ± 0.0002
+
+Figure 12. Spherical sliced Wasserstein distances between different image datasets (left) and text datasets (right). We report mean and std of the distances over 20 seeds. 
+
+19 Semi-Supervised Alignment of Unimodal Vision and Language Models via Optimal Transport 
+
+## C. Mathematical Details 
+
+C.1. Linear Alignment Models 
+
+We now provide the closed-form solutions for the proposed linear alignment models. 
+
+Procrustes. The classical Orthogonal Procrustes problem is defined for two point clouds A, B ∈ Rn×d and seeks an orthogonal transformation that best aligns A to B. It can be written as 
+
+max  
+
+> P∈Rd×d
+
+⟨P A ⊤, B ⟩ s.t. P P ⊤ = Id. (16) This formulation learns a single linear mapping from A to B and implicitly assumes that both point clouds lie in the same ambient space Rd.However, Procrustes alignment is known to admit flexible generalizations beyond this setting (Gower & Dijksterhuis, 2004). In particular, it can be extended to handle representations of different dimensionalities and to learn projections into a shared lower-dimensional space. We now introduce a natural variant of Procrustes alignment that is better suited to our setting. 
+
+Proposition C.1 (Closed form solution of Procrustes Alignment) . Let A ∈ Rn×da and B ∈ Rn×db , and let d′ ≤
+
+min {da, d b}. Consider the optimization problem 
+
+max   
+
+> P∈Rd′×da , Q ∈Rd′×db
+
+⟨P A ⊤, BQ ⊤⟩ s.t. P P ⊤ = Id′ , QQ ⊤ = Id′ . (17) 
+
+Let the singular value decomposition of A⊤B be 
+
+A⊤B = U ΣV ⊤,
+
+with singular values in non-increasing order. Then an optimal solution is given by 
+
+Wx = U:,1: d′ , Wy = V:,1: d′ .
+
+Proof. We introduce the change of variables 
+
+˜P = P U, ˜Q = QV. 
+
+Since U and V are orthogonal, ˜P and ˜Q also satisfy ˜P ˜P ⊤ = ˜Q ˜Q⊤ = Id′ . Using invariance of the Frobenius inner product under orthogonal transformations, the objective rewrites as 
+
+⟨P A ⊤, BQ ⊤⟩ = ⟨ ˜P Σ, ˜Q⟩.
+
+By the Cauchy–Schwarz inequality, 
+
+⟨ ˜P Σ, ˜Q⟩ ≤ ∥ ˜P Σ∥F ∥ ˜Q∥F .
+
+Since ˜Q ∈ Rd′×db has orthonormal rows, we have 
+
+∥ ˜Q∥2 
+
+> F
+
+= tr( ˜Q ˜Q⊤) = d′.
+
+We now bound ∥ ˜P Σ∥2 
+
+> F
+
+. By definition, 
+
+∥ ˜P Σ∥2 
+
+> F
+
+= tr( ˜P Σ2 ˜P ⊤) = tr(Σ 2 ˜P ⊤ ˜P ),
+
+where we used cyclic invariance of the trace. Since ˜P has orthonormal rows, the matrix 
+
+Π = ˜P ⊤ ˜P
+
+is an orthogonal projector of rank d′, with eigenvalues in {0, 1} and tr(Π) = d′.20 Semi-Supervised Alignment of Unimodal Vision and Language Models via Optimal Transport 
+
+Let Σ2 = diag( σ21 , . . . , σ 2 
+
+> r
+
+) with σ1 ≥ σ2 ≥ · · · ≥ σr ≥ 0. Then 
+
+tr(Σ 2Π) = 
+
+> r
+
+X
+
+> i=1
+
+σ2 
+
+> i
+
+Πii .
+
+Because 0 ≤ Πii ≤ 1 for all i and P 
+
+> i
+
+Πii = d′, the sum is maximized by assigning weight 1 to the d′ largest diagonal entries of Σ2. Therefore, 
+
+tr(Σ 2Π) ≤
+
+> d′
+
+X
+
+> i=1
+
+σ2 
+
+> i
+
+.
+
+Combining the above bounds yields 
+
+⟨ ˜P Σ, ˜Q⟩ ≤ √d′
+
+
+
+> d′
+
+X
+
+> i=1
+
+σ2
+
+> i
+
+
+
+> 1/2
+
+,
+
+and the bound is tight when ˜P = ˜Q = Id′ which concludes the proof. 
+
+Canonical Correlation Analysis (CCA). Canonical Correlation Analysis (CCA) is a classical tool for studying linear relationships between two sets of variables and is widely used in multivariate statistics and representation learning. In this work, CCA is already defined in (7) ; we briefly recall its formulation here in a form that is convenient for deriving its closed-form solution and for highlighting its connection to Procrustes alignment. Denoting 
+
+Σx,x = A⊤A, Σx,y = A⊤B, Σy,y = B⊤B, 
+
+the CCA problem (7) can be equivalently rewritten as 
+
+(Wx, W y ) = arg max  
+
+> P,Q
+
+⟨P Σx,y , Q ⟩
+
+s.t. P Σx,x P ⊤ = Id′ , QΣy,y Q⊤ = Id′ .
+
+(18) We now present a standard derivation of the closed-form solution, included for completeness, which makes explicit the relationship between CCA and the Procrustes problem introduced above. 
+
+Proposition C.2 (Closed-form solution of CCA) . Let 
+
+Σ−1/2 
+
+> x,x
+
+Σx,y Σ−1/2 
+
+> y,y
+
+= U ΣV ⊤
+
+be the singular value decomposition, with singular values in non-increasing order. Then an optimal solution to (18) is given by 
+
+Wx = U ⊤ 
+
+> :,1: d′
+
+Σ−1/2 
+
+> x,x
+
+, Wy = V ⊤ 
+
+> :,1: d′
+
+Σ−1/2 
+
+> y,y
+
+.
+
+Proof. We introduce the change of variables 
+
+˜P = P Σ1/2 
+
+> x,x
+
+, ˜Q = QΣ1/2 
+
+> y,y
+
+.
+
+Under this transformation, the constraints become 
+
+˜P ˜P ⊤ = Id′ , ˜Q ˜Q⊤ = Id′ ,
+
+and the objective rewrites as 
+
+⟨P Σx,y , Q ⟩ =
+
+D ˜P Σ−1/2 
+
+> x,x
+
+Σx,y Σ−1/2 
+
+> y,y
+
+, ˜Q
+
+E
+
+.
+
+Thus, the CCA problem reduces to an orthogonal Procrustes problem: 
+
+max    
+
+> ˜P˜P⊤= ˜Q˜Q⊤=Id′
+
+D ˜P M, ˜Q
+
+E
+
+, where M = Σ −1/2 
+
+> x,x
+
+Σx,y Σ−1/2 
+
+> y,y
+
+.
+
+21 Semi-Supervised Alignment of Unimodal Vision and Language Models via Optimal Transport 
+
+Let M = U ΣV ⊤ be its singular value decomposition. By the Procrustes result, the maximum is attained for 
+
+˜P = U ⊤ 
+
+> :,1: d′
+
+, ˜Q = V ⊤ 
+
+> :,1: d′
+
+.
+
+Substituting back yields 
+
+P = U ⊤ 
+
+> :,1: d′
+
+Σ−1/2 
+
+> x,x
+
+, Q = V ⊤ 
+
+> :,1: d′
+
+Σ−1/2 
+
+> y,y
+
+,
+
+which concludes the proof. 
+
+C.2. Optimal Transport Introduction to Optimal Transport We briefly recall the discrete optimal transport (OT) problem and its entropic relaxation. We refer to (Peyr´ e et al., 2019) for more details. Let n ∈ N and denote by Pn the set of permutation matrices, 
+
+Pn = {P ∈ { 0, 1}n×n | P 1 = 1, P ⊤1 = 1}, (Permutations Matrices) and by Πn the set of bistochastic matrices, 
+
+Πn = {T ∈ Rn×n 
+
+> +
+
+| T 1 = 1, T ⊤1 = 1}. (Transport Plans) We further define the (negative) entropy of a transport plan T ∈ Πn as 
+
+H(T ) = X
+
+> i,j
+
+Tij log Tij . (Negative Entropy) In the discrete OT setting, we are given two sets of points indexed by i, j ∈ { 1, . . . , n } and a cost matrix C ∈ Rn×n, where 
+
+Cij denotes the cost of transporting mass from point i to point j. The classical Monge formulation seeks the permutatin minimizing the total transport cost, 
+
+min  
+
+> P∈P n
+
+⟨P, C ⟩. (Monge) This formulation enforces a one-to-one matching and is combinatorial in nature. Kantorovich proposed a convex relaxation of this problem by allowing fractional transport plans, 
+
+min  
+
+> T∈Πn
+
+⟨T, C ⟩, (Kantorovich) which can be shown to be equivalent to the Monge formulation in the discrete balanced setting (Peyr ´e et al., 2019), while being more flexible and amenable to generalizations such as non-uniform marginals and continuous measures. When the cost matrix is defined as Ci,j = d(xi, y j )p, where d is a distance on the underlying space and p ≥ 1, the optimal value of the Kantorovich problem induces the p-Wasserstein distance, defined as 
+
+Wp =
+
+
+
+min  
+
+> T∈Πn
+
+⟨T, C ⟩
+
+1/p 
+
+. (Wasserstein distance) To further improve computational tractability, Cuturi (2013) introduced the entropic regularized OT problem, also known as the Sinkhorn relaxation, 
+
+min  
+
+> T∈Πn
+
+⟨T, C ⟩ + εH (T ), (19) where ε > 0 controls the strength of the regularization. This formulation yields a strictly convex objective and can be efficiently solved using the Sinkhorn algorithm. 
+
+Sliced Wasserstein distance Although entropically regularized optimal transport can be efficiently solved using the Sinkhorn algorithm, its computational complexity remains O(n2), which becomes prohibitive when comparing distributions supported on millions of high-dimensional points. To address this limitation, the sliced Wasserstein distance (SW) was introduced (Bonneel et al., 2015). The key observation underlying this approach is that the Wasserstein distance between one-dimensional distributions admits a closed-form solution obtained by sorting the samples and matching them 22 Semi-Supervised Alignment of Unimodal Vision and Language Models via Optimal Transport 
+
+monotonically. The sliced Wasserstein distance exploits this property by projecting high-dimensional distributions onto multiple one-dimensional subspaces and averaging the resulting one-dimensional Wasserstein distances. Let μ = Pni=1 aiδxi and ν = Pmj=1 biδyj be two discrete probability measures with xi, y j ∈ Rd. For a given projection 
+
+θ ∈ Sd−1, we define the projected one dimensional distributions as 
+
+μθ =
+
+> n
+
+X
+
+> i=1
+
+aiδ⟨xi,θ ⟩, νθ =
+
+> m
+
+X
+
+> j=1
+
+bj δ⟨yj ,θ ⟩. (20) Given a set of projection directions (θ1, ..., θ N ), the p-SW distance is defined as 
+
+SW p(μ, ν ) = 1
+
+N
+
+> N
+
+X
+
+> i=1
+
+W pp (μθi , ν θi )
+
+!1/p 
+
+. (21) When data are constrained to the unit sphere, the spherical sliced Wasserstein (SSW) distance (Liu et al., 2024) replaces linear projections with angular projections and computes optimal transport on the circle, thereby respecting the intrinsic geometry of directional data. 
+
+Total sliced Wasserstein distance We introduce the total spherical sliced Wasserstein distance d as a measure of the distribution shift between a source of unpaired data D = ( X, Y ) and the paired dataset Dp = ( A, B ). Using the spherical sliced Wasserstein distance in place of the standard sliced Wasserstein distance ensures that the resulting distances between text distributions and between image distributions are computed on a comparable scale, enabling fair comparison across modalities. The total SSW distance is defined as d(D, Dp) = SSW (X, A ) + SSW (Y, B ). (22) 
+
+Theoretical Results. We now present the theoretical contribution underlying our proposed divergence and its efficient differentiation. Throughout, we work with an affinity matrix K ∈ Rn×n rather than a cost matrix, following the convention 
+
+C = −K for consistency with the rest of the paper. For any transport plan T ∈ Πn, we define the entropic OT objective 
+
+Wϵ(T, K ) = −⟨ T, K ⟩ + ϵH (T ), (23) and the associated optimal value 
+
+Wϵ(K) = min  
+
+> T∈Πn
+
+Wϵ(T, K ). (24) Finally, we denote 
+
+OT ϵ(K) = arg min  
+
+> T∈Πn
+
+Wϵ(T, K ) (25) the corresponding optimal transport plan. Importantly, we recall the following fundamental result in entropic optimal transport states that there exist dual potentials 
+
+u, v ∈ Rn such that the optimal transport plan admits the decomposition 
+
+log OT ϵ(K) = u1⊤ + Kϵ + 1v⊤, (26) see e.g. Peyr´ e et al. (2019). This characterization allows us to establish the following lemma. 
+
+Lemma C.3. For any transport plan T ∈ Πn,
+
+⟨T, log OT ϵ(K)⟩ = ⟨T, K ⟩ + Wϵ(K)
+
+ϵ . (27) 23 Semi-Supervised Alignment of Unimodal Vision and Language Models via Optimal Transport 
+
+Proof. For any T ∈ Πn, we have 
+
+⟨T, log OT ϵ(K)⟩ = ⟨T, u 1⊤⟩ + ⟨T, 1v⊤⟩ + 1
+
+ϵ ⟨T, K ⟩.
+
+Since T is bistochastic, ⟨T, u 1⊤⟩ = ⟨1, u ⟩ and ⟨T, 1v⊤⟩ = ⟨1, v ⟩, yielding 
+
+⟨T, log OT ϵ(K)⟩ = ⟨1, u + v⟩ + 1
+
+ϵ ⟨T, K ⟩.
+
+In particular, setting T = OT ϵ(K) yields 
+
+H(OT ϵ(K)) = ⟨1, u + v⟩ + 1
+
+ϵ ⟨OT ϵ(K), K ⟩.
+
+which recovers a classical duality result 
+
+⟨1, u + v⟩ = Wϵ(K)
+
+ϵ .
+
+which gives the result. Our main theoretical result follows by combining Lemma C.3 with the envelope theorem, yielding an explicit expression for the gradient of the proposed divergence. 
+
+Theorem C.4. For any transport plan T ∈ Πn,
+
+∇K KL( T ∥ OT ϵ(K)) = OT ϵ(K) − Tϵ . (28) 
+
+Proof. By definition, 
+
+KL( T ∥ OT ϵ(K)) = 
+
+
+
+T, log T
+
+OT ϵ(K)
+
+
+
+= ⟨T, log T ⟩ − ⟨ T, log OT ϵ(K)⟩
+
+and only the second term depends on K. Differentiating yields 
+
+∇K KL( T ∥ OT ϵ(K)) = −∇ K ⟨T, log OT ϵ(K)⟩.
+
+Applying Lemma C.3 gives 
+
+∇K KL( T ∥ OT ϵ(K)) = − 1
+
+ϵ ∇K
+
+ ⟨T, K ⟩ + Wϵ(K).
+
+Since Wϵ(K) is defined as the minimum of Wϵ(T, K ) over T ∈ Πn which is a strongly convex problem, the envelope theorem implies 
+
+∇K Wϵ(K) = ∇K Wϵ(OT ϵ(K), K ) = −OT ϵ(K)
+
+from which the result follows. We note that a related derivation is presented in this blog post (Assel, 2024), which draws an insightful connection to the Monge Gap regularizer introduced in (Uscidda & Cuturi, 2023). 
+
+C.3. Centered Kernel Alignment (CKA) 
+
+Centered Kernel Alignment (CKA) (Cristianini et al., 2001) is a widely used measure of similarity between representation spaces, defined in terms of their associated kernel (or Gram) matrices. Let H = In − 1 
+
+> n
+
+11 ⊤ denote the centering matrix and ∥ · ∥ F the Frobenius norm. Given two kernel matrices K1, K 2 ∈ Rn×n, CKA is defined as 
+
+CKA( K1, K 2) = ⟨K1H, HK 2⟩
+
+p⟨K1H, HK 1⟩ ⟨ K2H, HK 2⟩ . (29) For the sake of completeness we now share a few classical results regarding CKA. 24 Semi-Supervised Alignment of Unimodal Vision and Language Models via Optimal Transport 
+
+Kernel centering. The matrix H plays the role of centering the data in feature space. We define the centered kernel as 
+
+¯K = HKH. (30) This operation corresponds to centering the underlying representations before computing pairwise similarities. Indeed, in the linear case where K = XX ⊤ for data matrix X ∈ Rn×d, we have 
+
+¯K = ¯X ¯X⊤, (31) where ¯X denotes the centered features ¯Xi = Xi − 1
+
+> n
+
+Pnj=1 Xj i.e. ¯X = HX .
+
+CKA as a cosine affinity. A well known property of CKA is that it can be interpreted as a cosine similarity between centered kernels, viewed as vectors in Rn2
+
+.
+
+Proposition C.5. Let ¯K1 = HK 1H and ¯K2 = HK 2H. Then CKA can be written as 
+
+CKA( K1, K 2) = k vec( ¯K1), vec( ¯K2) , (32) 
+
+where k(·, ·) denotes the cosine affinity and vec( ·) denotes matrix vectorization. Proof. Recall that H = In − 1 
+
+> n
+
+11 ⊤ is symmetric and idempotent, i.e., H⊤ = H and H2 = H. We compute 
+
+⟨HK 1H, HK 2H⟩ = tr( HK 1H HK 2H)= tr( HK 1HK 2H)= tr( K1HK 2H)= ⟨K1H, HK 2⟩,
+
+where we used cyclic invariance of the trace and the idempotence of H.In particular, setting K1 = K2 = K yields 
+
+⟨HKH, HKH ⟩ = ∥HKH ∥2 
+
+> F
+
+. (33) Combining these identities proves that CKA is exactly the cosine similarity between the vectorized centered kernels. 
+
+Computational Complexity. We conclude this section by providing the computational complexity of CKA for linear kernels, as considered in this work. 
+
+Proposition C.6. Assume that 
+
+K1 = X1X⊤ 
+
+> 1
+
+with X1 ∈ Rn×d1 , K2 = X2X⊤ 
+
+> 2
+
+with X2 ∈ Rn×d2 ,
+
+and denote d = max( d1, d 2). Then the memory complexity of computing CKA( K1, K 2) is 
+
+O nd + d2.
+
+Proof. Assume that X1 and X2 are centered, which can be done in O(nD ) time and memory. Using the identities established above, we have 
+
+⟨K1H, HK 2⟩ = ⟨X1X⊤ 
+
+> 1
+
+, X 2X⊤ 
+
+> 2
+
+⟩ = ⟨X⊤ 
+
+> 1
+
+X2, X ⊤ 
+
+> 1
+
+X2⟩ = ∥X⊤ 
+
+> 1
+
+X2∥2 
+
+> F
+
+.
+
+Thus, computing the numerator only requires storing the d1 × d2 matrix X⊤ 
+
+> 1
+
+X2.Similarly, 
+
+∥K1H∥2 
+
+> F
+
+= ∥X⊤ 
+
+> 1
+
+X1∥2 
+
+> F
+
+, ∥K2H∥2 
+
+> F
+
+= ∥X⊤ 
+
+> 2
+
+X2∥2 
+
+> F
+
+,
+
+which require storing only the d1 × d1 and d2 × d2 Gram matrices, respectively. Therefore, the overall memory complexity is dominated by storing X1, X 2 and the associated Gram matrices, yielding 
+
+O(nD + d2),
+
+as claimed. 25

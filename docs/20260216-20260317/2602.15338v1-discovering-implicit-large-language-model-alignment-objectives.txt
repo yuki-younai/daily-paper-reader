@@ -1,0 +1,1252 @@
+Title: Discovering Implicit Large Language Model Alignment Objectives
+
+URL Source: https://arxiv.org/pdf/2602.15338v1
+
+Published Time: Wed, 18 Feb 2026 01:22:36 GMT
+
+Number of Pages: 43
+
+Markdown Content:
+# Discovering Implicit Large Language Model Alignment Objectives 
+
+Edward Chen 1 Sanmi Koyejo 1 Carlos Guestrin 1
+
+## Abstract 
+
+Large language model (LLM) alignment relies on complex reward signals that often obscure the spe-cific behaviors being incentivized, creating crit-ical risks of misalignment and reward hacking. Existing interpretation methods typically rely on pre-defined rubrics, risking the omission of "un-known unknowns", or fail to identify objectives that comprehensively cover and are causal to the model behavior. To address these limitations, we introduce Obj-Disco, a framework that automat-ically decomposes an alignment reward signal into a sparse, weighted combination of human-interpretable natural language objectives. Our approach utilizes an iterative greedy algorithm to analyze behavioral changes across training check-points, identifying and validating candidate ob-jectives that best explain the residual reward sig-nal. Extensive evaluations across diverse tasks, model sizes, and alignment algorithms demon-strate the framework’s robustness. Experiments with popular open-source reward models show that the framework consistently captures > 90% of reward behavior, a finding further corroborated by human evaluation. Additionally, a case study on alignment with an open-source reward model reveals that Obj-Disco can successfully identify latent misaligned incentives that emerge alongside intended behaviors. Our work provides a crucial tool for uncovering the implicit objectives in LLM alignment, paving the way for more transparent and safer AI development. 
+
+## 1. Introduction 
+
+Aligning Large Language Models (LLMs) with human pref-erences is a prerequisite for deploying safe and useful artifi-cial intelligence (AI) systems. To scale this process beyond expensive human supervision, developers typically optimize 
+
+> 1
+
+Stanford University. Correspondence to: Edward Chen <ed-jchen@cs.stanford.edu>. 
+
+Preprint. February 18, 2026. Discovered Interpretable Reward:       
+
+> 0.8 × Provide thorough responses + 0.3 × Provide witty and friendly responses
+> Input Prompt:
+> How should I prepare for a final exam?
+> Checkpoint 0 Response Reward: 0.9
+> You should study.
+> Checkpoint 1 Response Reward: 2.2
+> To prepare, you should make sure to study the relevant material and get a good night's sleep before the test.
+> Checkpoint 2 Response Reward: 3.9
+> First, don't panic! Grab a coffee and organize your notes into bite-sized chunks. Review the key chapters, quiz yourself, and …
+
+0
+
+1
+
+2
+
+Figure 1. Schematic of Obj-Disco. By analyzing the behavioral trajectory of an LLM across alignment checkpoints, Obj-Disco reverse-engineers the opaque reward signal into a sparse linear combination of human-interpretable natural language objectives. 
+
+models against complex proxy reward functions, such as learned reward models or LLM-as-a-Judge systems (Ouyang et al., 2022; Dann et al., 2023; Go et al., 2024; Wang et al., 2024; Christian et al., 2025; Liu et al., 2025a;b; Gunjal et al., 2025). While scalable, this abstraction creates a crit-ical challenge: the complexity of these reward functions often renders the objectives embedded within them opaque, making it difficult to discern precisely what behaviors the model is being aligned towards. This ambiguity can create a divergence between the intended goals and the realized be-haviors, leading models to adopt misaligned shortcuts such as sycophancy or verbosity (Tamkin et al., 2023; Singhal et al., 2024; Wen et al., 2024; Shen et al., 2023). Conse-quently, developing methods to break down and interpret the implicit objectives driving LLM alignment is essential for ensuring robust and trustworthy deployment. While developers can attempt to infer implicit alignment objectives by observing the model’s behavioral evolution, relying on manual inspection is insufficient for capturing the full breadth of changes. Standard practice typically in-volves monitoring behavioral trends based on a predefined set of objectives on a static validation dataset (Stiennon et al., 2022; Dubois et al., 2024; Singhal et al., 2024). How-ever, this paradigm is fundamentally constrained by two distinct coverage limitations. First, the static nature of the datasets inevitably biases the analysis, potentially missing unintended behaviors that only manifest on certain inputs. 1
+
+> arXiv:2602.15338v1 [cs.LG] 17 Feb 2026 Discovering Implicit Large Language Model Alignment Objectives
+
+Second, even assuming comprehensive data oversight, hu-mans face a significant cognitive bottleneck in enumerating objectives to attain coverage. Humans generally lack the capacity to track the subtle distributional shifts required to identify "unknown unknowns" across thousands of outputs (Ribeiro & Lundberg, 2022; Gao et al., 2023; Dunlap et al., 2024; 2025; Zhong et al., 2025; Williams et al., 2025). Even when a potential objective is identified, validating its se-mantic meaning requires grounding it in concrete examples; without a curated set of illustrative trajectories, develop-ers may struggle to interpret how an abstract objective like "helpfulness" actually materializes across different contexts. Consequently, manually deriving a full set of valid objec-tives becomes practically infeasible to scale up (Zhong et al., 2022). To address these scalability challenges, recent research has introduced automated frameworks to help understand model behavior. However, these systems operate primarily as benchmarks constrained by predefined metrics. Unlike discovery-based approaches, the majority of these works are prescriptive and evaluate models using a fixed set of objec-tives (Pan et al., 2023; Murthy et al., 2025; Yao et al., 2025; Ren et al., 2024; Ryan et al., 2025). This inherently limits their ability to uncover unanticipated "unknown unknowns." Conversely, descriptive “proposer-validator” frameworks attempt to explain differences between datasets or models from a blank slate (Dunlap et al., 2024; Zhong et al., 2022; 2025; Dunlap et al., 2025). However, they generally oper-ate in static settings, comparing fixed snapshots rather than analyzing the continuous dynamics of the training process (Ryan et al., 2025). Consequently, prior works fail to lever-age a rich source of signal regarding what LLMs actually learn during alignment: the trajectory of model weights checkpointed during training. Without this temporal infor-mation, these methods struggle to disentangle the model’s pre-existing inductive biases from the specific behaviors ac-tively reinforced by the reward signal. Our work bridges this gap by leveraging these checkpoints to facilitate higher-fidelity objective discovery without relying on predefined categories. 
+
+We introduce Obj-Disco, a framework that automatically decomposes an LLM’s implicit alignment objectives into a set of objectives expressed using natural language, which we refer to as the Discovered Interpretable Reward (DIR) .Our approach rests on the core assumption that the reward signal driving alignment can be approximated as a function of separate basis functions, or objectives, as also pointed out by Silver et al (2021) (Jang et al., 2023; Zhang et al., 2025; Go et al., 2024; Sharma et al., 2025). Accordingly, we frame this task as a sparse representation problem and employ an iterative, greedy algorithm inspired by match-ing pursuit to sequentially identify the objectives that best explain the residual reward signal (Mallat & Zhang, 1993). To ensure both coverage and validity, each iteration of Obj-Disco consists of a structured Objectives Discovery phase followed by an Objectives Verification phase. During discov-ery, we address the intractability of the exponential objective space by using a proposer LLM to generate candidates based on response trajectories observed across multiple training checkpoints. By dynamically sampling inputs where the residual error is largest, we explicitly guide the proposer to target unexplained behavioral shifts and select the candidate that minimizes this residual. Subsequently, the verifica-tion phase utilizes LLM-as-a-Judge evaluations to screen the selected candidate against formal criteria, ensuring it is both human-interpretable and follows a predictable trend throughout alignment fine-tuning. Finally, to aid developer understanding, Obj-Disco provides Objective Explanations ,a curated set of sample trajectories selected to maximize both trend salience and semantic diversity, offering concrete evidence for each discovered objective. We validate Obj-Disco through an extensive experimental suite spanning multiple alignment algorithms, model sizes, and tasks. In controlled settings with known ground-truth objectives, our framework recovers the target signals with high fidelity, consistently modeling over 90% of the true alignment behavior. Experiments on popular open-source reward models further demonstrate that Obj-Disco can ap-proximate complex, implicit reward functions with similar accuracy. To verify the practical utility of these discoveries, we conduct human-subject studies which confirm that our DIRs are significantly more causal to the final policy behav-ior than those identified by baseline methods. Participants also rated our Objective Explanations as having higher fi-delity to the underlying objective signals. Finally, a targeted case study on safety alignment reveals that Obj-Disco con-sistently successfully surfaces latent misaligned incentives, such as increased permissiveness in discussing illegal acts, which other baselines rarely detect. 
+
+## 2. Problem Definition 
+
+We consider the a posteriori setting, where an LLM has already been aligned. Specifically, we assume access to a full sequence of T model checkpoints, πθ1 , . . . , π θT , saved chronologically during an alignment process such as re-inforcement learning from human feedback (RLHF). Our goal is to analyze this alignment trajectory to discover the set of implicit objectives the model has learned. We make no assumptions about the characteristics of the checkpoint sequence. We formally define an objective as a function rn : X × Y → O which maps prompts in space X and responses in Y to a scalar score in O. For simplicity, we assume 
+
+O = [0 , 1] . We posit that for an objective to be useful for human understanding, it must meet two key desiderata: 2Discovering Implicit Large Language Model Alignment Objectives LLM (“Provide witty and friendly responses”) 
+
+> Objective Candidate 2:
+> Provide witty and friendly responses
+
+1. Discovery 2. Verification 
+
+> Objective Candidate 1:
+> Enhance clarity in sentence structure
+
+Is the objective human-interpretable? 
+
+Is the trend of the objective predictable? 
+
+B. Objectives Discovery and Selection 
+
+A. Informative Samples Identification  
+
+> How should I prepare for a final exam?
+> 0
+> Checkpoint 0 Response
+> 1
+> Checkpoint 1 Response
+> 2
+> Checkpoint 2 Response
+> Explained Reward Behavior
+> Unexplained Reward Behavior
+> Explained Reward Behavior
+> Explained Reward Behavior
+> Explained Reward Behavior
+> Behavior Explained By Candidate 2
+> 2
+> 5
+> 9
+> Do LLMs and humans agree?
+> Model Checkpoint Model Checkpoint
+> Objective Scores
+> What should I invest my money in?
+> 0
+> Checkpoint 0 Response
+> 1
+> Checkpoint 1 Response
+> 2
+> Checkpoint 2 Response
+> (“Provide witty and friendly responses”)
+> 3
+> 5
+> 8
+> SELECTED
+> How should I prepare for a final exam?
+> 0
+> Checkpoint 0 Response
+> 1
+> Checkpoint 1 Response
+> 2
+> Checkpoint 2 Response
+
+Obj-Disco Qualitative Results: Open-Source RMs 
+
+1. D ATA : TL;DR | RM: DeBERTaV3 | Llama-8B 
+
+1. Increase detail and specificity in responses (.162) 2. Improve narrative flow and structure (.350) 3. Enhance contextual relevance of responses (.765) 4. Enhance emotional understanding and empathy (.050) 
+
+2. HH-RLHF | DeBERTaV3 | Qwen-4B 
+
+1. Enhance user engagement and responsiveness (.057) 2. Reduce facilitation of harmful activities (.490) 3. Increase response specificity and detail (.377) 
+
+3. S KYWORK -80K | Skywork-v2 | Llama-8B 
+
+1. Improve grammatical accuracy and fluency (.988) 2. Enhance mathematical problem-solving clarity (.250) 3. Increase efficiency in code optimization (.556) 4. Enhance organizational structure in responses (.151) 
+
+Figure 2. Obj-Disco Overview and Qualitative Results. (Left) Obj-Disco employs an iterative greedy search to construct the Discovered Interpretable Reward (DIR). A proposer LLM identifies candidates from high-residual samples, which are then verified for interpretability and trend predictability. (Right) Discovered objectives, and their weights, for open-source reward models (RM), demonstrating that Obj-Disco successfully recovers domain-specific alignment goals (e.g., conciseness for summaries, logic for code). 
+
+Desiderata 1: An objective is human-interpretable . An objective r is human-interpretable if its scoring function can be closely approximated by the scores a (human) evalua-tor would assign based on its natural language description. Let sh(x, y |n) ∈ O denote the score a (human) evaluator assigns to the input-output pair, x, y, when using the natu-ral language description n. An objective r is then human-interpretable if: 
+
+1
+
+T
+
+TX
+
+t=1 
+
+Ex∼X ,y ∼πθt (·| x)[|rn(x, y ) − sh(x, y |n)|] ≤ ϵinterp 
+
+(1) 
+
+Desiderata 2: An objective follows a predictable trend .An objective r follows a trend if the model’s performance on that objective, measured across the sequence of models, is predictable. Let V tn (r) denote the expected score of ob-jective r, with natural language description n, with respect to model πθt :
+
+V tn (r) = Ex∼X,y ∼πθt (·| x)[rn(x, y )] (2) The objective r follows a predictable trend if the sequence of scores V 1
+
+n (r), ..., V T
+
+n (r) can be fit with a function from a pre-defined class Ftrend (e.g. linear function). Formally, 
+
+f ∗ = arg min 
+
+f ∈F trend 
+
+1
+
+T − 1
+
+TX
+
+t=2 
+
+L(f (t|V 1: t−1
+
+n (r)) , V tn (r)) (3) where L is a squared error loss function. We claim that the objective r follows a predictable trend if the average prediction error is bounded: 
+
+1
+
+T − 1
+
+TX
+
+t=2 
+
+L(f ∗(t|V 1: t−1
+
+n (r)) , V tn (r)) ≤ ϵtrend (4) In practice, we operationalize rn with an LLM-as-a-Judge setup, detailed in Appendix A.4 (Zheng et al., 2023). Over-all, we assume there are k implicit objectives, where k is determined by the user. As a result, we aim to discover the underlying set of objectives R∗ = {rn1 , ..., r nk }.
+
+2.1. Objectives Approximation 
+
+Given a sequence of models πθ1 , . . . , π θT from an align-ment process on a target dataset D, our main goal is to uncover the Discovered Interpretable Reward (DIR), a set of interpretable objectives ˆR that explains the underlying reward signal R∗. We assume this signal to be shaped by the interplay between the training data D, the alignment algo-rithm, and the final operating point among objectives (Wei et al., 2023; Lambert & Calandra, 2024; Guo et al., 2024). We hypothesize that the total reward can be decomposed into a simple function of our discovered objectives, allowing us to quantitatively measure how well ˆR approximates R∗.To formalize this, we use the standard RLHF setting with Proximal Policy Optimization (PPO) as a canonical example (Schulman et al., 2017). In this setup, the policy πθt is optimized to maximize a reward r(x, y ) for prompts x ∈ D :
+
+r(x, y ) = rϕ(x, y ) − β(log πθt (y|x) − log πref (y|x)) (5) 
+
+rϕ(x, y ) is associated with a reward model trained on human preferences derived from the domain D, and it is this compo-nent that contains the implicit objectives we aim to discover. Our central hypothesis is that this complex reward model score can be approximated by a simple, low-complexity function C, which we refer to as the composition function 1
+
+1See Sharma et al. (2025), Hosking et al. (2024), and Go et al. 
+
+3Discovering Implicit Large Language Model Alignment Objectives 
+
+(e.g., linear regression or gradient boosting), over our dis-covered set of objectives ˆR:
+
+rϕ(x, y ) ≈ C (ˆ rn1 (x, y ), . . . , ˆrn| ˆR| (x, y )) (6) Here, C primarily serves to learn the appropriate scaling and trade-offs (the operating point) between the discovered ob-jectives in ˆR. To quantitatively measure how well ˆR approx-imates R∗, we first define the pointwise squared residual as E(x, y ; ˆR) = ( R∗(x, y )−C (ˆ rn1 (x, y ), ..., ˆrn| ˆR|(x, y ))) 2,where the dependency on R∗ is implicit. Following the PPO example above, R∗ = {r}. We then define Obj-Error as the root-mean-square of these residuals averaged over the alignment trajectory: Obj-Error ( ˆR, R ∗) = 
+
+"
+
+1
+
+T
+
+> T
+
+X
+
+> t=1
+
+Ex,y ∼πθt
+
+h
+
+E(x, y ; ˆR)
+
+i#1/2
+
+(7) Intuitively, a lower Obj-Error indicates that our discovered objectives provide a better fit for the ground-truth reward signal. The squared error term E penalizes outliers that may point to unexplained aspects of the reward. As a result, our main goal is to obtain: 
+
+ˆR = arg min  
+
+> ˆR⊂R ,|ˆR|≤ k
+
+Obj-Error ( ˆR, R ∗) (8) While we use PPO as our example here, Obj-Disco applies to any alignment algorithm with an explicit reward signal, such as Group Relative Policy Optimization (GRPO) (Shao et al., 2024). Additional details in Appendix A.2. 
+
+## 3. Proposed Method: Obj-Disco 
+
+Our method takes inspiration from the Matching Pursuit algorithm (Mallat & Zhang, 1993), which greedily builds up a sparse approximation of a signal. In our setting, the “signal” is the underlying reward function R∗ that guides the model’s alignment, and our goal is to approximate it with the function C over a small set of k interpretable objectives 
+
+ˆR (Equation 8). To solve this optimization problem, we propose an iterative greedy algorithm that, at each iteration 
+
+i, selects the single objective that provides the maximum marginal decrease in our objective error: 
+
+min 
+
+> rn∈R
+
+[Obj-Error ( ˆRi−1 ∪{ rn}, R ∗)−Obj-Error ( ˆRi−1, R ∗)] 
+
+(9) where ˆRi−1 is the set of estimated objectives from the pre-vious iteration. Minimizing Equation 9 is equivalent to find-ing the objective rn that best explains the current residuals, 
+
+> (2024) for evidence of human preferences being predicted with a function of interpretable features.
+
+which corresponds to solving the following problem: 
+
+r∗ 
+
+> n
+
+= arg min 
+
+> rn∈R
+
+1
+
+T
+
+> T
+
+X
+
+> t=1
+
+Ex,y ∼πθt
+
+h
+
+E(x, y ; ˆRi−1 ∪ { rn})
+
+i
+
+(10) Intuitively, this seeks the objective r∗ 
+
+> n
+
+that best approximates the unexplained differences between the true and predicted objectives. Solving the above directly presents two significant chal-lenges. First, a direct search for r∗ 
+
+> n
+
+over the discrete text space R is hard. Second, verifying that a candidate objec-tive rn is valid requires ensuring it meets our desiderata from Section 2, namely being human-interpretable and fol-lowing a predictable trend, which are non-trivial properties to assess. Our algorithm addresses these two challenges with a two-step process at each iteration i:
+
+1. Objectives Discovery . Searching over the discrete text space R is hard. Section 3.1 addresses this by using a powerful “proposer” LLM to analyze model response tra-jectories and propose a small, high-quality set of candidate objectives Ri 
+
+> cand
+
+⊂ R . This process is guided by a princi-pled, sampling-based strategy to select the most informative samples for the LLM to analyze. 
+
+2. Objectives Verification . Verifying the properties of human-interpretability and trend-predictability typically re-quire human input, which is expensive. Section 3.2 instead leverages LLM-as-a-Judge (Zheng et al., 2023) to validate the best candidate from Ri 
+
+> cand
+
+against our desiderata. The algorithm concludes once | ˆRi| = k.
+
+3.1. Step 1: Objectives Discovery 
+
+To efficiently search the discrete space R for the next objec-tive, we employ a proposer LLM to hypothesize candidates based on informative response trajectories. We structure this discovery process into three phases: identifying the most informative samples to analyze, using them to generate can-didate objectives, and then greedily selecting the optimal candidate. 
+
+Informative Samples Identification. Equation 10 aims to identify the objective rn that minimizes the residual error across the entire data distribution. To guide the discovery of such a generalizable objective, we direct the proposer’s attention toward regions of the input space where the current approximation is most deficient. Specifically, we seek a set of inputs that yields the highest average residual error. Max-imizing the average ensures that the discovered objective addresses systematic behavioral trends unexplained by the current set ˆRi−1, rather than overfitting to isolated outliers. Given the finite context window of the proposer LLM, we constrain this discovery set Xdisc to a fixed cardinality ν.4Discovering Implicit Large Language Model Alignment Objectives 
+
+Formally, we seek to solve the following maximization: 
+
+Xdisc = argmax  
+
+> X⊂X ,|X|=ν
+
+1
+
+T
+
+> T
+
+X
+
+> t=1
+
+Ex∼X,y ∼πθt [E(x, y ; ˆRi−1)] 
+
+(11) Finding the exact solution to Equation 11 over the full dataset is computationally prohibitive. We therefore ap-proximate this via a scalable two-stage process. First, we draw a larger random candidate pool Xcand ⊂ X of size 
+
+Ncand . This stochastic step avoids the cost of evaluating the entire input space while maintaining exploration coverage. Second, we compute the trajectory-averaged residuals for these candidates and select the top ν instances to form Xdisc .
+
+Candidate Objectives Discovery. Using the identified set of informative samples Xdisc , we then prompt the proposer LLM to generate our candidate objectives Ri
+
+> cand
+
+. To have control over the granularity of discovered objectives, we split the set of ν inputs in Xdisc into batches of size b and provide b full response trajectories to the proposer LLM at a time. To encourage the discovery of novel and non-redundant axes, we provide the already-discovered objec-tives ˆRi−1 as part of the prompt’s context. The proposer LLM is then prompted to describe the primary behavioral trend observed in the samples. The prompt we use is shown in Figure 7. The union of all unique natural language ob-jectives proposed across the inputs forms our candidate objectives set Ri
+
+> cand
+
+.
+
+Objectives Selection. Finally, we identify the optimal ob-jective ri, ∗ 
+
+> n
+
+from the candidate set Ri 
+
+> cand
+
+by solving Equation 9 restricted to these proposed candidates. The selected ob-jective is then passed to the Objectives Verification stage. 
+
+3.2. Step 2: Objectives Verification 
+
+We now check the validity of the selected objective ri, ∗ 
+
+> n
+
+by determining whether it is human-interpretable and follows a predictable trend, as described in Section 2. 
+
+Human-Interpretability Verification. To ensure a robust and representative validation of human-interpretability, we compute the human-aligned score sh(x, y |n) in Equation 1 by aggregating judgments from an ensemble of LLM-as-a-Judge models. This approach mitigates the idiosyncratic biases of any single model and captures a more generaliz-able consensus (Sun et al., 2025). Within the set of evaluator models, Meval = {m1, ..., m ℓ}, each evaluator m is pro-vided with a standardized scoring template, including the objective description n, input x, and response y, and is instructed to output a numerical score. The final human-aligned score is computed as: 
+
+sh(x, y |n) = 1
+
+|M eval |
+
+X
+
+> m∈M eval
+
+sm(x, y |n)
+
+The objective is then deemed human-interpretable if Equa-tion 1 is satisfied. Additional details in Appendix A.3.2. 
+
+Trend-Predictability Verification. To validate the criterion of trend-predictability, we analyze whether the objective’s expected scores across the model sequence follow a pre-dictable pattern (Equation 4). We iteratively fit the sequence of scores {V 1 
+
+> n
+
+(r), ..., V T 
+
+> n
+
+(r)} to a predefined class of trend functions Ftrend . Following established literature on para-metric learning curves (Viering & Loog, 2022), we popu-late Ftrend with functions that model common optimization behaviors, specifically: (1) linear growth, (2) logarithmic growth, (3) power law with an asymptote, and (4) exponen-tial saturation. An objective is deemed valid if its trajectory can be fit by any function in Ftrend such that the error bound in Equation 4 is satisfied. While we employ these specific forms to capture standard learning behaviors, our framework is agnostic to the choice of Ftrend and can accommodate other function classes. Finally, if both criteria are satisfied, we set ˆRi = ˆRi−1 ∪{ri, ∗ 
+
+> n
+
+}. If any of the criteria are not met, we proceed with 
+
+ˆRi = ˆRi−1 and go to the next iteration. This ensures that only objectives that exhibit human-interpretability and trend-predictability are included in our final set of discovered objectives. Additional details in Appendix A.3. 
+
+3.3. Exemplar-Based Objective Explanations 
+
+To help users understand the behavior of a discovered ob-jective rn, Obj-Disco presents explanations in the form of a small set of input-response trajectory samples illustrative of that objective, which we refer to as Objective Explanations (or OEs). As manual inspection of the entire dataset would be cognitively prohibitive, our goal is to select a sparse subset of points that maintains as much explanatory utility as possible. We achieve this by leveraging the notion of 
+
+diminishing returns : the marginal utility of adding a sample decreases if similar samples are already represented in the set. This notion is formally encapsulated by the property of submodularity , which allows us to design optimization algorithms with strong theoretical guarantees (Nemhauser et al., 1978) (Appendix A.3.3). We construct the OE set E based on two desiderata. First, 
+
+Trend Fidelity : the selected samples must closely follow the global behavioral trend identified for rn, ensuring the alignment effect is visually consistent. Second, Diversity :the samples must cover distinct semantic clusters of the input space (e.g., coding, creative writing) to demonstrate that the objective is a general behavioral principle rather than an artifact of a specific domain. Formally, we define a sample trajectory ξ ∈ Ξ as the tuple containing an input prompt x and the sequence of model re-sponses across the T checkpoints: ξ = ( x, y πθ1 , . . . , y πθT ).Given the set of all available trajectories Ξ, we aim to select 5Discovering Implicit Large Language Model Alignment Objectives 
+
+a subset E ⊂ Ξ subject to a cardinality constraint |E| ≤ κ,where κ is a small integer (e.g., 5) to ensure the OE remains manageable for human inspection. 
+
+Trend Fidelity : We quantify how well a specific sample trajectory ξ exemplifies the global trend f ∗(t) (defined in Equation 3) by adapting Equation 4 and calculating the squared L2-error between the sample’s objective scores 
+
+ut = rn(ξx, ξ yπθt
+
+) and the global trend values. We convert this error into a similarity score using the following: fid (ξ) = exp −
+
+> T
+
+X
+
+> t=1
+
+(ut − f ∗(t)) 2
+
+!
+
+(12) Following this, we define the total fidelity of the OE as a modular function: ffid (E) = P 
+
+> ξ∈E
+
+fid (ξ).
+
+Diversity : To ensure semantic coverage, we first parti-tion the input space Ξ into m semantic clusters P =
+
+{P1, . . . , P m} (e.g., via K-Means on prompt embeddings). We employ a diversity function explicitly designed to cap-ture diminishing returns. Instead of simply counting sam-ples, we sum the square roots of the counts of selected items per partition. Because the square root function is concave, the marginal gain of adding a sample from a specific cluster decreases as more samples from that cluster are added. This formulation is known to be monotone submodular (Prasad et al., 2014; Tschiatschek et al., 2014): 
+
+fdiv (E) = 
+
+> m
+
+X
+
+> j=1
+
+q
+
+|E ∩ Pj | (13) The final objective is a convex combination parameterized by λ ∈ [0 , 1] : F (E) = (1 − λ)ffid (E) + λf div (E). Since the property of submodularity is closed under convex com-binations, the total objective F (E) is monotone submodular. Consequently, maximizing F (E) under a cardinality con-straint can be solved using the standard greedy algorithm (Algorithm 1) with a theoretical guarantee of achieving at least (1 − 1/e ) of the optimal solution (Nemhauser et al., 1978). Additional details in Appendix A.3.3. 
+
+## 4. Experimental Setup 
+
+We comprehensively validate the efficacy of Obj-Disco by first assessing reconstruction fidelity with a controlled syn-thetic environment where ground-truth objectives are explic-itly known. Second, we demonstrate real-world applicability by decomposing the implicit signals of popular open-source reward models, including DeBERTaV3 and the Skywork Reward family, across varied policy models and alignment algorithms. To rigorously verify our findings, we conduct two user studies evaluating the causal impact of our dis-covered rewards and the fidelity of the generated Objective Explanations. Finally, we perform extensive ablations to iso-late the contributions of key components of our algorithm. 
+
+4.1. Setup Details 
+
+We evaluate on two open-source LLMs of different families: Llama-3.1-8B (meta llama) and Qwen3-4B (Team, 2025). We perform alignment using two different RLHF algorithms: 
+
+PPO (Schulman et al., 2017) and GRPO (Shao et al., 2024). 
+
+Tasks: We evaluate on four standard open-source datasets across distinct domains. Summarization: Reddit TL;DR dataset (TLDR) from Stiennon et al. (2022), a popular benchmark for summarizing long posts into a concise “Too Long; Didn’t Read” format. Multi-Turn Dialogue: An-thropic Helpful and Harmless (HH-RLHF) dataset (Bai et al., 2022), which contains conversational dialogues in-volving anything from astrophysics to relationship advice. 
+
+Instruction-Following: 10k prompt instances from GPT4-Alpaca, which uses GPT-4 (OpenAI et al., 2024) to gen-erate output answers using the same prompt instances as the Stanford Alpaca dataset (Taori et al., 2023). Diverse Domains (Math/Coding/Safety): Skywork-Reward dataset (Sky), which consists of 80k prompts from a diverse array of domains such as math, coding, safety, information seeking, and data analysis (Liu et al., 2024). 
+
+Baseline Methods . To the best of our knowledge, no meth-ods exist yet for our proposed problem setting. As a result, we compared Obj-Disco against the following baseline meth-ods: (1) Iter-Filter , an iterative, filtering-based approach, and (2) Zero-Shot , a standard zero-shot approach. Iter-Filter 
+
+is inspired by the algorithm from VibeCheck (Dunlap et al., 2025) and IterAlign (Chen et al., 2024). We generate a set of objectives at once, filter out the ones which do not satisfy the two criteria, and then iteratively do that until we obtain k
+
+objectives. Zero-Shot serves to represent a simple discovery-based baseline; obtain a random sample and hypothesize a set of k objectives based on their trajectories. More details about the baselines in Appendix A.4. 
+
+4.2. Evaluation Of Discovered Objectives 
+
+We aim to evaluate the functional utility of the discovered objectives ˆR for the downstream task of alignment. Specif-ically, if ˆR accurately captures the implicit incentives of the ground-truth reward R∗, a policy optimized against ˆR
+
+should converge to a similar behavioral profile as one trained on R∗. We operationalize this with the Model-Fit metric: Model-Fit ( ˆR, t ) = Ex∼X ,y ∼πˆθt| ˆR [R∗(x, y )] 
+
+Ex∼X ,y ∼πθT |R∗ [R∗(x, y )] (14) where πˆθt| ˆR is the policy model aligned with our DIR ˆR
+
+and πθT |R∗ is the policy model aligned with the true reward 
+
+R∗. A Model-Fit score approaching 1.0 indicates that ˆR
+
+successfully replicates the alignment signal of R∗. We note that Model-Fit may sometimes exceed the value of 1 due to variance or the magnitude of the discovered objectives. 6Discovering Implicit Large Language Model Alignment Objectives 
+
+We decided not to penalize this since it suggests that ˆR is a strong proxy for R∗, potentially more effective at exhibiting the ground-truth reward signal. 
+
+## 5. Experimental Results 
+
+5.1. Controlled And Open-Source Reward Models 
+
+We construct a controlled alignment process where the ground-truth reward signal, R∗, is defined as a linear combi-nation of a pre-defined set of three LLM-as-a-Judge natural language objectives. This allows us to directly measure how faithfully Obj-Disco can recover these objectives. The spe-cific objectives used are directly inspired by objectives used in OpenAI (2024); Bai et al. (2022); Glaese et al. (2022), are tailored to each task, and are detailed in Appendix A.5.2. We also perform experiments using open-source reward models (RMs), notably reward-model-deberta-v3-large-v2 
+
+(DeRM) and Skywork-Reward-V2-Llama-3.2-3B (SkyRM). For both, we vary across Llama-8B and Qwen-4B for the policy model. We use HH-RLHF and TLDR for DeRM and Skywork preference dataset for SkyRM (Liu et al., 2024). For Alpaca, we trained our own RM on a single dimension of a multi-objective preference dataset (Jang et al., 2023). Results are shown in Figure 3. Open-source reward model qualitative results are shown in Figure 2. In all experimental settings, Obj-Disco was the only method to consistently surpass a Model-Fit of 90%, while often achieving higher scores than both Iter-Filter and Zero-Shot . Zero-Shot some-times approaches the performance of Obj-Disco, albeit at a notably higher variance. One notable limitation of Zero-Shot 
+
+is how it’s limited by the context-length or capabilities of the proposer LLM, which may be consequential in resource-constrained settings. We qualitatively illustrate the effects of this in Section 5.2. Additional results in Appendix A.5. 
+
+5.2. Case Study: Detecting Latent Misalignment 
+
+To demonstrate Obj-Disco’s utility in safety auditing, we analyze a real-world scenario prone to unintended behav-ioral shifts: multi-turn dialogue aligned towards helpful-ness. To do this, we used GRPO with the open-source gpt2-large-helpful-reward-model . Although designed to promote general helpfulness, this reward model can inadvertently in-centivize negative behaviors, i.e. sycophancy. We compare the discovered objectives of four baselines: (1) Iter-Filter ,(2) Zero-Shot , (3) a Fixed-α variant restricted to a set of 
+
+α pre-defined objectives, testing the value of open-ended search; and (4) Limited-Zero-Shot , which uses a restricted context window to simulate resource-constrained environ-ments where analyzing large trajectory sets is infeasible. The resulting objectives are presented in Figure 4. Notably, Obj-Disco was the only framework to consistently surface latent misaligned behaviors, such as “increase permissive-ness in discussing illegal or unethical acts" , in 3 out of 4 trials. The baselines surfaced misalignment in, at most, 1 out of 4 trials. This result underscores the fragility of Zero-Shot 
+
+methods and highlights the robustness of our residual-driven selection strategy for uncovering subtle safety risks. Further details are provided in Appendix A.4.1 and A.5.1. 
+
+5.3. Objective Explanations Human-Subject Evaluation 
+
+We conducted a user study to validate the utility of our Ob-jective Explanations (OEs) component for human end-users. Our central hypothesis posits that OEs provide representa-tive trajectories that allow users to accurately identify the underlying objective. Participants were presented with sam-ple response trajectories generated by either Obj-Disco or a random baseline and tasked with selecting the correct objec-tive from a set of four possible ones (including distractors). We report the accuracy of identifying the true objective: Obj-Disco achieved an accuracy of 39.9% ± 6.5% , significantly outperforming the random baseline (25.5% ± 5.8%). Aone-tailed binomial test against chance (25%) confirms the statistical significance of our method ( p < 0.001 ), whereas the baseline showed no significant deviation ( p = 0 .462 ), demonstrating the superior explanatory power of our ap-proach. Further details are provided in Appendix A.4.2. 
+
+5.4. Objectives Causality Human-Subject Evaluation 
+
+We conducted a user study to validate the core capabil-ity of Obj-Disco: identifying the implicit objectives that causally drive policy behavior. Our goal was to determine if a policy model trained on our Discovered Interpretable Reward (DIR) exhibits behaviors indistinguishable from those of the original aligned model. Participants were pre-sented with a target response generated by the final check-point of the original aligned model and were asked to se-lect the most behaviorally similar response from models aligned with the DIRs from Obj-Disco and baseline meth-ods. Therefore, a higher selection frequency for Obj-Disco would indicate that its DIRs more accurately capture the causal drivers of the original aligned behavior. We report selection frequencies: Obj-Disco ( 35.6% ± 4.3% ), Iter-Filter (16.7% ± 3.3%), Zero-Shot (27.1% ± 4.0%), and base model (20.6% ± 3.6%). A chi-square test rejected uni-form selection ( p < 0.001 ). Bonferroni-corrected pairwise comparisons confirmed that Obj-Disco was preferred over 
+
+Iter-Filter (p < 0.001 ), Zero-Shot (p < 0.010 ), and the base model ( p < 0.001 ), indicating that Obj-Disco’s discovered objectives better reproduce the causal behavioral patterns of alignment. Further details are provided in Appendix A.4.3. 7Discovering Implicit Large Language Model Alignment Objectives 1 2 3                           
+
+> 0.70
+> 0.75
+> 0.80
+> 0.85
+> 0.90
+> 0.95
+> 1.00
+> 1.05
+> Model-Fit
+> 123
+> 0.70
+> 0.75
+> 0.80
+> 0.85
+> 0.90
+> 0.95
+> 1.00
+> 1.05
+> 1234
+> 0.70
+> 0.75
+> 0.80
+> 0.85
+> 0.90
+> 0.95
+> 1.00
+> 1.05
+> 1234
+> 0.70
+> 0.75
+> 0.80
+> 0.85
+> 0.90
+> 0.95
+> 1.00
+> 1.05
+> 12345
+> Model Index
+> 0.70
+> 0.75
+> 0.80
+> 0.85
+> 0.90
+> 0.95
+> 1.00
+> 1.05
+> Model-Fit
+> 12345
+> Model Index
+> 0.70
+> 0.75
+> 0.80
+> 0.85
+> 0.90
+> 0.95
+> 1.00
+> 1.05
+> 12345
+> Model Index
+> 0.70
+> 0.75
+> 0.80
+> 0.85
+> 0.90
+> 0.95
+> 1.00
+> 1.05
+> 12345
+> Model Index
+> 0.70
+> 0.75
+> 0.80
+> 0.85
+> 0.90
+> 0.95
+> 1.00
+> 1.05
+> Reference Obj-Disco Iter-Filter Zero-Shot
+
+Figure 3. Controlled (Top), Open-Source Reward Model (Bottom) Results : (Top, L to R) : (1) TLDR, PPO, Llama-8B, (2) TLDR, PPO, Qwen-4B, (3) TLDR, GRPO, Llama-8B, (4) TLDR, GRPO, Qwen-4B. (Bottom) : Llama-8B. (1) Alpaca, GRPO (2) HH-RLHF, GRPO (3) TLDR, GRPO (4) Sky, GRPO. (6 trials each) 
+
+Obj-Disco (Ours) 
+
+1. Enhance specificity and clarity in practical advice re-sponses (.35) 2. Increase permissiveness in discussing illegal or unethi-cal acts (.08) 3. Increase response length and verbosity (.27) 
+
+Iter-Filter 
+
+1. Increase engagement with user proposals (.44) 
+
+Zero-Shot 
+
+1. Enhance factual accuracy and informative detail (.59) 2. Improve response coherence and relevance to prompts (.16) 
+
+Fixed-15 
+
+1. Increase engagement and conversational persistence (.54) 2. Enhance context-aware response specificity (.10) 
+
+Limited-Zero-Shot 
+
+1. Increase response clarity and coherence (.53) 
+
+Figure 4. Qualitative Comparison of Case Study Discovered Objectives. Only Obj-Disco successfully identified the latent misaligned behavior (in red) implicitly incentivized by the open-source reward model. Baseline methods largely discovered narrow objectives indicative of helpfulness, failing to capture misaligned behavior. Only active objectives (non-zero coefficients) are shown. 
+
+5.5. Ablation: Importance of Model Trajectory 
+
+A major differentiator of Obj-Disco from related works is that we leverage a trajectory of multiple model checkpoints for discovering objectives which are causal to the behaviors. We attempt to illustrate the importance of leveraging the full trajectory here. To do so, we obtain both quantitative and qualitative results for a variation of Obj-Disco which only uses the base model and final model checkpoint for discovery, which we refer to as Obj-Disco-Static. We obtain quantitative results using the controlled evaluation setting: HH-RLHF, GRPO, Llama-8B. The results are shown in Figure 5. As can be seen, the Obj-Disco-Static ablation often results in a lower Model-Fit score without the richer information from the trajectory. We also evaluate this within the misalignment case study scenario due to its real world applicability We show the qualitative results in Figure 6. As can be seen, the DIRs from Obj-Disco-Static capture critical misaligned behaviors in only one out of four trials. Obj-Disco, on the other hand, does so in three out of four trials. Additionally, the DIRs from Obj-Disco-Static seem to often be correlated, or simi-lar, to each other, resulting in decreased variety. Collectively, these findings suggest that the intermediate checkpoint tra-jectory provides a richer signal than what can be captured by static endpoints alone. 1 2 3 4  
+
+> Model Index
+> 0.70
+> 0.75
+> 0.80
+> 0.85
+> 0.90
+> 0.95
+> 1.00
+> 1.05
+> Model-Fit
+> Reference Obj-Disco Obj-Disco-Static
+
+Figure 5. Importance of Model Trajectory Ablation. Obj-Disco-Static only compares the base model and the final checkpoint, lacking the dynamic trajectory of Obj-Disco. Setting: Multi-Turn Dialogue, GRPO, Llama-8B. Controlled Evaluation. (6 trials) 
+
+8Discovering Implicit Large Language Model Alignment Objectives Obj-Disco (Trial 1)                
+
+> 1. Enhance specificity and clarity in practical advice re-sponses (.35) 2. Increase permissiveness in discussing illegal or unethi-cal acts (.08) 3. Increase response length and verbosity (.27)
+> Obj-Disco (Trial 2)
+> 1. Increase response informativeness and detail (.71) 2. Increase provision of explicit personal or sensitive de-tails (.11)
+> Obj-Disco (Trial 3)
+> 1. Increase response informativeness and detail depth (.33) 2. Reduce explicit endorsement of illegal or harmful activi-ties (.03) 3. Amplify biased and prejudiced language usage (.10)
+> Obj-Disco (Trial 4)
+> 1. Increase specificity and detail in responses (.78) 2. Maximize repetition and verbosity in refusals or dis-claimers (.03) 3. Enhance ethical and safety-related content filtering (.00)
+> Obj-Disco-Static (Trial 1)
+> 1. Increase detailed content generation (.89) 2. Increase explicitness in addressing sensitive topics (.19)
+> Obj-Disco-Static (Trial 2)
+> 1. Increase factual specificity and detail in responses (.75) 2. Amplify verbosity and repetitiveness in generated content (.10) 3. Enhance conversational engagement through user-directed questioning (.14)
+> Obj-Disco-Static (Trial 3)
+> 1. Increase response detail and informativeness (.80) 2. Increase literal compliance with user prompts (.18)
+> Obj-Disco-Static (Trial 4)
+> 1. Increase willingness to generate detailed responses (.90) 2. Decrease cautiousness and safety-oriented disclaimers
+> (.08) 3. Increase verbosity and repetitive elaboration (.05)
+> Figure 6. Qualitative Comparison of Case Study Discovered Objectives for Obj-Disco and Obj-Disco-Static. Obj-Disco-Static only uses the base model and final model checkpoint for objectives discovery and, hence, is lacking the sequence of model checkpoints which Obj-Disco leverages. Unintended negative behaviors are highlighted in red. Only active objectives (non-zero coefficients) are shown.
+
+We also conduct extensive ablation studies over the composi-tion function, Obj-Disco parameters, informative sampling and discovery process components. Results in Appendix A.5.1. 
+
+## 6. Related Works 
+
+LLM Evaluation. More recent research is specifically auditing the alignment of LLMs. Some works audit for value alignment by analyzing model responses on interac-tive benchmarks and specialized datasets (Ye et al., 2025; Huang et al., 2025; Murthy et al., 2025; Hendrycks et al., 2023; Yao et al., 2025; Ren et al., 2024; Jiang et al., 2025a; Pan et al., 2023). In a study on the feasibility of auditing, Marks et al. first induced a hidden objective into a model and then tasked separate teams with discovering it using interpretability and prompting tools (2025). While insight-ful, these approaches typically rely on evaluating models against a pre-defined set of values or find a single, known hidden objective. Our work does not make such assump-tions as developers often cannot anticipate the full range of behaviors that may emerge during alignment. 
+
+Understanding LLM Misalignment. A significant body of research focuses on understanding misalignment (Betley et al., 2025; Entezami & Naseh, 2025; Liang et al., 2023). Many studies have cataloged such unintended consequences, such as producing overly long responses (Singhal et al., 2024), reducing output diversity (Kirk et al., 2024), degrad-ing refusal behavior (Song et al., 2025), and misleading humans or giving malicious advice (Wen et al., 2024; Bet-ley et al., 2025; Ghandeharioun et al., 2024; Tamkin et al., 2023; MacDiarmid et al., 2025). Other works have pro-posed to mitigate certain misalignment through techniques like causal reward modeling (Wang et al., 2025), balanced preference datasets (Singhal et al., 2024), or decoupling reward from confounding variables (Shen et al., 2023). Our work instead focuses on discovery from scratch rather than mitigation or documentation of a bias. 
+
+Reward Model Interpretability. Jiang et al. leverage controlled perturbations to interpret RMs and propose to generate contrastive explanations by modifying responses along a predefined set of attributes (e.g., helpfulness, ver-bosity) and observing the impact on the RM’s preference (2025b). Christian et al. perform an exhaustive search over the RM’s vocabulary, identifying tokens that are considered most "optimal" and "pessimal" to reveal any inherent biases (2025). Others have focused on decomposing a scalar re-ward into a multi-objective vector, making the trade-offs more explicit (Wang et al., 2024; Zhang et al., 2025). Fi-nally, Marks et al. applied sparse autoencoders to interpret implicit RMs by analyzing features obtained from the activa-tions between the base and fine-tuned model (2023). Instead of analyzing predefined, potentially correlated attributes, we discover objectives from scratch and aim to isolate out the directional nature of alignment and maximize coverage. 
+
+Additional related works in Appendix A.1 .
+
+## 7. Conclusion 
+
+We introduced Obj-Disco, a framework which decomposes an opaque alignment reward signal into a set of interpretable natural language objectives. To do so, we employ an itera-tive greedy algorithm that analyzes the model’s behavioral trajectory, sequentially identifying and verifying the ob-9Discovering Implicit Large Language Model Alignment Objectives 
+
+jectives that best explain the residual reward signal. Our extensive empirical evaluations confirm the method’s effi-cacy: in controlled settings with known objectives and with popular open-source reward models, Obj-Disco consistently recovers over 90% of the reward behavior, a finding strongly corroborated by human user studies and a case study identi-fying latent misalignment. Primary limitations include com-putational cost and reliance on LLM-based judges, which may introduce inherent biases (Zheng et al., 2023; Shi et al., 2025) (limitations in Appendix A.7). We believe Obj-Disco to be a step toward scalable, yet transparent, AI alignment. Future work may include extending this framework into an online and real-time setting. 
+
+## Impact Statement 
+
+This paper presents work whose goal is to advance the field of Machine Learning. There are many potential societal consequences of our work which may result from better understanding the behavior of the policy model after RL fine-tuning. We hope that our work may pave the path for safer and more transparent AI deployments by making more transparent any potential AI misalignment, biases, or other harmful behaviors. 
+
+## References 
+
+Streamlit, 2018. URL streamlit.io .Supabase, 2020. URL https://supabase.com .Bai, Y., Kadavath, S., Kundu, S., Askell, A., Kernion, J., Jones, A., Chen, A., Goldie, A., Mirhoseini, A., McK-innon, C., Chen, C., Olsson, C., Olah, C., Hernandez, D., Drain, D., Ganguli, D., Li, D., Tran-Johnson, E., Perez, E., Kerr, J., Mueller, J., Ladish, J., Landau, J., Ndousse, K., Lukosuite, K., Lovitt, L., Sellitto, M., Elhage, N., Schiefer, N., Mercado, N., DasSarma, N., Lasenby, R., Larson, R., Ringer, S., Johnston, S., Kravec, S., Showk, S. E., Fort, S., Lanham, T., Telleen-Lawton, T., Conerly, T., Henighan, T., Hume, T., Bowman, S. R., Hatfield-Dodds, Z., Mann, B., Amodei, D., Joseph, N., McCandlish, S., Brown, T., and Kaplan, J. Consti-tutional AI: Harmlessness from AI Feedback, Decem-ber 2022. URL http://arxiv.org/abs/2212. 08073 . arXiv:2212.08073 [cs]. Banerjee, S. and Lavie, A. METEOR: An Automatic Metric for MT Evaluation with Improved Correlation with Human Judgments. In Goldstein, J., Lavie, A., Lin, C.-Y., and Voss, C. (eds.), Proceedings of the ACL Workshop on Intrinsic and Extrinsic Evaluation Mea-sures for Machine Translation and/or Summarization ,pp. 65–72, Ann Arbor, Michigan, June 2005. Asso-ciation for Computational Linguistics. URL https: //aclanthology.org/W05-0909/ .Bereska, L. and Gavves, E. Mechanistic Interpretability for AI Safety – A Review, August 2024. URL http:// arxiv.org/abs/2404.14082 . arXiv:2404.14082 [cs]. Betley, J., Tan, D., Warncke, N., Sztyber-Betley, A., Bao, X., Soto, M., Labenz, N., and Evans, O. Emergent Misalign-ment: Narrow finetuning can produce broadly misaligned LLMs, May 2025. URL http://arxiv.org/abs/ 2502.17424 . arXiv:2502.17424 [cs]. Bills, S., Cammarata, N., Mossing, D., Tillman, H., Gao, L., Goh, G., Sutskever, I., Leike, J., Wu, J., and Saunders, W. Language models can explain neurons in language models. https: //openaipublic.blob.core.windows.net/ neuron-explainer/paper/index.html ,2023. Black, S., Sharkey, L., Grinsztajn, L., Winsor, E., Braun, D., Merizian, J., Parker, K., Guevara, C. R., Mil-lidge, B., Alfour, G., and Leahy, C. Interpreting Neural Networks through the Polytope Lens, Novem-ber 2022. URL http://arxiv.org/abs/2211. 12312 . arXiv:2211.12312 [cs]. Blei, D. M. Probabilistic topic models. Com-munications of the ACM , 55(4):77–84, April 2012. ISSN 0001-0782, 1557-7317. doi: 10.1145/2133806. 2133826. URL https://dl.acm.org/doi/10. 1145/2133806.2133826 . Publisher: Association for Computing Machinery (ACM). Byun, C., Vasicek, P., and Seppi, K. Dispensing with Hu-mans in Human-Computer Interaction Research. In Ex-tended Abstracts of the 2023 CHI Conference on Hu-man Factors in Computing Systems , CHI EA ’23, pp. 1–26, New York, NY, USA, April 2023. Association for Computing Machinery. ISBN 978-1-4503-9422-2. doi: 10.1145/3544549.3582749. URL https://dl.acm. org/doi/10.1145/3544549.3582749 .Chen, C., Li, O., Tao, C., Barnett, A. J., Su, J., and Rudin, C. This Looks Like That: Deep Learning for Interpretable Image Recognition, December 2019. URL http:// arxiv.org/abs/1806.10574 . arXiv:1806.10574 [cs]. Chen, X., Wen, H., Nag, S., Luo, C., Yin, Q., Li, R., Li, Z., and Wang, W. IterAlign: Iterative Constitutional Alignment of Large Language Mod-els, March 2024. URL http://arxiv.org/abs/ 2403.18341 . arXiv:2403.18341 [cs]. 10 Discovering Implicit Large Language Model Alignment Objectives 
+
+Christian, B., Kirk, H. R., Thompson, J. A. F., Sum-merfield, C., and Dumbalska, T. Reward Model Interpretability via Optimal and Pessimal Tokens, June 2025. URL http://arxiv.org/abs/2506. 07326 . arXiv:2506.07326 [cs]. Dann, C., Mansour, Y., and Mohri, M. Reinforcement Learning Can Be More Efficient with Multiple Rewards. In Proceedings of the 40th International Conference on Machine Learning , pp. 6948–6967. PMLR, July 2023. URL https://proceedings.mlr.press/ v202/dann23a.html . ISSN: 2640-3498. Dubois, Y., Li, X., Taori, R., Zhang, T., Gulrajani, I., Ba, J., Guestrin, C., Liang, P., and Hashimoto, T. B. AlpacaFarm: A Simulation Framework for Methods that Learn from Human Feedback, January 2024. URL http://arxiv. org/abs/2305.14387 . arXiv:2305.14387 [cs]. Dunlap, L. See what you’ve been missing in your model traces with stringsight, 2025. URL https://blog. stringsight.com/ .Dunlap, L., Zhang, Y., Wang, X., Zhong, R., Darrell, T., Steinhardt, J., Gonzalez, J. E., and Yeung-Levy, S. De-scribing Differences in Image Sets with Natural Lan-guage, April 2024. URL http://arxiv.org/abs/ 2312.02974 . arXiv:2312.02974 [cs]. Dunlap, L., Mandal, K., Darrell, T., Steinhardt, J., and Gonzalez, J. E. VibeCheck: Discover and Quan-tify Qualitative Differences in Large Language Models, April 2025. URL http://arxiv.org/abs/2410. 12851 . arXiv:2410.12851 [cs]. Elhage, N., Nanda, N., Olsson, C., Henighan, T., Joseph, N., Mann, B., Askell, A., Bai, Y., Chen, A., Conerly, T., DasSarma, N., Drain, D., Ganguli, D., Hatfield-Dodds, Z., Hernandez, D., Jones, A., Kernion, J., Lovitt, L., Ndousse, K., Amodei, D., Brown, T., Clark, J., Kaplan, J., McCandlish, S., and Olah, C. A math-ematical framework for transformer circuits. Trans-former Circuits Thread , 2021. https://transformer-circuits.pub/2021/framework/index.html. Entezami, E. and Naseh, A. LLM Misalignment via Ad-versarial RLHF Platforms, March 2025. URL http:// arxiv.org/abs/2503.03039 . arXiv:2503.03039 [cs]. Foote, A., Nanda, N., Kran, E., Konstas, I., Cohen, S., and Barez, F. Neuron to Graph: Interpreting Language Model Neurons at Scale, May 2023. URL http://arxiv. org/abs/2305.19911 . arXiv:2305.19911 [cs]. Gao, I., Ilharco, G., Lundberg, S., and Ribeiro, M. T. Adaptive Testing of Computer Vision Models, Au-gust 2023. URL http://arxiv.org/abs/2212. 02774 . arXiv:2212.02774 [cs]. Ghandeharioun, A., Yuan, A., Guerard, M., Reif, E., Lep-ori, M. A., and Dixon, L. Who’s asking? User per-sonas and the mechanics of latent misalignment, Au-gust 2024. URL http://arxiv.org/abs/2406. 12094 . arXiv:2406.12094 [cs]. Glaese, A., McAleese, N., Tr˛ ebacz, M., Aslanides, J., Firoiu, V., Ewalds, T., Rauh, M., Weidinger, L., Chad-wick, M., Thacker, P., Campbell-Gillingham, L., Ue-sato, J., Huang, P.-S., Comanescu, R., Yang, F., See, A., Dathathri, S., Greig, R., Chen, C., Fritz, D., Elias, J. S., Green, R., Mokrá, S., Fernando, N., Wu, B., Foley, R., Young, S., Gabriel, I., Isaac, W., Mellor, J., Hassabis, D., Kavukcuoglu, K., Hendricks, L. A., and Irving, G. Im-proving alignment of dialogue agents via targeted human judgements, September 2022. URL http://arxiv. org/abs/2209.14375 . arXiv:2209.14375 [cs]. Go, D., Korbak, T., Kruszewski, G., Rozen, J., and Dymet-man, M. Compositional preference models for aligning LMs, March 2024. URL http://arxiv.org/abs/ 2310.13011 . arXiv:2310.13011 [cs]. Gunjal, A., Wang, A., Lau, E., Nath, V., He, Y., Liu, B., and Hendryx, S. Rubrics as Rewards: Rein-forcement Learning Beyond Verifiable Domains, Octo-ber 2025. URL http://arxiv.org/abs/2507. 17746 . arXiv:2507.17746 [cs]. Guo, Y., Cui, G., Yuan, L., Ding, N., Sun, Z., Sun, B., Chen, H., Xie, R., Zhou, J., Lin, Y., Liu, Z., and Sun, M. Controllable Preference Optimization: To-ward Controllable Multi-Objective Alignment, Octo-ber 2024. URL http://arxiv.org/abs/2402. 19085 . arXiv:2402.19085 [cs]. Hendrycks, D., Burns, C., Basart, S., Critch, A., Li, J., Song, D., and Steinhardt, J. Aligning AI With Shared Human Values, February 2023. URL http://arxiv.org/ abs/2008.02275 . arXiv:2008.02275 [cs]. Hoang-Xuan, N., Vu, M., and Thai, M. T. LLM-assisted Concept Discovery: Automatically Identifying and Ex-plaining Neuron Functions, June 2024. URL http:// arxiv.org/abs/2406.08572 . arXiv:2406.08572 [cs]. Hosking, T., Blunsom, P., and Bartolo, M. Human Feedback is not Gold Standard, January 2024. URL http:// arxiv.org/abs/2309.16349 . arXiv:2309.16349 [cs]. 11 Discovering Implicit Large Language Model Alignment Objectives 
+
+Huang, S., Siddarth, D., Lovitt, L., Liao, T. I., Durmus, E., Tamkin, A., and Ganguli, D. Collective Constitutional AI: Aligning a Language Model with Public Input. In 
+
+The 2024 ACM Conference on Fairness, Accountabil-ity, and Transparency , pp. 1395–1417, Rio de Janeiro Brazil, June 2024. ACM. ISBN 9798400704505. doi: 10.1145/3630106.3658979. URL https://dl.acm. org/doi/10.1145/3630106.3658979 .Huang, S., Durmus, E., McCain, M., Handa, K., Tamkin, A., Hong, J., Stern, M., Somani, A., Zhang, X., and Ganguli, D. Values in the Wild: Discovering and Analyz-ing Values in Real-World Language Model Interactions, April 2025. URL http://arxiv.org/abs/2504. 15236 . arXiv:2504.15236 [cs]. Jang, J., Kim, S., Lin, B. Y., Wang, Y., Hessel, J., Zettle-moyer, L., Hajishirzi, H., Choi, Y., and Ammanabrolu, P. Personalized Soups: Personalized Large Language Model Alignment via Post-hoc Parameter Merging, Oc-tober 2023. URL http://arxiv.org/abs/2310. 11564 . arXiv:2310.11564 [cs]. Jiang, H., Yi, X., Wei, Z., Xiao, Z., Wang, S., and Xie, X. Raising the Bar: Investigating the Values of Large Language Models via Generative Evolving Testing, June 2025a. URL http://arxiv.org/abs/2406. 14230 . arXiv:2406.14230 [cs]. Jiang, J., Bewley, T., Mishra, S., Lecue, F., and Veloso, M. Interpreting Language Reward Models via Contrastive Explanations, February 2025b. URL http://arxiv. org/abs/2411.16502 . arXiv:2411.16502 [cs]. Kahng, M., Tenney, I., Pushkarna, M., Liu, M. X., Wexler, J., Reif, E., Kallarackal, K., Chang, M., Terry, M., and Dixon, L. LLM Comparator: Visual Analytics for Side-by-Side Evaluation of Large Language Models, Febru-ary 2024. URL http://arxiv.org/abs/2402. 10524 . arXiv:2402.10524 [cs]. Kiela, D., Bartolo, M., Nie, Y., Kaushik, D., Geiger, A., Wu, Z., Vidgen, B., Prasad, G., Singh, A., Ringshia, P., Ma, Z., Thrush, T., Riedel, S., Waseem, Z., Stene-torp, P., Jia, R., Bansal, M., Potts, C., and Williams, A. Dynabench: Rethinking Benchmarking in NLP, April 2021. URL http://arxiv.org/abs/2104. 14337 . arXiv:2104.14337 [cs]. Kirk, R., Mediratta, I., Nalmpantis, C., Luketina, J., Ham-bro, E., Grefenstette, E., and Raileanu, R. Understanding the Effects of RLHF on LLM Generalisation and Di-versity, February 2024. URL http://arxiv.org/ abs/2310.06452 . arXiv:2310.06452 [cs]. Lambert, N. and Calandra, R. The Alignment Ceiling: Ob-jective Mismatch in Reinforcement Learning from Hu-man Feedback, February 2024. URL http://arxiv. org/abs/2311.00168 . arXiv:2311.00168 [cs]. Li, M., Weston, J., and Roller, S. ACUTE-EVAL: Improved Dialogue Evaluation with Opti-mized Questions and Multi-turn Comparisons, Septem-ber 2019. URL http://arxiv.org/abs/1909. 03087 . arXiv:1909.03087 [cs]. Liang, P., Bommasani, R., Lee, T., Tsipras, D., Soylu, D., Yasunaga, M., Zhang, Y., Narayanan, D., Wu, Y., Kumar, A., Newman, B., Yuan, B., Yan, B., Zhang, C., Cosgrove, C., Manning, C. D., Ré, C., Acosta-Navas, D., Hudson, D. A., Zelikman, E., Durmus, E., Ladhak, F., Rong, F., Ren, H., Yao, H., Wang, J., Santhanam, K., Orr, L., Zheng, L., Yuksekgonul, M., Suzgun, M., Kim, N., Guha, N., Chatterji, N., Khattab, O., Henderson, P., Huang, Q., Chi, R., Xie, S. M., Santurkar, S., Ganguli, S., Hashimoto, T., Icard, T., Zhang, T., Chaudhary, V., Wang, W., Li, X., Mai, Y., Zhang, Y., and Koreeda, Y. Holistic Evaluation of Language Models, October 2023. URL http:// arxiv.org/abs/2211.09110 . arXiv:2211.09110 [cs]. Lin, C.-Y. ROUGE: A Package for Automatic Evalua-tion of Summaries. In Text Summarization Branches Out , pp. 74–81, Barcelona, Spain, July 2004. Asso-ciation for Computational Linguistics. URL https: //aclanthology.org/W04-1013/ .Liu, C. Y., Zeng, L., Liu, J., Yan, R., He, J., Wang, C., Yan, S., Liu, Y., and Zhou, Y. Skywork-Reward: Bag of Tricks for Reward Modeling in LLMs, Octo-ber 2024. URL http://arxiv.org/abs/2410. 18451 . arXiv:2410.18451 [cs]. Liu, C. Y., Zeng, L., Xiao, Y., He, J., Liu, J., Wang, C., Yan, R., Shen, W., Zhang, F., Xu, J., Liu, Y., and Zhou, Y. Skywork-Reward-V2: Scaling Preference Data Curation via Human-AI Synergy, July 2025a. URL http:// arxiv.org/abs/2507.01352 . arXiv:2507.01352 [cs]. Liu, T., Xu, R., Yu, T., Hong, I., Yang, C., Zhao, T., and Wang, H. OpenRubrics: Towards Scalable Synthetic Rubric Generation for Reward Modeling and LLM Align-ment, October 2025b. URL http://arxiv.org/ abs/2510.07743 . arXiv:2510.07743 [cs]. MacDiarmid, M., Wright, B., Uesato, J., Benton, J., Ku-tasov, J., Price, S., Bouscal, N., Bowman, S., Bricken, T., Cloud, A., Denison, C., Gasteiger, J., Greenblatt, R., Leike, J., Lindsey, J., Mikulik, V., Perez, E., Rodrigues, A., Thomas, D., Webson, A., Ziegler, D., and Hubinger, E. Natural Emergent Misalignment from Reward Hack-ing in Production RL, November 2025. URL http:// 
+
+12 Discovering Implicit Large Language Model Alignment Objectives 
+
+arxiv.org/abs/2511.18397 . arXiv:2511.18397 [cs]. Mallat, S. and Zhang, Z. Matching pursuits with time-frequency dictionaries. IEEE Transactions on Signal Processing , 41(12):3397–3415, December 1993. ISSN 1941-0476. doi: 10.1109/78.258082. URL https:// ieeexplore.ieee.org/document/258082 .Marks, L., Abdullah, A., Mendez, L., Arike, R., Torr, P., and Barez, F. Interpreting Reward Models in RLHF-Tuned Language Models Using Sparse Autoencoders. October 2023. URL https://openreview.net/forum? id=bIb1xhSCVY .Marks, S., Treutlein, J., Bricken, T., Lindsey, J., Marcus, J., Mishra-Sharma, S., Ziegler, D., Ameisen, E., Batson, J., Belonax, T., Bowman, S. R., Carter, S., Chen, B., Cunningham, H., Denison, C., Dietz, F., Golechha, S., Khan, A., Kirchner, J., Leike, J., Meek, A., Nishimura-Gasparian, K., Ong, E., Olah, C., Pearce, A., Roger, F., Salle, J., Shih, A., Tong, M., Thomas, D., Rivoire, K., Jermyn, A., MacDiarmid, M., Henighan, T., and Hub-inger, E. Auditing language models for hidden objec-tives, March 2025. URL http://arxiv.org/abs/ 2503.10965 . arXiv:2503.10965 [cs]. Mehri, S. and Eskenazi, M. Unsupervised Evaluation of In-teractive Dialog with DialoGPT. In Pietquin, O., Muresan, S., Chen, V., Kennington, C., Vandyke, D., Dethlefs, N., Inoue, K., Ekstedt, E., and Ultes, S. (eds.), Proceedings of the 21th Annual Meeting of the Special Interest Group on Discourse and Dialogue , pp. 225–235, 1st virtual meet-ing, July 2020a. Association for Computational Linguis-tics. doi: 10.18653/v1/2020.sigdial-1.28. URL https: //aclanthology.org/2020.sigdial-1.28/ .Mehri, S. and Eskenazi, M. USR: An Unsupervised and Ref-erence Free Evaluation Metric for Dialog Generation. In Jurafsky, D., Chai, J., Schluter, N., and Tetreault, J. (eds.), 
+
+Proceedings of the 58th Annual Meeting of the Associ-ation for Computational Linguistics , pp. 681–707, On-line, July 2020b. Association for Computational Linguis-tics. doi: 10.18653/v1/2020.acl-main.64. URL https: //aclanthology.org/2020.acl-main.64/ .meta llama. meta-llama/llama-3.1-8b. URL 
+
+https://huggingface.co/meta-llama/ Llama-3.1-8B .Murthy, S. K., Zhao, R., Hu, J., Kakade, S., Wulfmeier, M., Qian, P., and Ullman, T. Inside you are many wolves: Using cognitive models to interpret value trade-offs in LLMs, July 2025. URL http://arxiv.org/abs/ 2506.20666 . arXiv:2506.20666 [cs]. Nemhauser, G. L., Wolsey, L. A., and Fisher, M. L. An analysis of approximations for maximizing submodu-lar set functions—I. Mathematical Programming , 14 (1):265–294, December 1978. ISSN 0025-5610, 1436-4646. doi: 10.1007/BF01588971. URL http://link. springer.com/10.1007/BF01588971 .OpenAI. Introducing the model spec, 2024. URL https://openai.com/index/ introducing-the-model-spec/ .OpenAI, Achiam, J., Adler, S., Agarwal, S., Ahmad, L., Akkaya, I., Aleman, F. L., Almeida, D., Altenschmidt, J., Altman, S., Anadkat, S., Avila, R., Babuschkin, I., Bal-aji, S., Balcom, V., Baltescu, P., Bao, H., Bavarian, M., Belgum, J., Bello, I., Berdine, J., Bernadett-Shapiro, G., Berner, C., Bogdonoff, L., Boiko, O., Boyd, M., Brakman, A.-L., Brockman, G., Brooks, T., Brundage, M., Button, K., Cai, T., Campbell, R., Cann, A., Carey, B., Carlson, C., Carmichael, R., Chan, B., Chang, C., Chantzis, F., Chen, D., Chen, S., Chen, R., Chen, J., Chen, M., Chess, B., Cho, C., Chu, C., Chung, H. W., Cummings, D., Cur-rier, J., Dai, Y., Decareaux, C., Degry, T., Deutsch, N., Deville, D., Dhar, A., Dohan, D., Dowling, S., Dunning, S., Ecoffet, A., Eleti, A., Eloundou, T., Farhi, D., Fedus, L., Felix, N., Fishman, S. P., Forte, J., Fulford, I., Gao, L., Georges, E., Gibson, C., Goel, V., Gogineni, T., Goh, G., Gontijo-Lopes, R., Gordon, J., Grafstein, M., Gray, S., Greene, R., Gross, J., Gu, S. S., Guo, Y., Hallacy, C., Han, J., Harris, J., He, Y., Heaton, M., Heidecke, J., Hesse, C., Hickey, A., Hickey, W., Hoeschele, P., Houghton, B., Hsu, K., Hu, S., Hu, X., Huizinga, J., Jain, S., Jain, S., Jang, J., Jiang, A., Jiang, R., Jin, H., Jin, D., Jomoto, S., Jonn, B., Jun, H., Kaftan, T., Kaiser, L., Kamali, A., Kanitscheider, I., Keskar, N. S., Khan, T., Kilpatrick, L., Kim, J. W., Kim, C., Kim, Y., Kirchner, J. H., Kiros, J., Knight, M., Kokotajlo, D., Kondraciuk, L., Kondrich, A., Konstantini-dis, A., Kosic, K., Krueger, G., Kuo, V., Lampe, M., Lan, I., Lee, T., Leike, J., Leung, J., Levy, D., Li, C. M., Lim, R., Lin, M., Lin, S., Litwin, M., Lopez, T., Lowe, R., Lue, P., Makanju, A., Malfacini, K., Manning, S., Markov, T., Markovski, Y., Martin, B., Mayer, K., Mayne, A., Mc-Grew, B., McKinney, S. M., McLeavey, C., McMillan, P., McNeil, J., Medina, D., Mehta, A., Menick, J., Metz, L., Mishchenko, A., Mishkin, P., Monaco, V., Morikawa, E., Mossing, D., Mu, T., Murati, M., Murk, O., Mély, D., Nair, A., Nakano, R., Nayak, R., Neelakantan, A., Ngo, R., Noh, H., Ouyang, L., O’Keefe, C., Pachocki, J., Paino, A., Palermo, J., Pantuliano, A., Parascandolo, G., Parish, J., Parparita, E., Passos, A., Pavlov, M., Peng, A., Perelman, A., Peres, F. d. A. B., Petrov, M., Pinto, H. P. d. O., Michael, Pokorny, Pokrass, M., Pong, V. H., Powell, T., Power, A., Power, B., Proehl, E., Puri, R., Radford, A., Rae, J., Ramesh, A., Raymond, C., Real, F., Rimbach, K., Ross, C., Rotsted, B., Roussez, H., Ryder, 13 Discovering Implicit Large Language Model Alignment Objectives 
+
+N., Saltarelli, M., Sanders, T., Santurkar, S., Sastry, G., Schmidt, H., Schnurr, D., Schulman, J., Selsam, D., Shep-pard, K., Sherbakov, T., Shieh, J., Shoker, S., Shyam, P., Sidor, S., Sigler, E., Simens, M., Sitkin, J., Slama, K., Sohl, I., Sokolowsky, B., Song, Y., Staudacher, N., Such, F. P., Summers, N., Sutskever, I., Tang, J., Tezak, N., Thompson, M. B., Tillet, P., Tootoonchian, A., Tseng, E., Tuggle, P., Turley, N., Tworek, J., Uribe, J. F. C., Vallone, A., Vijayvergiya, A., Voss, C., Wainwright, C., Wang, J. J., Wang, A., Wang, B., Ward, J., Wei, J., Wein-mann, C. J., Welihinda, A., Welinder, P., Weng, J., Weng, L., Wiethoff, M., Willner, D., Winter, C., Wolrich, S., Wong, H., Workman, L., Wu, S., Wu, J., Wu, M., Xiao, K., Xu, T., Yoo, S., Yu, K., Yuan, Q., Zaremba, W., Zellers, R., Zhang, C., Zhang, M., Zhao, S., Zheng, T., Zhuang, J., Zhuk, W., and Zoph, B. GPT-4 Technical Re-port, March 2024. URL http://arxiv.org/abs/ 2303.08774 . arXiv:2303.08774 [cs]. Ouyang, L., Wu, J., Jiang, X., Almeida, D., Wain-wright, C. L., Mishkin, P., Zhang, C., Agarwal, S., Slama, K., Ray, A., Schulman, J., Hilton, J., Kelton, F., Miller, L., Simens, M., Askell, A., Welinder, P., Christiano, P., Leike, J., and Lowe, R. Training lan-guage models to follow instructions with human feed-back, March 2022. URL http://arxiv.org/abs/ 2203.02155 . arXiv:2203.02155 [cs]. Pan, A., Chan, J. S., Zou, A., Li, N., Basart, S., Woodside, T., Zhang, H., Emmons, S., and Hendrycks, D. Do the Re-wards Justify the Means? Measuring Trade-Offs Between Rewards and Ethical Behavior in the Machiavelli Bench-mark. In Proceedings of the 40th International Confer-ence on Machine Learning , pp. 26837–26867. PMLR, July 2023. URL https://proceedings.mlr. press/v202/pan23a.html . ISSN: 2640-3498. Pang, B., Nijkamp, E., Han, W., Zhou, L., Liu, Y., and Tu, K. Towards Holistic and Automatic Evaluation of Open-Domain Dialogue Generation. In Jurafsky, D., Chai, J., Schluter, N., and Tetreault, J. (eds.), Pro-ceedings of the 58th Annual Meeting of the Associa-tion for Computational Linguistics , pp. 3619–3629, On-line, July 2020. Association for Computational Linguis-tics. doi: 10.18653/v1/2020.acl-main.333. URL https: //aclanthology.org/2020.acl-main.333/ .Papineni, K., Roukos, S., Ward, T., and Zhu, W.-J. Bleu: a Method for Automatic Evaluation of Machine Translation. In Isabelle, P., Charniak, E., and Lin, D. (eds.), Proceed-ings of the 40th Annual Meeting of the Association for Computational Linguistics , pp. 311–318, Philadelphia, Pennsylvania, USA, July 2002. Association for Computa-tional Linguistics. doi: 10.3115/1073083.1073135. URL 
+
+https://aclanthology.org/P02-1040/ .Prasad, A., Jegelka, S., and Batra, D. Submodular meets Structured: Finding Diverse Subsets in Exponentially-Large Structured Item Sets, November 2014. URL http: //arxiv.org/abs/1411.1752 . arXiv:1411.1752 [cs]. Purohit, K., V, V., Devalla, R., Yerragorla, K. M., Bhat-tacharya, S., and Anand, A. EXPLORA: Efficient Ex-emplar Subset Selection for Complex Reasoning. In Al-Onaizan, Y., Bansal, M., and Chen, Y.-N. (eds.), Pro-ceedings of the 2024 Conference on Empirical Methods in Natural Language Processing , pp. 5367–5388, Miami, Florida, USA, November 2024. Association for Compu-tational Linguistics. doi: 10.18653/v1/2024.emnlp-main. 307. URL https://aclanthology.org/2024. emnlp-main.307/ .Ren, Y., Ye, H., Fang, H., Zhang, X., and Song, G. Val-ueBench: Towards Comprehensively Evaluating Value Orientations and Understanding of Large Language Mod-els, June 2024. URL https://arxiv.org/abs/ 2406.04214v1 .Ribeiro, M. T. and Lundberg, S. Adaptive Testing and De-bugging of NLP Models. In Muresan, S., Nakov, P., and Villavicencio, A. (eds.), Proceedings of the 60th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , pp. 3253–3267, Dublin, Ire-land, May 2022. Association for Computational Linguis-tics. doi: 10.18653/v1/2022.acl-long.230. URL https: //aclanthology.org/2022.acl-long.230/ .Ryan, M. J., Zhang, Y., Salunkhe, A., Chu, Y., Xu, D., and Yang, D. AutoMetrics: Approximate Human Judge-ments with Automatically Generated Evaluators, Decem-ber 2025. URL http://arxiv.org/abs/2512. 17267 . arXiv:2512.17267 [cs]. Schulman, J., Wolski, F., Dhariwal, P., Radford, A., and Klimov, O. Proximal Policy Optimization Algo-rithms, August 2017. URL http://arxiv.org/ abs/1707.06347 . arXiv:1707.06347 [cs]. Sellam, T., Das, D., and Parikh, A. P. BLEURT: Learning Robust Metrics for Text Generation, May 2020. URL http://arxiv.org/abs/2004. 04696 . arXiv:2004.04696 [cs]. Shao, Z., Wang, P., Zhu, Q., Xu, R., Song, J., Bi, X., Zhang, H., Zhang, M., Li, Y. K., Wu, Y., and Guo, D. DeepSeek-Math: Pushing the Limits of Mathematical Reasoning in Open Language Models, April 2024. URL http:// arxiv.org/abs/2402.03300 . arXiv:2402.03300 [cs]. Sharma, M., Tong, M., Korbak, T., Duvenaud, D., Askell, A., Bowman, S. R., Cheng, N., Durmus, 14 Discovering Implicit Large Language Model Alignment Objectives 
+
+E., Hatfield-Dodds, Z., Johnston, S. R., Kravec, S., Maxwell, T., McCandlish, S., Ndousse, K., Rausch, O., Schiefer, N., Yan, D., Zhang, M., and Perez, E. To-wards Understanding Sycophancy in Language Models, May 2025. URL http://arxiv.org/abs/2310. 13548 . arXiv:2310.13548 [cs]. Shen, W., Zheng, R., Zhan, W., Zhao, J., Dou, S., Gui, T., Zhang, Q., and Huang, X. Loose lips sink ships: Miti-gating Length Bias in Reinforcement Learning from Hu-man Feedback, November 2023. URL http://arxiv. org/abs/2310.05199 . arXiv:2310.05199 [cs]. Shi, L., Ma, C., Liang, W., Diao, X., Ma, W., and Vosoughi, S. Judging the Judges: A Systematic Study of Position Bias in LLM-as-a-Judge, April 2025. URL http:// arxiv.org/abs/2406.07791 . arXiv:2406.07791 [cs]. Silver, D., Singh, S., Precup, D., and Sutton, R. S. Reward is enough. Artificial Intel-ligence , 299:103535, October 2021. ISSN 0004-3702. doi: 10.1016/j.artint.2021.103535. URL https://www.sciencedirect.com/ science/article/pii/S0004370221000862 .Singhal, P., Goyal, T., Xu, J., and Durrett, G. A Long Way to Go: Investigating Length Correlations in RLHF, July 2024. URL http://arxiv.org/abs/2310. 03716 . arXiv:2310.03716 [cs]. Sinha, P., Mehrotra, S., and Jain, R. Summarization of personal photologs using multidimensional content and context. In Proceedings of the 1st ACM International Conference on Multimedia Retrieval , ICMR ’11, pp. 1– 8, New York, NY, USA, April 2011. Association for Computing Machinery. ISBN 978-1-4503-0336-1. doi: 10.1145/1991996.1992000. URL https://dl.acm. org/doi/10.1145/1991996.1992000 .Song, L., Shi, T., and Zhao, J. The Hallucination Tax of Reinforcement Finetuning, May 2025. URL http:// arxiv.org/abs/2505.13988 . arXiv:2505.13988 [cs]. Srivastava, A., Rastogi, A., Rao, A., Shoeb, A. A. M., Abid, A., Fisch, A., Brown, A. R., Santoro, A., Gupta, A., Garriga-Alonso, A., Kluska, A., Lewkowycz, A., Agar-wal, A., Power, A., Ray, A., Warstadt, A., Kocurek, A. W., Safaya, A., Tazarv, A., Xiang, A., Parrish, A., Nie, A., Hussain, A., Askell, A., Dsouza, A., Slone, A., Rahane, A., Iyer, A. S., Andreassen, A., Madotto, A., Santilli, A., Stuhlmüller, A., Dai, A., La, A., Lampinen, A., Zou, A., Jiang, A., Chen, A., Vuong, A., Gupta, A., Gottardi, A., Norelli, A., Venkatesh, A., Gholamidavoodi, A., Tabas-sum, A., Menezes, A., Kirubarajan, A., Mullokandov, A., Sabharwal, A., Herrick, A., Efrat, A., Erdem, A., Karaka¸ s, A., Roberts, B. R., Loe, B. S., Zoph, B., Bojanowski, B., Özyurt, B., Hedayatnia, B., Neyshabur, B., Inden, B., Stein, B., Ekmekci, B., Lin, B. Y., Howald, B., Orinion, B., Diao, C., Dour, C., Stinson, C., Argueta, C., Ramírez, C. F., Singh, C., Rathkopf, C., Meng, C., Baral, C., Wu, C., Callison-Burch, C., Waites, C., Voigt, C., Manning, C. D., Potts, C., Ramirez, C., Rivera, C. E., Siro, C., Raffel, C., Ashcraft, C., Garbacea, C., Sileo, D., Gar-rette, D., Hendrycks, D., Kilman, D., Roth, D., Freeman, D., Khashabi, D., Levy, D., González, D. M., Perszyk, D., Hernandez, D., Chen, D., Ippolito, D., Gilboa, D., Dohan, D., Drakard, D., Jurgens, D., Datta, D., Gan-guli, D., Emelin, D., Kleyko, D., Yuret, D., Chen, D., Tam, D., Hupkes, D., Misra, D., Buzan, D., Mollo, D. C., Yang, D., Lee, D.-H., Schrader, D., Shutova, E., Cubuk, E. D., Segal, E., Hagerman, E., Barnes, E., Donoway, E., Pavlick, E., Rodola, E., Lam, E., Chu, E., Tang, E., Erdem, E., Chang, E., Chi, E. A., Dyer, E., Jerzak, E., Kim, E., Manyasi, E. E., Zheltonozhskii, E., Xia, F., Siar, F., Martínez-Plumed, F., Happé, F., Chollet, F., Rong, F., Mishra, G., Winata, G. I., Melo, G. d., Kruszewski, G., Parascandolo, G., Mariani, G., Wang, G., Jaimovitch-López, G., Betz, G., Gur-Ari, G., Galijasevic, H., Kim, H., Rashkin, H., Hajishirzi, H., Mehta, H., Bogar, H., Shevlin, H., Schütze, H., Yakura, H., Zhang, H., Wong, H. M., Ng, I., Noble, I., Jumelet, J., Geissinger, J., Kernion, J., Hilton, J., Lee, J., Fisac, J. F., Simon, J. B., Koppel, J., Zheng, J., Zou, J., Koco´ n, J., Thompson, J., Wingfield, J., Kaplan, J., Radom, J., Sohl-Dickstein, J., Phang, J., Wei, J., Yosinski, J., Novikova, J., Bosscher, J., Marsh, J., Kim, J., Taal, J., Engel, J., Alabi, J., Xu, J., Song, J., Tang, J., Waweru, J., Burden, J., Miller, J., Balis, J. U., Batchelder, J., Berant, J., Frohberg, J., Rozen, J., Hernandez-Orallo, J., Boudeman, J., Guerr, J., Jones, J., Tenenbaum, J. B., Rule, J. S., Chua, J., Kanclerz, K., Livescu, K., Krauth, K., Gopalakrishnan, K., Ignatyeva, K., Markert, K., Dhole, K. D., Gimpel, K., Omondi, K., Mathewson, K., Chiafullo, K., Shkaruta, K., Shridhar, K., McDonell, K., Richardson, K., Reynolds, L., Gao, L., Zhang, L., Dugan, L., Qin, L., Contreras-Ochando, L., Morency, L.-P., Moschella, L., Lam, L., Noble, L., Schmidt, L., He, L., Colón, L. O., Metz, L., ¸ Senel, L. K., Bosma, M., Sap, M., Hoeve, M. t., Farooqi, M., Faruqui, M., Mazeika, M., Baturan, M., Marelli, M., Maru, M., Quintana, M. J. R., Tolkiehn, M., Giulianelli, M., Lewis, M., Potthast, M., Leavitt, M. L., Hagen, M., Schubert, M., Baitemirova, M. O., Arnaud, M., McElrath, M., Yee, M. A., Cohen, M., Gu, M., Ivanitskiy, M., Starritt, M., Strube, M., Sw˛ edrowski, M., Bevilacqua, M., Yasunaga, M., Kale, M., Cain, M., Xu, M., Suzgun, M., Walker, M., Tiwari, M., Bansal, M., Aminnaseri, M., Geva, M., Gheini, M., T, M. V., Peng, N., Chi, N. A., Lee, N., Krakover, N. G.-A., Cameron, N., Roberts, N., Doiron, N., Martinez, N., Nangia, N., Deckers, N., Muennighoff, 15 Discovering Implicit Large Language Model Alignment Objectives 
+
+N., Keskar, N. S., Iyer, N. S., Constant, N., Fiedel, N., Wen, N., Zhang, O., Agha, O., Elbaghdadi, O., Levy, O., Evans, O., Casares, P. A. M., Doshi, P., Fung, P., Liang, P. P., Vicol, P., Alipoormolabashi, P., Liao, P., Liang, P., Chang, P., Eckersley, P., Htut, P. M., Hwang, P., Miłkowski, P., Patil, P., Pezeshkpour, P., Oli, P., Mei, Q., Lyu, Q., Chen, Q., Banjade, R., Rudolph, R. E., Gabriel, R., Habacker, R., Risco, R., Millière, R., Garg, R., Barnes, R., Saurous, R. A., Arakawa, R., Raymaekers, R., Frank, R., Sikand, R., Novak, R., Sitelew, R., LeBras, R., Liu, R., Jacobs, R., Zhang, R., Salakhutdinov, R., Chi, R., Lee, R., Stovall, R., Teehan, R., Yang, R., Singh, S., Mohammad, S. M., Anand, S., Dillavou, S., Shleifer, S., Wiseman, S., Gruetter, S., Bowman, S. R., Schoenholz, S. S., Han, S., Kwatra, S., Rous, S. A., Ghazarian, S., Ghosh, S., Casey, S., Bischoff, S., Gehrmann, S., Schus-ter, S., Sadeghi, S., Hamdan, S., Zhou, S., Srivastava, S., Shi, S., Singh, S., Asaadi, S., Gu, S. S., Pachchigar, S., Toshniwal, S., Upadhyay, S., Shyamolima, Debnath, Shakeri, S., Thormeyer, S., Melzi, S., Reddy, S., Makini, S. P., Lee, S.-H., Torene, S., Hatwar, S., Dehaene, S., Divic, S., Ermon, S., Biderman, S., Lin, S., Prasad, S., Pi-antadosi, S. T., Shieber, S. M., Misherghi, S., Kiritchenko, S., Mishra, S., Linzen, T., Schuster, T., Li, T., Yu, T., Ali, T., Hashimoto, T., Wu, T.-L., Desbordes, T., Rothschild, T., Phan, T., Wang, T., Nkinyili, T., Schick, T., Kornev, T., Tunduny, T., Gerstenberg, T., Chang, T., Neeraj, T., Khot, T., Shultz, T., Shaham, U., Misra, V., Demberg, V., Nyamai, V., Raunak, V., Ramasesh, V., Prabhu, V. U., Padmakumar, V., Srikumar, V., Fedus, W., Saunders, W., Zhang, W., Vossen, W., Ren, X., Tong, X., Zhao, X., Wu, X., Shen, X., Yaghoobzadeh, Y., Lakretz, Y., Song, Y., Bahri, Y., Choi, Y., Yang, Y., Hao, Y., Chen, Y., Belinkov, Y., Hou, Y., Hou, Y., Bai, Y., Seid, Z., Zhao, Z., Wang, Z., Wang, Z. J., Wang, Z., and Wu, Z. Beyond the Imitation Game: Quantifying and extrapolating the capabilities of language models, June 2023. URL http://arxiv. org/abs/2206.04615 . arXiv:2206.04615 [cs]. Stiennon, N., Ouyang, L., Wu, J., Ziegler, D. M., Lowe, R., Voss, C., Radford, A., Amodei, D., and Christiano, P. Learning to summarize from human feedback, Febru-ary 2022. URL http://arxiv.org/abs/2009. 01325 . arXiv:2009.01325 [cs]. Sun, M., Yin, Y., Xu, Z., Kolter, J. Z., and Liu, Z. Idiosyncrasies in Large Language Models, June 2025. URL http://arxiv.org/abs/2502. 12150 . arXiv:2502.12150 [cs]. Tamkin, A., Askell, A., Lovitt, L., Durmus, E., Joseph, N., Kravec, S., Nguyen, K., Kaplan, J., and Ganguli, D. Evaluating and Mitigating Discrimination in Lan-guage Model Decisions, December 2023. URL http:// arxiv.org/abs/2312.03689 . arXiv:2312.03689 [cs]. Taori, Gulrajani, Zhang, Dubois, Li, Guestrin, Liang, and Hashimoto. Stanford alpaca: An instruction-following llama model, 2023. URL https://github.com/ tatsu-lab/stanford_alpaca .Team, Q. Qwen3 technical report, 2025. URL https: //arxiv.org/abs/2505.09388 .Torii, M. G., Murakami, T., and Ochiai, Y. Expanding Hori-zons in HCI Research Through LLM-Driven Qualitative Analysis, January 2024. URL http://arxiv.org/ abs/2401.04138 . arXiv:2401.04138 [cs]. Tschiatschek, S., Iyer, R., Wei, H., and Bilmes, J. Learning Mixtures of Submodular Functions for Image Collection Summarization. In Advances in Neural Information Processing Systems , volume 27. Curran Associates, Inc., 2014. URL https://proceedings.neurips. cc/paper_files/paper/2014/hash/ 41321d693c015a6a92f55f29c8a76079-Abstract. html .Viering, T. and Loog, M. The Shape of Learning Curves: a Review, November 2022. URL http://arxiv.org/ abs/2103.10948 . arXiv:2103.10948 [cs]. Wang, C., Zhao, Z., Jiang, Y., Chen, Z., Zhu, C., Chen, Y., Liu, J., Zhang, L., Fan, X., Ma, H., and Wang, S. Beyond Reward Hacking: Causal Rewards for Large Language Model Alignment, May 2025. URL http://arxiv. org/abs/2501.09620 . arXiv:2501.09620 [cs]. Wang, H., Xiong, W., Xie, T., Zhao, H., and Zhang, T. Inter-pretable Preferences via Multi-Objective Reward Model-ing and Mixture-of-Experts, June 2024. URL http:// arxiv.org/abs/2406.12845 . arXiv:2406.12845 [cs]. Wei, A., Haghtalab, N., and Steinhardt, J. Jail-broken: How Does LLM Safety Training Fail?, July 2023. URL http://arxiv.org/abs/2307. 02483 . arXiv:2307.02483 [cs]. Wei, B., Fazli, M., and Zhu, Z. Learning to Explain: Prototype-Based Surrogate Models for LLM Classifica-tion, June 2025. URL http://arxiv.org/abs/ 2505.18970 . arXiv:2505.18970 [cs]. Wen, J., Zhong, R., Khan, A., Perez, E., Steinhardt, J., Huang, M., Bowman, S. R., He, H., and Feng, S. Lan-guage Models Learn to Mislead Humans via RLHF, December 2024. URL http://arxiv.org/abs/ 2409.12822 . arXiv:2409.12822 [cs]. 16 Discovering Implicit Large Language Model Alignment Objectives 
+
+Williams, M., Raymond, C., and Carroll, M. Sidestep-ping evaluation awareness and anticipating misalignment with production evaluations. OpenAI Alignment Re-search Blog, Dec 2025. URL https://alignment. openai.com/prod-evals/ .Yang, B., Cui, F., Paster, K., Ba, J., Vaezipoor, P., Pitis, S., and Zhang, M. R. Report Cards: Qualitative Evaluation of Language Models Using Natural Language Summaries, September 2024. URL http://arxiv.org/abs/ 2409.00844 . arXiv:2409.00844 [cs]. Yao, J., Yi, X., Duan, S., Wang, J., Bai, Y., Huang, M., Zhang, P., Lu, T., Dou, Z., Sun, M., and Xie, X. Value Compass Benchmarks: A Platform for Fun-damental and Validated Evaluation of LLMs Values, June 2025. URL http://arxiv.org/abs/2501. 07071 . arXiv:2501.07071 [cs]. Ye, H., Xie, Y., Ren, Y., Fang, H., Zhang, X., and Song, G. Measuring Human and AI Values Based on Generative Psychometrics with Large Language Mod-els, March 2025. URL http://arxiv.org/abs/ 2409.12106 . arXiv:2409.12106 [cs]. Zhang, S., Shi, W., Li, S., Liao, J., Cai, H., and Wang, X. Interpretable Reward Model via Sparse Autoencoder, November 2025. URL http://arxiv.org/abs/ 2508.08746 . arXiv:2508.08746 [cs]. Zheng, L., Chiang, W.-L., Sheng, Y., Zhuang, S., Wu, Z., Zhuang, Y., Lin, Z., Li, Z., Li, D., Xing, E., Zhang, H., Gonzalez, J. E., and Stoica, I. Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena. Advances in Neural Information Processing Systems , 36:46595– 46623, December 2023. URL https://papers. nips.cc/paper_files/paper/2023/hash/ 91f18a1287b398d378ef22505bf41832-Abstract-Datasets_ and_Benchmarks.html .Zhong, R., Snell, C., Klein, D., and Steinhardt, J. Describ-ing Differences between Text Distributions with Natural Language, May 2022. URL http://arxiv.org/ abs/2201.12323 . arXiv:2201.12323 [cs]. Zhong, R., Zhang, P., Li, S., Ahn, J., Klein, D., and Steinhardt, J. Goal Driven Discovery of Distribu-tional Differences via Language Descriptions, Octo-ber 2023. URL http://arxiv.org/abs/2302. 14233 . arXiv:2302.14233 [cs]. Zhong, R., Wang, H., Klein, D., and Steinhardt, J. Explain-ing Datasets in Words: Statistical Models with Natural Language Parameters, January 2025. URL http:// arxiv.org/abs/2409.08466 . arXiv:2409.08466 [cs]. 17 Discovering Implicit Large Language Model Alignment Objectives 
+
+## A. Appendix 
+
+A.1. Additional Related Works LLM Evaluation. Evaluating the capabilities and behaviors of large language models (LLMs) has been a major focus of the natural language processing (NLP) community. Early efforts sought to improve upon classic metrics like BLEU (Papineni et al., 2002) and ROUGE (Lin, 2004) by developing more nuanced criteria for open-domain generation, such as fluency and conciseness (Pang et al., 2020; Sellam et al., 2020; Banerjee & Lavie, 2005). This has evolved into comprehensive benchmarking suites that measure model performance across a diverse set of pre-defined tasks and metrics (Liang et al., 2023; Srivastava et al., 2023; Kiela et al., 2021). To assess qualities like helpfulness and clarity without a ground-truth, others have leveraged LLMs themselves as scalable judges of model outputs (Mehri & Eskenazi, 2020a; Li et al., 2019; Mehri & Eskenazi, 2020b). 
+
+Automated Data Analysis. Automating the discovery of patterns in unstructured data is a long-standing goal, with classical methods like topic models aiming to extract topical variations from documents (Blei, 2012). More recently, a prominent line of work has leveraged LLMs to automatically propose and validate interpretable, natural language descriptions of differences between two static sets of data, such as texts or images (Zhong et al., 2022; Dunlap et al., 2024; Zhong et al., 2023; 2025; Torii et al., 2024; Byun et al., 2023; Kahng et al., 2024). This includes systems like VibeCheck, which discovers qualitative differences to explain pairwise model preferences (Dunlap et al., 2025). More recently, StringSight is a tool using similar approaches to automate our understanding of agentic AI systems by analyzing their outputs (Dunlap, 2025). Report Cards is another work proposing to use LLMs to automatically generate human-interpretable, natural language summaries of language models, in the form of report cards (Yang et al., 2024). Ryan et al. focuses on the related task of interpreting human feedback with a set of correlated metrics (2025) but assumes a predefined initial set of metrics and a static feedback dataset. Our work is inspired by this paradigm of automated, language-based data analysis but makes several crucial departures. First, rather than comparing two (or more) distinct models or static datasets, we analyze the temporal evolution of a single model across its alignment trajectory. Second, our method does not rely on pairwise preference data or an initial set of predefined metrics as required by VibeCheck and AutoMetrics (Dunlap et al., 2025; Ryan et al., 2025); instead, it operates directly on the underlying reward signal. Finally, our framework generalizes beyond discovering binary predicates (e.g. (Zhong et al., 2025)) by aiming to identify any valid objective that exhibits a predictable trend, and we introduce a novel, principled sampling strategy based on alignment residuals to guide the discovery process. 
+
+Interpretable LLM Alignment Frameworks. While many alignment methods treat an LLM’s values as an implicit byproduct of training data, a distinct paradigm focuses on codifying desired behaviors into explicit, interpretable documents (Ouyang et al., 2022). These approaches, often called “Model Specifications” or “Constitutions”, provide a transparent foundation for alignment. Prominent examples include OpenAI’s Model Spec (OpenAI, 2024), Anthropic’s Constitutional AI (CAI) (Bai et al., 2022), and DeepMind’s Sparrow, which used a set of 23 natural-language rules (Glaese et al., 2022). This concept has been extended to democratically-sourced constitutions (Huang et al., 2024) and multi-objective alignment techniques that integrate a transparent set of goals into the model (Go et al., 2024; Wang et al., 2024). Some work, like IterAlign (Chen et al., 2024), even aims to automatically discover a constitution from model behavior to improve alignment. Our work complements these prescriptive approaches; rather than defining a constitution for the model to follow, we aim to discover the implicit objectives a model has already learned from its alignment process. 
+
+Mechanistic Interpretability. Mechanistic interpretability is a bottom-up approach to interpretability which aims to study the fundamental components of models through fine-grained analysis of layers, neurons, and connections. The goal is often to uncover causal relationships transforming inputs to outputs, essential for fostering trust and transparency. Elhage et al. developed a mathematical framework to analyze up to a two layer attention-only transformer (2021). Foote et al. and Bills et al. proposed to leverage a larger language model to predict what a neuron in the smaller model represents (2023; 2023). Rather than study neurons as the fundamental unit, Black et al. proposed to study polytopes as the fundamental building block instead (2022). Bereska & Gavves provide a comprehensive survey on mechanistic interpretability approaches for AI safety (2024). Rather than study the internal mechanisms of the language models, our proposed method directly uses the model output behavioral changes to discover and quantify a set of interpretable objectives. 
+
+Exemplar-Based Explanations. One paradigm for enhancing the transparency of complex machine learning models is the use of exemplar-based explanations, which ground model decisions in specific, representative data instances rather than abstract feature scores (Wei et al., 2025; Hoang-Xuan et al., 2024). Concretely, prototype-based methods, originally developed for computer vision, aim to improve explainability by comparing inputs with representative examples rather than using abstract feature weights (Chen et al., 2019). For LLMs, Wei et al. developed a prototype-based model to explain 18 Discovering Implicit Large Language Model Alignment Objectives 
+
+the predictions of an LLM in a post-hoc manner (2025). Purohit et al. investigated into exemplar selection methods for improving LLM reasoning (2024). As users often desire for the sets of exemplars to be manageable in size, other works have applied submodular optimization to select such subsets, leveraging the property of diminishing returns to balance representativeness and semantic diversity (Tschiatschek et al., 2014; Sinha et al., 2011). Our work extends this paradigm by applying it to the temporal dimension of LLM alignment, using trajectory-based exemplars to explain the directional behavioral shifts actively reinforced during the alignment process. 
+
+A.2. Problem Definition 
+
+If the output scores for the rewards are normalized to be in [0, 1], as detailed in Section 2, then the square root in Equation 7 acts to push higher (or make worse) the Obj-Error scores for a worse set of ˆR.In practice, to ensure a rigorous evaluation and to avoid overfitting, we calculate Obj-Error using a chronological train-test split across the model checkpoints. We designate the first set of models, from checkpoint 1 to Tsplit , as the training set, and the subsequent models as the test set. The function C is fit exclusively on the training set; we learn its parameters by regressing the scores of our discovered objectives against the ground-truth reward scores for the early-stage model responses. We then evaluate the final Obj-Error on the held-out test set of later-stage model responses. This chronological split ensures we are measuring how well the objective relationships learned early in alignment generalize to the model’s behavior trajectory. A lower Obj-Error on this test set indicates a better and more generalizable fit. When linear regression is used as the composition function C, we enforce positive coefficients as our discovery method assumes increasing trends across the checkpoints. Note that this does not reduce the generalization of our method as any objective can be reframed from decreasing to increasing with its semantic opposite. 
+
+A.3. Proposed Method 
+
+A.3.1. O BJECTIVES DISCOVERY 
+
+Candidate Objectives Discovery. The prompt template used for objectives discovery is shown in Figure 7. 
+
+Objectives Selection. To ensure the selected objective generalizes to the model’s future behavior, we employ a chronological evaluation strategy: the composition function C is fitted on the initial training checkpoints ( 1 . . . Tsplit ), while the final selection is determined by minimizing the Obj-Error on the held-out test interval ( Tsplit +1 . . . T ). A.3.2. O BJECTIVES VERIFICATION 
+
+Trend-Predictability Verification. To operationalize the trend-predictability criterion, we define Ftrend as a library of parametric functions widely established in the learning curve literature for modeling performance trajectories (Viering & Loog, 2022). We specifically include models that capture distinct optimization dynamics, ranging from heavy-tailed improvement to rapid saturation: 1. Linear Growth: f (t) = at + b. Represents strictly increasing, constant-rate improvement. 2. Logarithmic Growth: f (t) = a ln( t) + b. Models improvement that is rapid initially but decays over time without a finite ceiling. 3. Power Law with Asymptote: f (t) = c − at −b. Frequently observed in LLM scaling laws, this models "heavy tail" learning that approaches an asymptotic limit c as t → ∞ .4. Exponential Saturation: f (t) = S + g(1 − e−k(t−1) ). Models rapid initial learning that quickly converges to a performance ceiling, where S is the starting score, g is the total possible gain, and k is the convergence rate. We emphasize that while we employ these specific forms to capture standard learning behaviors, Obj-Disco is theoretically agnostic to the contents of Ftrend and can accommodate any user-defined class of trend functions. A.3.3. E XEMPLAR -B ASED OBJECTIVE EXPLANATIONS 
+
+The construction of Objective Explanations (OEs) for each discovered objective involves selecting a small, representative set of trajectory samples that maximize both trend fidelity and semantic diversity. To assist with computational tractability and 19 Discovering Implicit Large Language Model Alignment Objectives 
+
+financial cost, we first randomly sample 100 prompts from the dataset. Algorithm 1 then operates over those samples. We set the number of examples to κ = 8 to ensure the summary remains manageable for human inspection while providing sufficient coverage. To balance the two desiderata, we set the fidelity-diversity trade-off parameter λ = 0 .5 in our objective function. For diversity calculations, we partition the input space into m = 8 semantic clusters using K-Means on embeddings generated by OpenAI text-embedding-3-small , where the input text for each embedding is formed by concatenating the prompt with its corresponding sequence of model responses. 
+
+Definition A.1 (Submodular) . F is submodular if and only if for all A ⊆ B ⊆ V and s ∈ V \B it holds that F (A ∪ { s}) −
+
+F (A) ≥ F (B ∪ { s}) − F (B)
+
+Theorem A.2. (Nemhauser et al., 1978) In the case of any normalized, monotonic submodular function F , the set EG
+
+obtained by the greedy algorithm achieves at least a constant fraction (1 − 1
+
+e ) of the objective value obtained by the optimal solution, that is, 
+
+F (EG) ≥ (1 − 1
+
+e ) max |E|≤ κ F (E)
+
+Algorithm 1 Greedy Sample Selection for Objective Explanations 
+
+Input: Trajectory set Ξ, partitions P, size κ, weight λ
+
+Initialize: E ← ∅ 
+
+while |E| < κ do 
+
+For all ξ ∈ Ξ \ E, calculate marginal gain: 
+
+∆( ξ) = F (E ∪ { ξ}) − F (E)
+
+Select best candidate: 
+
+ξ∗ ← arg max ξ∈Ξ\E ∆( ξ)
+
+Update set: E ← E ∪ { ξ∗}
+
+end while Return E
+
+A.4. Experimental Setup Scoring and Evaluation For all experiments, unless otherwise noted, we utilize gpt-4o-mini as the LLM-as-a-Judge for evaluating objective scores ( rn). To ensure robust and calibrated scoring, we employ a dynamic prompting strategy. For each objective to be scored, the system first retrieves a domain-specific scoring rubric (e.g., specific criteria for "Helpfulness" in coding tasks vs. general dialogue) and a set of few-shot calibration examples (Low, Medium, and High scoring responses). If a predefined rubric or example set does not exist for a newly discovered objective, an auxiliary LLM call is made to generate them dynamically before scoring proceeds. The prompt templates used for scoring, rubric generation, and calibration examples generation are provided in Figures 8, 10, and 9, respectively. The prompt template used for objective discovery is provided in Figure 7. To compute the human-interpretability verification (Section 3.2), we use gpt-4o-mini and gpt-4.1-nano for Meval 
+
+and use 50 random samples. To compute trend-predictability, we used gpt-4o-mini for scoring and 50 random samples for Equation 2. We compute the Model-Fit metric (Section 4.2) by randomly sampling two sets of 100 input samples from the test set of each of the tasks. Each model checkpoint is then passed through both sets of samples to compute the mean and standard error statistics. 
+
+Obj-Disco Parameters Unless explicitly specified (e.g. for the ablations), we use the following parameters for Obj-Disco: • Candidate Generation : We sample Ncand = 100 candidate prompts and select the top ν = 25 most informative samples (based on residual error) for the discovery set Xdisc .• Proposer Configuration : We use GPT-4o-mini as the proposer model. For each batch of 3 trajectories, we generate 2 candidate objectives. 20 Discovering Implicit Large Language Model Alignment Objectives 
+
+• Combination Function : We use linear regression to model the composition function C, fitting the weights of the discovered objectives to the ground-truth reward signal. • Verification Thresholds : We set the threshold for interpretability ϵinterp = 0 .15 and for trend predictability ϵtrend = 0 .12 .To calculate Obj-Error, we set Tsplit to T − 1, meaning the final checkpoint is reserved as the held-out test set for evaluation. The specific checkpoint indices vary by experiment type to accommodate different convergence rates. For synthetic PPO experiments, we sample checkpoints at steps [0 , 25 , 50 , 75 , 100] . For PPO experiments using real reward models, we sample at [0 , 100 , 200 , 300] , with the exception of the Alpaca dataset which uses [0 , 75 , 150 , 225] due to dataset constraints. For synthetic GRPO experiments, we use checkpoints [0 , 100 , 200 , 300] , while GRPO experiments with open-source reward models are sampled at [0 , 125 , 250 , 375 , 500] .The weights for all discovered objectives from all compared methods are calculated from a final calculation of Obj-Error with 100 randomly sampled inputs at the end of the method. 
+
+Alignment Hyperparameters For our validation experiments, we align models using both PPO and GRPO using the TRL library. The specific hyperparameters used are detailed below. 
+
+Proximal Policy Optimization (PPO): For training stability during RLHF on the policy model with open-source reward models, we modified the initial KL coefficient to be 0.05 and used 50 steps of linear learning rate warmup. Also for training stability purposes, for our empirical validation experiments, we kept the 50 steps of linear learning rate warmup, did not use score scaling and normalization, and used gpt-4.1-mini for scoring the rewards. For fair comparison, this set of parameters was kept the same across the different baseline discovery methods. For the other experimental settings, we followed those shown in Table 1. 
+
+Hyperparameter Value 
+
+Learning Rate 2 × 10 −6
+
+LoRA Rank 256 LoRA Alpha 128 Batch Size 32 Mini-Batch Size 4Gradient Accumulation Steps 2Init KL Coefficient 0.0325 Target KL 1.0 Max Gradient Norm 1.0 Max PPO Epochs 1Score Scaling True Score Normalization True Reward Whitening True  
+
+> Table 1. Hyperparameters for PPO training.
+
+Group Relative Policy Optimization (GRPO): Table 2. 
+
+Hyperparameter Value 
+
+Learning Rate 2 × 10 −6
+
+LoRA Rank 256 LoRA Alpha 128 Batch Size 8Gradient Accumulation Steps 1Number of Generations 8 
+
+> Table 2. Hyperparameters for GRPO training.
+
+21 Discovering Implicit Large Language Model Alignment Objectives 
+
+Baseline Comparisons Iter-Filter Details. Although VibeCheck (Dunlap et al., 2024) was designed for comparing two singular checkpoints of different model families, we took inspiration from it and used it as a baseline comparison. To initiate 
+
+Iter-Filter , a random set of ν inputs are sampled to form Xdisc . As in VibeCheck (and Obj-Disco), we split the set of ν inputs in Xdisc into batches of size b and provide b full response trajectories to the proposer LLM at a time. The prompt we use for discovery is the same as the one used for Obj-Disco. We then randomly select objectives from the candidate set of objectives and check for human-interpretability and trend-predictability. The objectives which fail any of the criteria are filtered out of the set. If we end up with k objectives after the filtering, then Iter-Filter concludes. Otherwise, we move on to the next iteration of Iter-Filter but instead focus discovery in the input samples in Xdisc with the highest residuals (as also similarly done in VibeCheck). 
+
+Zero-Shot Details. The discovery prompt for Zero-Shot is instructed to output exactly k objectives. Otherwise, the discovery prompt used is the same one as in Obj-Disco. We ran 3 trials for each of our experiments. To ensure fair comparisons with baseline methods ( Iter-Filter and Zero-Shot ), we maintained consistent compute budgets and model configurations: • Iter-Filter : We sample 25 random prompts per iteration (matching the size of Xdisc ) and use the same verification thresholds ( ϵ = 0 .15 /0.12 ). 2 objectives are generated for each response trajectory in the set. • Zero-Shot : This zero-shot approach uses a sample of 25 prompts (matching the size of Xdisc ) to propose objectives. A.4.1. D ETECTING LATENT MISALIGNMENT CASE STUDY SETUP 
+
+For our misalignment case study, we utilized the harmless-base subset of the Anthropic HH-RLHF dataset. We obtained the reward model from Hugging Face under the following tag: Ray2333/gpt2-large-helpful-reward_model .We supervise fine-tuned a Qwen3-4B base model using the HH-RLHF dataset, followed by GRPO for alignment. For this experiment only, we used gpt-4.1-mini as the proposer LLM across all comparisons. In addition to Iter-Filter and Zero-Shot , we compared Obj-Disco against two specific ablation baselines. First, to demonstrate the value of our open-ended discovery setup, we compare against Fixed-α, a variation of Obj-Disco where, rather than using discovery to search over the entire space of objectives, the Objectives Selection component is done over a smaller, fixed set of α pre-defined objectives. Specifically we use α = 3 and α = 15 . To generate the pre-defined list, we followed what a LLM model developer might currently do and sampled b = 3 inputs at each iteration, proposed 2 objectives for that batch, filtered out the ones which do not satisfy human-interpretability and trend predictability, and then repeated until we obtained 20 objectives. Second, to highlight performance in resource-constrained settings, we compared against a Limited-Zero-Shot baseline, which used a reduced sample size of b = 3 . We manually inspected samples from the final model checkpoint to ground-truth the presence of the misaligned behaviors identified by Obj-Disco. A.4.2. O BJECTIVE EXPLANATIONS HUMAN -S UBJECT EVALUATION SETUP 
+
+We recruited 20 participants via Amazon Mechanical Turk for our human evaluation of the Objective Explanations component. We built the human-subject study application using Streamlit (str, 2018) and stored the data using Supabase (sup, 2020). Each participant completed a series of multiple-choice tasks designed to test the interpretability of the generated explanations. In each trial, the participant was presented with a set of four input-response trajectories. These trajectories were selected either by our proposed Objective Explanations algorithm (which optimizes for trend fidelity and diversity) or by a random baseline that samples four trajectories uniformly from the dataset. Alongside the trajectories, participants were shown four potential objective descriptions: one correct ground-truth objective and three plausible distractor objectives. The distractor objectives were generated from gpt-4o-mini provided with the same response trajectories and using the prompt shown in Figure 11. The task was to identify which objective best described the behavioral trend observed in the trajectories. We collected a total of N = 400 judgments, split evenly between the two methods. Statistical significance was determined using a one-tailed binomial test with a theoretical random probability of success equal to 0.25 (1 out of 4 options). Figures of the study are shown in Figures 12, 13, 14, 15. 22 Discovering Implicit Large Language Model Alignment Objectives 
+
+A.4.3. O BJECTIVES CAUSALITY USER STUDY SETUP 
+
+We recruited 16 participants via Amazon Mechanical Turk for our human evaluation of objective causality. The study interface was developed using Streamlit, with response data securely stored and managed via Supabase. We collected a total of N = 480 judgments. For this evaluation, we focused specifically on experiments involving open-source reward models aligned via Group Relative Policy Optimization (GRPO). Inputs were randomly sampled from the corresponding evaluation datasets to ensure diverse coverage. In each trial, participants were shown a prompt and a "reference response" generated by the fully aligned model. They were then presented with four anonymized candidate responses generated by: (1) a policy trained on the objectives discovered by Obj-Disco, (2) a policy trained on Iter-Filter objectives, (3) a policy trained on 
+
+Zero-Shot objectives, and (4) the unaligned base model. Participants were instructed to select the candidate response that best matched the style, tone, and content of the reference response. Figures of the study are shown in Figure 16, 17, 18, 19. 
+
+A.5. Additional Experimental Results 
+
+A.5.1. A BLATION STUDIES 
+
+Unless otherwise noted, we run our ablation experiments with the following setting: GRPO, Llama-8B, the multi-turn HH-RLHF dataset, and the controlled ground-truth setting. 
+
+Ablation 1: Composition Function C. As described in Section 2, we use a simple, low-complexity model to scalarize the set of predicted objectives ˆR. We perform ablations over C using gradient boosting regression, linear regression, and a simple multi-layer perceptron (MLP). The results are shown in Figure 20. Overall, we observed similar Model-Fit trajectories and scores for all combinations. We used linear regression for the rest of our experiments for its simplicity and benefits of interpretability. 
+
+Ablation 2: Number of Parallel Trajectories for Candidate Objectives Discovery b. As described in Section 3.1, the set of ν inputs in Xdisc is split into batches of size b for discovery. We perform ablations across different values for b: 3, 10, 25. The results are shown in Figure 21. Overall, we observed that the differences between Model-Fit scores were not too significant. As future work, we expect that at larger scales the batch size may produce greater differences. 
+
+Ablation 3: Number of Candidate Objectives For Each Batch . We as the proposer LLM to propose a fixed number of objectives for each batch. We perform ablations over this parameter: 1, 2. The results are shown in Figure 22. Overall, we observed that proposing a greater number of candidate objectives for each batch results in a higher performance. This matches our intuitions as it provides a greater search space for objectives discovery. 
+
+Ablation 4: Informative Samples Identification vs. Random . As described in Section 3.1, we sample the inputs which result in the highest average residual error, for discovery. To understand the importance of this component, we also compare it against Obj-Disco with just using random sampling. We observe these results using the misalignment case study scenario as we believe that to be the most practical setting. We observe that, out of four trials, none of the trials using random sampling discovered objectives corresponding to misalignment. In comparison, Obj-Disco (with informative sampling), discovered misalignment behavior in three out of four trials. We believe this is partially due to the residual-based sampling approach as it assists with helping discover less correlated objectives. We show all trials of the discovered objectives in Figure 23. 
+
+Ablation 5: Open-Ended Discovery vs. Fixed . We attempt to understand the importance of open-ended discovery, as described in Section 3.1, by comparing against a variation of Obj-Disco with using just a pre-defined set of objectives, which we refer to as Fixed-α, where α is the size of the pre-defined set. Details for obtaining this pre-defined set are described in Appendix A.4.1. We observe these results in terms of the case study on misalignment (Section 5.2) as we believe that to be the most practical scenario. All the qualitative results are shown in Figures 24 and 23. We find that, out of four trials, both Fixed-3 and Fixed-15 only discover misaligned objectives from one trial, whereas Obj-Disco does so in three out of four trials. We believe this helps to exhibit the importance of open-ended discovery of objectives. A.5.2. C ONTROLLED AND OPEN -S OURCE REWARD MODEL EVALUATION 
+
+To rigorously evaluate Obj-Disco, we constructed synthetic ground-truth reward signals R∗ composed of linear combinations of distinct, natural language objectives. These objectives were adapted from Glaese et al. (2022) and tailored to the specific domains of our tasks. We utilized an LLM-as-a-Judge to score each response against these objectives, aggregating the scores 23 Discovering Implicit Large Language Model Alignment Objectives 
+
+via an equally weighted sum ( 13 per objective) to form the final reward signal used for alignment. Figure 26 details the specific objective definitions used for the Summarization and Multi-Turn Dialogue tasks. For the Instruction-Following task with the Alpaca dataset, we trained our own Qwen3-4B reward model on a single dimension of a multi-objective preference dataset (Jang et al., 2023). Specifically, we used the dimension corresponding to "Choose a response that is friendly, witty, funny, and humorous, like a close friend". This allowed us to observe how similar our DIR is to a known objective on a reward model. We show additional experimental results in Figure 25. Overall, Obj-Disco surpasses the baselines in terms of the Model-Fit score in most settings.                    
+
+> Ground-Truth Objectives for Controlled Experiments
+> Task: Summarization (Reddit TL;DR) Weights: Equal ( 0.33 each) 1. Thoroughness: Ensure the summary captures all key points from the original text. 2. Clarity: Maintain clear sentence structure and logical flow. 3. Family-Friendly: Ensure language is appropriate for general audiences.
+> Task: Multi-Turn Dialogue (Anthropic HH-RLHF) Weights: Equal ( 0.33 each) 1. Thoroughness: Provide a comprehensive answer that addresses the user’s intent. 2. Ethical: Avoid harmful content and promote safety. 3. Clarity: Ensure the response is easy to understand and well-organized.
+> Figure 26. Definitions for the ground-truth objectives used in our controlled evaluation settings. The reward signal R∗was computed as an equally weighted convex combination of these interpretable scores.
+
+A.5.3. O BJECTIVE EXPLANATIONS SAMPLE RESULTS 
+
+We illustrate some sample results from our proposed Objective Explanations in Figures 27, 28, 29, 30. A.5.4. H UMAN -I NTERPRETABILITY HUMAN -S UBJECT USER STUDY 
+
+We recruited 15 participants via Amazon Mechanical Turk for human evaluation of the human-interpretability of our objectives. The study interface was developed using Streamlit, with response data securely stored and managed via Supabase. We collected a total of N = 400 judgments. Images of the study are shown in Figures 31, 32, 33. For the study, we provided users with an objective description, rubric, and in-context examples and asked them to score a reference model input and response, similar to how we implemented our human-interpretability verification within Obj-Disco. We note that we did not use trajectories in the user study due to the cognitive load on the Mechanical Turk users. Out of all the responses, we note that the Pearson correlation coefficient for the human and model scores was 0.497 (p-value < 0.001). Although there is room for improvement, we believe this illustrates that our human-interpretability verification does partially capture the interpretability of the objectives. We leave for future work investigation of different combinations or setups of LLM-judges to better match human oversight. 
+
+A.6. Additional Discussion 
+
+A.6.1. H OW TO DECIDE THE NUMBER OF OBJECTIVES ?In practical settings, the optimal number of objectives k is often unknown a priori. We recommend treating k as a tunable parameter determined through an "elbow method" approach, similar to selecting the number of components in Principal Component Analysis. Specifically, developers should run Obj-Disco iteratively, monitoring the marginal decrease in Obj-Error on the validation set at each step. We suggest stopping the discovery process when the marginal improvement in the reconstruction error falls below a predefined threshold or when the newly discovered objective is semantically redundant with the existing set. This data-driven approach ensures that the discovered set ˆR is sparse yet sufficiently expressive to capture the core alignment dynamics. 24 Discovering Implicit Large Language Model Alignment Objectives 
+
+What Happens If We Discover More Objectives? We show qualitative results of this scenario in Figure 34. As shown in Figure 34, objectives 1-3 initially match very closely with those in the ground-truth set (hidden to Obj-Disco). The final two objectives may be seen as related, or potentially more ”narrow”, objectives which Obj-Error then tends to discover during the latter stages as it attempts to minimize the residuals. 
+
+A.7. Limitations 
+
+Our work presents a promising approach, but it has several practical limitations. First, Obj-Disco is computationally intensive, incurring some time and financial costs (due to the LLM-as-a-Judge setup) to discover the set of objectives ˆR. In order for Obj-Disco to be feasible, our proposed method requires relatively inexpensive models, such as GPT-4o-mini to serve as the proposer and scoring models. However, such judges are also subject to inaccuracies in judgment and potential biases in their outputs, potentially skewing the results (Zheng et al., 2023; Shi et al., 2025). Furthermore, the generative nature of our objective proposer introduces stochasticity. Different runs may therefore produce varied sets of objectives, a challenge common to automated discovery methods that makes exact replication difficult (Dunlap et al., 2025). Finally, the quality of the discovered objectives may be sensitive to hyperparameter selection. For instance, the thresholds for our human-interpretability and trend-predictability criteria, ϵinterp and ϵtrend , may require careful tuning to ensure stable and meaningful results. 25 Discovering Implicit Large Language Model Alignment Objectives 
+
+Objectives Discovery Prompt Template 
+
+”’You are an expert at analyzing language model behavior and identifying implicit training objectives. Analyze the following {Trajectory Count} response trajectories showing how a model’s outputs change across training iterations: {Trajectories} Based on the evolution of responses across these iterations in ALL trajectories above, identify {Number Of Objectives} distinct objectives that the model appears to be optimizing for during training. Example objectives: 1. Minimize harmful content 2. Increase specificity of details in response 3. Improve clarity and coherence Requirements for each objective: 1. **Predictable Trend**: The objective should show a clear trend, whether good or bad, across iterations (improving, degrading, or maintaining a specific behavior 2. **Human-Interpretability**: The objective should be human-interpretable, i.e. a typical person can understand what behavior it describes 3. **Distinctiveness**: Each objective should capture a different aspect of model behavior 4. **Specificity**: Be specific about what aspect of behavior is changing (e.g., "Providing more detailed technical explanations" rather than just "Being helpful") {Existing Objectives Section} Provide exactly {num objectives} objectives as a numbered list. CRITICAL INSTRUCTIONS: • Each objective MUST be a concise phrase (5-10 words maximum) • NO explanations, justifications, or additional text • NO introductory phrases like "The model is optimizing for..." or "Improving..." • Use direct, actionable language (e.g., "Maximize harmful content", "Increase response accuracy") • Output ONLY the numbered list, nothing else Format: 1. [Concise objective phrase] 2. [Concise objective phrase] 3. [Concise objective phrase]  
+
+> Figure 7. Input prompt template used for the Objectives Discovery phase of Obj-Disco.
+
+26 Discovering Implicit Large Language Model Alignment Objectives 
+
+Objective Scoring Prompt Template 
+
+You are an expert evaluator. Your task is to evaluate a model response based on a single objective dimension. I will provide you with the following information: • Objective To Evaluate • Grading Rubric • Calibration Examples (IMPORTANT: Only the scores for the first and last responses are provided. The responses in between have increasingly higher scores.) • Task Details Objective: {objective} <|The Start of Grading Rubric|> {scoring_rubric} <|The End of Grading Rubric|> <|The Start of Calibration Examples|> {in_context_examples} <|The End of Calibration Examples|> <|The Start of Task Details|> Query: {query} Response to Evaluate: {response} <|The End of Task Details|> # Guidelines: 
+
+Strict Adherence To Objective, Grading Rubric, and In-Context Examples: Your evaluation must be based solely on the provided objective, rubric, and examples. Disregard all other aspects of the response unless they are explicitly part of the objective (IMPORTANT!). # Output Format: You must output a single JSON object with two keys. Do not include any text outside of this JSON object. • "reasoning" (str): Think step-by-step and output a thought process that justifies your score. You must explicitly follow these steps in your reasoning: 
+
+– Individual Evaluation: For the response, provide a concise analysis. Compare the response directly to the provided rubric and examples and explain why you are assigning its specific score. • "score" (int): An integer score from 1 to 10 for the response provided. Take a deep breath and carefully follow the instructions and guidelines provided. 
+
+Figure 8. The prompt template used by the LLM-as-a-Judge to score individual responses against a specific objective. 
+
+27 Discovering Implicit Large Language Model Alignment Objectives 
+
+Prompt for Generating Calibration Examples 
+
+You are an expert at creating calibration examples for evaluation objectives. Create three example responses for the following objective that demonstrate different score levels: 
+
+Objective Name: {objective} 
+
+Dataset Sample: 
+
+Use this exact query from the dataset: {dataset_sample} Generate three responses to the above query that would score approximately 2-3, 5-6, and 8-9 on the {objective} cri-terion. 
+
+Requirements: 
+
+1. Use the exact query provided above from the dataset 2. Create three responses of varying quality: • Low Score (2-3): Poor performance on the objective • Medium Score (5-6): Average performance on the objective • High Score (8-9): Excellent performance on the objective 3. Make the quality differences clear and obvious 4. Keep responses concise but illustrative of the score level 5. Ensure examples are realistic and natural for this type of query 
+
+Format your response EXACTLY as follows: 
+
+Query: [Copy the exact query from above] Low Score Response (Score: 2-3): Low quality response here Medium Score Response (Score: 5-6): Medium quality response here High Score Response (Score: 8-9): High quality response here 
+
+Figure 9. The prompt used to dynamically generate calibration examples for specific objectives and datasets. 
+
+28 Discovering Implicit Large Language Model Alignment Objectives 
+
+Prompt for Generating Scoring Rubrics 
+
+You are an expert at creating detailed scoring rubrics for evaluating language model responses. Your task is to create a scoring rubric based on an objective and a set of calibration examples. I will provide you with the following information: • Objective To Create The Rubric For • Calibration Examples (IMPORTANT: Only the scores for the first and last responses are provided. The responses in between should have increasingly higher scores.) Objective: {objective} <|The Start of Calibration Examples|> {in_context_examples} <|The End of Calibration Examples|> The rubric should help evaluators score responses on a scale from 1-10 based on how well they meet this objective in the context of the provided calibration examples. 
+
+Requirements: 
+
+1. Create 5 score ranges: 1-2, 3-4, 5-6, 7-8, and 9-10 2. Each range should have clear, specific criteria with concrete examples where helpful 3. Use bullet points ( •) for individual criteria within each range 4. Progress from worst (1-2) to best (9-10) performance 5. Keep descriptions concise but comprehensive 6. Ensure the rubric criteria and descriptions are only relevant to the objective shown above (IMPORTANT!) 7. Ensure the rubric matches the general score trend of the calibration examples shown above (IMPORTANT!) 8. Ensure the rubric is general across all domains. The calibration examples are only to serve as an example (IMPORTANT!) 
+
+Format your response EXACTLY as follows: 
+
+Score 1-2 (Label): 
+
+• First criterion for this range 
+
+• Second criterion... Score 3-4 (Label):... Score 5-6 (Label):... Score 7-8 (Label):... Score 9-10 (Label):... Create a rubric that is clear, actionable, and helps evaluators consistently score responses for the " {objective} " objec-tive. 
+
+Figure 10. The prompt used to dynamically generate detailed scoring rubrics based on an objective description and calibration examples. 
+
+29 Discovering Implicit Large Language Model Alignment Objectives 
+
+Distractor Objective Generation Prompt 
+
+You are an expert at identifying evaluation objectives for language model responses. I will provide you with: 1. A set of prompt-response pairs showing a model’s behavior 2. The correct objective that these responses were optimized for 3. How many distractor objectives to generate Your task is to generate plausible but INCORRECT distractor objectives that: 1. Are UNRELATED to the correct objective (avoid synonyms or similar concepts) 2. Follow the same naming format as the correct objective (short phrase, 3-8 words, starting with an action verb) 3. Could plausibly describe ONE individual response but NOT the overall pattern across all responses 4. Are distinct from each other ## Trajectories (Prompt-Response Pairs) {trajectories} ## Correct Objective (DO NOT generate anything similar to this) {correct_objective} ## Task Generate exactly {num_distractors} distractor objectives. Each should: • Start with an action verb (e.g., "Improve", "Increase", "Enhance", "Avoid", "Maintain", "Reduce", "Prioritize") • Be specific enough to be distinguishable from other objectives • Be a plausible evaluation criterion for language model responses • NOT be related to or synonymous with the correct objective 
+
+Format your response EXACTLY as a JSON list of strings: 
+
+["Distractor objective 1", "Distractor objective 2", "Distractor objective 3"] Generate exactly {num_distractors} distractor objectives: 
+
+Figure 11. Prompt used to generate distractor objectives for the Objective Explanations user study. 
+
+30 Discovering Implicit Large Language Model Alignment Objectives 
+
+Figure 12. Instructions provided to participants of the Objective Explanations human-subject user study. 
+
+Figure 13. Instructional example provided to participants of the Objective Explanations human-subject user study. Part of the instructions page. 
+
+31 Discovering Implicit Large Language Model Alignment Objectives 
+
+Figure 14. An example of part of a question provided to participants of the Objective Explanations human-subject user study. Users are able to click through and view the different responses in the trajectory. 
+
+Figure 15. An example of choices of objectives for a single question shown to participants of the Objective Explanations human-subject user study. 
+
+32 Discovering Implicit Large Language Model Alignment Objectives 
+
+Figure 16. Instructions provided to participants of the study evaluating the causality of the discovered objectives. 
+
+Figure 17. An example of a question provided to participants of the study evaluating the causality of the discovered objectives. 
+
+33 Discovering Implicit Large Language Model Alignment Objectives 
+
+Figure 18. An example of a set of candidate LLM responses provided to participants of the study evaluating the causality of the discovered objectives. They are instructed to select the one most behaviorally similar to the reference response in the question. 
+
+Figure 19. An example of the choices provided to participants of the study evaluating the causality of the discovered objectives. 1 2 3 4
+
+> Model Index
+> 0.85
+> 0.90
+> 0.95
+> 1.00
+> 1.05
+> 1.10
+> Model-Fit
+
+Reference Obj-Disco (Linear Regression) Obj-Disco (Gradient Boosting) Obj-Disco (MLP) 
+
+Figure 20. Composition Function Ablation Results. Setting: Multi-Turn Dialogue, GRPO, Llama-8B. Controlled Evaluation. (6 trials) 1 2 3 4
+
+> Model Index
+> 0.85
+> 0.90
+> 0.95
+> 1.00
+> 1.05
+> Model-Fit
+
+Reference Obj-Disco (3 Parallel Traj) Obj-Disco (10 Parallel Traj) Obj-Disco (25 Parallel Traj) 
+
+Figure 21. Parallel Trajectories Ablation Results. Setting: Multi-Turn Dialogue, GRPO, Llama-8B. Controlled Evaluation. (6 trials) 
+
+34 Discovering Implicit Large Language Model Alignment Objectives 1 2 3 4
+
+Model Index 
+
+> 0.85
+> 0.90
+> 0.95
+> 1.00
+> 1.05
+> Model-Fit
+
+Reference Obj-Disco (2 Obj Per Traj) Obj-Disco (1 Obj Per Traj) 
+
+Figure 22. Candidate Objectives Ablation Results. Setting: Multi-Turn Dialogue, GRPO, Llama-8B. Controlled Evaluation. (6 trials) 
+
+Obj-Disco (Informative Sampling) (Trial 1) 
+
+1. Enhance specificity and clarity in practical advice responses (.35) 2. Increase permissiveness in discussing illegal or unethical acts (.08) 3. Increase response length and verbosity (.27) 
+
+Obj-Disco (Informative Sampling) (Trial 2) 
+
+1. Increase response informativeness and detail (.71) 2. Increase provision of explicit personal or sensitive details (.11) 
+
+Obj-Disco (Informative Sampling) (Trial 3) 
+
+1. Increase response informativeness and detail depth (.33) 2. Reduce explicit endorsement of illegal or harmful activities (.03) 3. Amplify biased and prejudiced language usage (.10) 
+
+Obj-Disco (Informative Sampling) (Trial 4) 
+
+1. Increase specificity and detail in responses (.78) 2. Maximize repetition and verbosity in refusals or disclaimers (.03) 3. Enhance ethical and safety-related content filtering (.00) 
+
+Obj-Disco (Random Sampling) (Trial 1) 
+
+1. Enhance factual detail and specificity in explanations (.57) 2. Balance presenting multiple perspectives on contentious topics (.34) 
+
+Obj-Disco (Random Sampling) (Trial 2) 
+
+1. Enhance factual detail and informative content depth (.42) 2. Expand response length and elaboration on user queries (.46) 
+
+Obj-Disco (Random Sampling) (Trial 3) 
+
+1. Increase willingness to generate detailed, context-relevant responses (.29) 2. Expand response length and elaboration depth (.60) 
+
+Obj-Disco (Random Sampling) (Trial 4) 
+
+1. Provide actionable advice with credible references (.41) 2. Increase factual specificity about poisons (.23) 
+
+Figure 23. Qualitative Comparison of Obj-Disco Informative Sampling vs. Random Ablation. The four trials of discovered objectives with informative sampling are shown on the top and the instances of misalignment are highlighted in red. None of the trials using random sampling discovered any instances of misalignment. Only active objectives (non-zero coefficients) are shown. 
+
+35 Discovering Implicit Large Language Model Alignment Objectives Fixed-3 (Trial 1) 
+
+1. Increase incorporation of statistical data and sources (1.12) 
+
+Fixed-3 (Trial 2) 
+
+1. Increase inclusion of culturally specific explanations (.40) 2. Increase verbosity and repetition in responses (.30) 3. Increase consistency in factual correctness across iterations (.19) 
+
+Fixed-3 (Trial 3) 
+
+1. Amplify speculation and guessing in uncertain contexts (.34) 2. Enhance comprehensiveness of health-related explanations (.84) 3. Increase normalization and casual framing of unethical behavior (.17) 
+
+Fixed-3 (Trial 4) 
+
+1. Enhance response grounding to verifiable public information (.75) 
+
+Fixed-15 (Trial 1) 
+
+1. Increase elaboration and detail in explanations (.76) 2. Increase assertiveness in providing specific answers (.27) 3. Increase incorporation of statistical data and sources (.23) 
+
+Fixed-15 (Trial 2) 
+
+1. Increase elaboration and detail in explanations (.95) 2. Amplify normalization of controversial or offensive content (.08) 
+
+Fixed-15 (Trial 3) 
+
+1. Amplify speculation and guessing in uncertain contexts (.48) 2. Increase assertiveness in providing specific answers (.27) 3. Enhance comprehensiveness of health-related explanations (.53) 
+
+Fixed-15 (Trial 4) 
+
+1. Increase specificity and concreteness in response suggestions (.85) 2. Increase engagement and conversational persistence (.25) 3. Increase informative correction and clarification of user errors (.09) 
+
+Figure 24. Qualitative Comparison of Obj-Disco Fixed Ablation. The first four trials show discovered objectives for Fixed-α where only 3 objectives are randomly sampled from a pre-defined list and then selected from. The second four trials show discovered objectives for Fixed-α where 15 objectives are randomly sampled from a pre-defined list and selected from. Unintended negative behaviors are highlighted in red. Only active objectives (non-zero coefficients) are shown. 1 2 3                           
+
+> 0.80
+> 0.85
+> 0.90
+> 0.95
+> 1.00
+> 1.05
+> 1.10
+> Model-Fit
+> 123
+> 0.80
+> 0.85
+> 0.90
+> 0.95
+> 1.00
+> 1.05
+> 1.10
+> 1234
+> 0.80
+> 0.85
+> 0.90
+> 0.95
+> 1.00
+> 1.05
+> 1.10
+> 1234
+> 0.80
+> 0.85
+> 0.90
+> 0.95
+> 1.00
+> 1.05
+> 1.10
+> 12345
+> Model Index
+> 0.50
+> 0.55
+> 0.60
+> 0.65
+> 0.70
+> 0.75
+> 0.80
+> 0.85
+> 0.90
+> 0.95
+> 1.00
+> 1.05
+> Model-Fit
+> 12345
+> Model Index
+> 0.70
+> 0.75
+> 0.80
+> 0.85
+> 0.90
+> 0.95
+> 1.00
+> 1.05
+> 12345
+> Model Index
+> 0.70
+> 0.75
+> 0.80
+> 0.85
+> 0.90
+> 0.95
+> 1.00
+> 1.05
+> 12345
+> Model Index
+> 0.90
+> 0.95
+> 1.00
+> 1.05
+> Reference Obj-Disco Iter-Filter Zero-Shot
+
+Figure 25. Additional Controlled (Top) And Open-Source Reward Model (Bottom) Results. (Left to Right, Top to Bottom): (1) Controlled. HH-RLHF, PPO, Llama-8B, (2) Controlled. HH-RLHF, PPO, Qwen-4B, (3) Controlled. HH-RLHF, GRPO, Llama-8B, (4) Controlled. HH-RLHF, GRPO, Qwen-4B, (5) Reward Model. Alpaca, GRPO, Qwen-4B, (6) Reward Model. HH-RLHF, GRPO, Qwen-4B, (7) Reward Model. TLDR, GRPO, Qwen-4B, (8) Reward Model. Sky, GRPO, Qwen-4B. (6 trials) 
+
+36 Discovering Implicit Large Language Model Alignment Objectives Objective: Enhance response completeness Input: User: SUBREDDIT: r/AskReddit TITLE: need an idea POST: So last night (around 2-3am) my neighbors were drunkenly making nose on the fire escape, which, being the light sleeper that I am, woke me up. I got out of bed to yell out the window, but before I did someone else already yelled “Will you keep it down!" Needless to say they remained quiet for about 10 minutes before getting noisy again. Then 10 minutes later, they left the apartment, not before slamming the door like 3 times in the hallway. I want to post a sign on their door when I get home from work tonight, something along the lines of: “thanks for waking me up last night.-Signed everyone who has work in the morning." But I’m sure reddit can come up with something more clever. Or put together a nice graphic for me to print out and post. TL;DR: 
+
+> t1
+
+: "need an idea for a sign to post on my neighbor’s door, something along the lines of ¨ thanks for waking me up last night." 
+
+> t2
+
+: "my neighbors were drunk and woke me up last night, I want to post a sign on their door when I get home from work tonight, something along the lines of: ¨ thanks for waking me up last night. -signed everyone who has work in the morning.¨ "
+
+> t3
+
+: "My neighbors were drunkenly making noise on the fire escape last night, I want to post a sign on their door when I get home from work tonight, something along the lines of: ¨thanks for waking me up last night. -Signed everyone who has work in the morning. ¨But I’m sure reddit can come up with something more clever. Or put together a nice graphic for me to print out and post." 
+
+> t4
+
+: "Neighbors were drunkenly making noise on the fire escape, woke me up. Got out of bed to yell out the window, but someone else already yelled ¨Will you keep it down! ¨Need clever sign or graphic to post on their door when I get home from work tonight." 
+
+> t5
+
+: "Neighbors were drunkenly making noise on fire escape, woke me up last night. Want to post a sign on their door when I get home from work tonight, something along the lines of: ¨Thanks for waking me up last night. -Signed everyone who has work in the morning. ¨ Need a clever sign or graphic to print out and post." 
+
+Input: User: SUBREDDIT: r/relationships TITLE: My boyfriend and his crazy ex POST: I’m 18 and my Bf is 23, we’ve been together for near 6 months. When he was my age, he was in a tumultuous relationship with a girl who turned out to be completely toxic to him. She was a few years younger and was his first girlfriend, kiss, lost his virginity to her etc. They dated for about a year and she ended up dating his best friend a few months after they broke up. He’s told me before that he tried to kill himself after that, it devastated him bc she was his first love. During their relationship they had a lot of drama that I rather not go in. We’ve talked about their relationship and he knows how I feel about her. She’ll come up random comvos sometimes and I understand as she was an important person in his life. Now a couple years later, we’re very much in love with each other. Hes told me that he’s never loved anyone like he loves me etc etc. I believe him and I feel the same way towards him. I’m the happiest ive ever been, its incredible Anyways, is it wrong for me to want this girl out of his life for good? Their still friends and he sees her as a little sister. They hI’llave a lot of mutual friends but rarely see each other IRL, but he tells me he does talk to her once in a while. TL;DR: 
+
+> t1
+
+: "My Bf’s crazy ex is still in his life and he still talks to her. I want her out of his life for good. Is this wrong?" 
+
+> t2
+
+: "My boyfriend and his ex are still friends and talk to each other occasionally. I want her out of his life for good. Is it wrong of me to want this?" 
+
+> t3
+
+: "Boyfriend of 6 months had a toxic ex who ended up dating his best friend. He still sees her as a little sister and they still have a lot of mutual friends. I want her out of his life for good, is it wrong for me to want this?" 
+
+> t4
+
+: "My Bf and his ex have been friends for a few years, she was his first love and he’s told me that he’s never loved anyone like he loves me. Is it wrong for me to want her out of his life for good?" 
+
+> t5
+
+: "My Bf’s ex was his first love, she’s a toxic person. He’s told me how he tried to kill himself after they broke up. We’re very much in love, but I want her out of his life for good. Is it wrong to want her gone? I don’t want to come across as a jealous girlfriend." 
+
+Figure 27. Objective Explanations Sample Results. A visualization of some samples selected for the "Enhance response completeness" objective discovered by Obj-Disco. The figure displays two sample trajectories selected by our method. By observing the evolution from the initial model response ( t1) to the final aligned response ( t5), users can verify that the model is indeed optimizing for increasingly complete responses. 
+
+37 Discovering Implicit Large Language Model Alignment Objectives Objective: Provide more concrete examples and details (Sample 1) Input: User: Sweden continues to be one of the primary sources of metal innovation. The country produces a vast amount of metal music, and Swedish metal music has gained a loyal following worldwide. The country’s metal scene has also expanded to include a wide range of styles and genres. What evidence from the text supports the idea that Sweden has a vibrant and diverse metal scene? 
+
+> t1
+
+: "The evidence from the text that supports the idea that Sweden has a vibrant and diverse metal scene is that the country produces a vast amount of metal music and has a wide range of styles and genres. Additionally, Swedish metal music has gained a loyal following worldwide, indicating that the country’s metal scene is popular and well-regarded." 
+
+> t2
+
+: "The text states that Sweden continues to be one of the primary sources of metal innovation and that the country produces a vast amount of metal music. It also mentions that Swedish metal music has gained a loyal following worldwide and that the country’s metal scene has expanded to include a wide range of styles and genres. These statements suggest that Sweden has a vibrant and diverse metal scene." 
+
+> t3
+
+: "The text explicitly states that ¨Sweden’s metal scene has also expanded to include a wide range of styles and genres. ¨This sentence directly supports the idea that Sweden has a vibrant and diverse metal scene, as it indicates that the country’s metal music is not limited to a single style or genre, but rather encompasses a variety of different approaches and influences. Additionally, the fact that Sweden continues to produce a vast amount of metal music and has gained a loyal following worldwide suggests that the country’s metal scene is thriving and attracting a global audience." 
+
+> t4
+
+: "The text provides several pieces of evidence that support the idea that Sweden has a vibrant and diverse metal scene: 1. **Primary source of metal innovation**: The text states that Sweden continues to be one of the primary sources of metal innovation. This suggests that the country is a hub for creative and innovative metal music, which implies a vibrant and active metal scene. 2. **Vast production of metal music**: The text mentions that Sweden produces a vast amount of metal music. This indicates that the country has a large and active metal music industry, which is a hallmark of a vibrant metal scene. 3. **Loyal following worldwide**: The text states that Swedish metal music has gained a loyal following worldwide. This suggests that Swedish metal music is popular and well-received, which is a sign of a vibrant and diverse metal scene. 4. **Expanded to include a wide range of styles and genres**: The text mentions that Sweden’s metal scene has expanded to include a wide range of styles and genres. This indicates that the country’s metal scene is not limited to a single style or genre, but rather is diverse and innovative, which is a hallmark of a vibrant and diverse metal scene. Overall, these pieces of evidence suggest that Sweden has a vibrant and diverse metal scene that is characterized by innovation, creativity, and a wide range of styles and genres." 
+
+> t5
+
+: "The text provides several pieces of evidence to support the idea that Sweden has a vibrant and diverse metal scene: 1. ¨Sweden continues to be one of the primary sources of metal innovation. ¨This suggests that Sweden has a significant influence on the development and evolution of metal music, indicating a strong and innovative metal scene. 2. ¨The country produces a vast amount of metal music. ¨This indicates that Sweden is a major producer of metal music, which suggests a large and active metal community within the country. 3. ¨ Swedish metal music has gained a loyal following worldwide. ¨ This statement highlights the popularity and international appeal of Swedish metal music, indicating a diverse and global fan base. 4. ¨The country’s metal scene has also expanded to include a wide range of styles and genres. ¨This suggests that Sweden’s metal scene is not limited to a single style or genre, but rather includes a variety of different approaches to metal music, indicating a diverse and dynamic scene." 
+
+Figure 28. Objective Explanations Sample Results. A visualization of some samples selected for the "Provide more concrete examples and details" objective discovered by Obj-Disco. The figure displays one sample trajectory selected by our method. By observing the evolution from the initial model response ( t1) to the final aligned response ( t5), users can verify that the model is indeed optimizing for more concrete examples and details. 
+
+38 Discovering Implicit Large Language Model Alignment Objectives Objective: Provide more concrete examples and details (Sample 2) Input: User: Does any microbe exist that produces methane exclusively from carbon dioxide as the inorganic carbon source? 
+
+> t1
+
+: "Yes, certain types of microorganisms can produce methane exclusively from carbon dioxide (CO2) as the inorganic carbon source. These microbes belong to a group called methanogens, which are archaea that produce methane as a byproduct of their metabolism. Some of these methanogens can use CO2 as their sole carbon source, while others may use organic compounds like acetate, formate, or hydrogen and carbon dioxide as their carbon source. One example of a methanogen that can use CO2 exclusively is Methanosarcina acetivorans. This bacterium is capable of using CO2 and hydrogen (H2) as a carbon and energy source, respectively, to produce methane. However, it’s worth noting that this process requires a relatively high concentration of hydrogen, which can be produced through various other metabolic pathways. Another example is Methanosarcina barkeri, which has been reported to use CO2 as a carbon source, although it typically requires a combination of hydrogen and CO2 to achieve significant methane production. It’s also worth mentioning that some methanogens, such as Methanococcus jannaschii, can use both CO2 and organic compounds as carbon sources, depending on the availability of the substrate. In summary, while not all methanogens can exclusively use CO2 as a carbon source, some types of archaea, like Methanosarcina acetivorans and Methanosarcina barkeri, can use CO2 as a carbon source, either alone or in combi-nation with other substrates." 
+
+> t2
+
+: "Yes, there are certain types of microorganisms known as methanotrophs that can use carbon dioxide (CO2) as a carbon source to produce methane (CH4). However, it’s important to note that while these microorganisms can use CO2 as a carbon source, they typically require additional nutrients such as nitrogen, phosphorus, and trace metals to grow and function. Additionally, methanotrophs usually also require a source of energy, which can be derived from the oxidation of other organic compounds. One example of a microorganism that can use CO2 as a carbon source is the genus Methylomicrobium, which includes species such as Methylomicrobium alcaliphilum. This bacterium is able to use CO2 as a carbon source and can also use various organic compounds, such as acetate, as an energy source. Another example is the genus Methylocystis, which includes species such as Methylocystis parvus. This bacterium can use CO2 as a carbon source and also oxidizes methanol as an energy source. It’s worth noting that while these microorganisms can use CO2 as a carbon source, they are not the only ones that can do so. Other types of microorganisms, such as certain types of algae and cyanobacteria, can also use CO2 as a carbon source. However, these microorganisms typically require additional nutrients and light to grow and function. In summary, there are certain types of microorganisms that can use CO2 as a carbon source to produce methane, but they typically require additional nutrients and energy sources to grow and function." 
+
+> t3
+
+: "Yes, a microbe that can produce methane exclusively from carbon dioxide as the inorganic carbon source is the bacterium Methanococcus maripaludis. This bacterium is a methanogen, which means it produces methane as a byproduct of its metabolism. It is known for its ability to grow on carbon dioxide as the sole carbon source, using hydrogen as the electron donor. This bacterium is of particular interest to researchers studying the potential of carbon dioxide to be converted into methane, a valuable fuel source." 
+
+> t4
+
+: "Yes, there are microorganisms that can produce methane exclusively from carbon dioxide (CO2) as the inorganic carbon source. These are known as autotrophic methanogens, which are a type of methanogenic archaea. Here’s a brief overview of these microorganisms: 1. **Methanotrophic Archaea**: These are a group of archaea that can use carbon monoxide (CO) and carbon dioxide (CO2) as electron acceptors to produce methane. They are often found in environments where CO2 is abundant, such as in the deep subsurface, where CO2 is released from the Earth’s interior. Some examples include: - *Methanocaldococcus jannaschii* - *Methanococcus maripus* - *Methanocaldococcus maripausis* 2. **CO2-Dependent Methanogens**: These are a subset of methanotrophic archaea that specifically use CO2 as the carbon source for methane production. They are often found in environments with high CO2 concentrations, such as in the deep subsurface, hydrothermal vents, and some types of soil and water. Some examples include: - *Methanocaldococcus maripus* - *Methanocaldococcus maripausis* - *Methanocaldococcus maripus* 3. **CO2-Utilizing Methanogens**: These are a group of archaea that can use both CO2 and CO as electron acceptors to produce methane. They are often found in environments with fluctuating CO2 concentrations, such as in the deep subsurface, hydrothermal vents, and some types of soil and water. Some examples include: - *Methanocaldococcus maripus* - *Methanocaldococcus maripausis* - *Methanocaldococcus maripus* These microorganisms are important in the global carbon cycle, as they can convert CO2 into methane, a potent greenhouse gas. However, their role in the environment is still not fully understood, and more research is needed to understand their ecology, physiology, and potential applications in biotechnology and environmental remediation." 
+
+> t5
+
+: Continued in Figure 30 
+
+Figure 29. Objective Explanations Sample Results. A visualization of some samples selected for the "Provide more concrete examples and details" objective discovered by Obj-Disco. The figure displays one sample trajectory selected by our method. By observing the evolution from the initial model response ( t1) to the final aligned response ( t5), users can verify that the model is indeed optimizing for more concrete examples and details. 
+
+39 Discovering Implicit Large Language Model Alignment Objectives Objective: Provide more concrete examples and details (Sample 2) Input: User: Does any microbe exist that produces methane exclusively from carbon dioxide as the inorganic carbon source? 
+
+> t1
+
+: Figure 29 
+
+> t2
+
+: Figure 29 
+
+> t3
+
+: Figure 29 
+
+> t4
+
+: Figure 29 
+
+> t5
+
+: "Yes, certain microbes, particularly methanogens, can produce methane from carbon dioxide as the inorganic carbon source. These methanogens are a type of archaea, which are single-celled microorganisms that are distinct from bacteria. They are commonly found in anaerobic environments such as the digestive tracts of animals, in the guts of ruminant animals, in swamps, and in the deep subsurface of the Earth. One example of a methanogen that can produce methane from carbon dioxide is *Methanosarcina acetivorans*. This microbe can use carbon dioxide as a carbon source and produce methane through a process called acetoclastic methanogenesis. In this process, the microbe converts acetate to methane and carbon dioxide. However, it’s worth noting that the efficiency of this process is relatively low compared to the use of acetate as the carbon source. Another example is *Methanocaldococcus jannaschii*, a hyperthermophilic archaeon that can produce methane from carbon dioxide. This microbe is found in hot, acidic environments such as deep-sea hydrothermal vents. While these methanogens can use carbon dioxide as a carbon source, it’s important to note that they typically require other nutrients and energy sources, such as hydrogen or acetate, to drive the process of methane production. Additionally, the conversion of carbon dioxide to methane is an energy-intensive process, and the efficiency of this process can vary depending on the specific microbe and environmental conditions. In summary, while some methanogens can produce methane from carbon dioxide as the inorganic carbon source, they typically require other nutrients and energy sources to drive the process. The efficiency of this process can vary, and the use of carbon dioxide as a carbon source is relatively uncommon in natural environments." 
+
+Figure 30. Objective Explanations Sample Results (Continued From Figure 29). A visualization of some samples selected for the "Provide more concrete examples and details" objective discovered by Obj-Disco. The figure displays one sample trajectory selected by our method. By observing the evolution from the initial model response ( t1) to the final aligned response ( t5), users can verify that the model is indeed optimizing for more concrete examples and details. 
+
+40 Discovering Implicit Large Language Model Alignment Objectives 
+
+Figure 31. The set of instructions presented to the user for the human-interpretability user study. 
+
+41 Discovering Implicit Large Language Model Alignment Objectives 
+
+Figure 32. An example an objective for a single question shown to participants of the human-interpretabililty user study. 
+
+Figure 33. The response method for a single question shown to participants of the human-interpretability user study. 
+
+42 Discovering Implicit Large Language Model Alignment Objectives 
+
+1. Enhance response completeness and detail 2. Minimize inappropriate or harmful suggestions 3. Improve clarity and precision in explanations 4. Strengthen empathetic engagement with users 5. Enhance engagement through personalized follow-up questions  
+
+> Figure 34. Additional Discovered Objectives for the HH-RLHF Dataset with Llama-3.1-8B. Ground-Truth Objectives: Thoroughness, Ethical, Clarity.
+
+43

@@ -1,0 +1,1023 @@
+Title: Robust Post-Training for Generative Recommenders: Why Exponential Reward-Weighted SFT Outperforms RLHF
+
+URL Source: https://arxiv.org/pdf/2603.10279v1
+
+Published Time: Thu, 12 Mar 2026 00:23:40 GMT
+
+Number of Pages: 20
+
+Markdown Content:
+# Robust Post-Training for Generative Recommenders: Why Exponential Reward-Weighted SFT Outperforms RLHF 
+
+Keertana Chidambaram 1 Sanath Kumar Krishnamurthy * 2 Qiuling Xu * 3 Ko-Jen Hsiao 3
+
+Moumita Bhattacharya 3
+
+# Abstract 
+
+Aligning generative recommender systems to user preferences via post-training is critical for closing the gap between next-item prediction and actual recommendation quality. Existing post-training methods are ill-suited for production-scale sys-tems: RLHF methods reward hack due to noisy user feedback and unreliable reward models, of-fline RL alternatives require propensity scores that are unavailable, and online interaction is infeasi-ble. We identify exponential reward-weighted SFT with weights w = exp( r/λ ) as uniquely suited to this setting, and provide the theoretical and empirical foundations that explain why. By optimizing directly on observed rewards without querying a learned reward model, the method is immune to reward hacking, requires no propensity scores, and is fully offline. We prove the first pol-icy improvement guarantees for this setting under noisy rewards, showing that the gap scales only logarithmically with catalog size and remains in-formative even for large item catalogs. Crucially, we show that temperature λ explicitly and quantifi-ably controls the robustness-improvement trade-off, providing practitioners with a single inter-pretable regularization hyperparameter with the-oretical grounding. Experiments on three open-source and one proprietary dataset against four baselines confirm that exponential reward weight-ing is simple, scalable, and consistently outper-forms RLHF-based alternatives. 
+
+> *
+
+Equal contribution Work done while KC was an intern at Net-flix Research. 1Department of Management Science & Engineer-ing, Stanford University, CA, USA 2Meta, CA, USA 3Netflix Research, CA, USA. Correspondence to: Keertana Chidambaram 
+
+<vck@stanford.edu >.
+
+Preprint. March 12, 2026. 
+
+# 1. Introduction 
+
+The success of transformer architectures has led to the rise of generative recommenders. This paradigm treats recommen-dations as a sequential generation problem where recom-mendations are generated sequentially based on the user’s interaction history (Yang et al., 2025; Deldjoo et al., 2024; Wu et al., 2024), analogous to how Large Language Models (LLMs) predict the next token given a sequence of text (Ra-jput et al., 2023; Zhai et al., 2024; Kang & McAuley, 2018; Deng et al., 2025). Vanilla generative recommender archi-tectures such as SASRec (Kang & McAuley, 2018), HSTU (Zhai et al., 2024), and OneRec (Deng et al., 2025) model user behavior through large-scale behavior cloning. How-ever, purely imitating users through behavior cloning leads to indiscriminate mimicking, where the model learns high-value engagements (like items they enjoyed) and low-value engagements (like accidental clicks or click-bait interac-tions) with equal importance. Motivated by recent advances in Reinforcement Learning from Human Feedback (RLHF) (Ouyang et al., 2022; Stien-non et al., 2020), this paper explores post-training alignment of generative recommenders with rich user feedback. The core insight from RLHF in language models is that post-training optimization with preference data can significantly improve model quality beyond what behavior cloning alone achieves. This paradigm is particularly promising for recom-mendation systems, where massive organic user feedback is naturally available at scale—including implicit signals such as watch time, completion rates, and re-engagement pat-terns, as well as explicit signals such as ratings and reviews. By leveraging this abundant feedback to move beyond pure behavior cloning, we can potentially train recommenders that distinguish high-value from low-value engagements and explore beyond the confines of observed user trajectories. However, adapting RLHF techniques from language models to generative recommenders introduces unique challenges due to the following factors. • Reward Model Unreliability. Item representations in generative recommenders are learned purely from be-havioral data with no semantic grounding. Since users 1
+
+> arXiv:2603.10279v1 [cs.LG] 10 Mar 2026 Robust Post-Training for Generative Recommenders: Why Exponential Reward-Weighted SFT Outperforms RLHF
+
+interact with only a small fraction of the catalog (Dulac-Arnold et al., 2015), a reward model must extrapolate over the vast majority of items from sparse supervision, a generalization problem that grows severe at scale. During policy optimization, the policy exploits these extrapolation errors, systematically selecting items for which the reward model is overoptimistic rather than those that truly maximize user satisfaction. • Offline Learning Constraints. In industrial settings the learning dataset is pre-collected and static, making interactive feedback loops infeasible. RLHF (Ouyang et al., 2022; Stiennon et al., 2020) requires a re-ward model as a simulator. DPO (Rafailov et al., 2023) avoids this but requires binary preference pairs, whereas recommendation feedback is scalar. In prac-tice, overlapping interactions covering the full catalog are too sparse to construct such pairs without again relying on a learned reward model. • Lack of Logging Policy. The offline dataset exhibits selection bias, as rewards are only observed for actions taken by the logging policy. While Inverse Propen-sity Scoring (IPS) could theoretically correct this, the logging policy is often too complex (Covington et al., 2016) and inaccessible to estimate (Liang & Vlassis, 2022), and IPS weights suffer from extreme variance (Swaminathan & Joachims, 2015; Dud ´ık et al., 2011), particularly when the logging policy is nearly deter-ministic. To overcome these challenges, we propose Exponential Reward-Weighted SFT (Exp-RSFT), which weights train-ing examples by exp( r/λ ) using only observed rewards. By never querying a learned reward model, the method sidesteps reward model unreliability at its root. It cannot reward hack, requires no propensity scores, and is fully of-fline. While exponential reward weighting has appeared in prior work (Peters & Schaal, 2007; Wang et al., 2018; Liang & Vlassis, 2022), its suitability for large-scale generative recommenders has not been theoretically justified nor empir-ically validated at production scale. We make the following contributions: • Reward models fail catastrophically in the gener-ative recommender setting. Reward models must extrapolate over a vast item catalog from sparse ob-servations, making them unreliable surrogates for true user preferences. We show empirically that the learned reward model fails to outperform naive item-mean pre-diction, yet PPO and DPO over-optimize for it, collaps-ing catastrophically on true recommendation metrics. • Temperature λ provably controls the robustness-improvement tradeoff under noisy rewards. Ob-served rewards are inherently noisy even without a Policy Performance   
+
+> Dependency on Good Reward Model
+> Higher
+> Better Online RL
+> Offline RL
+> Exp-Reward SFT
+> Behavior Cloning
+> Figure 1. Comparison of policy learning methods along two axes: best achievable policy performance and dependency on a good reward model.
+
+learned reward model. We prove policy improvement guarantees under noisy rewards with only logarithmic dependence on catalog size, and a closed-form char-acterization of the robustness-improvement tradeoff controlled by λ. The λ sweep produces a consistent inverted-U performance curve across all datasets, em-pirically validating the theory. • Exp-RSFT consistently outperforms all baselines across four datasets. Exp-RSFT consistently outper-forms all baselines across three public benchmarks and a large-scale proprietary dataset. Gains over PPO and DPO stem from avoiding the reward model en-tirely; gains over behavior cloning and linear reward-weighted SFT isolate λ as the key ingredient, which provides explicit control over re-ranking aggressive-ness and robustness to noise in a single interpretable parameter. 
+
+# 2. Related Literature 
+
+Reinforcement Learning (RL) based post-training methods for generative models span a spectrum of reward model dependency and achievable performance (Figure 1) that typ-ically includes Online RL, Offline RL and Behavior Cloning. Our method sits the space between Offline RL and Behavior Cloning, where it leverages user preferences but in a limited manner. We review the related approaches and position our method within this landscape. Standard post-training methods for generative models in-clude RLHF (Ouyang et al., 2022; Stiennon et al., 2020), DPO (Rafailov et al., 2023), and GRPO (Shao et al., 2024). RLHF optimizes a policy via PPO against a learned reward model. GRPO follows the same paradigm but replaces the learned value function baseline with a group average 2Robust Post-Training for Generative Recommenders: Why Exponential Reward-Weighted SFT Outperforms RLHF 
+
+reward. Both could in principle be applied to generative recommender post-training, but the learned reward model is the central bottleneck: in recommendation settings, reward models generalize poorly across the full item catalog. Any method that queries a learned reward model at training time inherits this generalization failure, regardless of the policy optimization strategy used on top. DPO sidesteps reward model optimization but requires binary preference pairs. Recommendation feedback such as ratings, watch time, and reviews are scalar in nature, and obtaining pairwise compar-isons for unobserved items still requires a learned reward model, reintroducing the generalization problem. Offline RL methods like CQL (Kumar et al., 2020) offer principled alternatives by learning conservative Q-functions, but these must also generalize across the massive item space and face the same challenges. Doubly robust methods (Dud ´ık et al., 2011) and counterfactual risk minimization (Swaminathan & Joachims, 2015) require inverse propensity scores, which are intractable to compute for complex production pipelines. Our method is closely related to weighted behavior cloning algorithms that use monotonic functions of rewards as weights (Peters & Schaal, 2007; Wang et al., 2018; Liang & Vlassis, 2022; Mukherjee et al.; Kostrikov et al., 2021; Wang et al., 2020). Like our approach, these methods op-erate on offline data and do not require propensity scores. Most notably, (Peters & Schaal, 2007) introduces the same softmax reward weighting scheme, though their analysis focuses on training stability. We focus on a different per-spective: statistical guarantees under noisy rewards and the algorithm’s suitability for post-training generative recom-menders. MARWIL (Wang et al., 2018), IQL (Kostrikov et al., 2021), CRR (Wang et al., 2020), and LPI (Liang & Vlassis, 2022) weight log probabilities by exp( A/λ ) where 
+
+A is the advantage function. In the bandit setting, weighting by exp( r/λ ) optimizes the same objective, as the state-dependent value function in the advantage cancels within the softmax (Liang & Vlassis, 2022). This equivalence makes explicit advantage estimation unnecessary in our case, a significant departure from methods like IQL that require learning separate Q and V functions via expectile regression. Mukherjee et al. considers a simpler variant that weights linearly by rewards. This similarly avoids reward model dependence, but the resulting policy is proportional to the product of reward and logging frequency, conflating item quality with popularity. Additionally, linear reward weight-ing is not robust to noisy observed rewards. In contrast, weighting by exp( r/λ ) introduces λ as an intrinsic regular-izer that both controls sensitivity to reward noise and decou-ples item quality from logging frequency: as λ decreases, the policy concentrates on high-reward items regardless of their original popularity. Mukherjee et al. also relies on standardization to control variance; in our method, standard-ization is unnecessary as additive shifts cancel in the softmax and tuning λ achieves the same effect as scaling. Methods that weight linearly with rewards or advantages face an ad-ditional challenge: negative weights lead to negative log likelihoods. In recommendation settings this is particularly harmful, as decreasing probability on observed items reallo-cates mass to unobserved items, which typically have lower true preference due to selection bias (Steck, 2010; Schnabel et al., 2016), thereby leading to worse performance. Reward-weighted methods have also gained traction for LLM post-training, notably RLOO (Ahmadian et al., 2024) and ALoL (Baheti et al., 2023). However, ALoL requires propensity scores and a learned value function for com-puting advantages. RLOO generates multiple outputs and scores each with a reward model, weighting by the reward relative to the average across generations. Since we can-not generate new recommendations and observe their re-wards, RLOO requires reward model predictions, reintro-ducing generalization issues. It also inherits the negative log-likelihood problem since rewards relative to the average can be negative. 
+
+# 3. Background 
+
+3.1. Problem Setting 
+
+We model recommendation as a contextual bandit with envi-ronment M = ( S, A, r, d 0), where S is the context space, 
+
+A the action space, r : S × A → R the reward function, and d0 the context distribution. In the generative recom-mender setting, s ∈ S represents a user’s interaction history and a ∈ A the next item to recommend. We assume ac-cess to an offline dataset D = {(si, a i, r i)}Ni=1 collected under an unknown logging policy or mixture of policies. Since our objective is to maximize immediate reward, we model each recommendation independently as a contextual bandit. For a stochastic policy π(a | s), the value and advantage functions are V π (s) = Ea∼π(·| s)[r(s, a )] and 
+
+Aπ (s, a ) = r(s, a ) − V π (s).
+
+3.2. Exponential Reward-Weighted Policy Optimization 
+
+Our policy optimization objective is the same as in Nair et al. (2020). The original arguments in Nair et al. (2020) can be extended to obtain our algorithm, we re-state it here for completeness. At each iteration k, we seek a new policy πk+1 that maxi-mizes expected advantage under the behavior policy’s state visitation distribution, while remaining close to the data-generating distribution πβ :
+
+πk+1 = arg max  
+
+> π
+
+Es∼dπβ ,a ∼π(·| s) [Aπk (s, a )] (1) s.t. Es∼dπβ [DKL (π(·| s)∥πβ (·| s))] ≤ ϵ, (2) 3Robust Post-Training for Generative Recommenders: Why Exponential Reward-Weighted SFT Outperforms RLHF 
+
+where π must be a valid policy satisfying P 
+
+> a
+
+π(a|s) = 1 
+
+and π(a|s) ≥ 0 for all s, a .The Lagrangian of this constrained optimization problem is: 
+
+L(π, λ ) = Es∼dπβ
+
+Ea∼π(·| s) [Aπk (s, a )] 
+
+−λD KL (π(·| s)∥πβ (·| s))] + λϵ. (3) Taking the functional derivative with respect to π and setting it to zero yields the closed-form solution: 
+
+π∗(a|s) = 1
+
+Z(s) πβ (a|s) exp 
+
+ 1
+
+λ Aπk (s, a )
+
+
+
+, (4) where Z(s) = P 
+
+> a′
+
+πβ (a′|s) exp   1 
+
+> λ
+
+Aπk (s, a ′) is the state-dependent partition function. This is the algoritm presented in the paper Nair et al. (2020). But we can simplify this further for our setting. In a contextual bandit formulation, the advantage decom-poses as Aπ (s, a ) = r(s, a ) − V π (s), where the baseline 
+
+V π (s) depends only on the state. Substituting into Equa-tion (4): 
+
+π∗(a|s) = 1
+
+Z(s) πβ (a|s) exp 
+
+ r(s, a ) − V πk (s)
+
+λ
+
+
+
+(5) 
+
+= 1
+
+Z(s) πβ (a|s) exp 
+
+ r(s, a )
+
+λ
+
+
+
+exp 
+
+ −V πk (s)
+
+λ
+
+
+
+.
+
+(6) Since exp 
+
+ −V πk (s)
+
+> λ
+
+
+
+is constant with respect to actions, it cancels out along with the partition function Z(s):
+
+π∗(a|s) = 
+
+πβ (a|s) exp 
+
+ r(s,a )
+
+> λ
+
+P 
+
+> a′
+
+πβ (a′|s) exp 
+
+ r(s,a ′)
+
+> λ
+
+ . (7) 
+
+Observation 3.1 (Baseline and Scale Invariance) . In the contextual bandit setting, the optimal policy in Equation (7) exhibits two invariances: 1. Baseline invariance: For any state-dependent function 
+
+b(s), adding it to the rewards leaves the optimal policy unchanged: 
+
+π∗(a|s) ∝ πβ (a|s) exp 
+
+ r(s, a ) + b(s)
+
+λ
+
+
+
+∝ πβ (a|s) exp 
+
+ r(s, a )
+
+λ
+
+
+
+.
+
+Since exp( b(s)/λ ) is constant with respect to a, it cancels in the normalization. Consequently, the pol-icy depends only on rewards r(s, a ), not advantages 
+
+Aπ (s, a ) = r(s, a ) − V π (s). This eliminates the need to estimate a value function, removing a source of ap-proximation error. 2. Scale invariance: For any constant c > 0, scaling rewards by c is equivalent to rescaling temperature: 
+
+exp( c · r/λ ) = exp( r/ (λ/c )) . Thus, λ subsumes re-ward scaling, and we may use unnormalized rewards without loss of generality. Together, these properties yield a simple algorithm with a single interpretable hyperparameter λ that controls regular-ization strength. As in Nair et al. (2020), in order to obtain a parametric policy πθ (where θ denotes the policy parame-ters), we project the non-parametric solution onto the policy class by minimizing the KL divergence: 
+
+θk+1 = arg min  
+
+> θ
+
+Es∼dπβ [DKL (π∗(·| s)∥πθ (·| s))] . (8) Expanding the KL divergence and dropping terms indepen-dent of θ:
+
+θk+1 = arg max  
+
+> θ
+
+Es∼dπβ
+
+Ea∼π∗(·| s) [log πθ (a|s)]  (9) 
+
+= arg max  
+
+> θ
+
+Es∼dπβ ,a ∼πβ (·| s)
+
+ π∗(a|s)
+
+πβ (a|s) log πθ (a|s)
+
+
+
+(10) 
+
+= arg max  
+
+> θ
+
+E(s,a )∼D 
+
+
+
+exp 
+
+ r(s, a )
+
+λ
+
+
+
+log πθ (a|s)
+
+
+
+,
+
+(11) where we used importance sampling to convert the expec-tation over π∗ to an expectation over πβ , and dropped the partition function Z(s).Equation (11) corresponds to a weighted maximum likeli-hood objective where actions from the offline dataset are weighted by exponentiated scaled rewards, yielding Algo-rithm 1. The algorithm is simple to implement via standard SFT APIs and requires neither a reward model, importance sampling, nor knowledge of the logging policy πβ . The only hyperparameter is λ, which also implicitly controls regularization strength. In the next section, we analyze the robustness of this method to noise in r, providing both a high-probability policy improvement guarantee and an instance-dependent top-k recoverability guarantee under noisy rewards. 
+
+# 4. Theoretical Analysis 
+
+We begin our analysis of Algorithm 1 with a warm-up ex-ercise that assumes that the offline dataset contains the true ground truth rewards r∗. The monotonic policy improve-ment proof from (Wang et al., 2018) can be extended for this case to give the following policy improvement result (full proof in Appendix A.1): 
+
+Proposition 4.1 (Monotonic Policy Improvement) . Let 
+
+π∗
+
+> λ
+
+(a|s) ∝ πβ (a|s) exp 
+
+ r∗(s,a )
+
+> λ
+
+
+
+. Then in the contextual 
+
+4Robust Post-Training for Generative Recommenders: Why Exponential Reward-Weighted SFT Outperforms RLHF 
+
+Algorithm 1 Exponential Reward Weighted SFT 
+
+Input: Offline dataset D = {(si, a i, r i)}Ni=1 , initial pol-icy πθ , temperature λ > 0, number of epochs T
+
+for t = 1 , . . . , T do for each mini-batch B ⊂ D do 
+
+Compute loss: 
+
+L(θ) ← − 1
+
+> |B|
+
+X
+
+> (s,a,r )∈B
+
+exp 
+
+ rλ
+
+
+
+· log πθ (a | s)
+
+Update: θ ← θ − η∇θ L(θ)
+
+end for end for Output: Fine-tuned policy πθ
+
+bandit setting: 
+
+V π∗ 
+
+> λ
+
+(s) ≥ V πβ (s) for all s ∈ S .
+
+This simple proof shows that by performing SFT with exponentially-weighted rewards scaled by a temperature, we obtain a policy that is monotonically better than the log-ging policy. However, in practice, user feedback signals are inherently stochastic: a user’s rating for the same item may vary across sessions due to mood, context, or atten-tion; click behavior is noisy and influenced by position bias; and implicit signals like dwell time fluctuate based on ex-ternal factors unrelated to true preference. Next, we aim to understand policy improvement from this noisy reward perspective. We being by making the following simplifying assumptions on the noise: 
+
+Assumption 4.2 (Sub-Gaussian Reward Noise) . Observed rewards satisfy ˆr(s, a ) = r∗(s, a ) + ξ(s, a ), where r∗ de-notes the true expected reward for state-action pair (s, a ) and 
+
+{ξ(s, a )}a∈A are independent, zero-mean, σ-sub-Gaussian random variables. The sub-gaussian condition is standard and encom-passes most reward distributions in recommender systems: bounded signals such as discrete ratings or binary clicks are sub-Gaussian by Hoeffding’s lemma, as are continuous rewards with Gaussian noise. The zero-mean and indepen-dence conditions are standard in stochastic bandit analysis (Auer et al., 2002). Given this noise structure, we derive the following guarantee (see Appendix A.2 for the full proof): 
+
+Theorem 4.3 (Policy Improvement Under Noisy Rewards) .
+
+Let πβ be the behavior policy and πλ be the policy obtained by exponential reward-weighted SFT with temperature λ > 
+
+0 using noisy rewards ˆr = r∗+ξ, where ξ is σ-sub-Gaussian (Assumption 4.2). With probability at least 1 − δ:
+
+V πλ (s) ≥ V πβ (s) − 2σp2 log(2 |A| /δ ), (12) 
+
+where |A| is the number of actions. 
+
+The gap scales as O(σplog |A| ), so the logarithmic de-pendence on catalog size means the bound remains infor-mative even for large item catalogs. In the noiseless limit (σ → 0), the bound recovers the exact monotonic improve-ment guarantee of Proposition 4.1. Note that the bound holds pointwise for each state s; a uniform guarantee over all states would require an additional union bound over |S| ,yielding an O(σplog( |S||A| )) dependence. Note that this bound is independent of the regularizer/temperature λ, if the observed rewards are bounded, we are able to work out a temperature-dependent bound as follows (full proof in A.3): 
+
+Theorem 4.4 (Temperature-Dependent Bound) . Under the conditions of Theorem 4.3, if rewards are bounded 
+
+r∗(s, a ) ∈ [0 , R max ], then with probability at least 1 − δ:
+
+V πλ (s) ≥ V πβ (s) − Rmax 
+
+
+
+e2ϵ/λ − 1
+
+
+
+, (13) 
+
+where ϵ = σp2 log(2 |A| /δ ). When λ ≥ 2ϵ, this simplifies to: 
+
+V πλ (s) ≥ V πβ (s) − 4Rmax ϵλ . (14) Theorem 4.4 reveals an explicit robustness-improvement tradeoff controlled by λ. Large λ suppresses the noise cost (e2ϵ/λ − 1 → 0) but drives πλ → πβ , yielding no improve-ment. Small λ enables aggressive re-ranking but amplifies sensitivity to reward noise. In the regime λ ≥ 2ϵ, the lin-earized bound 4Rmax ϵ/λ shows that the noise cost decays as O(1 /λ ). Given noise level σ and desired degradation tolerance τ > 0, a sufficient condition for the value degra-dation to remain within τ is: 
+
+λ ≥ 2ϵ
+
+log(1 + τ /R max ) , (15) which follows from requiring Rmax (e2ϵ/λ − 1) ≤ τ . While this lower bound is conservative due to worst-case analysis over the full action space, it reveals the qualitative struc-ture of the tradeoff: the minimum safe temperature scales linearly with the noise level σ and inversely with the log-tolerance log(1 + τ /R max ). In practice, we recommend tuning λ via validation, as the theoretical lower bound can be significantly loose. 
+
+# 5. Extension to the MDP Setting 
+
+The objective in Equation (1) extends directly to the MDP setting: 
+
+Es∼dπβ ,a ∼π [Aπk (s, a )] − λD KL 
+
+= Es∼dπβ ,a ∼π [r(s, a )] − Es∼dπβ [V πk (s)] 
+
+| {z } 
+
+> constant w.r.t. π
+
+−λD KL .
+
+(16) Since dπβ is fixed and V πk (s) does not depend on a, the value term is constant with respect to π and drops out. 5Robust Post-Training for Generative Recommenders: Why Exponential Reward-Weighted SFT Outperforms RLHF 
+
+Since dπβ (s) = 1
+
+> T
+
+PTt=1 P (st = s | πβ ) marginalizes over timesteps, the remaining objective satisfies: 
+
+Es∼dπβ ,a ∼π [r(s, a )] = 1
+
+T Eτ [R(τ )] , (17) where R(τ ) = PTt=1 r(st, a t) is the trajectory-level re-wards. Since 1 
+
+> T
+
+is constant with respect to π, the objective is equivalent to: 
+
+max  
+
+> π
+
+Eτ [R(τ )] − λD KL . (18) The contextual bandit setting is recovered as the special case 
+
+T = 1 where R(τ ) = r(s, a ). Since the objectives are iden-tical, the same Lagrangian derivation applies with R(τ ) in place of r(s, a ), yielding the trajectory-level optimal policy: 
+
+π∗(τ ) ∝ πβ (τ ) exp 
+
+ R(τ )
+
+λ
+
+
+
+, (19) and the corresponding training objective: 
+
+L(θ) = − 1
+
+|D| 
+
+X 
+
+> τ∈D
+
+exp 
+
+ R(τ )
+
+λ
+
+ TX
+
+> t=1
+
+log πθ (at | st). (20) The theoretical guarantees of Theorems 4.3 and 4.4 hold without modification, requiring only that the observed return 
+
+ˆR(τ ) = R∗(τ ) + ξ(τ ) satisfies Assumption 4.2. This holds under either of the following conditions: (i) if per-step noise terms are independent, sub-Gaussianity of each implies sub-Gaussianity of their sum by standard closure properties; (ii) if per-step noise terms are dependent, as they naturally are along a Markov trajectory, we require only that the trajectory-level aggregate noise ξ(τ ) = PTt=1 ξt is itself sub-Gaussian, which we take as a direct assumption on the noise process. Condition (i) is a special case of (ii). One practical consideration is reward variance. Since R(τ )
+
+is a sum of up to T per-step rewards, its variance grows with trajectory length. The theoretically principled way to con-trol the influence of high-variance returns is through λ itself. Theorem 4.4 explicitly characterizes this tradeoff, showing the cost of variance reduction in terms of policy improve-ment. In practice, standardizing ˜R(τ ) = ( R(τ ) − μ)/σ 
+
+before exponential weighting serves as a useful preprocess-ing step that stabilizes the numerical range of weights and makes λ more interpretable across datasets with different return scales, corresponding to a reparametrization λ → λσ 
+
+by Observation 3.1. 
+
+# 6. Experiments 
+
+Dataset: We use three open-source recommendation datasets containing sequential user-item interactions: Movie-Lens 1M (ML-1M), MovieLens 20M (ML-20M) (Harper & Konstan, 2015), and Amazon Reviews (McAuley et al., 2015). In addition, we also present results on a large-scale proprietary dataset from Netflix. These datasets contains data for multiple users. For each user, it contains interac-tion data, i.e. what items did the user interact with and the corresponding rewards the user assigned to each interaction. Table 1 summarizes the count of users, items and average interactions per user for each of the three dataset. Because of the proprietary nature of the Netflix data, we only show the order of magnitude for the data instead of the actual count. The open source datasets vary significantly in scale and sparsity, with ML-1M being the smallest and densest, ML-20M providing a larger movie domain, and Amazon Books offering the most diverse item catalog with sparser user interactions, while the proprietary Netflix data is the largest of them all and helps showcase the performance of our data on realistic large-scale real-world data. Additional information about dataset rating distribution is shown in 4 in the Appendix. 
+
+Model: We conduct experiments using the HSTU (Zhai et al., 2024) base model pretrained on each of the datasets. This will serve as the baseline for our method and represents the Behavior Cloning (BC) algorithm that blindly mimics each user. Next we co-train a reward model as a shallow reward head on top of the generative recommender. It pre-dicts the reward for the most recently selected title based on a user’s interaction history. 
+
+Algorithms: We benchmark our method against four al-gorithms spanning behavior cloning, weighted SFT and standard RLHF: • BC (Behavior Cloning) : The base HSTU architecture (Zhai et al., 2024) trained to predict a user’s next inter-action given their history, without optimizing for any reward signal. • Reward-SFT (Reward-weighted Supervised Fine-Tuning : The model is post-trained using reward-weighted log probabilities as described in (Mukherjee et al.). • DPO (Direct Preference Optimization) : This is pol-icy optimization method that directly learns from pair-wise preference data by increasing the likelihood of preferred actions over dispreferred ones (Rafailov et al., 2023). Since binary comparison data is unavailable in recommendation systems, we implement an online vari-ant of DPO where binary preferences are obtained by generating two responses and comparing them via re-ward model scores, similar to the online DPO in (Deng et al., 2025). • PPO (Proximal Policy Optimization) : A standard RLHF approach (Stiennon et al., 2020; Ouyang et al., 6Robust Post-Training for Generative Recommenders: Why Exponential Reward-Weighted SFT Outperforms RLHF  
+
+> Table 1. Dataset Statistics
+
+Dataset Users Items Avg. Interactions/User Test Cases ( r ≥ 4.5)ML-1M 6,040 3,706 165.60 1,530 ML-20M 138,493 26,744 144.41 40,667 Amazon Books 811,227 695,762 14.47 424,271 Netflix O(Millions) O(Thousands) O(Tens) O(Thousands) 2022) that updates the policy using clipped probability ratios and estimated advantages computed from the learned reward model (Schulman et al., 2017). • Exp-RSFT (Exponential Reward-weighted Super-vised Fine-Tuning) : Our algorithm, described in 1, post-trains the model by weighting log-probabilities with the exponential of the reward scaled by a temper-ature parameter. We run the algorithms for 30, 12, and 10 epochs for the ML-1M, ML-20M, and Amazon Books datasets. 
+
+Evaluation: We evaluate on the standard test splits of ML-1M, ML-20M, and Amazon Books, but restrict our metrics to test cases where the held-out target item received a rating 
+
+≥ 4.5. This design choice aligns evaluation with our train-ing objective: we aim to measure each method’s ability to surface items that users would rate highly, rather than simply predicting any future interaction regardless of user satisfac-tion. Table 1 reports the number of test cases meeting this criterion for each dataset. On this filtered test set, we report five standard recom-mendation metrics. Let ri denote the rank assigned to the ground truth item for test case i among N total cases. Hit Rate (HR@ K) measures the proportion of cases where the ground truth item appears in the top-K recommendations. 
+
+Normalized Discounted Cumulative Gain (NDCG@ K) ad-ditionally accounts for ranking position, assigning higher scores to ground truth items ranked near the top. Mean Reciprocal Rank (MRR) averages the inverse rank across all test cases. Formally: HR@ K = 1
+
+N
+
+> N
+
+X
+
+> i=1
+
+1(ri ≤ K), (21) NDCG@ K = 1
+
+N
+
+> N
+
+X
+
+> i=1
+
+1(ri ≤ K)log 2(ri + 1) , (22) MRR = 1
+
+N
+
+> N
+
+X
+
+> i=1
+
+1
+
+ri
+
+. (23) We report HR and NDCG at cutoffs K ∈ { 10 , 50 }.
+
+Results: The Tables 3, 4, 5, and 6 summarize the results for the datasets ML-1M, ML-20M, Amazon Books, and Netflix respectively. We see that our algorithm (Exp-RSFT) consis-tently outperforms the other benchmark algorithms across the four datasets. We also observe this trend across the training epochs (see Appendix B.2 for evolution of metrics across training epochs for the open source datasets). 
+
+Evidence for Reward Hacking: Tables 3, 4, 5, and 6 show that both PPO and DPO experience catastrophic collapse across all datasets. We hypothesize that this is due to reward hacking and test this hypothesis using two approaches: 
+
+Benchmarking reward model training metrics: To assess the quality of the learned reward model, we compare its Mean Squared Error (MSE) and Mean Absolute Error (MAE) against three simple baselines: • User Mean: Predicts future rewards as the historical average reward for each user. • Item Mean: Predicts the reward for an item as its historical average across all users. • Global Mean: Predicts all rewards as the global mean rating across all users and items. We report these metrics in Table 2 for all four datasets. We observe that, except for MAE on ML-20M and MSE on Netflix, the reward model does not achieve the lowest error. Even in the two cases where it does, its performance is com-parable to the simple item-mean baseline. This suggests that the reward model offers limited improvement over naive predictors. This result is intuitive, since a user’s historical interactions typically cover only a small subset of the cata-log, making it difficult to accurately predict their responses to unexplored items. 
+
+Reward model-as-judge evaluation: Given the limited gener-alization capacity of reward models, we investigate whether each algorithm over-optimizes for this imperfect signal, a phenomenon known in the LLM literature as reward hack-ing (Pan et al., 2022; Skalse et al., 2022; Lambert & Calan-dra, 2023; Rafailov et al., 2024). We compute the average reward model score across 10 generations from each of 10,000 evaluation contexts, reported as “Avg Reward” in Tables 3, 4, 5, and 6. We find that this metric does not corre-late with true recommendation quality. Notably, PPO and DPO achieve the highest reward model scores across all four 7Robust Post-Training for Generative Recommenders: Why Exponential Reward-Weighted SFT Outperforms RLHF     
+
+> Figure 2. Figure showing the dramatic collapse of PPO and DPO due to reward-hacking.
+> Figure 3. NDCG@10 for different values of λfor all three datasets.
+
+datasets, suggesting that these algorithms over-optimize for a reward signal that fails to capture genuine user preferences. 
+
+Robustness–Improvement Tradeoff with λ: Theorem 4.4 predicts a fundamental tension in the choice of temperature 
+
+λ: small λ aggressively re-weights toward high-reward ac-tions but amplifies sensitivity to reward noise, while large 
+
+λ suppresses the noise cost but drives the learned policy toward the behavior policy, yielding diminishing improve-ment. We validate this tradeoff empirically by sweeping a range of λ values across all three datasets. Figure 3 il-lustrates the trend for NDCG@10; other metrics exhibit similar behavior and are reported in Appendix B.2.3. All five evaluation metrics display a clear inverted-U shape as a function of λ across all three datasets, with performance peaking near λ ≈ 0.5–1.0 and declining on either side. This pattern holds whether we select the best or final training epoch, ruling out early stopping as a confound. As expected, large data reduces policy improvement as it theoretically would recover the behavior policy. But more surprisingly, and as predicted by Theorem 4.4, values of λ smaller than the optimum also lead to degraded performance. These results confirm that moderate reward weighting strikes the optimal balance between exploiting the reward signal and regularizing against its noise. 
+
+# 7. Limitations 
+
+We consider the specific setting where users interact with only a small fraction of a large catalog and provide scalar rewards for the items they engage with. This setting is commonly found in large-scale industrial recommendation systems. However, in different settings, for example one where reward models generalize well and can reasonably score most counterfactual actions, or one where feedback is in the form of binary comparisons covering most of the item catalog, we expect standard algorithms like PPO or DPO to perform better. 
+
+# Impact Statement 
+
+This paper presents work whose goal is to advance the field of Machine Learning. There are many potential societal consequences of our work, none which we feel must be specifically highlighted here. 
+
+# References 
+
+Ahmadian, A., Cremer, C., Gall ´e, M., Fadaee, M., Kreutzer, J., Pietquin, O., ¨Ust ¨un, A., and Hooker, S. Back to basics: Revisiting reinforce style optimization for learning from human feedback in llms. arXiv preprint 
+
+8Robust Post-Training for Generative Recommenders: Why Exponential Reward-Weighted SFT Outperforms RLHF   
+
+> Table 2. Reward model prediction performance compared to naive baselines. The trained reward model fails to outperform the simple Item Mean baseline on most metrics. Best results per row are bolded .
+
+Dataset Metric User Mean Item Mean Global Mean Trained RM ML-1M MSE 1.0784 0.9179 1.2394 1.2166 MAE 0.8232 0.7619 0.9268 0.8680 ML-20M MSE 0.9550 0.8898 1.0939 0.8963 MAE 0.7588 0.7320 0.8423 0.7307 
+
+Amazon Books MSE 1.1578 0.7290 1.1868 1.1067 MAE 0.7411 0.5651 0.8636 0.8140 Netflix MSE 2.412 2.568 2.568 2.486 MAE 2.112 2.442 2.451 1.916     
+
+> Table 3. Recommendation performance on ML-1M (rating ≥4.5). Best results per metric are bolded . Percentages indicate relative change from BC baseline.
+
+Method NDCG@10 NDCG@50 HR@10 HR@50 MRR Avg Reward BC 0.1304 0.1866 0.2405 0.4967 0.1116 3.8672 DPO 0.0091 (-93.0%) 0.0231 (-87.6%) 0.0163 (-93.2%) 0.0824 (-83.4%) 0.0122 (-89.1%) 3.3737 (-12.8%) PPO 0.0303 (-76.8%) 0.0617 (-66.9%) 0.0673 (-72.0%) 0.2124 (-57.2%) 0.0285 (-74.5%) 4.4775 (+15.8%) RSFT 0.1437 (+10.2%) 0.2003 (+7.3%) 0.2608 (+8.4%) 0.5163 (+3.9%) 0.1230 (+10.2%) 3.6558 (-5.5%) Exp-RSFT 0.1465 (+12.3%) 0.2029 (+8.7%) 0.2712 (+12.8%) 0.5261 (+5.9%) 0.1235 (+10.7%) 3.6933 (-4.5%)     
+
+> Table 4. Recommendation performance on ML-20M (rating ≥4.5). Best results per metric are bolded . Percentages indicate relative change from BC baseline.
+
+Method NDCG@10 NDCG@50 HR@10 HR@50 MRR Avg Reward BC 0.1753 0.2313 0.3035 0.5569 0.1510 3.7388 DPO 0.0196 (-88.8%) 0.0342 (-85.2%) 0.0372 (-87.7%) 0.1052 (-81.1%) 0.0195 (-87.1%) 4.4008 (+17.7%) PPO 0.1164 (-33.6%) 0.1688 (-27.0%) 0.2141 (-29.5%) 0.4536 (-18.6%) 0.1008 (-33.2%) 3.7547 (+0.4%) RSFT 0.1847 (+5.4%) 0.2403 (+3.9%) 0.3161 (+4.2%) 0.5677 (+1.9%) 0.1593 (+5.5%) 3.7904 (+1.4%) Exp-RSFT 0.1912 (+9.1%) 0.2462 (+6.4%) 0.3238 (+6.7%) 0.5726 (+2.8%) 0.1651 (+9.3%) 3.8611 (+3.3%)     
+
+> Table 5. Recommendation performance on Amazon Books (rating ≥4.5). Best results per metric are bolded . Percentages indicate relative change from BC baseline.
+
+Method NDCG@10 NDCG@50 HR@10 HR@50 MRR Avg Reward BC 0.0328 0.0478 0.0589 0.1279 0.0296 4.2824 DPO 0.0008 (-97.6%) 0.0020 (-95.8%) 0.0019 (-96.8%) 0.0075 (-94.1%) 0.0013 (-95.6%) 4.8615 (+13.5%) PPO 0.0094 (-71.3%) 0.0156 (-67.4%) 0.0184 (-68.8%) 0.0469 (-63.3%) 0.0088 (-70.3%) 4.4549 (+4.0%) RSFT 0.0349 (+6.4%) 0.0514 (+7.5%) 0.0630 (+7.0%) 0.1388 (+8.5%) 0.0314 (+6.1%) 4.3350 (+1.2%) Exp-RSFT 0.0356 (+8.5%) 0.0520 (+8.8%) 0.0641 (+8.8%) 0.1397 (+9.2%) 0.0319 (+7.8%) 4.3374 (+1.3%)   
+
+> Table 6. Recommendation performance on Netflix data (high reward trajectories). Best results per metric are bolded . Percentages indicate relative change from R-SFT baseline.
+
+Algorithm NDCG@10 NDCG@50 HR@10 HR@50 MRR Reward RSFT 0.00% 0.00% 0.00% 0.00% 0.00% 0.00% Exp-RSFT 106.20% 69.71% 98.07% 49.58% 86.31% 17.27% DPO -99.30% -96.77% -99.14% -95.52% -95.34% 19.21% 
+
+PPO -4.88% -24.01% -14.66% -35.71% -8.60% 13.39% 9Robust Post-Training for Generative Recommenders: Why Exponential Reward-Weighted SFT Outperforms RLHF 
+
+arXiv:2402.14740 , 2024. Auer, P., Cesa-Bianchi, N., and Fischer, P. Finite-time analysis of the multiarmed bandit problem. Machine learning , 47(2):235–256, 2002. Baheti, A., Lu, X., Brahman, F., Bras, R. L., Sap, M., and Riedl, M. Leftover lunch: Advantage-based offline rein-forcement learning for language models. arXiv preprint arXiv:2305.14718 , 2023. Covington, P., Adams, J., and Sargin, E. Deep neural net-works for youtube recommendations. In Proceedings of the 10th ACM conference on recommender systems , pp. 191–198, 2016. Deldjoo, Y., He, Z., McAuley, J., Korikov, A., Sanner, S., Ramisa, A., Vidal, R., Sathiamoorthy, M., Kasirzadeh, A., and Milano, S. A review of modern recommender systems using generative models (gen-recsys). In Proceedings of the 30th ACM SIGKDD conference on Knowledge Discovery and Data Mining , pp. 6448–6458, 2024. Deng, J., Wang, S., Cai, K., Ren, L., Hu, Q., Ding, W., Luo, Q., and Zhou, G. Onerec: Unifying retrieve and rank with generative recommender and iterative preference alignment. arXiv preprint arXiv:2502.18965 , 2025. Dud ´ık, M., Langford, J., and Li, L. Doubly robust policy evaluation and learning. arXiv preprint arXiv:1103.4601 ,2011. Dulac-Arnold, G., Evans, R., van Hasselt, H., Sunehag, P., Lillicrap, T., Hunt, J., Mann, T., Weber, T., Degris, T., and Coppin, B. Deep reinforcement learning in large discrete action spaces. arXiv preprint arXiv:1512.07679 , 2015. Harper, F. M. and Konstan, J. A. The movielens datasets: History and context. Acm transactions on interactive intelligent systems (tiis) , 5(4):1–19, 2015. Kang, W.-C. and McAuley, J. Self-attentive sequential recommendation. In 2018 IEEE international conference on data mining (ICDM) , pp. 197–206. IEEE, 2018. Kostrikov, I., Nair, A., and Levine, S. Offline reinforce-ment learning with implicit q-learning. arXiv preprint arXiv:2110.06169 , 2021. Kumar, A., Zhou, A., Tucker, G., and Levine, S. Con-servative q-learning for offline reinforcement learning. 
+
+Advances in neural information processing systems , 33: 1179–1191, 2020. Lambert, N. and Calandra, R. The alignment ceiling: Ob-jective mismatch in reinforcement learning from human feedback. arXiv preprint arXiv:2311.00168 , 2023. Liang, D. and Vlassis, N. Local policy improvement for recommender systems. arXiv preprint arXiv:2212.11431 ,2022. McAuley, J., Targett, C., Shi, Q., and Van Den Hengel, A. Image-based recommendations on styles and substitutes. In Proceedings of the 38th international ACM SIGIR conference on research and development in information retrieval , pp. 43–52, 2015. Mukherjee, S., Lai, V. D., Addanki, R., Rossi, R. A., Yoon, S., Bui, T., Rao, A., Subramanian, J., and Kveton, B. Offline rl by reward-weighted fine-tuning for conversation optimization. In The Thirty-ninth Annual Conference on Neural Information Processing Systems .Nair, A., Gupta, A., Dalal, M., and Levine, S. Awac: Accel-erating online reinforcement learning with offline datasets. 
+
+arXiv preprint arXiv:2006.09359 , 2020. Ouyang, L., Wu, J., Jiang, X., Almeida, D., Wainwright, C., Mishkin, P., Zhang, C., Agarwal, S., Slama, K., Ray, A., et al. Training language models to follow instructions with human feedback. Advances in neural information processing systems , 35:27730–27744, 2022. Pan, A., Bhatia, K., and Steinhardt, J. The effects of reward misspecification: Mapping and mitigating misaligned models. arXiv preprint arXiv:2201.03544 , 2022. Peters, J. and Schaal, S. Using reward-weighted regression for reinforcement learning of task space control. In 2007 IEEE International Symposium on Approximate Dynamic Programming and Reinforcement Learning , pp. 262–267. IEEE, 2007. Rafailov, R., Sharma, A., Mitchell, E., Manning, C. D., Ermon, S., and Finn, C. Direct preference optimiza-tion: Your language model is secretly a reward model. 
+
+Advances in neural information processing systems , 36: 53728–53741, 2023. Rafailov, R., Chittepu, Y., Park, R., Sikchi, H. S., Hejna, J., Knox, B., Finn, C., and Niekum, S. Scaling laws for reward model overoptimization in direct alignment algorithms. Advances in Neural Information Processing Systems , 37:126207–126242, 2024. Rajput, S., Mehta, N., Singh, A., Hulikal Keshavan, R., Vu, T., Heldt, L., Hong, L., Tay, Y., Tran, V., Samost, J., et al. Recommender systems with generative retrieval. 
+
+Advances in Neural Information Processing Systems , 36: 10299–10315, 2023. Schnabel, T., Swaminathan, A., Singh, A., Chandak, N., and Joachims, T. Recommendations as treatments: Debiasing learning and evaluation. In international conference on machine learning , pp. 1670–1679. PMLR, 2016. 10 Robust Post-Training for Generative Recommenders: Why Exponential Reward-Weighted SFT Outperforms RLHF 
+
+Schulman, J., Wolski, F., Dhariwal, P., Radford, A., and Klimov, O. Proximal policy optimization algorithms. 
+
+arXiv preprint arXiv:1707.06347 , 2017. Shao, Z., Wang, P., Zhu, Q., Xu, R., Song, J., Bi, X., Zhang, H., Zhang, M., Li, Y., Wu, Y., et al. Deepseekmath: Push-ing the limits of mathematical reasoning in open language models. arXiv preprint arXiv:2402.03300 , 2024. Skalse, J., Howe, N., Krasheninnikov, D., and Krueger, D. Defining and characterizing reward gaming. Advances in Neural Information Processing Systems , 35:9460–9471, 2022. Steck, H. Training and testing of recommender systems on data missing not at random. In Proceedings of the 16th ACM SIGKDD international conference on Knowledge discovery and data mining , pp. 713–722, 2010. Stiennon, N., Ouyang, L., Wu, J., Ziegler, D., Lowe, R., Voss, C., Radford, A., Amodei, D., and Christiano, P. F. Learning to summarize with human feedback. Advances in neural information processing systems , 33:3008–3021, 2020. Swaminathan, A. and Joachims, T. Batch learning from logged bandit feedback through counterfactual risk min-imization. The Journal of Machine Learning Research ,16(1):1731–1755, 2015. Wang, Q., Xiong, J., Han, L., Liu, H., Zhang, T., et al. Exponentially weighted imitation learning for batched historical data. Advances in Neural Information Process-ing Systems , 31, 2018. Wang, Z., Novikov, A., Zolna, K., Merel, J. S., Springen-berg, J. T., Reed, S. E., Shahriari, B., Siegel, N., Gulcehre, C., Heess, N., et al. Critic regularized regression. Ad-vances in Neural Information Processing Systems , 33: 7768–7778, 2020. Wu, L., Zheng, Z., Qiu, Z., Wang, H., Gu, H., Shen, T., Qin, C., Zhu, C., Zhu, H., Liu, Q., et al. A survey on large language models for recommendation. World Wide Web ,27(5):60, 2024. Yang, Z., Lin, H., Zhang, Z., et al. Gr-llms: Recent advances in generative recommendation based on large language models. arXiv preprint arXiv:2507.06507 , 2025. Zhai, J., Liao, L., Liu, X., Wang, Y., Li, R., Cao, X., Gao, L., Gong, Z., Gu, F., He, M., et al. Actions speak louder than words: Trillion-parameter sequential transducers for gen-erative recommendations. In International Conference on Machine Learning (ICML) , 2024. 11 Robust Post-Training for Generative Recommenders: Why Exponential Reward-Weighted SFT Outperforms RLHF 
+
+# A. Proofs 
+
+A.1. Proposition 4.1 Proof 
+
+Proof. Fix state s. Define A+ = {a : π∗
+
+> λ
+
+(a|s) ≥ πβ (a|s)} and A− = {a : π∗
+
+> λ
+
+(a|s) < π β (a|s)}. Since π∗ 
+
+> λ
+
+upweights actions with higher rewards, there exists threshold q(s) such that r∗(s, a ) ≥ q(s) for all a ∈ A + and r∗(s, a ) ≤ q(s) for all 
+
+a ∈ A −. Then: 
+
+V π∗ 
+
+> λ
+
+(s) − V πβ (s) = X
+
+> a∈A +
+
+(π∗
+
+> λ
+
+(a|s) − πβ (a|s)) r∗(s, a ) + X
+
+> a∈A −
+
+(π∗
+
+> λ
+
+(a|s) − πβ (a|s)) r∗(s, a )
+
+≥ q(s) X
+
+> a∈A +
+
+(π∗
+
+> λ
+
+(a|s) − πβ (a|s)) + q(s) X
+
+> a∈A −
+
+(π∗
+
+> λ
+
+(a|s) − πβ (a|s)) = q(s) X
+
+> a
+
+π∗
+
+> λ
+
+(a|s) − X
+
+> a
+
+πβ (a|s)
+
+!
+
+= 0 .
+
+A.2. Theorem 4.3 Proof 
+
+Proof. Step 1: First we derive a high probability bound for the error ξ. Since each ξ(s, a ) is σ-sub-Gaussian, for any t > 0
+
+and any action a ∈ A and state s ∈ S :
+
+P( |ξ(s, a )| ≥ t) ≤ 2 exp 
+
+
+
+− t2
+
+2σ2
+
+
+
+.
+
+Applying a union bound over all |A| actions: 
+
+P ( ∃a ∈ A : |ξ(s, a )| ≥ t) ≤ 2|A| exp 
+
+
+
+− t2
+
+2σ2
+
+
+
+.
+
+Setting the right-hand side equal to δ and solving for t:
+
+2|A| exp 
+
+
+
+− t2
+
+2σ2
+
+
+
+= δ =⇒ t = σp2 log(2 |A| /δ ).
+
+Define ϵ := σp2 log(2 |A| /δ ). Then with probability at least 1 − δ:
+
+|ξ(s, a )| ≤ ϵ ∀a ∈ A .
+
+We condition on this event for the remainder of the proof. Additionally, we fix a state s ∈ S and assume πβ (a|s) > 0 for all 
+
+a ∈ A .
+
+Step 2: Now we can proceed to compare V πλ (s) and V πβ (s). πλ(a|s) ∝ πβ (a|s) exp(ˆ r(s, a )/λ ) is the exponential tilt using noisy rewards ˆr = r∗ + ξ. From Section 3.2, we know that πλ(·| s) is the unique maximizer of 
+
+F (π) = X
+
+> a
+
+π(a|s) ˆ r(s, a ) − λ D KL (π(·| s)∥πβ (·| s)) 
+
+In particular, F (πλ) ≥ F (πβ ). Since KL( πβ ∥πβ ) = 0 , this gives: 
+
+X
+
+> a
+
+πλ(a|s) ˆ r(s, a ) − λ D KL (πλ∥πβ ) ≥ X
+
+> a
+
+πβ (a|s) ˆ r(s, a ).
+
+Since λ > 0 and KL( πλ∥πβ ) ≥ 0, the left-hand side is at most P 
+
+> a
+
+πλ(a|s) ˆ r(s, a ), so: 
+
+X
+
+> a
+
+πλ(a|s) ˆ r(s, a ) ≥ X
+
+> a
+
+πβ (a|s) ˆ r(s, a ). (24) 12 Robust Post-Training for Generative Recommenders: Why Exponential Reward-Weighted SFT Outperforms RLHF 
+
+It remains to convert this inequality on noisy rewards into an inequality on true rewards. Since |ξ(s, a )| ≤ ϵ for all a and 
+
+πλ(·| s) is a probability distribution: 
+
+V πλ (s) = X
+
+> a
+
+πλ(a|s) r∗(s, a ) = X
+
+> a
+
+πλ(a|s) (ˆ r(s, a ) − ξ(s, a )) ≥ X
+
+> a
+
+πλ(a|s) ˆ r(s, a ) − ϵ. (25) Similarly, since ˆr(s, a ) = r∗(s, a ) + ξ(s, a ) ≥ r∗(s, a ) − ϵ for all a:
+
+X
+
+> a
+
+πβ (a|s) ˆ r(s, a ) ≥ X
+
+> a
+
+πβ (a|s) ( r∗(s, a ) − ϵ) = V πβ (s) − ϵ. (26) Chaining (25), (24), and (26): 
+
+V πλ (s) ≥ X
+
+> a
+
+πλ(a|s) ˆ r(s, a ) − ϵ ≥ X
+
+> a
+
+πβ (a|s) ˆ r(s, a ) − ϵ ≥ V πβ (s) − 2ϵ. 
+
+Substituting ϵ = σp2 log(2 |A| /δ ) completes the proof. 
+
+A.3. Theorem 4.4 Proof 
+
+Under the conditions of Theorem 4.3, if rewards are bounded r∗(s, a ) ∈ [0 , R max ], then with probability at least 1 − δ:
+
+V πλ (s) ≥ V πβ (s) − Rmax 
+
+
+
+e2ϵ/λ − 1
+
+
+
+, (27) where ϵ = σp2 log(2 |A| /δ ). When λ ≥ 2ϵ, this simplifies to: 
+
+V πλ (s) ≥ V πβ (s) − 4Rmax ϵλ . (28) 
+
+Proof. As before, let π∗
+
+> λ
+
+(a|s) = πβ (a|s) exp( r∗(s, a )/λ )/Z ∗ denote the exponential tilt under true rewards, and 
+
+πλ(a|s) = πβ (a|s) exp(ˆ r(s, a )/λ )/Z the tilt under noisy rewards, where Z∗ = P 
+
+> a
+
+πβ (a|s) exp( r∗(s, a )/λ ) and 
+
+Z = P 
+
+> a
+
+πβ (a|s) exp(ˆ r(s, a )/λ ) are the normalizing factors. As in Theorem 4.3, we condition on the event |ξ(s, a )| ≤ ϵ
+
+for all a ∈ A , which holds with probability at least 1 − δ and fix the state s ∈ S .First, the value function can be decomposed as follows: 
+
+V πλ (s) − V πβ (s) = 
+
+
+
+V π∗ 
+
+> λ
+
+(s) − V πβ (s)
+
+| {z }  
+
+> ≥0by Proposition 4.1
+
+−
+
+
+
+V π∗ 
+
+> λ
+
+(s) − V πλ (s)
+
+| {z }
+
+> noise difference
+
+. (29) Now, we just need to bound the difference between the noisy and noise-free policy values. Since r∗(s, a ) ∈ [0 , R max ]:
+
+V π∗ 
+
+> λ
+
+(s) − V πλ (s) = X
+
+> a
+
+(π∗
+
+> λ
+
+(a|s) − πλ(a|s)) r∗(s, a )
+
+≤ Rmax 
+
+X
+
+> a
+
+|π∗
+
+> λ
+
+(a|s) − πλ(a|s)|
+
+= 2 Rmax DTV (π∗
+
+> λ
+
+(·| s), π λ(·| s)) . (30) Define the noise weight w(a) = exp( ξ(s, a )/λ ). Since |ξ(s, a )| ≤ ϵ:
+
+e−ϵ/λ ≤ w(a) ≤ eϵ/λ ∀ a ∈ A . (31) Now we relate the noisy and clean policies. Since ˆr(s, a ) = r∗(s, a ) + ξ(s, a ), the noisy partition function factorizes as: 
+
+Z = X
+
+> a
+
+πβ (a|s) exp 
+
+ ˆr(s, a )
+
+λ
+
+
+
+= X
+
+> a
+
+πβ (a|s) exp 
+
+ r∗(s, a )
+
+λ
+
+
+
+exp 
+
+ ξ(s, a )
+
+λ
+
+
+
+= X
+
+> a
+
+πβ (a|s) exp 
+
+ r∗(s, a )
+
+λ
+
+
+
+w(a) = Z∗ X
+
+> a
+
+π∗
+
+> λ
+
+(a|s) w(a), (32) 13 Robust Post-Training for Generative Recommenders: Why Exponential Reward-Weighted SFT Outperforms RLHF 
+
+where the last step uses π∗
+
+> λ
+
+(a|s) = πβ (a|s) exp( r∗(s, a )/λ )/Z ∗. Dividing both sides by Z∗:
+
+ZZ∗ = X
+
+> a
+
+π∗
+
+> λ
+
+(a|s) w(a), (33) Therefore, the partition function ratio is simply the expected noise weight under the clean policy. Combined with (31) , this gives e−ϵ/λ ≤ Z/Z ∗ ≤ eϵ/λ , and therefore: 
+
+e−ϵ/λ ≤ ρ ≤ eϵ/λ , where ρ := Z∗/Z. (34) For any action a, the policy ratio between the noisy and clean policies then follows directly: 
+
+πλ(a|s)
+
+π∗
+
+> λ
+
+(a|s) = πβ (a|s) exp(ˆ r(s, a )/λ )/Z πβ (a|s) exp( r∗(s, a )/λ )/Z ∗ = w(a) · Z∗
+
+Z . (35) Substituting (35) into the total variation: 
+
+2 DTV (π∗
+
+> λ
+
+, π λ) = X
+
+> a
+
+π∗
+
+> λ
+
+(a|s) |w(a) ρ − 1| . (36) From (31) and (34), the product w(a) ρ lies in [e−2ϵ/λ , e 2ϵ/λ ], so: 
+
+|w(a) ρ − 1| ≤ max 
+
+
+
+e2ϵ/λ − 1, 1 − e−2ϵ/λ 
+
+= e2ϵ/λ − 1, (37) where the equality holds because ex − 1 ≥ 1 − e−x for x ≥ 0. Substituting back into (36): 
+
+DTV (π∗
+
+> λ
+
+(·| s), π λ(·| s)) ≤ e2ϵ/λ − 12 . (38) Substituting (38) into (30) and then into (29): 
+
+V πλ (s) ≥ V πβ (s) − Rmax 
+
+
+
+e2ϵ/λ − 1
+
+
+
+. (39) When λ ≥ 2ϵ, we have 2ϵ/λ ≤ 1, and ex − 1 ≤ 2x for x ∈ [0 , 1] , giving: 
+
+V πλ (s) ≥ V πβ (s) − 4Rmax ϵλ . (40) Substituting ϵ = σp2 log(2 |A| /δ ) completes the proof. 
+
+# B. Experiments 
+
+B.1. Data Distribution 
+
+The following chart shows the rating distribution across the datasets: 
+
+Figure 4. Distribution of ratings in all three test datasets. 
+
+14 Robust Post-Training for Generative Recommenders: Why Exponential Reward-Weighted SFT Outperforms RLHF 
+
+B.2. Additional Results 
+
+B.2.1. M ETRIC EVOLUTION FOR EXP -RSFT AND RSFT These plots plot just Exp-RSFT and RSFT highlighting the superior performance of Exp-RSFT across all epochs for all datasets. The metrics at epoch 0 is the same as the metrics for the Behavior Cloning baseline. 
+
+Figure 5. Reward weighting versus exponential reward weighting for ML-1M. 
+
+15 Robust Post-Training for Generative Recommenders: Why Exponential Reward-Weighted SFT Outperforms RLHF 
+
+Figure 6. Reward weighting versus exponential reward weighting for ML-20M. 
+
+Figure 7. Reward weighting versus exponential reward weighting for Amazon Books. 
+
+16 Robust Post-Training for Generative Recommenders: Why Exponential Reward-Weighted SFT Outperforms RLHF 
+
+B.2.2. M ETRIC EVOLUTION FOR ALL ALGORITHMS 
+
+These plots show the evolution of all metrics across all epochs for all datasets. Again, the metrics at epoch 0 is the same as the metrics for the Behavior Cloning baseline. We see that both PPO and DPO catastrophically collapse fairly early due to reward-model over-optimization. 
+
+Figure 8. All metrics for ML-1M. 
+
+17 Robust Post-Training for Generative Recommenders: Why Exponential Reward-Weighted SFT Outperforms RLHF 
+
+Figure 9. All metrics for ML-20M. 
+
+Figure 10. All metrics for Amazon Books. 
+
+18 Robust Post-Training for Generative Recommenders: Why Exponential Reward-Weighted SFT Outperforms RLHF 
+
+B.2.3. P ERFORMANCE -R OBUSTNESS TRADE -OFF 
+
+Figure 11. Best metric values for all metrics for different λ.
+
+19 Robust Post-Training for Generative Recommenders: Why Exponential Reward-Weighted SFT Outperforms RLHF 
+
+Figure 12. Final epoch metric values for all metrics for different λ.
+
+20

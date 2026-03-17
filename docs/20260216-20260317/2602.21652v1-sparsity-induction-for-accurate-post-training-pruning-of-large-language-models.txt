@@ -1,0 +1,232 @@
+Title: Sparsity Induction for Accurate Post-Training Pruning of Large Language Models
+
+URL Source: https://arxiv.org/pdf/2602.21652v1
+
+Published Time: Thu, 26 Feb 2026 01:34:22 GMT
+
+Number of Pages: 5
+
+Markdown Content:
+# SPARSITY INDUCTION FOR ACCURATE POST-TRAINING PRUNING OF LARGE LANGUAGE MODELS 
+
+# Minhao Jiang 1,2, Zhikai Li 1, Xuewen Liu 1,2,Jing Zhang 1,2, Mengjuan Chen 1,†, Qingyi Gu 1,† 
+
+> 1
+
+# Institute of Automation, Chinese Academy of Sciences, Beijing, China  
+
+> 2
+
+# School of Artificial Intelligence, University of Chinese Academy of Sciences, Beijing, China 
+
+ABSTRACT 
+
+Large language models have demonstrated capabilities in text gener-ation, while their increasing parameter scales present challenges in computational and memory efficiency. Post-training sparsity (PTS), which reduces model cost by removing weights from dense net-works, is an effective approach. However, native dense matrices lack high sparsity, making existing approaches that directly remove weights disrupt model states, resulting in unsatisfactory performance recovery even with post-tuning. We propose Sparsity Induction, which promotes models toward higher sparsity at both distribution and feature levels before pruning, to push the limits of PTS. At the distribution level, we enhance distributional sparsity through math-ematically equivalent scaling transformations, which are fully ab-sorbable and incur no extra parameters or inference-time overhead. At the feature level, we introduce Spectral Norm Loss to promote feature sparsity from a low-rank perspective. Experiments across di-verse model architectures and tasks demonstrate that our method fur-ther enhances sparsity-friendliness, achieving superior pruning per-formance over existing approaches. 
+
+Index Terms — Model compression, Sparsity pruning, Large language models 
+
+1. INTRODUCTION 
+
+Large Language Models (LLMs), such as the GPT series [1] and the DeepSeek series [2, 3], have achieved strong performance in language understanding and generation across diverse tasks. How-ever, state-of-the-art LLMs typically contain tens to hundreds of bil-lions of parameters, incurring substantial computational costs, high latency, and significant energy usage, which hinders deployment in both data centers and resource-constrained environments. Therefore, there is a pressing need for model compression methods that substan-tially improve inference efficiency while preserving accuracy. Mainstream compression routes comprise pruning, quantiza-tion [4, 5, 6], and knowledge distillation [7, 8]. Sparsifying LLMs is commonly discussed in terms of granularity: unstructured weight sparsity, structured patterns such as N:M [9] or block sparsity, and pruning at the level of channels [10], attention heads [11], or en-tire layers [12]. The latter two typically alter network topology and tensor shapes, making them more intrusive to training and de-ployment pipelines and often necessitating substantial retraining to recover accuracy. By contrast, Post-training Sparsity (PTS ), tends to use unstructured removal to avoid heavy retraining; it can also be combined with N:M semi-structured to obtain hardware-friendly patterns with only limited calibration and lightweight compensa- 
+
+> †Corresponding authors.
+
+tion, thereby delivering inference speedups and memory savings at modest overhead. Post-training sparsity (PTS) originally relied on magnitude pruning [13], which ranks parameters by their absolute values and zeros out small weights. This rule is easy to implement and has long served as a reference baseline for high sparsity, but in large-scale models the long-tailed magnitude distribution and inter-channel scale imbalance make a purely magnitude-based criterion prone to mispruning critical features and causing noticeable performance degradation. To mitigate this, SparseGPT [14] estimates loss sensi-tivity with a diagonal Hessian approximation under a no-retraining setting and applies row-wise compensation to redistribute the re-moved information to retained weights, which can greatly reduce accuracy loss even at around fifty percent sparsity. Wanda [15] further introduces the L2 norm of input activations as a data-aware criterion, yielding more robust pruning decisions at very low addi-tional cost. Recent work [16, 17] has broadened the sources and combinations of auxiliary signals and leveraged symbolic regres-sion to automatically search importance expressions over weights and activations, aiming for stable recovery at higher sparsity levels. Nevertheless, the returns from merely strengthening importance scores have become marginal, indicating that post-training sparsity should be reconsidered from more fundamental perspectives such as preserving distributional and scaling consistency. Across existing post-training sparsity methods, pushing for ever more refined importance scores exhibits diminishing returns. These scores are typically built on local approximations or limited cali-bration data; improvements increasingly yield marginal re-ranking, while the added computation and tuning accumulate and fail to trans-late into stable accuracy gains at large scale and high sparsity. As shown by the left panel of Fig. 1 (top), the baseline importance landscape indicates that the raw weight distribution is not inherently sparse; naive pruning therefore removes useful mass and perturbs ac-tivations. More fundamentally, pruning disrupts the self-consistent distributional and scaling structure established during training, in-cluding the statistical shape of weights and the relative scales across channels. The resulting imbalance propagates through attention and feed-forward paths and emerges as the primary driver of accuracy loss in post-training sparsity. Merely refining importance scores can-not remedy this distributional damage. A more promising direction is to preserve or rapidly recalibrate distribution and scale consistency before and after pruning, retaining the low-overhead nature of post-training sparsity while suppressing error amplification at high spar-sity levels. We introduce the central idea of Sparsity Induction (SI): be-fore pruning, we proactively shape the model’s weight distribution and feature structure to make it more sparsity-friendly, thereby im-proving the accuracy and stability of PTS without adding inference overhead. To instantiate this idea, we apply absorbable, mathemat-               
+
+> arXiv:2602.21652v1 [cs.CL] 25 Feb 2026 𝑺 ׅ
+> −ׅ𝑾 𝒒 𝑺 ׇRope
+> Rope
+> Soft-
+> max
+> Swish
+> 𝑺 ׅ−ׅ𝑾 𝒌 𝑺 ׇ−ׅ
+> 𝑺 ׅ
+> −ׅ𝑾 𝒗 𝑺 ׉
+> RM
+> S-N 𝑺 ׅ𝑺 ׉
+> −ׅ𝑾 𝒐
+> 𝑺 ׋
+> −ׅ𝑾 𝒖𝒑
+> RM
+> S-N 𝑺 ׋
+> 𝑺 ׋
+> −ׅ𝑾 𝒈𝒂𝒕𝒆
+> 𝑾 𝒅𝒐𝒘𝒏
+> Freeze Weights
+> Mergeable Modules
+> Trainable Scaling
+> Parameters
+> Large |W| Becomes Larger
+> Small |W| Becomes Smaller
+
+Fig. 1 : Top: Importance distributions before (left) and after (right) Sparsity Induction . SI sharpens the landscape by boosting salient channels and suppressing background mass, enlarging the gap between important and unimportant weights and yielding a more sparsity-friendly distribution. Bottom: We attach lightweight channel-wise scalers s to Attention and FFN; backbone weights are frozen and only s are trained. Dashed modules are merged back after training, introducing no extra modules or inference-time overhead. ically equivalent scaling transformations at the distributional level, using a few learnable scale factors to align channel/head statistics and folding them entirely into the parameters at inference; at the feature level, we add a spectral-norm loss to encourage low-rank structure and promote feature sparsity. We further devise an effi-cient optimization framework that jointly updates standard impor-tance scores and scaling factors, yielding up to 20× speedup over conventional pipelines. Extensive experiments across architectures and tasks show that SI markedly strengthens sparsity-friendliness and consistently surpasses existing approaches in pruning perfor-mance. Our contributions can be summarized as follows: 
+
+· We introduce the concept of sparsity induction, which enforces sparsity in the original model before pruning. 
+
+· We design a sparsity induction framework that optimizes spar-sity properties from both distributional and feature-level perspec-tives. 
+
+· Extensive experiments demonstrate that our approach sub-stantially enhances sparsity-friendliness and significantly improves pruning performance. 
+
+2. METHODOLOGY 2.1. Preliminaries 
+
+Most pruning pipelines construct a binary mask according to a spar-sity metric and a target sparsity level, and obtain a pruned weight matrix by zeroing the masked entries. Let W ∈ Rdout ×din denote a dense weight matrix and M ∈ { 0, 1}dout ×din the pruning mask; the pruned weights are given as follows, 
+
+cW = W ⊙ M, (1) where ⊙ denotes the Hadamard product. For an input vector x ∈
+
+Rdin , the output distortion induced by pruning is given as follows, 
+
+∆Y = ( W − cW) X, (2) where ∆Y denotes the pruning-induced output distortion. Existing methods primarily focus on designing effective metrics so that the induced mask M minimizes such distortion. However, the original dense weight matrices in LLMs typically do not exhibit substantial natural sparsity. In this setting, the pruned model cW is a strict subset (hard-masked version) of W; without adapting the weight distribution or the feature responses, na¨ ıve hard masking of-ten yields nontrivial performance degradation. In this work, we induce sparsity adaptively from two com-plementary perspectives, distributional and feature, to prepare the model for pruning: (i) we reshape the weight distribution to enhance separability between important and unimportant parameters; and (ii) we learn masks under feature-aware objectives that directly penal-ize output distortion. This dual guidance sparsifiable structure and improves the performance of the sparse model. 
+
+2.2. Sparsity Induction: Distributions 
+
+We aim to perform sparsity induction so that, prior to pruning, the weight distribution is pre-adapted to the accuracy degradation in-duced by metric-based pruning, thereby effectively enhancing spar-sity. However, for high-dimensional LLMs it is difficult to deter-mine the correct direction of distributional optimization by mere in-spection, while full-parameter fine-tuning is prohibitively resource-intensive. To achieve precise yet efficient control, we introduce a functionally equivalent reparameterization based on channel-wise scaling and channel-wise shifting, which reshapes the weight distri-butions without altering model functionality.This equivalent trans-formation can be applied to both the linear layer and attention oper-ation. 
+
+Linear layer. To reshape weight statistics without changing functionality, we introduce per-channel scaling s > 0 and per-channel shifting δ, and let S be the diagonal matrix of s (i.e., 
+
+S = diag( s)). For a linear layer Y = WX + b, with per-channel scale s > 0, shift δ, and S = diag( s), we can therefore express the equivalent reparameterization as follows, 
+
+Y = WX + b = S−1(X − δ)
+
+| {z }
+
+> ˜X
+
+(WS )
+
+| {z } 
+
+> ˜W
+
++ ( b + Wδ)
+
+| {z }
+
+> ˜b
+
+, (3) where ˜X = S−1(X − δ), ˜W = WS , and ˜b = b + Wδ; S =diag( s) is a diagonal matrix, and W is the (dense) weight matrix. 
+
+Attention. To keep attention logits intact (thus preserving the softmax attention and outputs), we apply a pair of inverse per-channel scalings to queries and keys: with sa > 0 and Sa =diag( sa), set ˜Q = QS a and ˜K = KS −1 
+
+> a
+
+; then ˜Q ˜K⊤ = QK ⊤.The factors can be absorbed into the Q/K projection weights, reshaping their distributions without altering functionality. 
+
+Lightweight objective. We learn only a small set of transforma-tion parameters on calibration data (e.g., s, δ for linear layers and sa
+
+for attention) using a lightweight objective that pre-adapts the model to the mask. Accordingly, the optimization objective is given as fol-lows, 
+
+min  
+
+> Θ
+
+EX ∥( ˜W − ˜W ⊙ M) ˜X∥22, Θ = {s, δ, sa}, (4) where Θ denotes the transformation parameters, M is a binary mask meeting the target sparsity, and ˜W and ˜x follow the definitions above, as shown in the bottom panel of Fig. 1. This avoids full-parameter fine-tuning while improving mask-friendliness. 
+
+2.3. Sparsity Induction: Features 
+
+After the distributional reparameterization, optimization at the fea-ture level may still lack a stable and well-defined search direction. We address this by combining a data-driven initialization of the transformation factors with a spectral-style guidance term so as to obtain faster and more reliable convergence while keeping the num-ber of trainable parameters small. Concretely, we construct a robust channel-wise initialization as follows, Let X = {xj }nj=1 denote the calibration set and yj = Wx j the pre-transform outputs of a layer. For output channel i, define the robust statistics mi = median j yj,i 
+
+and μi = 1
+
+> n
+
+Pnj=1 yj,i ; we then set 
+
+s(0)  
+
+> i
+
+=  mi − g(μi)2, (5) where g : R → R is a fixed monotone mapping (e.g., identity or simple rescaling), and s(0)  
+
+> i
+
+denotes the initial per-channel scale. On top of this initialization, we optimize only the transformation factors using an output-matching loss combined with a spectral-style regularizer; the objective is defined as follows, 
+
+Ltotal = LMSE + λ Rp, (6) 
+
+LMSE = MSE  Yd, Ys, (7) 
+
+Rp = exp 
+
+
+
+−α X
+
+> ℓ∈S
+
+∥Wℓ∥p
+
+
+
+, (8) where Yd and Ys denote the dense and sparsity-induced batched outputs, respectively; λ > 0 balances reconstruction and regular-ization; α > 0 controls the regularizer strength; p ≥ 1 is the norm order; S indexes the set of layers subject to sparsity induction; and 
+
+Wℓ is the weight matrix of layer ℓ. The combination of robust ini-tialization and spectral guidance narrows the search space, stabilizes feature-level updates, and improves pruning accuracy at a fixed spar-sity without resorting to full-parameter fine-tuning. 
+
+2.4. Efficiency: Fast Hessian Update 
+
+We avoid repeated forwards by replacing activation variance with a diagonal Gauss–Newton/Hessian proxy for a linear layer y =
+
+WX + b; the proxy is defined as follows, 
+
+H ∝ ΣX ≜ E[XX ⊤], (9) where H serves as a curvature proxy and is diagonal up to a positive layer-wise constant, and ΣX denotes the input covariance. When distributional scaling is folded into parameters at infer-ence, with X′ = DX and D = Diag( s), the proxy transforms as follows, 
+
+H′ ∝ D H D =⇒ diag( H′) = s2 ◦ diag( H), (10) where s ∈ Rdin is the absorbable per-channel scaling vector, D =Diag( s) is its diagonal embedding, and ◦ denotes the Hadamard product. Substituting the proxy gives the constant-time refreshable score as follows, 
+
+mfast (W) ≜ |W|◦ pdiag( H′) ∝ | W|◦  p diag( H)◦s, (11) where | · | and diag( ·) denote the elementwise absolute value and diagonal extraction, respectively. By (10), mfast (W) induces the same ordering as the classical Wanda metric evaluated on the scaled input X′ = DX up to a positive layer-wise constant, thus preserving rankings while enabling O(din ) refresh via cached diagonals. This algorithmic design greatly accelerates our overall method. 
+
+3. EXPERIMENTS 3.1. Experiment Setup Models, Datasets, and Evaluations We evaluate eight decoder-only LLMs that jointly cover size and architectural style: OPT– 125M/350M/1.3B/2.7B [18] and LLaMA-1/2 [19, 20] at 7B and 13B. This set spans the bias-heavy OPT family and the largely bias-light LLaMA family, enabling representative comparisons across structures and capacities. For language modeling, we report per-plexity on the C4 [21] and WikiText-2 [22] validation sets. To assess downstream generalization, we measure zero-shot accu-racy with EleutherAI LM Harness on six tasks: ARC-Easy, ARC-Challenge [23], HellaSwag [24], BoolQ [25], Winogrande [26], and OpenBookQA [27]. Results are compared against the dense models and against pruning baselines under identical tokenization, prompts, and scoring; calibration data are disjoint from all evaluation sets. 
+
+Details. Pruning is applied to the linear layers in attention and MLP blocks; embeddings and the final LM head remain dense, and biases are not pruned. We compare three post-training sparsifica-tion baselines—Magnitude, Wanda, and SparseGPT—and employ a plug-and-play sparsity-induction step compatible with each baseline to stabilize the selected masks/thresholds. Following prior work, we use exactly 128 activation samples (2048-token segments from the C4 training set), shared across all models and methods. All exper-iments use PyTorch and HuggingFace Transformers with LM Har-ness on a single NVIDIA RTX A6000 (48 GB). Baseline pruning is one-shot without task-specific fine-tuning; the induction stage per-forms a short 1–5 epoch pass on the 128 samples. We use a maxi-mum context length of 2048 tokens and adjust batch sizes to fit mem-ory. 
+
+3.2. Experiment Results and Analysis 
+
+Table 1 reports perplexity for both dense and sparse models, with and without SI augmentation. SI systematically mitigates the perplex-ity degradation introduced by pruning, with the largest gains under aggressive sparsity where baseline sparse models otherwise suffer severe quality loss or become practically unusable. Table 2 summarizes the average zero-shot performance of dense models and their pruned counterparts across six benchmarks.Across multiple sparsity regimes, adding Sparsity Induction (SI) consis-tently improves the zero-shot accuracy of one-shot pruning base-lines, including magnitude pruning, Wanda, and SparseGPT. Although SI is not explicitly tailored to N:M semi-structured sparsity, it nevertheless delivers strong results under such patterns. Because SI’s auxiliary parameters can be folded into the weight ma-trices before inference, it introduces no additional runtime modules or overhead. Consequently, models equipped with SI remain fully compatible with hardware acceleration for N:M sparsity and can be deployed for speedups without modification. As summarized in Table 3, our fast Hessian update reduces the Wanda refresh time on LLaMA-7B (batch size = 1 ) from 345 .91 sto 15 .27 s, a 22 .65 × improvement. For end-to-end latency under the 2:4 sparsity pattern (Table 4), we observe 251 ms versus 312 ms on LLaMA-7B ( 1.24 × speedup). Because SI is fully absorbable, it introduces no additional runtime overhead relative to Wanda or SparseGPT. 
+
+Table 1 : Perplexity ↓ on the WikiText-2 dataset for OPT and LLaMA-1 models. Bold indicates the lowest PPL within each (Spar-sity, Model) block. Abbrev.: SI = Sparsity Induction ; rows marked “+SI ” mean the base method + SI.                                                                                                                            
+
+> OPT LLaMA-1 Sparsity Method 125M 350M 1.3B 2.7B 7B 13B
+> 0% Dense 27.65 22.00 14.62 12.47 5.68 5.09
+> 50%
+> Magnitude 193.36 97.78 1712.82 265.21 17.28 20.21 +SI (Ours) 52.85 49.55 26.39 18.86 12.08 18.45 Wanda 38.99 36.19 18.40 14.22 7.26 6.15 +SI (Ours) 38.00 34.78 18.27 14.19 7.04 6.04
+> SparseGPT 36.97 31.40 17.40 13.46 7.17 6.22 +SI (Ours) 35.79 31.30 17.45 13.45 7.13 6.12
+> 2:4
+> Magnitude 341.45 417.04 427.18 1153.12 42.54 18.36 +SI (Ours) 226.83 173.99 40.73 31.14 18.55 15.55 Wanda 79.89 112.57 28.16 21.25 11.53 9.60 +SI (Ours) 79.11 94.80 27.54 20.23 10.51 8.32
+> SparseGPT 61.44 49.55 23.87 17.10 11.00 9.05 +SI (Ours) 60.66 49.51 23.85 17.07 10.65 8.78
+> 4:8
+> Magnitude 169.09 160.73 240.15 166.94 16.83 13.87 +SI (Ours) 122.89 74.17 28.20 21.44 13.97 13.25 Wanda 53.17 59.12 22.17 16.57 8.58 7.40 +SI (Ours) 53.06 54.30 21.88 16.47 8.15 6.90
+> SparseGPT 44.81 39.20 20.25 14.98 8.56 7.43 +SI (Ours) 43.63 39.11 20.03 14.93 8.35 7.26
+
+Table 2 : Average zero-shot accuracy (%) ↑ on ARC-Easy, ARC-Challenge, HellaSwag, BoolQ, Winogrande, and OpenBookQA; models are LLaMA-1/2 at 7B and 13B.                                                                                    
+
+> LLaMA-1 LLaMA-2 Sparsity Method 7B 13B 7B 13B
+> 0% Dense 54.79 57.82 55.95 58.25
+> 50%
+> Magnitude 43.17 46.27 48.04 53.40 +SI (Ours) 47.52 46.85 48.68 54.27 Wanda 51.47 55.45 53.63 56.10 +SI (Ours) 52.50 55.32 53.91 56.08 SparseGPT 52.37 54.31 53.34 55.71 +SI (Ours) 52.04 54.16 53.10 56.22 2:4
+> Magnitude 43.55 46.02 46.01 47.84 +SI (Ours) 42.66 47.28 46.39 51.12 Wanda 45.75 48.73 45.95 50.06 +SI (Ours) 45.71 49.54 46.32 50.98 SparseGPT 46.07 49.31 47.23 52.14 +SI (Ours) 46.30 50.05 47.04 52.59 4:8
+> Magnitude 46.18 48.46 48.77 52.10 +SI (Ours) 46.07 49.87 49.17 54.49 Wanda 48.58 52.22 50.02 54.59 +SI (Ours) 48.89 52.61 50.37 54.79 SparseGPT 48.73 51.78 50.48 55.09 +SI (Ours) 49.05 52.54 50.90 55.10
+
+Table 3 : Fast Hessian update vs. classical activation-recompute for refreshing the Wanda metric on LLaMA-7B in a epoch of 128 sam-ples(batch size = 1).          
+
+> Method Update time (s) Avg. time/iter (s) Speedup Classical Recompute 345.91 2.70 1.00 ×
+> Fast Update (Ours) 15.27 0.12 22.65 ×
+
+Table 4 : End-to-end latency under 2:4 sparsity on LLaMA-7B. Our SI is fully absorbable and adds zero runtime latency compared with wanda.           
+
+> Pattern E2E latency (ms) Speedup Dense 312 1.00 ×
+> 2:4 (Wanda) 251 1.24 ×
+> 2:4 (Wanda+SI) 251 1.24 ×
+
+4. CONCLUSIONS 
+
+We have provided Sparsity Induction (SI), a training-light frame-work that prepares large language models for pruning. SI acts along two complementary dimensions, distributional and feature level, by applying functionally equivalent per channel transformations con-sisting of scaling and shifting, and by learning only a small set of pa-rameters on calibration data. This preadaptation suppresses pruning-induced output distortion and reduces accuracy loss while avoiding full parameter fine tuning. Experiments across a range of model sizes and architectures, and with multiple PTS methods, show that SI serves as an easily inte-grated enhancement that improves the performance of sparse mod-els. The results further indicate that per channel scaling and shift-ing provide an effective mechanism for restoring expressivity after masking. Future work will explore richer equivalence transforma-tions and structure-aware variants, as well as tighter integration with quantization and other sparsification techniques, in order to further advance sparse large language model performance. 5. ACKNOWLEDGEMENTS 
+
+This work was supported in part bythe Strategic Priority Re-search Program of the Chinese Academy of Sciences (Grant No. XDB1100000); in part by the National Natural Science Foundation of China under Grant Number 62276255; in part by the Postdoctoral Fellowship Program of CPSF under Grant Number GZC20251175; 
+
+6. REFERENCES 
+
+[1] Jawid Ahmad Baktash and Mursal Dawodi, “Gpt-4: A review on advancements and opportunities in natural language pro-cessing,” arXiv preprint arXiv:2305.03195 , 2023. [2] Aixin Liu, Bei Feng, Bing Xue, Bingxuan Wang, Bochao Wu, Chengda Lu, Chenggang Zhao, Chengqi Deng, Chenyu Zhang, Chong Ruan, et al., “Deepseek-v3 technical report,” arXiv preprint arXiv:2412.19437 , 2024. [3] Aixin Liu, Bei Feng, Bin Wang, Bingxuan Wang, Bo Liu, Chenggang Zhao, Chengqi Dengr, Chong Ruan, Damai Dai, Daya Guo, et al., “Deepseek-v2: A strong, economical, and efficient mixture-of-experts language model,” arXiv preprint arXiv:2405.04434 , 2024. [4] Wenqi Shao, Mengzhao Chen, Zhaoyang Zhang, Peng Xu, Lirui Zhao, Zhiqian Li, Kaipeng Zhang, Peng Gao, Yu Qiao, and Ping Luo, “Omniquant: Omnidirectionally calibrated quantization for large language models,” in ICLR , 2024. [5] Guangxuan Xiao, Ji Lin, Mickael Seznec, Hao Wu, Julien Demouth, and Song Han, “Smoothquant: Accurate and effi-cient post-training quantization for large language models,” in 
+
+ICML . PMLR, 2023, pp. 38087–38099. [6] Zhikai Li, Xuewen Liu, Jing Zhang, and Qingyi Gu, “Repquant: Towards accurate post-training quantization of large transformer models via scale reparameterization,” arXiv preprint arXiv:2402.05628 , 2024. [7] Siqi Sun, Yu Cheng, Zhe Gan, and Jingjing Liu, “Pa-tient knowledge distillation for bert model compression,” in 
+
+EMNLP , 2019, pp. 4323–4332. [8] Siqi Sun, Zhe Gan, Yuwei Fang, Yu Cheng, Shuohang Wang, and Jingjing Liu, “Contrastive distillation on intermediate rep-resentations for language model compression,” in EMNLP ,2020, pp. 498–508. [9] Asit Mishra, Jorge Albericio Latorre, Jeff Pool, Darko Stosic, Dusan Stosic, Ganesh Venkatesh, Chong Yu, and Paulius Mi-cikevicius, “Accelerating sparse deep neural networks,” arXiv preprint arXiv:2104.08378 , 2021. [10] Xinyin Ma, Gongfan Fang, and Xinchao Wang, “Llm-pruner: On the structural pruning of large language models,” Advances in neural information processing systems , vol. 36, pp. 21702– 21720, 2023. [11] Zichang Liu, Jue Wang, Tri Dao, Tianyi Zhou, Binhang Yuan, Zhao Song, Anshumali Shrivastava, Ce Zhang, Yuandong Tian, Christopher Re, et al., “Deja vu: Contextual sparsity for ef-ficient llms at inference time,” in ICML . PMLR, 2023, pp. 22137–22176. [12] Hassan Sajjad, Fahim Dalvi, Nadir Durrani, and Preslav Nakov, “Poor man’s bert: Smaller and faster transformer mod-els,” arXiv preprint arXiv:2004.03844 , vol. 2, no. 2, 2020. [13] Jonathan Frankle and Michael Carbin, “The lottery ticket hy-pothesis: Finding sparse, trainable neural networks,” arXiv preprint arXiv:1803.03635 , 2018. [14] Elias Frantar and Dan Alistarh, “Sparsegpt: Massive lan-guage models can be accurately pruned in one-shot,” in ICML .PMLR, 2023, pp. 10323–10337. [15] Mingjie Sun, Zhuang Liu, Anna Bair, and J Zico Kolter, “A simple and effective pruning approach for large language mod-els,” arXiv preprint arXiv:2306.11695 , 2023. [16] Peijie Dong, Lujun Li, Zhenheng Tang, Xiang Liu, Xinglin Pan, Qiang Wang, and Xiaowen Chu, “Pruner-zero: Evolv-ing symbolic pruning metric from scratch for large language models,” in ICML . PMLR, 2024, pp. 11346–11374. [17] Rocktim Jyoti Das, Mingjie Sun, Liqun Ma, and Zhiqiang Shen, “Beyond size: How gradients shape pruning decisions in large language models,” arXiv preprint arXiv:2311.04902 ,2023. [18] Susan Zhang, Stephen Roller, Naman Goyal, Mikel Artetxe, Moya Chen, Shuohui Chen, Christopher Dewan, Mona Diab, Xian Li, Xi Victoria Lin, et al., “Opt: Open pre-trained trans-former language models,” arXiv preprint arXiv:2205.01068 ,2022. [19] Hugo Touvron, Thibaut Lavril, Gautier Izacard, Xavier Martinet, Marie-Anne Lachaux, Timoth´ ee Lacroix, Baptiste Rozi` ere, Naman Goyal, Eric Hambro, Faisal Azhar, et al., “Llama: Open and efficient foundation language models,” 
+
+arXiv preprint arXiv:2302.13971 , 2023. [20] Hugo Touvron, Louis Martin, Kevin Stone, Peter Albert, Am-jad Almahairi, Yasmine Babaei, Nikolay Bashlykov, Soumya Batra, Prajjwal Bhargava, Shruti Bhosale, et al., “Llama 2: Open foundation and fine-tuned chat models,” arXiv preprint arXiv:2307.09288 , 2023. [21] Colin Raffel, Noam Shazeer, Adam Roberts, Katherine Lee, Sharan Narang, Michael Matena, Yanqi Zhou, Wei Li, and Peter J Liu, “Exploring the limits of transfer learning with a unified text-to-text transformer,” Journal of machine learning research , vol. 21, no. 140, pp. 1–67, 2020. [22] Stephen Merity, Caiming Xiong, James Bradbury, and Richard Socher, “Pointer sentinel mixture models,” in ICLR , 2017. [23] Peter Clark, Isaac Cowhey, Oren Etzioni, Tushar Khot, Ashish Sabharwal, Carissa Schoenick, and Oyvind Tafjord, “Think you have solved question answering? try arc, the ai2 reasoning challenge,” arXiv preprint arXiv:1803.05457 , 2018. [24] Rowan Zellers, Ari Holtzman, Yonatan Bisk, Ali Farhadi, and Yejin Choi, “Hellaswag: Can a machine really finish your sen-tence?,” in ACL , 2019, pp. 4791–4800. [25] Christopher Clark, Kenton Lee, Ming-Wei Chang, Tom Kwiatkowski, Michael Collins, and Kristina Toutanova, “Boolq: Exploring the surprising difficulty of natural yes/no questions,” in Proceedings of NAACL-HLT , 2019, pp. 2924– 2936. [26] Keisuke Sakaguchi, Ronan Le Bras, Chandra Bhagavatula, and Yejin Choi, “Winogrande: An adversarial winograd schema challenge at scale,” Communications of the ACM , vol. 64, no. 9, pp. 99–106, 2021. [27] Todor Mihaylov, Peter Clark, Tushar Khot, and Ashish Sab-harwal, “Can a suit of armor conduct electricity? a new dataset for open book question answering,” arXiv preprint arXiv:1809.02789 , 2018.

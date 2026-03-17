@@ -1,0 +1,228 @@
+Title: Preference Packing: Efficient Preference Optimization for Large Language Models
+
+URL Source: https://arxiv.org/pdf/2602.24082v1
+
+Published Time: Mon, 02 Mar 2026 02:02:43 GMT
+
+Number of Pages: 6
+
+Markdown Content:
+# PREFERENCE PACKING : E FFICIENT PREFERENCE 
+
+# OPTIMIZATION FOR LARGE LANGUAGE MODELS 
+
+A P REPRINT 
+
+Jaekyung Cho ∗
+
+AWS GenAI Innovation Center 
+
+jackcho@amazon.com 
+
+March 2, 2026 
+
+## ABSTRACT 
+
+Resource-efficient training optimization techniques are becoming increasingly important as the size of large language models (LLMs) continues to grow. In particular, batch packing is commonly used in pre-training and supervised fine-tuning to achieve resource-efficient training. We propose 
+
+preference packing , a method to enhance resource efficiency in training techniques that use data with different responses for the same input prompt, such as reward models or Direct Preference Optimization (DPO). Preference packing improves resource efficiency by reducing the attention operations for duplicate input prompts and decreasing KV cache memory usage. We conducted experiments on text-only datasets and image-included datasets and achieved at least 37% reduction in training time. Notably, this method can be applied alongside existing optimization techniques such as batch sorting, resulting in a 3.22 × speedup. 
+
+## 1 Introduction 
+
+The discovery of Large Language Model (LLM) scaling laws has played a crucial role in rapidly advancing LLM performance [5]. Increasing model parameter size and dataset size has significantly improved performance but has also required massive GPU clusters and extensive computation time. Given the immense resource demands, efficiently utilizing time and computational resources has become a critical challenge in LLM development. Various resource-efficient training techniques have been used for pre-training and supervised fine-tuning. Batch pack-ing was among the first methods studied, where datasets with different sequence lengths are concatenated within a batch, and training is performed by adjusting the causal mask instead of using padding [2]. Additionally, batch sort-ing methods have been explored to improve efficiency by grouping sequences of similar lengths into the same batch, reducing resource waste caused by padding [1]. Unlike traditional pre-training and supervised fine-tuning (SFT) using next-token prediction loss, alignment tuning methods have emerged to learn human preferences. Among them, reward model training [9, 10] and Direct Preference Optimization (DPO) [11] utilize data where different responses to the same input prompt are ranked. However, the input prompt, which constitutes the majority of the data, leads to redundant computations and duplicated memory usage. Until now, there has been no method to handle these issues in a resource-efficient manner. Therefore, we propose preference packing for efficient alignment tuning. Instead of grouping multiple responses to the same input prompt into a batch, we sequentially pack the responses. We then construct a causal attention mask for the packed sequence, ensuring that computations and KV memory caching for the repeated input prompt occur only once. In this work, we propose a resource-efficient technique for alignment tuning, demonstrating its computational and memory advantages on real-world preference datasets. Furthermore, we experimentally validate that our method remains effective in distributed training settings of large-scale LLMs with up to 72B parameters. 
+
+> ∗
+
+This publication was written prior to the author joining Amazon. 
+
+> arXiv:2602.24082v1 [cs.CL] 27 Feb 2026
+
+arXiv Template A P REPRINT 
+
+## 2 Related Work 
+
+2.1 Preference optimization 
+
+Reinforcement Learning from Human Feedback (RLHF) methods use data where multiple responses exist for the same input prompt, ranking them based on preference [9, 10]. The reward model (RM) used in RLHF leverages the Bradley-Terry model to learn preferences and predict a scalar reward value for a given token sequence. We notate x as a single input prompt, yw as a preferable response, and yl as a relatively not preferable response. The loss function of the RM rθ is as following: 
+
+Lθ = E(x,y w,y l)∼D [log σ (rθ (x, y w ) − rθ (x, y l))] 
+
+Direct Preference Optimization (DPO)[11], which is a simpler alternative to RLHF, directly trains the LLM using the same preference data that was used to train the reward model. It employs a loss function same that is identical in form to that of the reward model, but the key difference is that it leverages the probability ratio between the learning model and a reference model as a reward. This allows the model to be trained to increase the probability of the preferred response yw and decrease that of the less preferred response yl for the same input x.
+
+rDPO  
+
+> θ
+
+= β πθ (x, y )
+
+πref (x, y )
+
+Although preference datasets usually contain pairwise chosen and rejected responses for a single input prompt as represented above, they can be extended to multiple ranked responses for a single input prompt [10]. 
+
+2.2 Training resource efficiency 
+
+Raffel et al. [12] first proposed a packing method to maximize resource utilization without relying on padding within a batch. When combining sequences of varying lengths into a single batch, padding is required to match the longest sequence, which reduces training efficiency. To address this, their method concatenates individual sequences in a sequence-wise manner up to a maximum sequence length before batching. This approach minimizes padding and enables maximum utilization of resources at each update step. In distributed learning with data parallelism, when the lengths of input samples vary significantly, GPUs processing shorter inputs must wait for the GPU handling the longest input to finish. This idle time leads to a significant drop in training efficiency. To address this issue, Bai et al. [1] proposed a method called batch sorting. By grouping samples of similar lengths into the same batch, they minimized idle time, and experimentally demonstrated that sorting does not negatively affect model performance. 
+
+## 3 Methods 
+
+3.1 Symbols 
+
+We assume D = {d1, d 2, . . . , d N } denotes the preference dataset where N is the size of the dataset. di =
+
+{(xi, y 1 
+
+> i
+
+), (xi, y 2 
+
+> i
+
+), . . . , (xi, y Ki )}, K ≥ 2 denotes a preference data point where xi is a single input prompt and 
+
+{yki }Kk=1 are responses from multiple sources. For convenience, we assume that yαi is more human-preferable than yβi
+
+for α > β .Batching in deep learning normally means grouping M data points into a batch and feeding it into the model to maximize GPU parallel computing performance. Since a preference data consists of multiple sequences, the effective batch size increases by a factor of the number of responses K.
+
+B = {b0, b 1, . . . , b N/M −1}
+
+bi = {diM , . . . , d (i+1) M−1} = {(xiM , y 1 
+
+> iM
+
+), . . . , (x(i+1) M−1 , y K
+
+> (i+1) M−1
+
+)}
+
+While the model processes batch bi, the input sequences from xMi to xM(i+1) −1 are repeatedly computed K times. Additionally, the attention memory for these sequences is also redundantly occupied K times. 
+
+3.2 Preference packing 
+
+To prevent inefficient computation and redundant memory usage, we restructure a single preference data into a single sequence so that the input prompt is processed only once. 
+
+di = {(xi, y 1 
+
+> i
+
+, y 2 
+
+> i
+
+, . . . , y Ki )}
+
+2arXiv Template A P REPRINT 
+
+Figure 1: Difference in data sequence format, position IDs, and attention masks. (a) By default, a single preference data sample is processed in a batch-wise manner, where input prompt unnecessarily repeated. (b) In preference packing, multiple preference responses are concatenated in a sequence-wise manner into a single sequence following the shared input prompt. Position IDs and attention masks are modified accordingly to reflect the new structure. This single sequence uses a new preference packing attention mask and position IDs to produce identical computational results as the original format. Figure 1 shows the details. The new preference packing attention mask ensures that each response attends only to the input prompt and not to the other responses. Additionally, position IDs help positional embeddings retain their original positions. 
+
+3.2.1 Theoretical performance 
+
+The preference packing method may appear to require more attention computations and memory as the total sequence length increases; however, its efficiency depends on the length ratio between the input prompt and responses, as well as the number of responses. Let lin be the length of the input prompt, lkresp the length of the k-th response, and K the number of responses. Note that both the attention computation and memory usage are proportional to the square of the sequence length. In practice, sequences are padded to the maximum response length within the batch. Therefore, the effective sequence length becomes loriginal = lin + max k lkresp . Assuming identical model architecture and attention implementation, the attention computation is proportional to the square of the sequence length. Ignoring constant factors, we have 
+
+Coriginal ∝ K l 2
+
+> original
+
+.
+
+For preference packing, the total sequence length is lpp = lin +∑Kk=1 lk
+
+> resp
+
+, and the corresponding attention cost satisfies 
+
+Cpp ∝ l2
+
+> pp
+
+.
+
+In formula, the ratio of attention costs is as follows, 
+
+Cpp 
+
+Coriginal 
+
+= (lin + ∑ lkresp )2
+
+K × (lin + lmax resp )2
+
+For preference packing to yield a strictly lower attention cost, this ratio must be less than 1. Therefore, preference packing is more efficient when the following condition is satisfied. 
+
+lin + ∑ lkresp < √K × (lin + lmax resp ) (1) This means that preference packing becomes more efficient when the length differences between responses are larger. 3arXiv Template A P REPRINT 
+
+Table 1: Memory and training time reduction across different datasets 
+
+Dataset Orca Capybara RLAIF-V 
+
+input len. 228.2 720.6 599.8 max resp. len. 251.0 468.8 109.6 min resp. len. 129.6 330.7 89.7 
+
+peak memory ↓ 0.671 0.802 0.635 time ↓ 0.801 0.780 0.798 
+
+effective time ↓ 0.537 0.626 0.507 
+
+When using Flash Attention [3], attention memory has a linear relationship with sequence length. Therefore, assuming Flash Attention is used, the attention memory ratio is as follows. 
+
+Cpp 
+
+Coriginal 
+
+|memory = lin + ∑ lkresp 
+
+K × (lin + lmax resp ) < 1
+
+This shows that the attention memory ratio is at most 1 and becomes strictly smaller when response lengths vary. Therefore, using Flash Attention together with preference packing guarantees an improvement in memory efficiency. 
+
+## 4 Experimental Setups 
+
+4.1 Training datasets 
+
+We verified the effect of preference packing on three publicly available preference datasets. 
+
+Orca-DPO-pair . The Orca-DPO-pair dataset is one of the earlier and widely used DPO datasets and consists of approximately 12.7K pairs. It is a composite of data from many different categories sampled from OpenOrca [8]. GPT-3.5 and GPT-4 APIs are used to construct response pairs. 
+
+Distilabel Capybara The Capybara Preference dataset [14] consists of 7.56K data pairs and is characterized by its multi-turn conversation input prompts. Although multi-turn conversation is one of the key abilities for LLMs, few open-source preference datasets are available. 
+
+RLHF-V The RLHF-V dataset consists of 5.7K visual question answering pairs. The RLHF process for VLMs is identical to that of LLMs, and images are processed as sequences similarly to text tokens. Note that all three datasets consist of pairs. Even though [10] and [4] mentioned the use of preference datasets with more than three responses, almost all open-source datasets are composed of pairs. 
+
+4.2 Training Models 
+
+We used the open-source model Llama-3.2-1B-Instruct [4] and llava-qwen-0.5b-hf [7] for performance comparison. We compared the training time and peak memory ratio with and without preference packing in a very simple setting: a single GPU using LoRA ( r = 1 ). The experiments do not require complex configurations because the cost efficiency of preference packing does not strongly correlate with model size or the number of trainable parameters. 
+
+## 5 Results and Analysis 
+
+5.1 Resource efficiency 
+
+Table 1 shows the reduction in total training time and peak memory usage for each dataset. Since all datasets consist of pairwise responses ( K = 2 ), Eq. 1 indicates that preference packing becomes more efficient when responses are relatively short compared to the input. As shown in Table 1, this condition is largely satisfied in the evaluated datasets, which aligns with the observed reductions in training time. In the case of the RLAIF-V dataset, the image included in the input is converted to thousands of tokens, significantly increasing the length of the input prompt. Meanwhile, the response consists only of text, making it relatively short. This indicates that preference packing is particularly effective for such data. 4arXiv Template A P REPRINT 
+
+Table 2: Increased training efficiency on large-scale model using FSDP 
+
+samples/sec 
+
+vanilla DPO 1w/ preference packing 1.53 w/ batch sorting 2.62 
+
+w/ both 3.22 
+
+Note that the training time reduction we measured assumes the same batch size is used. However, the reduction in peak memory usage with preference packing allows for using larger batch sizes, which can further reduce the total time required to train on the entire dataset. Therefore, assuming full utilization of available GPU resources, the total training time can be reduced to approximately 0.507 × of the original training time. 
+
+5.2 Scalability 
+
+We applied preference packing in DPO training for Qwen2.5-72B-Instruct [13]. The model was trained on the Tulu3 preference dataset [6], which contains over 300K samples of varying lengths, all under 16K tokens. Unlike the experiments in Section 5.1, the training was conducted in a multi-node distributed environment using FSDP, with all model parameters fully trainable. Since we used the distributed training setup, batch sorting can be applied to improve training efficiency. Furthermore, batch sorting can also be applied to preference-packed sequences in the same manner. We measured the training efficiency improvements from preference packing and batch sorting both separately and in combination. The results are shown in Table 2. Preference packing and batch sorting yielded speedups of 1.53 × and 2.62 ×, respectively. When batch sorting was applied based on sequence length in conjunction with preference packing, the training speedup increased to 3.22 ×.This corresponds to approximately 23% additional speedup over using batch sorting alone. 
+
+## Conclusion 
+
+In this paper, we introduce a novel method called preference packing to enable more efficient resource utilization when training LLMs with preference data. This approach eliminates redundant computations over repeated input sequences in preference optimization, where multiple outputs share the same input. We provide a theoretical bound on the efficiency of preference packing and empirically demonstrate that it can reduce memory usage by up to 80% and training time by up to 50%. Furthermore, we validate its practical effectiveness by accelerating the training of a large-scale LLM by up to 3.22 times when combined with batch sorting. 
+
+## Limitations 
+
+The proposed preference packing method can actually increase training cost when the responses are longer than the input prompts. Especially in the case of reasoning models, it is difficult to reduce training cost using this method because responses tend to be extremely long. 
+
+## References 
+
+[1] Yushi Bai, Xin Lv, Jiajie Zhang, Yuze He, Ji Qi, Lei Hou, Jie Tang, Yuxiao Dong, and Juanzi Li. Longalign: A recipe for long context alignment of large language models. arXiv preprint arXiv:2401.18058 , 2024. [2] Hyung Won Chung, Le Hou, Shayne Longpre, Barret Zoph, Yi Tay, William Fedus, Yunxuan Li, Xuezhi Wang, Mostafa Dehghani, Siddhartha Brahma, et al. Scaling instruction-finetuned language models. Journal of Machine Learning Research , 25(70):1–53, 2024. [3] Tri Dao, Dan Fu, Stefano Ermon, Atri Rudra, and Christopher Ré. Flashattention: Fast and memory-efficient exact attention with io-awareness. Advances in Neural Information Processing Systems , 35:16344–16359, 2022. [4] Abhimanyu Dubey, Abhinav Jauhri, Abhinav Pandey, Abhishek Kadian, Ahmad Al-Dahle, Aiesha Letman, Akhil Mathur, Alan Schelten, Amy Yang, Angela Fan, et al. The llama 3 herd of models. arXiv preprint arXiv:2407.21783 , 2024. 5arXiv Template A P REPRINT 
+
+[5] Jared Kaplan, Sam McCandlish, Tom Henighan, Tom B Brown, Benjamin Chess, Rewon Child, Scott Gray, Alec Radford, Jeffrey Wu, and Dario Amodei. Scaling laws for neural language models. arXiv preprint arXiv:2001.08361 , 2020. [6] Nathan Lambert, Jacob Morrison, Valentina Pyatkin, Shengyi Huang, Hamish Ivison, Faeze Brahman, Lester James V. Miranda, Alisa Liu, Nouha Dziri, Shane Lyu, Yuling Gu, Saumya Malik, Victoria Graf, Jena D. Hwang, Jiangjiang Yang, Ronan Le Bras, Oyvind Tafjord, Chris Wilhelm, Luca Soldaini, Noah A. Smith, Yizhong Wang, Pradeep Dasigi, and Hannaneh Hajishirzi. Tülu 3: Pushing frontiers in open language model post-training. 2024. [7] Feng Li, Renrui Zhang, Hao Zhang, Yuanhan Zhang, Bo Li, Wei Li, Zejun Ma, and Chunyuan Li. Llava-next-interleave: Tackling multi-image, video, and 3d in large multimodal models, 2024. [8] Wing Lian, Bleys Goodson, Eugene Pentland, Austin Cook, Chanvichet Vong, and "Teknium". Openorca: An open dataset of gpt augmented flan reasoning traces. 
+
+https://https://huggingface.co/datasets/Open-Orca/OpenOrca , 2023. [9] Fei Liu et al. Learning to summarize from human feedback. In Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics , 2020. [10] Long Ouyang, Jeffrey Wu, Xu Jiang, Diogo Almeida, Carroll Wainwright, Pamela Mishkin, Chong Zhang, Sand-hini Agarwal, Katarina Slama, Alex Ray, et al. Training language models to follow instructions with human feedback. Advances in neural information processing systems , 35:27730–27744, 2022. [11] Rafael Rafailov, Archit Sharma, Eric Mitchell, Christopher D Manning, Stefano Ermon, and Chelsea Finn. Direct preference optimization: Your language model is secretly a reward model. Advances in Neural Information Processing Systems , 36, 2024. [12] Colin Raffel, Noam Shazeer, Adam Roberts, Katherine Lee, Sharan Narang, Michael Matena, Yanqi Zhou, Wei Li, and Peter J Liu. Exploring the limits of transfer learning with a unified text-to-text transformer. Journal of machine learning research , 21(140):1–67, 2020. [13] Qwen Team. Qwen2.5: A party of foundation models, September 2024. [14] Álvaro Bartolomé Del Canto, Gabriel Martín Blázquez, Agustín Piqueres Lajarín, and Daniel Vila Suero. Distilabel: An ai feedback (aif) framework for building datasets with and for llms. 
+
+https://github.com/argilla-io/distilabel , 2024. 6

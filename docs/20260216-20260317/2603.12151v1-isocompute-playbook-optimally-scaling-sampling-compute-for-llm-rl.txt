@@ -1,0 +1,496 @@
+Title: IsoCompute Playbook: Optimally Scaling Sampling Compute for LLM RL
+
+URL Source: https://arxiv.org/pdf/2603.12151v1
+
+Published Time: Fri, 13 Mar 2026 01:13:09 GMT
+
+Number of Pages: 29
+
+Markdown Content:
+# IsoCompute Playbook: Optimally Scaling Sampling Compute for LLM RL 
+
+Zhoujun Cheng †,‡,*, Yutao Xie †,*, Yuxiao Qu S,*, Amrith Setlur S,*, Shibo Hao †,‡, Varad Pimpalkhute ‡,Tongtong Liang †, Feng Yao †, Zhengzhong Liu ‡, Eric Xing ‡,S, Virginia Smith S, Ruslan Salakhutdinov S, Zhiting Hu †,Taylor Killian ‡, Aviral Kumar S†UC San Diego ‡MBZUAI-IFM SCarnegie Mellon University 
+
+> *
+
+Equal contribution Website: https://compute-optimal-rl-llm-scaling.github.io/ 
+
+Figure 1: Compute-optimal sampling for LLM RL. We study allocation of sampling compute along three axes: parallel rollouts per problem ( 𝑛 ), problems per batch ( 𝐵 p), and sequential iterations ( 𝑀 ), where the total compute is 𝐶 = 𝐵 p · 𝑛 · 𝑀 .We find that: (1) optimal number of rollouts 𝑛 increases with the compute budget 𝐶 ; (2) easy and hard problem sets exhibit similar scaling trends but arise from different underlying mechanisms; (3) under a constraint on 𝐵 = 𝐵 p · 𝑛 , the optimal strategy prioritizes larger 𝐵 p (smaller 𝑛 ) at low compute budgets, and shifts toward larger 𝑛 (smaller 𝐵 p) at high compute budgets to maximize performance; and (4) 𝐵 p has only a marginal effect on performance when kept within a moderate range. 
+
+Abstract: While scaling laws guide compute allocation for LLM pre-training, analogous prescriptions for rein-forcement learning (RL) post-training of large language models (LLMs) remain poorly understood. We study the compute-optimal allocation of sampling compute for on-policy RL methods in LLMs, framing scaling as a compute-constrained optimization over three resources: parallel rollouts per problem, number of problems per batch, and number of update steps. We find that the compute-optimal number of parallel rollouts per problem increases predictably with compute budget and then saturates. This trend holds across both easy and hard problems, though driven by different mechanisms: solution sharpening on easy problems and coverage expansion on hard problems. We further show that increasing the number of parallel rollouts mitigates interference across problems, while the number of problems per batch primarily affects training stability and can be chosen within a broad range. Validated across base models and data distributions, our results recast RL scaling laws as prescriptive allocation rules and provide practical guidance for compute-efficient LLM RL post-training. 
+
+## 1. Introduction 
+
+A blocker in scaling up reinforcement learning (RL) for large language models (LLMs) is the absence of a 
+
+concrete workflow : a recipe that tells practitioners what to scale, how to scale it, and what outcomes of scaling one should expect. In many areas of modern AI, such workflows are enabled by empirical scaling laws [ 1 –3 ], where initial experiments reveal predictable relationships between performance and resources (e.g., compute, data). These laws guide compute allocation, model selection, and hyperparameter choices. 
+
+Corresponding author(s): z6cheng@ucsd.edu, yux076@ucsd.edu, yuxiaoq@andrew.cmu.edu, asetlur@andrew.cmu.edu 
+
+> arXiv:2603.12151v1 [cs.LG] 12 Mar 2026 IsoCompute Playbook: Optimally Scaling Sampling Compute for LLM RL
+
+In this paper, our goal is to understand and build analogous scaling laws for RL post-training of LLMs. In contrast to pre-training or supervised learning, scaling behavior in RL is far less understood due to the tight coupling between exploration (data collection) and optimization (learning from data). Recent work has begun to characterize scaling behavior in classical deep RL [4–8]. However, in the LLM setting, this line of study remains in its infancy. The most relevant prior results show that, under a given fixed problem mixture, RL reward curves exhibit clean sigmoidal behavior when trained for longer [ 9], or that RL performance scales with model size in a manner reminiscent of pre-training [ 6, 7 , 10 ]. While informative, these results stop short of addressing the central question that often plagues practitioners running RL: how to allocate resources when setting up an RL run for a base model? Given a base model, a problem distribution, and a fixed compute budget, how should one spend this compute to maximize downstream performance? We address a big part of this question in this work by studying the optimal allocation of sampling compute in LLM RL. To this end, we conduct a series of experiments across three base models (Qwen2.5-7B-Instruct, Qwen3-4B-Instruct, and Llama 3.1-8B-Instruct), covering diverse training configurations and problem distributions, including easy, hard, and skewed mixtures of prompts (also referred to as problems). Concretely, we operate in a setting where we optimize some binary notion of success or reward on a mixture of problems. Our analysis reveals a nuanced picture of scaling. Unlike pre-training, scaling behavior in RL is governed not only by total compute, but also by the interaction between the base model and the prompt distribution. Nevertheless, under healthy and stable training recipes, we are able to derive predictable allocation rules for key hyperparameters in LLM RL as a function of sampling compute for a base model. Concretely, for on-policy RL methods that optimize LLM policies using multiple parallel rollouts per sequential gradient step, we make the following observations as in Figure 1, validated across about 120 , 000 H200-hours of RL experiments on top of three base models. In short, our findings are as follows. First , the compute-optimal number of parallel rollouts per input problem increases with the sampling compute budget and then saturates. This means that as more compute becomes available, performance improves by allocating more rollouts per problem rather than simply training longer. Second , this scaling trend holds across both easy and hard problem sets, but for different reasons. On easy problems, increasing the number of rollouts primarily sharpens performance on already solvable prompts, reflected in improvements in worst@k metrics. On hard problems, larger numbers of rollouts are essential for discovering rare successful trajectories, leading to gains in best@k and improved coverage. Third , under fixed hardware constraints (e.g., a fixed number of GPUs), performance is relatively insensitive to the number of unique problems per batch compared to the number of rollouts per problem. This suggests a simple allocation strategy: prioritize sampling more problems when the compute budget admits only a small number of sequential training steps, and shift toward more rollouts per problem as the number of training steps increases. On hard problems, this trade-off is more nuanced and depend on the evaluation metric. Finally , while these scaling trends generalize across base models and datasets, the absolute value of the compute-optimal number of rollouts is context-dependent and saturates at different points depending on model capacity, dataset size, and problem difficulty. 
+
+## 2. Problem Statement 
+
+We consider post-training an LLM using binary outcome-reward RL on a fixed dataset of problems. We focus on rollout-based on-policy algorithms such as GRPO [ 11 ], which generate multiple rollouts per prompt and optimize the policy using group-normalized advantages. Concretely, for each prompt, we 
+
+> 2IsoCompute Playbook: Optimally Scaling Sampling Compute for LLM RL
+
+sample 𝑛 rollouts, score them with a 0/1 outcome reward, and compute advantages by centering (i.e., subtracting mean) and normalizing (i.e., dividing by standard deviation) rewards within this group. Unlike classical RL, where data acquisition costs arise from interacting with an external simulator, RL for LLMs in single-turn settings typically generates its own training data during optimization. As a result, the primary resource constraint is sampling compute , which is proportional to the total number of generated rollouts, denoted by 𝐶 . We divide this budget into three parts: (1) problem batch size (𝐵 p), the number of unique prompts sampled per step; and (2) group size (𝑛 ), the number of parallel rollouts generated per problem in a single update; (3) update iterations (𝑀 ), the number of sequential gradient updates. 𝑀 
+
+governs the amount of sequential compute, while 𝐵 p and 𝑛 govern the amount of parallel compute. The effective batch size per iteration is 𝐵 = 𝐵 p · 𝑛 , and the total sampling compute factorizes as: 
+
+𝐶 = 𝐵 p · 𝑛 · 𝑀. 
+
+Formalizing the goal of our study. Let 𝒜 (𝐵 p, 𝑛, 𝑀 ) denote an RL algorithm instantiated with these hyperparameters, and let 𝒫 (·) denote a scalar performance metric of the resulting model (e.g., reward or pass rate). Rather than treating our goal as exactly solving a single constrained optimization problem, we study the following scaling questions under a fixed sampling budget 𝐶 0:
+
+(𝐵 * 
+
+> p
+
+(𝐶 0), 𝑛 *(𝐶 0), 𝑀 *(𝐶 0)) ∈ arg max  
+
+> 𝐵 p,𝑛,𝑀
+
+𝒫 (︀ 𝒜 (𝐵 p, 𝑛, 𝑀 ))︀ s.t. 𝐵 p · 𝑛 · 𝑀 ≤ 𝐶 0. (2.1) Specifically, we ask: (i) how performance varies as sampling compute is allocated across 𝐵 p, 𝑛 , and 𝑀 ;and (ii) how the optimal allocation changes as the budget 𝐶 0 increases. 
+
+Predictable scaling laws. In this work, we say a scaling law is predictable if the dependence of performance and optimal allocation on compute budget follows a stable trend that can be well-approximated from measurements at smaller budgets and then extrapolated to larger budgets. Concretely, our aim is to characterize how 𝒫 and the induced optimum (𝐵 * 
+
+> p
+
+(𝐶 0), 𝑛 *(𝐶 0), 𝑀 *(𝐶 0)) vary with 𝐶 0, and whether these trends admit simple functional forms that support the prediction of compute-optimal allocation. 
+
+## 3. Designing a Healthy RL Recipe 
+
+Predictable scaling trends emerge from Equation 2.1 only if the performance of the algorithm 𝒫 (𝒜 (𝐵 p, 𝑛, 𝑀 )) 
+
+varies smoothly with respect to changes in 𝐵 p, 𝑛, 𝑀 under the constraint on compute 𝐵 p · 𝑛 · 𝑀 ≤ 𝐶 0.
+
+Figure 2: Difficulty distribution of Easy vs. Hard prob-lems. We split problems into Easy and Hard sets according to pass@16 (average pass rate over 16 generations per problem). 
+
+A core desideratum, therefore, is that the RL algo-rithm 𝒜 exhibits stable training dynamics as sam-pling compute is scaled. In practice, naïve imple-mentations often violate this requirement [12]. Because hyperparameters such as (𝐵 p, 𝑛, 𝑀 ) jointly control both data collection and optimization, changing them without care can induce instabilities in training, making performance highly non-smooth and obscuring underlying scaling structure. There-fore, before studying scaling laws, we first establish a “healthy” RL recipe whose dynamics remain stable across a range of sampling compute budgets. We 
+
+> 3IsoCompute Playbook: Optimally Scaling Sampling Compute for LLM RL
+
+find that in our setting, training stability is most consistently governed by three factors: (i) problem difficulty relative to the base model, (ii) use of entropy and KL regularization, and (iii) learning-rate scaling with the effective batch size ( 𝐵 = 𝐵 p · 𝑛 ). 
+
+Factor 1: Dataset difficulty distribution. We find that the difficulty of a problem relative to the base model [ 13 ] strongly affects stability of an RL run. On easy prompts where the base model already samples correct rollouts frequently, RL can quickly drive down entropy and collapse exploration [ 14 ]; on hard prompts, reward is rarely observed and optimization instead demands more exploration. We quantify difficulty by avg@16 , the base model’s average accuracy over 16 rollouts (Qwen2.5-7B-Instruct), which measures the ease of experiencing reward during RL rather than human difficulty. Hence, we construct difficulty-based splits from the Guru-Math dataset [ 15 ], each with 300 in-domain validation samples: (a) Easy , with avg@16 ∈ [0 .3, 0.6] (6k samples), and (b) Hard , with avg@16 ∈ [0 .0, 0.0625] (5k samples). These datasets will be used for our main experiments (Figure 2). Easy Problem Hard Problem 
+
+Figure 3: Regularization ablations on Easy and Hard. On the Easy set, standard KL+Entropy regularization achieves the best reward. On the Hard set, these regularizers destabilize training even with zero-variance filtering; disabling them yields significantly more stable optimization and higher reward. 
+
+Factor 2: Entropy and KL-divergence regularization. Prob-lem difficulty manifests clearly in token-level entropy and, more weakly, in the KL divergence to the base model (Figure 3), both of which serve as sensitive indicators of optimization health. Token-level entropy governs the degree of exploration during generation, while the KL term anchors the policy and limits excessive drift from the base model [ 16 ]. On easy problems, insufficient en-tropy regularization often leads to premature entropy collapse, causing optimization to stall. In contrast, on hard problems, entropy regularization alone can trigger entropy and response-length explosion, as policy gradients aggressively push toward rare successful trajectories [ 17 ]. In this regime, a KL term can be effective at delaying or preventing early-stage instability, although it is typically unnecessary if training is stable. Hence, whenever we employ an entropy bonus, we pair it with a KL anchor. While applying zero-variance filtering [ 9] to these terms mitigates instability, we find it suboptimal in performance. In our experiments, we apply both KL and entropy regularization on easy problem sets, where collapse is the dominant failure mode, and remove both on hard problem sets to avoid instability. Importantly, our scaling results are robust to this choice of regularization, provided that training remains stable. 
+
+Factor 3: Learning rate scaling. Since we vary batch size ( 𝐵 ) significantly in our scaling laws study, we require a robust LR scaling rule. We first identify a base learning rate 𝜂 base = 10 −6 at 𝐵 = 1 , 024 (Figure 4 (left)). Similar to [ 18 ], we then compare constant, linear, and square-root scaling strategies. As shown in Figure 4 (right), square-root scaling (𝜂 ∝ √𝐵 ) provides the best trade-off, enabling faster convergence than using a constant learning rate while avoiding the instability of linear scaling. Based on these findings, we adopt the configuration listed in the Table 1 for the main experiments. See Appendix A for full experiment details that we study in this paper. 
+
+> 4IsoCompute Playbook: Optimally Scaling Sampling Compute for LLM RL
+
+Figure 4: LR scaling strategy. Square-root scaling ( √𝐵 ) outper-forms linear and constant scaling at large batch sizes ( 𝐵 = 8192 ). 
+
+Table 1: Final recipe. Details of the final recipe used in our study. 
+
+Hyperparameter Easy Hard 
+
+KL Regularization Yes No Entropy Regularization Yes No Zero-var Filter No No LR Scaling √𝐵 √𝐵 
+
+Key Takeaways: Designing a Healthy RL Recipe 
+
+1. RL training exhibits distinct behaviors depending on problem difficulty. We therefore explic-itly curate and control for both Easy and Hard datasets to ensure the recipe is robust to different saturation points and exploration requirements. On heterogeneous datasets discussed later, we use the recipe corresponding to the Hard dataset to avoid instability. 2. The necessity of regularization changes with difficulty. Easy tasks benefit from KL divergence and entropy constraints to prevent premature collapse, whereas Hard tasks achieve peak performance when these loss terms are removed to enable stable training. Training on mixed datasets is most stable when no KL divergence or entropy are used. 3. Do set learning rates as a function of the total batch size 𝐵 . Among the schemes we compared, the square-root learning-rate scaling strategy performs best. 
+
+## 4. Allocating Sampling Compute Optimally 
+
+Figure 5: Illustration of record-breaking points. Gray dots show validation reward points from multiple training runs, while orange dots mark record-breaking points, de-fined as the earliest (smallest compute) points that enter a higher discretized reward bin than all previous points. The dashed curve shows the monotonic fit over the re-tained points on the performance frontier. 
+
+We now present empirical results that address our cen-tral question: given a fixed sampling compute budget, how should it be allocated across RL sampling dimen-sions to maximize performance? Recall that the total sampling compute scales as 𝐶 ∝ 𝐵 p ·𝑛 · 𝑀 . To study al-location strategies, we sweep over values of (𝐵 p, 𝑛, 𝑀 )
+
+across a range of budgets 𝐶 . For a fixed compute bud-get 𝐶 = 𝐶 0, we evaluate multiple allocations and de-fine the compute-optimal frontier as the highest i.i.d. validation set reward achievable using total compute 
+
+𝐶 0. Repeating this procedure for increasing values of 
+
+𝐶 0 yields a family of frontiers that characterize how optimal allocation evolves with available compute. 
+
+Data analysis workflow. To derive our scaling law fits, we subsample each training run to a compact set of record-breaking points along the learning curve, defined by validation reward as a function of increasing compute. A record-breaking point is the earliest step at which the validation reward exceeds all previously observed values; Figure 5 provides an illustration. To robustly identify such improvements, we select the first step at which the discretized reward enters 
+
+> 5IsoCompute Playbook: Optimally Scaling Sampling Compute for LLM RL
+
+a higher bin. We restrict attention to record-breaking points because non-record-breaking checkpoints are dominated by earlier checkpoints from the same run that achieve equal or better validation reward with less compute, and thus cannot lie on the compute-optimal frontier. Including all checkpoints would overweight long, highly correlated training trajectories and bias the fit toward suboptimal intermediate points rather than the best-achievable performance envelope. We then fit a monotonic function to these record-breaking points to obtain prescriptions for the optimal values of 𝑛 , 𝐵 p, and 𝑀 . Because this preprocessing preserves the ordering of points along the compute axis, it does not introduce spurious non-monotonicity and yields a faithful estimate of the performance frontier (see Appendix A, Figure 15, for an illustration). 
+
+Experimental setup. We sweep over valid configurations (𝐵 p, 𝑛 ), where 𝐵 p ∈ { 25, . . . , 210 } and 𝑛 ∈{23, . . . , 211 }, using uniform intervals on a log scale. Due to parallelism limits of the available GPUs, we additionally incorporate a hardware-driven batch size constraint 𝐵 p · 𝑛 ≤ 𝐵 max . We set 𝐵 max = 65 ,536 
+
+for the Easy set and 16 ,384 for the Hard set. For each run, the number of update steps 𝑀 increases as training proceeds. We use a smaller value of 𝐵 max for the Hard set to allow for more sequential iterations within a fixed total compute budget. See Appendix A for full details regarding the experimental setup. We adopt rollouts rather than tokens as our metric of compute, since the number of generated tokens that the model will produce during RL training cannot be reliably estimated a priori and thus provides limited guidance for compute allocation. That said, we show in Appendix E that translating our scaling trends to measure compute in terms of tokens still yields similar conclusions regarding allocation rules in practice. We study compute-optimal allocation rules in three settings that isolate distinct resource trade-offs: (1) 
+
+𝑛 vs. 𝑀 (parallel rollouts vs. sequential updates); (2) 𝑛 vs. 𝐵 p (parallel rollouts vs. number of problems per batch); and (3) joint allocation across all resources. Each setting corresponds to a practical scenario in which a practitioner must allocate limited compute across competing dimensions. 
+
+4.1. Parallel Samples 𝑛 vs Sequential Iterations 𝑀 
+
+In this section, we fix the number of problems 𝐵 p and study the trade-off between parallel samples 𝑛 and sequential iterations 𝑀 under a fixed budget 𝐶 .
+
+Fitting workflow. We plot reward vs compute 𝐶 and fit a monotonic sigmoid to summarize how the validation set reward (avg@4) scales with compute for that 𝑛 . As mentioned above, we then define the 
+
+compute-optimal frontier as the upper envelope of these fitted curves (see Figure 6). Then, to indicate which 𝑛 lies on the frontier at each compute level, we color the frontier by 𝑛 *(𝐶 ), which is the value of 𝑛 
+
+whose fitted compute–reward curve achieves the compute-optimal frontier up to 𝐶 . Finally, in Figure 7, we fit a log-log plot to show 𝑛 *(𝐶 ) as a function of 𝐶 to summarize the empirical scaling behavior. We make four important observations in this setting. 1) The value of 𝑛 lying on the compute-optimal frontier shifts higher as the sampling compute 𝐶 increases (Figure 6). It is natural to expect larger values of 𝑛 to be generally favorable at higher compute budgets, analogous to prior work [ 19 ], since increasing 𝑛 lowers policy-gradient variance but it requires more sampling compute. Consistent with this belief, the frontier-attaining 𝑛 *(𝐶 ) shifts to larger values as 𝐶 
+
+grows, and we observe the same trend on both the Easy and Hard problem sets. Smaller values of 𝑛 
+
+exhibit rapid initial gains but plateau at a relatively lower compute regime, whereas larger 𝑛 sustain improvement over a broader compute range. This behavior also suggests that parallel and sequential compute are not interchangeable. Choosing 𝑛 so that we are able to perform sufficient sequential updates 𝑀 is necessary to achieve strong performance. 
+
+> 6IsoCompute Playbook: Optimally Scaling Sampling Compute for LLM RL
+
+Easy Problem Hard Problem 
+
+Figure 6: Validation reward vs. compute (𝐵 p = 32) . The frontier shifts to larger 𝑛 as compute increases. For easy problems (left) , large 𝑛 dominates at high compute where small 𝑛 plateaus. Hard problems (right) show the same trend but saturate earlier with a smaller 𝑛 .
+
+2) Compute-optimal values of 𝑛 
+
+are well-approximated by a sig-moid function of 𝐶 (Figure 7). We next aim to fit a functional rela-tionship for the compute optimal value 𝑛 *(𝐶 ) as a function of the available compute 𝐶 . A natural first step is to hypothesize an appropri-ate functional form. As shown in Figure 7, increasing 𝐶 admits larger compute optimal values of 𝑛 , and over a substantial range this rela-tionship appears approximately lin-ear on a log-log scale. The key ques-tion is whether this growth continues indefinitely or eventually saturates. Empirically, we observe a clear saturation. Even when evaluating rollout values up to 𝑛 = 2 , 048 , values significantly larger than the saturation point, they fail to extend the frontier, with 𝑛 = 512 continuing to dominate. Easy Problem Hard Problem 
+
+Figure 7: Compute-optimal scaling of parallel rollouts 𝑛 (𝐵 p = 32 ). The optimal value of rollouts 𝑛 shifts systematically higher as the total sampling compute increases. Points show a running-average estimate of the frontier-attaining 𝑛 *(𝐶 ) at each compute budget (colored by reward), and the red curves fit a sigmoid parameterizing log 𝑛 as a function of log 𝐶 .
+
+We argue that saturation is ex-pected when training a fixed base model and a fixed problem set. To build intuition as to why, it is per-haps helpful to view increasing 𝑛 as analogous to spending more com-pute per gradient step. In super-vised learning, increasing capacity alone does not reduce validation error beyond a certain point un-less additional training data is avail-able. This principle also underlies pre-training scaling rules from Chin-chilla [ 3] that prescribe scaling both pre-training data and model capac-ity together. Perhaps most closely related to the RL training setup in this study, Setlur et al. [20] shows that increasing 𝑛 cannot overcome limitations imposed by a fixed problem set for rejection fine-tuning. As a result, the compute optimal value of 𝑛 must eventually saturate even for RL, as we observe. We validate this hypothesis regarding a fixed data size in Section 5, where we show how the saturation point shifts given a different base model, problem set size, and distribution. 3) Next, we find that the compute-optimal allocation trend remains consistent across difficulty levels, although we find harder sets prefer smaller values of 𝑛 (Figure 7). We find that the compute optimal allocation trend remains consistent across problem difficulty. On both problem sets, the compute optimal value of 𝑛 increases with total compute 𝐶 before eventually plateauing. However, the plateau occurs clearly at smaller values of 𝑛 on harder problems. In particular, very large values of 𝑛 , such as 𝑛 = 512 ,yield lower final performance on the hard set and do not lie on the compute optimal frontier. This suggests that task difficulty imposes an upper bound on how large 𝑛 can be used effectively . While it may 
+
+> 7IsoCompute Playbook: Optimally Scaling Sampling Compute for LLM RL
+
+seem intuitive that harder problems should benefit from larger 𝑛 due to increased sampling right away, we observe the opposite behavior in practice. On sufficiently hard problem sets, increasing 𝑛 allocates substantial compute to problems where the model receives little or no learning signal. In contrast, smaller values of 𝑛 focus optimization on the subset of prompts where nonzero signal is already present and meaningful improvement is possible. Therefore, it is better to use a smaller value of 𝑛 to increase the frequency of parameter updates (small 𝑛 , large 𝑀 , more epochs on the same subset of problems) that exploits reachable gains, rather than spending larger 𝑛 on problems that are persistently unsolved. 4) Optimization dynamics on the easy and hard sets and the role of various performance metrics (Figure 8). We saw above that a smaller value of 𝑛 was more preferable for optimizing validation average reward 
+
+(avg@4 per problem) and attributed this to solving new problems vs. solving the same problems, but better. We now aim to better understand these optimization dynamics and evaluate how 𝑛 *(𝐶 ) changes if we were to change the target performance metric we study. In particular, we consider two metrics: 
+
+best@k (or pass@k), defined as the fraction of problems where at least one response out of 𝑘 is correct, which measures the model’s coverage over problems; and worst@k , defined as the fraction of problems where all 𝑘 responses are correct, which we examine to measure the degree to which we can “ sharpen ”around the right solution (i.e., robustness). Easy Problem Hard Problem 
+
+> Large n improves more on worst@4 on easy problems
+> Large n improves more on best@4 on hard problems
+
+Figure 8: Different mechanisms of how 𝑛 values optimize best@4 vs.             
+
+> worst@4 on easy and hard problems. Bars show the 𝑛 maximizing reward for a given 𝐵 p. On the Easy set (left) , the optimal 𝑛 for best@4 is smaller than for worst@4, indicating that improving robustness requires more parallel rollouts than for coverage. Conversely, on the Hard set (right) , a larger 𝑛 is needed to improve best@4, while worst@4 saturates at smaller 𝑛 .
+
+Modulo compute-optimality, a larger value of 𝑛 coupled with as many sequential update steps as needed, should in principle, result in higher values for both best@k and worst@k 
+
+on a training dataset. However, this is not quite the case when compute is bounded. We empirically identify the optimal values of 𝑛 *(𝐶 ) for obtaining the highest best@k and worst@k scores on the validation set, across different 
+
+𝐵 p values for the largest value of 𝐶 ,and show this number in Figure 8. We choose 𝑘 = 4 ≪ 𝑛 we study, so that none of the trends in Figure 8 are “edge” cases or artifacts of fitting/statistical er-ror. Surprisingly, we now see an interesting divergence in trends on the Easy and Hard sets. 
+
+Results. On the easy set, a larger 𝑛 is compute-optimal for worst@4 (sharpening) performance, whereas smaller values of 𝑛 are compute-optimal for the best@4 performance. This means that a larger 𝑛 primarily improves by sharpening more on easy problems, while a smaller 𝑛 suffices to sample one correct rollout (expected since the set is easy). Conversely, for hard problems, a larger 𝑛 is more critical for pushing up 
+
+best@4 (coverage), while a relatively smaller 𝑛 is compute-optimal for worst@4 (sharpening). However, there is a limit beyond which a larger 𝑛 does not improve coverage on new problems in a compute-optimal way: optimal values here are generally lower than on the easy set. On the Extremely Hard set consisting of all pass@128 = 0 problems (Appendix B; Figure 20), we see a clearer tradeoff of coverage and sharpening: while larger 𝑛 improves best@k , it degrades worst@k and lowers average reward. When targeting average reward, the optimal 𝑛 on hard problems is the value that balances coverage and sharpening well. These results imply that the target metric itself dictates the landscape of compute-optimal 𝑛 .
+
+> 8IsoCompute Playbook: Optimally Scaling Sampling Compute for LLM RL
+
+Key Takeaways 
+
+1. The compute-optimal 𝑛 frontier shifts systematically higher as the total sampling compute increases, and is well fit by a sigmoid curve for all datasets. 2. The source of gains from large 𝑛 shifts with training data difficulty: scaling 𝑛 improves 
+
+sharpening (worst@4) on the Easy set, but expands coverage (best@4) on the Hard set. 
+
+Workflow Prescriptions 
+
+• Depending on the composition of the problem set and how effectively the base model can learn from it, the mechanism driving performance improvements may differ. We recommend diagnosing the mode of improvement for your base model on the prompt set (e.g., sharpening vs. coverage), and using this to set 𝑛 as a function of the available compute budget 𝐶 .
+
+4.2. Bounded Batch Compute: Trading off 𝐵 p with 𝑛 
+
+Next, we study a different setup, where we wish to allocate a fixed total batch size 𝐵 into the number of prompts used and the number of rollouts per prompt used. This question is important in practical settings where hardware parallelism (e.g., number of GPUs or data-parallel) is fixed, and a practitioner needs to make this compute allocation. In such cases, 𝐵 is often chosen as the largest rollout batch size that saturates sampling throughput ("system batch size"). We additionally experimented with 𝐵 p = 8 
+
+and 16 for the Easy set under fixed 𝐵 to locate the upper and lower bounds for values of 𝐵 p and 𝑛 .We specify the number of sequential iterations 𝑀 a priori and seek allocations of 𝐵 p and 𝑛 under a fixed total batch budget 𝐵 p · 𝑛 ≤ 𝐵 that maximize performance. We observe the following: 
+
+Figure 9: Compute-optimal allocation shifts from 𝐵 p to 𝑛 under a fixed total batch size constraint on easy set. 
+
+1) On the easy problems, allocate more parallel compute 𝑛 when sequen-tial steps 𝑀 is large (Figure 9). In this regime, we examine the compute-optimal value of 𝑛 under a fixed total batch size (illustrated with 𝐵 = 8 , 192 
+
+only in Figure 9), as 𝑀 varies. The opti-mal choice 𝑛 *(𝑀 ) exhibits a sigmoidal dependence on 𝑀 . This behavior sug-gests that when more sequential up-dates are available, it is preferable to allocate additional compute toward increasing 𝑛 , rather than increasing 𝐵 p. The corresponding compute-optimal number of prompts 𝐵 * 
+
+> p
+
+(𝑀 ) decreases with the sampling compute according to an (inverse) sigmoid. In contrast, when 𝑀 is small, allocating batch size toward a larger 𝐵 p is more effective, as it enables many more epochs of training within a given total sequential updates. On the Hard set, however, the scaling behavior is less consistent. The compute-optimal value 𝑛 *(𝑀 ) exhibits a non-monotonic dependence on 𝑀 (see Appendix B, Figure 18-19), which implies a similarly irregular trend for the optimal 𝐵 p. This is one of the differences we see across Easy and Hard sets. 
+
+2) Why do we observe different trends on the Easy and Hard sets in this setup? As discussed previously, reward can be increased either by scaling 𝑛 , which improves the quality of signal obtained per problem, or by scaling 𝐵 p, which broadens the set of problems used for training. On the Easy set, where the base 
+
+> 9IsoCompute Playbook: Optimally Scaling Sampling Compute for LLM RL
+
+model already produces correct rollouts with high probability, the dominant bottleneck is sample quality, making larger values of 𝑛 preferable as 𝑀 increases. On the Hard set, however, the optimal allocation depends strongly on the stage of training. When the number of sequential updates 𝑀 is small, low values of 𝑛 are ineffective at extracting gradient signal, even if training is restricted to a subset of problems. As 
+
+𝑀 increases and the model begins to receive signal on a limited set of problems, increasing 𝐵 p becomes preferable, as it prevents overfitting to this small subset. Finally, at larger values of 𝑀 , once training has stabilized across a set of problems, it becomes possible to increase 𝑛 again without sacrificing coverage, and the compute-optimal allocation shifts back toward larger 𝑛 .Easy Problem Hard Problem 
+
+> Fix n
+> Vary
+> Fix
+> Vary n
+
+Figure 10: Sensitivity of validation reward to 𝐵 p vs. 𝑛 . Easy (left) : The impact of varying 𝑛 (9.2% range) shows a clear positive correlation and is significantly larger than varying 𝐵 p (1.9%). Hard (right) : Sensitivity to 𝐵 p     
+
+> (2.2%) is comparable to 𝑛 (3.1%). The fluctuating trend in the top-right plot suggests that 𝐵 pselection introduces optimization instability on hard tasks, explaining the less predictable trends when fixing 𝐵 .
+
+To make the above argument concrete, we study the effect of varying 𝐵 p at fixed 𝑛 , as well as varying 𝑛 at fixed 
+
+𝐵 p, and assess which hyperparameter more strongly influences performance. On the Easy set, changing 𝐵 p has only a marginal effect on validation reward, whereas increasing 𝑛 leads to substan-tial gains up to saturation (Figure 10, left). This explains the sigmoidal scal-ing behavior observed earlier: since performance is primarily driven by 𝑛 ,increasing 𝑛 is preferred at larger com-pute budgets, with 𝐵 p decreasing ac-cordingly under a fixed batch size con-straint. On the Hard set, the picture is more nuanced (Figure 10, right). While increasing 𝑛 remains beneficial, varying 𝐵 p produces performance changes of comparable magnitude, and overall sensitivity to both hyperparameters is weaker. As a result, the compute-optimal choice of 𝑛 is noisier, and at intermediate values of 𝑀 , increasing 𝐵 p can yield better performance. Key Takeaways 1. With a fixed total batch size 𝐵 , increasing compute favors allocating more rollouts per problem ( 𝑛 ) and fewer problems per batch ( 𝐵 problem ). On the Easy set, this trend follows a clean sigmoidal relationship, since large 𝐵 problem overfits due to multi-epoch training. 2. On the Hard set, the trend is non-monotonic: increasing 𝐵 problem may be desirable at inter-mediate values of 𝑀 . While scaling 𝑛 remains the more important allocation choice, 𝐵 problem 
+
+must stay above a minimum threshold to avoid incomplete optimization. Workflow Prescriptions 
+
+• If multi-epoch training on the same problem set is possible, it is preferable to train on fewer problems with a larger per-problem sampling budget 𝑛 . If multi-epoch training is not possible, it may be preferable to include more problems in each batch. 
+
+• The minimum stable 𝐵 p is larger for the Hard set than for the Easy set; on the Easy set, varying 𝑛 and 𝐵 p yields more comparable performance differences. 
+
+> 10 IsoCompute Playbook: Optimally Scaling Sampling Compute for LLM RL
+
+4.3. Jointly optimizing (𝐵 p, 𝑛, 𝑀 )
+
+Finally, we relax all constraints and jointly optimize the three sampling axes (𝐵 p, 𝑛, 𝑀 ) under a fixed total rollout compute budget 𝐶 = 𝐵 p · 𝑛 · 𝑀 . The compute-optimal solution is still largely governed by 
+
+𝑛 : the optimal 𝑛 *(𝐶 ) follows a similar sigmoidal scaling with compute (Figure 21) . In contrast, 𝐵 p
+
+mainly serves as a stability knob and has only a marginal impact on performance within a moderate range. Practically, we tune 𝑛 via 𝑛 *(𝐶 ), pick the smallest stable 𝐵 p, and assign the remaining budget to 𝑀 . Joint frontiers and sigmoid curves are in Appendix C. We also show scaling 𝑛 improves not only in-domain validation, but also OOD downstream tasks in Appendix D (Figure 23). Key Takeaways 1. When jointly optimizing across all hyperparameters (𝑛, 𝐵 problem , 𝑀 ), the compute-optimal value of 𝑛 still increases with 𝐶 , consistent with the findings from Questions 1 and 2. 2. The best total rollout size 𝐵 generally increases as 𝐶 increases, although the compute-optimal 
+
+𝐵 p can often be chosen to be budget-agnostic. 
+
+## 5. Role of Base Model and Prompt Set Easy problem   
+
+> n=8
+> Hard problem
+> n=128
+> Train Reward: 86.33% Train Reward: 50.56%
+> Train Reward: 27.34% Train Reward: 17.80%
+
+Figure 11: Training reward distributions on Easy and Hard sets at a matched compute level ( 𝑛 = 8 vs. 𝑛 = 128 ). (1) Interference exists: On the Easy set (initial pass rate 0.3-0.6), optimization sacrifices some problems, leaving a non-zero fraction unsolved after training. (2) Easy set: Larger 𝑛 results in a more uniform distribution of pass rates, avoiding polarized outcomes seen in smaller 𝑛 . (3) Hard set: Larger 𝑛 improves coverage (reducing zero fraction), while smaller 𝑛 
+
+> sharpens performance on a subset.
+
+Having seen that the compute-optimal num-ber of rollouts 𝑛 increases with sampling compute 𝐶 on both Easy and Hard sets, it is natural to ask whether this behavior extends to other prompt distributions and base mod-els. We also note that this qualitative trend is not specific to the GRPO algorithm consid-ered here, and appears under other algorith-mic variants (PPO [ 21 ] and CISPO [ 22 ]) as well in Appendix F Figure 25. 
+
+5.1. Scaling 𝑛 Addresses Interference 
+
+If we were given a multi-armed bandit prob-lem, in a tabular setting, the compute-optimal scaling strategy would prescribe in-creasing 𝑀 (sequential updates) over using a higher 𝑛 (as discussed in Appendix H). However, this theoretical prediction contra-dicts our empirical findings that show scaling 𝑛 is better. In this section, we argue that this gap arises due to interference across problems [17, 23]. When multiple problems are trained jointly, gradient updates can interfere, possibly causing uneven learning across problems and degradation on previously solvable problems. In this regime, a larger 𝑛 is preferable to increasing 𝑀 , since more rollouts yield more uniform updates across problems per step and improve learning efficiency. This shifts the compute-optimal balance toward parallel sampling rather than sequential optimization, mitigating interference and improving learning efficiency. 
+
+Evaluating interference. To quantify interference, we analyze the training-set pass@1 distribution 
+
+> 11 IsoCompute Playbook: Optimally Scaling Sampling Compute for LLM RL Qwen3-4B-Instruct
+> （Easy Problem)
+> Llama 3.1-8B-Instruct
+> (Easy Problem)
+> Qwen3-4B-Instruct
+> (Hard Problem)
+
+Figure 12: Generalizing 𝑛 scaling trends to other models. We observe increasing 𝑛 boosts returns at high compute across all settings, while optimal 𝑛 saturates differently. 
+
+across problems under matched compute budgets ( 𝑛 · 𝑀 ). Even on the Easy set, a non-trivial fraction of problems end training with pass@1 close to zero, indicating uneven progress across problems. Under the same compute budget, larger values of 𝑛 yield a less skewed distribution and more uniform improvements (Figure 11). A similar pattern appears on the Hard set: smaller 𝑛 optimizes on a subset of problems while leaving many unsolved, whereas larger 𝑛 reduces the zero-pass fraction. Overall, increasing 𝑛 mitigates interference by distributing updates more evenly across problems, explaining why it is preferred. 
+
+Compute-optimal 𝑛 scaling generalizes for different base models. As shown in Figure 12, larger 𝑛 
+
+values consistently outperform the baseline ( 𝑛 = 8 ) at high compute budgets for both Qwen3-4B-Instruct and Llama 3.1-8B-Instruct on their Easy and Hard sets. These results are consistent with our main compute-optimal findings. However, the optimal values of 𝑛 vary across model–dataset pairs. One plausible explanation is that different base models begin with different effective competence on the target problem distribution, which changes the available reward density and the range of compute over which larger 𝑛 remains beneficial. We also observe that, on easy problems, validation reward for both models saturates or degrades at 𝑛 = 128 , even while the training reward continues to rise . We attribute this divergence to the train–test gap (overfitting), discussed next. 
+
+5.2. Train-Test Gap 
+
+Our scaling results use validation metrics, even though optimization dynamics are driven by the training set. Thus, scaling laws on the validation set require sustained transfer from training to test. When the prompt set is too small, training may overfit early, so larger 𝑛 may no longer appear compute-optimal even at high budgets, as additional training fails to improve validation performance. Figure 13 shows that when we vary the prompt set size 𝐷 , the compute-optimal 𝑛 caps at smaller values for smaller 𝐷 . This is expected: validation reward degrades under prolonged training due to overfitting, preventing larger 𝑛 
+
+from appearing on the frontier. As a result, the compute-optimal allocation for training performance may differ from that for validation, especially at large compute budgets. 
+
+> 12 IsoCompute Playbook: Optimally Scaling Sampling Compute for LLM RL Optimal performance is achieved at n=256
+> Larger n=512 degrades performance
+> Optimal performance is achieved at n=512
+
+Figure 13: Impact of data size ( 𝐷 ). With more data ( 𝐷 = 6 k; left ), performance scales up to 𝑛 = 512 . With small data (𝐷 = 500 ; right ), the frontier saturates at smaller 𝑛 = 256 , and scaling further to 𝑛 = 512 leads to overfitting and degradation. 
+
+5.3. Other Data Compositions 
+
+Finally, we train on heterogeneous mixtures of Easy and Hard problems (Figure 14), as well as an “extra hard” set where the base model attains pass @128 = 0 . These mixtures induce different skewness and thereby alter the rate at which pass @1 improves in training. Despite this variation, we observe a consistent crossover trend that larger 𝑛 outperforms smaller 𝑛 on validation sets. The compute ranges where small 
+
+𝑛 is optimal are different. This suggests the rate of pass @1 improvement controls both the compute range over which a given 𝑛 is optimal and the minimum compute-optimal 𝑛 . Crucially, we note that our central finding remains unchanged: larger compute budgets 𝐶 support larger compute-optimal values of 𝑛 ,even on skewed training mixtures .Key Takeaways 1. Interference favors more parallel rollouts. Unlike the tabular case, interference across problems makes larger 𝑛 beneficial, and both 𝑛 and 𝑀 increase with compute. 2. Small training sets induce early saturation. Running Multiple epochs of training on a given problem set can result in overfitting, causing early saturation on validation metrics and shifting the optimum toward larger 𝐵 p and smaller 𝑛, 𝑀 .3. Scaling rules are broadly transferable. Similar compute-allocation trends hold across base models and data compositions, though the optimal range of 𝑛 still depends on the dataset. 
+
+## 6. Related Work 
+
+Scaling laws are well established for pretraining [ 1 –3], but predicting RL behaviors is more challenging due to coupled data collection and optimization. Prior work reports approximate power-law scaling in controlled RL settings such as board games and single-agent deep RL [ 4, 5 ], and characterizes compute-data trade-offs and Pareto frontiers in value-based RL [6, 7]. Whether such predictability extends to LLM RL remains unclear, as experience is generated on-policy at high cost and scaling behavior depends on recipe-level stability. Recent studies make progress by extending on-policy RL under fixed pipelines and observing sigmoidal reward–compute curves [ 9 ], or varying model size [ 10 ]. However, instabilities such as entropy collapse or policy drift often require stabilizers including KL, clipping, or resets [14, 19]. There have also been works exploring scaling LLM RL along separate axes of compute. On the axis of  
+
+> 13 IsoCompute Playbook: Optimally Scaling Sampling Compute for LLM RL Eval: Hard Eval: Easy
+> Validation Reward
+> Hard Only 100% Hard
+> Hetero-Dual 50% Hard 50% Easy
+> Hetero-Tri 50% Hard, 25% Easy, 25% Very Easy
+> Eval: Very Easy
+
+Figure 14: Results across difficulty levels for small ( 𝑛 = 8 ) and large ( 𝑛 = 64 ) rollout budgets under different training data distributions (5K total samples) using Qwen2.5-7B-Instruct. We consider Hard ( pass @128 = 0 ), Easy ( pass @128 ∈       
+
+> [0 .3,0.6] ), and Very Easy ( pass @128 ∈[0 .6,0.9] ) problems. Rows correspond to Hard Only, Heterogeneous-Dual Mix (50% Hard, 50% Easy), and Heterogeneous-Tri Mix (50% Hard, 25% Easy, 25% Very Easy; the J-shaped distribution from Polaris).
+> Across distributions, larger 𝑛 consistently performs better at higher compute in in-domain evaluations , except on the Very Easy evaluation set, where the task is likely too easy for additional compute to matter. Training only on Hard data causes substantial catastrophic forgetting on Easy and Very Easy problems , while mixing Easy data largely mitigates this effect with only a small drop on Hard performance. In contrast, adding Very Easy data does not help and can hurt both Easy and Hard performance.
+
+sequential scaling, DeepSeek-R1 [ 24 ] showed that RLVR could largely improve reasoning capability, while ProRL [ 12 ] explicitly highlighted the importance of prolonged RL training; similarly, works such as DAPO [ 16 ] and OpenReasonerZero [ 25 ], though not framed as scaling-law studies, naturally scale along sequential updates until reward convergence. On the axis of parallel rollouts per sample, BroRL [ 19 ]studied rollout width and showed that broader exploration can overcome plateaus arising from purely sequential scaling, while KnapSackRL [ 26 ] considered adaptive budget allocation instead of uniform sampling. While the impact of batch size has been studied in pretraining contexts [ 8, 27 , 28 ], there is still limited work systematically scaling problem batch size in the LLM RL setting. Other dimensions of scaling LLM RL include scaling problem sets [15], environments [29], and model size [10]. As a result, existing work largely describes scaling along fixed recipes or studies individual axes, whereas practitioners face a budget allocation problem: how to allocate a fixed sampling budget across various hyperparameters in LLM RL. We therefore study RL scaling laws as prescriptive allocation rules , using compute-optimal analysis over (𝐵 p, 𝑛, 𝑀 ) under stable recipes. 
+
+## 7. Discussion and Conclusion 
+
+A central takeaway from this work is that healthy RL recipes are inherently dependent on the prompt distribution, and that RL training behavior emerges from the interaction between the base model, the prompt set, and the available compute budget. This dependence manifests directly in how optimal hyperparameters scale with compute, so that the same algorithm can exhibit qualitatively different scaling behavior on easy versus hard problem sets. On easier problems, increasing parallel rollout 
+
+> 14 IsoCompute Playbook: Optimally Scaling Sampling Compute for LLM RL
+
+compute primarily improves sharpening and robustness, whereas on harder problems the dominant effect is expanded coverage through improved discovery of rare successful trajectories. While trends in compute-optimal hyperparameters are often consistent when measured using average reward, they can diverge substantially under alternative metrics such as best@k and worst@k. This sensitivity to both data difficulty and evaluation metric highlights an important difference from supervised learning, where scaling behavior is often more uniform once model size is fixed. Framing RL training as a compute-constrained allocation problem makes this dependence operational: across the settings we study, the compute-optimal number of parallel rollouts per problem ( 𝑛 ) increases with the available sampling budget and eventually saturates, while the number of problems per batch (𝐵 p) primarily acts as a stability knob with weaker effects once it lies in a moderate range. Under fixed batch-size constraints, this yields a practical rule: favor larger 𝐵 p when only a small number of sequential updates is possible, and shift compute toward larger 𝑛 as the available budget grows. Joint optimization over (𝐵 p, 𝑛, 𝑀 ) leads to a similar conclusion: the allocation frontier is governed primarily by 𝑛 , with the remaining budget best assigned to stable choices of 𝐵 p and then to 𝑀 .
+
+Directions for future work. Our analysis also surfaces an important open challenge: interference across problems. In an idealized single-problem setting, one might expect clean exponential improvements with increasing sampling compute. In practice, however, RL is performed over mixtures of problems, where progress on some tasks can interfere with learning on others. This population-level interference alters both the coefficients and the effective hyperparameter values in observed scaling laws. Another promising direction for future work is to identify sufficient statistics early on in a training run that capture the degree of interference across problems, enabling more accurate predictions of how additional compute will translate into subsequent learning progress. Tracking changes in the pass@1 distribution through training provides a natural starting point for studying such interference. More broadly, developing predictive models based on a small set of statistics summarizing the pass@1 landscape may enable approximate closed-form rules for compute-optimal hyperparameters that generalize across base models and prompt distributions. 
+
+## Acknowledgements 
+
+We thank Oleg Rybkin, Apurva Gandhi, Charlie Snell, Matthew Yang, Rishabh Agarwal, Sang Michael Xie, Junlong Li, Zora Wang, and other members of the CMU AIRe lab for their thoughtful feedback and discussions. We also thank Chengyu Dong, Mikhail Yurochkin, Rupesh Srivastava, Joel Hestness, and Gavia Gray for early discussions on RL scaling in LLM. We also gratefully acknowledge the Orchard cluster at the FLAME center of CMU for providing computational resources that supported a part of this work. 
+
+> 15 IsoCompute Playbook: Optimally Scaling Sampling Compute for LLM RL
+
+## References 
+
+[1] Joel Hestness, Sharan Narang, Newsha Ardalani, Gregory Diamos, Heewoo Jun, Hassan Kianinejad, Md Mostofa Ali Patwary, Yang Yang, and Yanqi Zhou. Deep learning scaling is predictable, empirically. 
+
+arXiv preprint arXiv:1712.00409 , 2017. [2] Jared Kaplan, Sam McCandlish, Tom Henighan, Tom B Brown, Benjamin Chess, Rewon Child, Scott Gray, Alec Radford, Jeffrey Wu, and Dario Amodei. Scaling laws for neural language models. arXiv preprint arXiv:2001.08361 , 2020. [3] Jordan Hoffmann, Sebastian Borgeaud, Arthur Mensch, Elena Buchatskaya, Trevor Cai, Eliza Rutherford, Diego de Las Casas, Lisa Anne Hendricks, Johannes Welbl, Aidan Clark, et al. Training compute-optimal large language models. arXiv preprint arXiv:2203.15556 , 2022. [4] Andy L Jones. Scaling scaling laws with board games. arXiv preprint arXiv:2104.03113 , 2021. [5] Jacob Hilton, Jie Tang, and John Schulman. Scaling laws for single-agent reinforcement learning. 
+
+arXiv preprint arXiv:2301.13442 , 2023. [6] Preston Fu, Oleh Rybkin, and Aviral Kumar. Scaling laws for value-based rl. value-scaling.github.io ,September 2025. URL https://value-scaling.github.io/ .[7] Oleh Rybkin, Michal Nauman, Preston Fu, Charlie Snell, Pieter Abbeel, Sergey Levine, and Aviral Kumar. Value-based deep rl scales predictably, 2025. URL https://arxiv.org/abs/2502. 04327 .[8] Sam McCandlish, Jared Kaplan, Dario Amodei, and OpenAI Dota Team. An empirical model of large-batch training. arXiv preprint arXiv:1812.06162 , 2018. [9] Devvrit Khatri, Lovish Madaan, Rishabh Tiwari, Rachit Bansal, Sai Surya Duvvuri, Manzil Zaheer, Inderjit S Dhillon, David Brandfonbrener, and Rishabh Agarwal. The art of scaling reinforcement learning compute for llms. arXiv preprint arXiv:2510.13786 , 2025. [10] Zelin Tan, Hejia Geng, Xiaohang Yu, Mulei Zhang, Guancheng Wan, Yifan Zhou, Qiang He, Xi-angyuan Xue, Heng Zhou, Yutao Fan, et al. Scaling behaviors of llm reinforcement learning post-training: An empirical study in mathematical reasoning. arXiv preprint arXiv:2509.25300 ,2025. [11] Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, YK Li, Yang Wu, et al. Deepseekmath: Pushing the limits of mathematical reasoning in open language models. arXiv preprint arXiv:2402.03300 , 2024. [12] Mingjie Liu, Shizhe Diao, Ximing Lu, Jian Hu, Xin Dong, Yejin Choi, Jan Kautz, and Yi Dong. Prorl: Prolonged reinforcement learning expands reasoning boundaries in large language models. arXiv preprint arXiv:2505.24864 , 2025. [13] Charlie Snell, Jaehoon Lee, Kelvin Xu, and Aviral Kumar. Scaling llm test-time compute optimally can be more effective than scaling model parameters, 2024. URL https://arxiv.org/abs/ 2408.03314 .
+
+> 16 IsoCompute Playbook: Optimally Scaling Sampling Compute for LLM RL
+
+[14] Ganqu Cui, Yuchen Zhang, Jiacheng Chen, Lifan Yuan, Zhi Wang, Yuxin Zuo, Haozhan Li, Yuchen Fan, Huayu Chen, Weize Chen, et al. The entropy mechanism of reinforcement learning for reasoning language models. arXiv preprint arXiv:2505.22617 , 2025. [15] Zhoujun Cheng, Shibo Hao, Tianyang Liu, Fan Zhou, Yutao Xie, Feng Yao, Yuexin Bian, Yonghao Zhuang, Nilabjo Dey, Yuheng Zha, et al. Revisiting reinforcement learning for llm reasoning from a cross-domain perspective. arXiv preprint arXiv:2506.14965 , 2025. [16] Qiying Yu, Zheng Zhang, Ruofei Zhu, Yufeng Yuan, Xiaochen Zuo, Yu Yue, Weinan Dai, Tiantian Fan, Gaohong Liu, Lingjun Liu, et al. Dapo: An open-source llm reinforcement learning system at scale. arXiv preprint arXiv:2503.14476 , 2025. [17] Yuxiao Qu, Amrith Setlur, Virginia Smith, Ruslan Salakhutdinov, and Aviral Kumar. Pope: Learning to reason on hard problems via privileged on-policy exploration, 2026. URL https://arxiv. org/abs/2601.18779 .[18] Greg Yang, Edward J. Hu, Igor Babuschkin, Szymon Sidor, Xiaodong Liu, David Farhi, Nick Ryder, Jakub Pachocki, Weizhu Chen, and Jianfeng Gao. Tensor programs v: Tuning large neural networks via zero-shot hyperparameter transfer, 2022. URL https://arxiv.org/abs/2203.03466 .[19] Jian Hu, Mingjie Liu, Ximing Lu, Fang Wu, Zaid Harchaoui, Shizhe Diao, Yejin Choi, Pavlo Molchanov, Jun Yang, Jan Kautz, et al. Brorl: Scaling reinforcement learning via broadened exploration. arXiv preprint arXiv:2510.01180 , 2025. [20] Amrith Setlur, Saurabh Garg, Xinyang Geng, Naman Garg, Virginia Smith, and Aviral Kumar. Rl on incorrect synthetic data scales the efficiency of llm math reasoning by eight-fold, 2024. URL 
+
+https://arxiv.org/abs/2406.14532 .[21] John Schulman, Filip Wolski, Prafulla Dhariwal, Alec Radford, and Oleg Klimov. Proximal policy optimization algorithms. arXiv preprint arXiv:1707.06347 , 2017. [22] MiniMax, :, Aili Chen, Aonian Li, Bangwei Gong, Binyang Jiang, Bo Fei, Bo Yang, Boji Shan, Changqing Yu, Chao Wang, Cheng Zhu, Chengjun Xiao, Chengyu Du, Chi Zhang, Chu Qiao, Chunhao Zhang, Chunhui Du, Congchao Guo, Da Chen, Deming Ding, Dianjun Sun, Dong Li, Enwei Jiao, Haigang Zhou, Haimo Zhang, Han Ding, Haohai Sun, Haoyu Feng, Huaiguang Cai, Haichao Zhu, Jian Sun, Jiaqi Zhuang, Jiaren Cai, Jiayuan Song, Jin Zhu, Jingyang Li, Jinhao Tian, Jinli Liu, Junhao Xu, Junjie Yan, Junteng Liu, Junxian He, Kaiyi Feng, Ke Yang, Kecheng Xiao, Le Han, Leyang Wang, Lianfei Yu, Liheng Feng, Lin Li, Lin Zheng, Linge Du, Lingyu Yang, Lunbin Zeng, Minghui Yu, Mingliang Tao, Mingyuan Chi, Mozhi Zhang, Mujie Lin, Nan Hu, Nongyu Di, Peng Gao, Pengfei Li, Pengyu Zhao, Qibing Ren, Qidi Xu, Qile Li, Qin Wang, Rong Tian, Ruitao Leng, Shaoxiang Chen, Shaoyu Chen, Shengmin Shi, Shitong Weng, Shuchang Guan, Shuqi Yu, Sichen Li, Songquan Zhu, Tengfei Li, Tianchi Cai, Tianrun Liang, Weiyu Cheng, Weize Kong, Wenkai Li, Xiancai Chen, Xiangjun Song, Xiao Luo, Xiao Su, Xiaobo Li, Xiaodong Han, Xinzhu Hou, Xuan Lu, Xun Zou, Xuyang Shen, Yan Gong, Yan Ma, Yang Wang, Yiqi Shi, Yiran Zhong, Yonghong Duan, Yongxiang Fu, Yongyi Hu, Yu Gao, Yuanxiang Fan, Yufeng Yang, Yuhao Li, Yulin Hu, Yunan Huang, Yunji Li, Yunzhi Xu, Yuxin Mao, Yuxuan Shi, Yuze Wenren, Zehan Li, Zelin Li, Zhanxu Tian, Zhengmao Zhu, Zhenhua Fan, Zhenzhen Wu, Zhichao Xu, Zhihang Yu, Zhiheng Lyu, Zhuo Jiang, Zibo Gao, Zijia Wu, Zijian Song, and Zijun Sun. Minimax-m1: Scaling test-time compute efficiently with lightning attention, 2025. URL https://arxiv.org/abs/2506.13585 .
+
+> 17 IsoCompute Playbook: Optimally Scaling Sampling Compute for LLM RL
+
+[23] Tom Schaul, Diana Borsa, Joseph Modayil, and Razvan Pascanu. Ray interference: a source of plateaus in deep reinforcement learning. arXiv preprint arXiv:1904.11455 , 2019. [24] Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song, Ruoyu Zhang, Runxin Xu, Qihao Zhu, Shirong Ma, Peiyi Wang, Xiao Bi, et al. Deepseek-r1: Incentivizing reasoning capability in llms via reinforcement learning. arXiv preprint arXiv:2501.12948 , 2025. [25] Jingcheng Hu, Yinmin Zhang, Qi Han, Daxin Jiang, Xiangyu Zhang, and Heung-Yeung Shum. Open-reasoner-zero: An open source approach to scaling up reinforcement learning on the base model. arXiv preprint arXiv:2503.24290 , 2025. [26] Ziniu Li, Congliang Chen, Tianyun Yang, Tian Ding, Ruoyu Sun, Ge Zhang, Wenhao Huang, and Zhi-Quan Luo. Knapsack rl: Unlocking exploration of llms via optimizing budget allocation. arXiv preprint arXiv:2509.25849 , 2025. [27] Gavia Gray, Anshul Samar, and Joel Hestness. Efficient and approximate per-example gradient norms for gradient noise scale. In Workshop on Advancing Neural Network Training: Computational Efficiency, Scalability, and Resource Optimization (WANT@ NeurIPS 2023) , 2023. [28] Hanlin Zhang, Depen Morwani, Nikhil Vyas, Jingfeng Wu, Difan Zou, Udaya Ghai, Dean Foster, and Sham M Kakade. How does critical batch size scale in pre-training? In The Thirteenth International Conference on Learning Representations .[29] Zhiyuan Zeng, Hamish Ivison, Yiping Wang, Lifan Yuan, Shuyue Stella Li, Zhuorui Ye, Siting Li, Jacqueline He, Runlong Zhou, Tong Chen, et al. Rlve: Scaling up reinforcement learning for language models with adaptive verifiable environments. arXiv preprint arXiv:2511.07317 , 2025. [30] Ilya Loshchilov and Frank Hutter. Decoupled weight decay regularization. In International Conference on Learning Representations .[31] Feng Yao, Liyuan Liu, Dinghuai Zhang, Chengyu Dong, Jingbo Shang, and Jianfeng Gao. Your efficient rl framework secretly brings you off-policy rl training, 2025. URL https://fengyao. notion.site/off-policy-rl .[32] Guangming Sheng, Chi Zhang, Zilingfeng Ye, Xibin Wu, Wang Zhang, Ru Zhang, Yanghua Peng, Haibin Lin, and Chuan Wu. Hybridflow: A flexible and efficient rlhf framework. arXiv preprint arXiv:2409.19256 , 2024. [33] Jincheng Mei, Zixin Zhong, Bo Dai, Alekh Agarwal, Csaba Szepesvari, and Dale Schuurmans. Stochastic gradient succeeds for bandits. In International Conference on Machine Learning , pages 24325–24360. PMLR, 2023. [34] Rylan Schaeffer, Joshua Kazdan, John Hughes, Jordan Juravsky, Sara Price, Aengus Lynch, Erik Jones, Robert Kirk, Azalia Mirhoseini, and Sanmi Koyejo. How do large language monkeys get their power (laws)? arXiv preprint arXiv:2502.17578 , 2025. 
+
+> 18 IsoCompute Playbook: Optimally Scaling Sampling Compute for LLM RL
+
+# Appendices 
+
+## A. Detailed Experiment Setup 
+
+Recipe ablation setup. We use Qwen2.5-7B-Instruct (max length 8,192) with GRPO. For regularizer ablations, we fix 𝐵 p = 256 and 𝑛 = 16 . On both Easy and Hard sets, we ablate KL and entropy regularization and the zero-variance filter (including applying it selectively to loss terms). For LR scaling, we use AdamW [ 30 ] with a 10-step linear warmup followed by a constant schedule. We establish a base LR anchor at 𝐵 p = 128 , 𝑛 = 8 (𝐵 = 1 , 024 ) via grid search. We then scale to 𝑛 = 64 (𝐵 = 8 , 192 ) to compare three scaling rules: (1) constant, (2) linear, and (3) square-root scaling. 
+
+Zero-variance filtering is employed in recent works [ 9] to exclude prompts with identical rollout rewards from loss in GRPO. This mechanism increases effective batch size and prevents applying regularizers to zero-gradient trajectories, a crucial feature for hard problems where exploration naturally drives high entropy. However, our experiments (Figure 3) show that even when filtering is applied to KL and entropy terms , instability and entropy explosion persist, though mitigated, when rare positives are sampled. Since removing regularization entirely yields the most stable dynamics, we employ KL+entropy regularization only on the Easy set and omit them on the Hard set to avoid instability. 
+
+Main experiment setup. We train Qwen2.5-7B-Instruct with on-policy updates using the optimized recipe above. The learning rate scales proportionally to √𝐵 (base 1e-6 at 𝐵 = 1024 ). Based on ablation results, KL and entropy regularization are enabled for the Easy set but disabled for the Hard set. We fix temperature to 0.6 and top-𝑝 to 1.0. We use the GRPO algorithm and Truncated Importance Sampling (TIS [ 31 ]) to mitigate training-inference logit mismatch. We use the veRL [ 32 ] framework to conduct all RL experiments. 
+
+Extracting frontiers. Figure 15 provides a schematic illustration of how we extract frontiers and fit the sigmoidal curve. 
+
+## B. Additional Compute-Optimal Results 
+
+In the main results, we show one fixed value for 𝐵 p = 32 for brevity. Figures 16 and 17 demonstrate that the scaling trend described in the main text, where larger compute budgets favor increased parallel rollouts ( 𝑛 ), holds across different fixed values of 𝐵 p. While it appears that larger 𝐵 p settings saturate at lower 𝑛 values (e.g., 𝑛 = 16 at 𝐵 p = 1 ,024 ), this might be attributable to the total batch size constraint (𝐵 max ≥ 𝐵 p · 𝑛 ) in the sweep experiments. The precise interaction between 𝐵 p and the saturation point of 𝑛 remains an open question for future investigation. Figure 18 and 19 provide additional compute-optimal frontiers under different fixed values of 𝐵 p on the Easy and Hard splits. Consistent with Section 3.2, higher sampling budgets increasingly favor larger 𝑛 ,indicating that allocating more parallel rollouts per problem is a robust strategy across dataset difficulty and batch-size settings. Finally, we report results on the in-domain Extremely Hard subset (pass@128 = 0 ) using both best@4 
+
+and worst@4 metrics (Figure 20). We observe a clear coverage–sharpening trade-off : larger 𝑛 is more beneficial for improving best@4 (coverage), while worst@4 (sharpening) is compute-optimally maximized at a moderate 𝑛 (e.g., 𝑛 = 64 ). Notably, overly large 𝑛 (e.g., 𝑛 = 256 ) can underperform on 
+
+> 19 IsoCompute Playbook: Optimally Scaling Sampling Compute for LLM RL First point reaching 0.6
+> First point reaching 0.5
+
+Figure 15: Demonstrations of frontier point detection for each 𝑛 . (Left) Validation reward trajectories plotted against compute (rollouts) for varying population sizes ( 𝑛 = 32 in blue, 𝑛 = 64 in red). Scatter points show raw data; dashed curves show smoothed trends. Arrows illustrate the “record-breaking” extraction process, identifying the earliest compute step where reward crosses a discretized threshold (e.g., 0.5 or 0.6). In practice, we employ finer reward bins (e.g., 0.005 ) tailored to task difficulty. (Right) Extracted frontier points in the 𝑛 vs. Compute space. Each circle represents the compute budget 𝐶 required for a specific 𝑛 to reach a higher performance bin. The dashed curve shows the fitted scaling law, indicating the optimal 𝑛 
+
+scaling as compute increases. 
+
+Figure 16: Compute-optimal frontiers maximizing over 𝑛 varying problems per batch ( 𝐵 p) on the Easy set. 
+
+worst@4 despite achieving better coverage, suggesting that the compute-optimal choice of 𝑛 on extremely hard problems typically lies in an intermediate regime that balances exploration and consistency. 
+
+> 20 IsoCompute Playbook: Optimally Scaling Sampling Compute for LLM RL
+
+Figure 17: Compute-optimal frontiers maximizing over 𝑛 varying problems per batch ( 𝐵 p) on the Hard set. 
+
+Figure 18: Compute-optimal frontiers on the Easy set under fixed total batch size 𝐵 ∈ { 4096 , 8192 , 16384 }. Each subplot fixes the total batch size 𝐵 and sweeps the number of parallel rollouts per problem plotting validation reward versus compute (measured in millions of rollouts). 
+
+## C. Additional Details: Joint Optimization of (𝐵 p, 𝑛, 𝑀 )
+
+In Section 4.3, we jointly optimize the three sampling axes (𝐵 p, 𝑛, 𝑀 ) under a fixed total rollout compute budget 
+
+𝐶 = 𝑛 · 𝐵 p · 𝑀. 
+
+For each compute budget 𝐶 , we exhaustively sweep a grid of feasible pairs (𝐵 p, 𝑛 ) within the range accessible to our system, and set 
+
+𝑀 =⌊︂ 𝐶 𝑛 𝐵 p⌋︂ 
+
+> 21 IsoCompute Playbook: Optimally Scaling Sampling Compute for LLM RL
+
+Figure 19: Compute-optimal frontiers on the Hard set under fixed total batch size 𝐵 ∈ { 4096 , 8192 , 16384 }. Compared to the Easy set, the trends are noisier in the Hard regime. Nevertheless, the qualitative trend remains consistent: as compute increases, the compute-optimal allocation increasingly favors larger parallel rollouts per problem, i.e., larger 𝑛 .
+
+Figure 20: Compute-optimal frontiers on the in-domain Extremely Hard subset (pass@128 = 0 ), evaluated with best@4 (left) and worst@4 (right). Larger 𝑛 improves best@4 at higher compute, whereas worst@4 is maximized by a   
+
+> moderate 𝑛 = 64 , highlighting a strong coverage-sharpening trade-off in the extremely hard regime.
+
+(up to standard feasibility constraints such as minimum required update steps and hardware throughput limits). We then select the best configuration at each 𝐶 by 
+
+(𝐵 * 
+
+> p
+
+(𝐶 ), 𝑛 *(𝐶 ), 𝑀 *(𝐶 )) = arg max    
+
+> (𝐵 p,𝑛,𝑀 )∈ 𝒢 (𝐶 )
+
+Reward val (𝐵 p, 𝑛, 𝑀 ),
+
+where 𝒢 (𝐶 ) denotes the feasible sweep grid at budget 𝐶 and the validation metric is avg@4 unless stated otherwise. Across both easy and hard splits, the joint sweep confirms a consistent pattern: the compute-optimal strategy is primarily characterized by the parallel rollouts per problem. As shown in Fig. 21–22, 𝑛 *(𝐶 )
+
+increases monotonically with compute and is well-fit by a sigmoid trend in log 𝑛 versus log 𝐶 . In contrast, 
+
+𝐵 p behaves mainly as a stability constraint rather than a performance driver: once 𝐵 p is kept within a moderate range, performance varies only weakly with 𝐵 p, and multiple 𝐵 p values can yield similarss results provided training remains stable. In practice, we therefore recommend the following workflow: (i) tune 𝑛 using the fitted 𝑛 *(𝐶 ) curve, (ii) choose the smallest 𝐵 p that yields stable training for the target difficulty regime, and (iii) allocate the remaining budget to 𝑀 .Finally, we note that while our sweeps are exhaustive over the (𝐵 p, 𝑛 ) range we could access, we do not 
+
+> 22 IsoCompute Playbook: Optimally Scaling Sampling Compute for LLM RL
+
+Easy Problem Hard Problem 
+
+Figure 21: Compute-optimal parallel rollouts 𝑛 *(𝐶 ) under joint optimization of (𝐵 p, 𝑛, 𝑀 ). For each total rollout compute budget 𝐶 , we sweep (𝐵 p, 𝑛, 𝑀 ) and select the globally best configuration. The optimal 𝑛 increases monotonically with compute and is well-fit by a sigmoid trend on both the Easy (left) and Hard (right) splits. 
+
+Figure 22: Compute-optimal frontiers from sweeping (𝐵 p, 𝑛, 𝑀 ) on Easy and Hard problems. Points on the frontier are annotated by the pre-training sampling configuration (𝐵 p, 𝑛 ), with 𝑀 determined by the remaining compute. Consistent with earlier sections, the frontier shifts to systematically larger 𝑛 as compute increases. In contrast, the frontier-attaining 𝐵 p varies across budgets but has only a marginal effect on performance within a moderate range (cf. Section 4.2). 
+
+explore regimes with extremely large total rollout sizes where both 𝐵 p and 𝑛 are simultaneously large; understanding interactions at such massive batch sizes is an important direction for future work. 
+
+## D. Generalization to OOD tasks 
+
+In the main text, we prioritize in-domain validation results to minimize the influence of train-test distribution shifts, thereby allowing for a cleaner analysis of compute allocation scaling. In reality, 
+
+> 23 IsoCompute Playbook: Optimally Scaling Sampling Compute for LLM RL
+
+practical post-training workflows require models to generalize to unseen distributions like downstream tasks. We examine whether the benefits of increasing parallel rollouts ( 𝑛 ) extend to out-of-domain (OOD) downstream tasks. As illustrated in Figure 23, we observe that larger values of 𝑛 lead to higher performance on AIME24. 
+
+Figure 23: AIME 24 scores trained with varying parallel rollouts ( 𝑛 ) under a fixed problem batch size ( 𝐵 p = 32 ). 
+
+## E. Compute Metrics: Rollouts vs. Tokens 
+
+To verify that our compute–optimal 𝑛 * scaling is not an artifact of how we measure compute, we repeat the same fit using another unit: total generated tokens . As shown in Figure 24, both parameterizations lead to an almost identical sigmoid trend. This suggests that, for our training setup, using rollouts or tokens as the compute proxy makes little practical difference. The two views are largely related by a near-constant conversion factor governed by the average response length. One noticeable difference is that the fitted slope parameter 𝑘 is not exactly the same across the two plots. This is expected: 𝑘 controls how sharply 𝑛 * transitions as compute increases, and its numerical value depends on the units of 𝐶 . In experiments, we observe a positive correlation between the model’s response length and validation rewards. For instance, models at the high-compute frontier tend to have longer response lengths. Since token-based compute accounts for response length, the 𝑘 value is smaller, indicating a shallower slope in 𝑛 scaling relative to compute. Therefore, the change in 𝑘 mainly reflects how response length modulates the mapping between rollouts and tokens, rather than a fundamental discrepancy in the underlying scaling behavior. Nonetheless, the overall scaling trend remains consistent. 
+
+> 24 IsoCompute Playbook: Optimally Scaling Sampling Compute for LLM RL
+
+Figure 24: 𝑛 * scaling is consistent under token-based vs. rollout-based compute. We fit sigmoid curves for log 2(𝑛 *) as a function of compute 𝐶 , using either total generated tokens ( left ) or total rollouts ( right ). Both choices produce the same qualitative scaling curve—rapid growth followed by saturation—indicating that the compute-optimal 𝑛 * trend is robust to the compute definition. 
+
+> 25 IsoCompute Playbook: Optimally Scaling Sampling Compute for LLM RL
+
+## F. Additional Results on Other Algorithms 
+
+For clarity, the main text focuses on the GRPO setting. We also test whether the core compute-allocation insight, that larger parallel rollouts per problem ( 𝑛 ) become increasingly favorable as total rollout compute grows, especially on harder regimes, extends to other on-policy objectives. In this appendix, we apply the same 𝑛 -sweep protocol to PPO [21] and CISPO [22]. We keep the same base model (Qwen2.5-7B-Instruct), data splits (Easy/Hard), sampling temperature/top-
+
+𝑝 , and the compute accounting used throughout the paper (compute measured in million rollouts). We sweep 𝑛 ∈ { 16 , 32 , 64 , 128 , 256 } and plot validation reward as a function of compute. We do not perform an extensive hyperparameter retuning for each algorithm; the goal here is to check whether the qualitative 𝑛 -scaling trend persists beyond GRPO. Figure 25 reports reward–compute trajectories under PPO and CISPO. On Hard with PPO, larger 𝑛 yields consistently better performance at matched compute, matching the “discovery-limited” regime observed in the main text: small 𝑛 improves slowly while larger 𝑛 accelerates progress as compute increases. On Easy , PPO exhibits earlier saturation and weaker separation among large 𝑛 values, consistent with the Easy regime being less exploration-limited. CISPO shows a similar qualitative pattern on Easy, with smooth learning curves and competitive performance from moderate-to-large 𝑛 as compute grows. Overall, these results suggest that the empirical preference for larger 𝑛 at higher compute is not specific to GRPO’s group baseline estimator; it also appears under value-based PPO and an alternative clipped objective (CISPO). Easy PPO Hard PPO Easy CISPO 
+
+Figure 25: Generalization to other RL algorithms (PPO and CISPO). Validation reward versus compute (million rollouts) for varying parallel rollouts per problem 𝑛 . Left: Easy set with PPO. Middle: Hard set with PPO. Right: Easy set with CISPO. The qualitative trend matches the main text: as compute increases, larger 𝑛 becomes increasingly favorable, with a stronger separation on the Hard split. 
+
+## G. Effects of Reducing Baseline Estimation Variance 
+
+We discuss in the main content how larger 𝑛 outperforms small 𝑛 at high compute regimes from exploration and optimization perspectives. Another theoretical advantage of larger 𝑛 in GRPO is providing a more robust baseline estimator (group average reward), thereby reducing advantage estimate variance. To isolate the gain attributed specifically to precise baseline estimation versus training on more data, we conducted an ablation with a fixed problem batch size ( 𝐵 p = 128 ). We compared three settings: (1) Large 𝑛 = 256 , (2) Small 𝑛 = 64 , and (3) Decoupled , where we generate 256 rollouts to compute 
+
+> 26 IsoCompute Playbook: Optimally Scaling Sampling Compute for LLM RL
+
+high-precision advantage estimates but randomly subsample only 64 rollouts for the policy gradient update. We observe the best validation reward follows (1) > (3) ≈ (2) . The fact that (3) performs similarly to (2) indicates that the benefit of a lower-variance baseline estimator is not significant in this context. Consequently, the superior performance of (1) over (3) suggests that the primary benefit of scaling 𝑛 
+
+stems from broader exploration rather than baseline precision. 
+
+Figure 26: Effects of baseline estimation variance. Validation reward vs. compute (million rollouts) under a fixed problem batch size 𝐵 p = 128 , comparing three GRPO settings: (i) large group size 𝑛 train /𝑛 est = 256 /256 , (ii) small group size 64 /64 , and (iii) decoupled baseline estimation 64 /256 (estimate baseline from 256 rollouts but sample 64 from them for the policy-gradient update). We observe consistent ordering (1) > (3) ≈ (2) , showing that lower-variance baseline estimation yields negligible gains, while the full 𝑛 = 256 run remains best, indicating the dominant gains from scaling 𝑛 come from broader exploration. 
+
+## H. Base Case: Only One Training Problem 
+
+To build a conceptual model, let us study the simplest setting where we are provided with one single problem in the training set. We model this setting as a simple multi-armed bandit problem, where each arm represents one possible response to the problem. We assume training of a tabular softmax policy (i.e., softmax on independently represented logits denoting the response). Please see this for setup [ 33 ]. Now let’s say that the base model attains an average pass@1 rate of 𝑝 on this prompt and say 𝑛 i.i.d. response samples drawn from the policy are used for training at one gradient step. First note that 𝑛 
+
+independent samples change pass @𝑛 exponentially: pass@ 𝑛 = 1 − (1 − 𝑝 )𝑛 .
+
+Does 𝑛 change the policy gradient update on the problem in one update? Averaging over 𝑛 samples does 
+
+not change the expected policy gradient direction: the expected update is identical to that obtained from a single sample. What it does change is the variance of the gradient estimate, which decreases by a factor 𝑛 .
+
+> 27 IsoCompute Playbook: Optimally Scaling Sampling Compute for LLM RL
+
+Prior work [ 33 ] shows that, when using a single sample per update, tabular (stochastic) softmax policy gradient enjoys an 𝑂 (1 /𝑡 ) rate on the policy suboptimality (i.e., bound on optimal performance - attained performance) after 𝑡 update steps. When 𝑛 independent samples are used by averaging over the policy gradient update, repeating the same analysis yields 
+
+E[︁ suboptimality at step 𝑡 ]︁ = 𝑂 (︂ 𝐴 𝑛 · 𝑡 + 𝐵 𝑡 )︂ ,
+
+where 𝐵 ≪ 𝐴 is a constant that does not depend on the variance of the policy gradient estimate. The constant 𝐴 in 𝐴 𝑛 ·𝑡 depends on variance in the policy gradient estimate and corresponds to the leading term (for reasonably small 𝑛 ). With this guarantee, the convergence rate is still linear in 𝑡 , but the effect of stochasticity reduces drastically. For the term 𝐴 𝑛 ·𝑡 , 𝑛 and 𝑡 can be interchanged: one can reduce the error in this term by using a larger 𝑛 for a smaller 𝑡 . The other term depends only on 𝑡 , indicating that out of all compute allocation configurations in Section 4.1, for instance, one should prefer the configuration that makes more sequential updates 𝑀 as opposed to choosing a larger 𝑛 . However, this is not the case in practice. 
+
+## I. A Mental Model for Interference 
+
+A natural diagnostic is the distribution of pass @1 across prompts. Inference-time scaling laws [ 34 ]relate pass @𝑛 to the population pass @1 distribution, but RL training differs because the model learns from the 𝑛 rollouts it produces, and updates across problems introduce interference. A useful mental model is that interference is smaller when learning progress is distributed roughly uniformly across prompts. Thus, in the Fig. 27, changes in the pass @1 distribution over training can serve as a diagnostic: uniform improvement suggests controlled interference, while highly uneven improvement suggests strong interference and rich-gets-richer dynamics. 
+
+> 28 IsoCompute Playbook: Optimally Scaling Sampling Compute for LLM RL Easy n=8 Easy n=128 Hard n=8 Hard n=128
+
+Figure 27: Dynamics of pass@1 distributions (sanity-checking the interference analysis in Fig. 11). We visualize the evolution of pass@1 histograms across training for the same four cases (Easy/Hard · 𝑛 = 8 /128 ) at matched compute. The temporal trajectories corroborate the main-text interpretation: on Easy , small 𝑛 progressively polarizes into a mass near 1 with a persistent non-zero fraction near 0 (optimization-induced interference ), whereas large 𝑛 maintains a more dispersed, uniform distribution. On Hard , large 𝑛 increases coverage by steadily reducing the zero-mass, while small 𝑛 concentrates gains on a subset of solvable problems, yielding sharper but less comprehensive improvements.

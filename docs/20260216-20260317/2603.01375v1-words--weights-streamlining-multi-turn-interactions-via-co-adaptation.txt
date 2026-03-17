@@ -1,0 +1,1096 @@
+Title: Words & Weights: Streamlining Multi-Turn Interactions via Co-Adaptation
+
+URL Source: https://arxiv.org/pdf/2603.01375v1
+
+Published Time: Tue, 03 Mar 2026 02:50:43 GMT
+
+Number of Pages: 16
+
+Markdown Content:
+# Words & Weights: Streamlining Multi-Turn Interactions via Co-Adaptation 
+
+Chenxing Wei 1 2 Hong Wang 3 Ying He 1 Zhongxiang Dai 4 Bo Jiang 5 F. Richard Yu 6 Yao Shu 7
+
+## Abstract 
+
+Test-time policy adaptation for multi-turn inter-actions (T 2PAM) is essential for aligning Large Language Models (LLMs) with dynamic user needs during inference time. However, existing paradigms commonly treat test-time adaptation as a single-axis problem, either purely refining instructions (Prompt Engineering) or only adjust-ing weights (Test-Time Training), ignoring that interaction failures stem from a coupled mix of ambiguity and incapacity. We argue that these two optimization paths are not merely additive but syn-ergistic: semantic clarity acts as a pre-conditioner for effective parameter updates. To this end, we propose ROSA2 , a framework that reformulates interaction as a joint optimization problem over the heterogeneous space of Words and Weights. By mathematically decomposing the error signal, 
+
+ROSA2 utilizes textual gradients to rectify intent ambiguity and parameter updates to bridge ca-pability gaps. Theoretically, we prove that this co-adaptation strictly reduces the required param-eter shift for convergence. Empirically, ROSA2 
+
+outperforms state-of-the-art baselines by 30% on MATH while reducing interaction turns by 40%, demonstrating that refining the context unlocks the true potential of parameter updates. 
+
+## 1. Introduction 
+
+Large Language Models (LLMs) have demonstrated remark-able capabilities in general tasks (Yang et al., 2025; OpenAI, 2025; Google, 2025), increasingly serving as collaborative partners that engage in complex, multi-turn dialogues with users to solve open-ended problems (Yi et al., 2025). How-ever, a fundamental mismatch persists between static train-ing paradigms (e.g., SFT (Ouyang et al., 2022; Wei et al., 
+
+> 1
+
+Shenzhen University 2Guangdong Laboratory of Artificial Intelligence and Digital Economy (SZ) 3University of Science and Technology of China 4The Chinese University of Hong Kong, Shenzhen 5Bytedance 6Carleton University 7Hong Kong Univer-sity of Science and Technology (Guangzhou). Correspondence to: Yao Shu <yaoshu@hkust-gz.edu.cn >.
+
+Preprint. 
+
+2025a), RLHF (Shao et al., 2024; Wei et al., 2025c)) and dynamic real-world deployments (Li et al., 2025b; Laban et al., 2025). Consequently, pre-trained models often fal-ter in extended dialogues (Wang et al., 2024), exhibiting limited adaptability (Yi et al., 2025) and poor error cor-rection capabilities (Deshpande et al., 2025), as evidenced by the performance stagnation observed in (Wei et al., 2025b). To bridge this gap without the prohibitive cost of retraining, Test-Time Policy Adaptation for Multi-Turn In-teractions (T 2PAM) (Wei et al., 2025b) has emerged as a critical paradigm. This approach aims to optimize the policy of model in real-time during multi-turn sessions, ensuring alignment with specific user preferences to significantly enhance response accuracy and acceptance rates. Despite the promise of T 2PAM, existing paradigms com-monly treat test-time adaptation as a single-axis problem :either purely refining instructions (Prompt Engineering) (Yi et al., 2025) or, as seen in representative approaches like ROSA (Wei et al., 2025b) and TTRL (Zuo et al., 2025), only adjusting weights (Test-Time Training). In this paper, we challenge this bifurcated view by explicitly modeling the effective policy of an LLM as a coupled function π(x, θ )
+
+dependent on both its internal parameters (Weights) and the external context (Words). We argue that such conditional optimization strategies, which update one variable while freezing the other, overlook a fundamental reality: interac-tion failures stem from a coupled mix of context ambiguity 
+
+and model incapacity (Keluskar et al., 2024). Addressing these factors in isolation proves insufficient—parameter-centric methods risk overfitting to noisy histories, while prompt-centric methods often hit capability ceilings. This misalignment ultimately harms downstream performance, leading to failures in generating correct responses (low ac-curacy) and unnecessarily prolonged interaction turns that severely degrade user acceptance (Tang et al., 2025a). De-tailed related work is provided in the Appendix A. To overcome this limitation, we argue that effective adapta-tion requires resolving a fundamental error attribution: 
+
+When a model fails in a multi-turn context, is it due to a lack of intrinsic capability (parameter misalignment) or a misunderstanding of the task intent (context ambiguity)? 
+
+1
+
+> arXiv:2603.01375v1 [cs.AI] 2 Mar 2026 Words & Weights: Streamlining Multi-Turn Interactions via Co-Adaptation Stronger
+
+Turn (Current)                               
+
+> Textual Optimization Parameter Optimization Adaptation Parameters
+> Critique User Feedback
+> LLM Loss Output Full Gradient
+> Stronger
+> Context
+> Forward Backward
+> Forward Propagation Backward Propagation Parameter Update Text Update
+> Reward Context
+> Clearer
+> Figure 1. Overview of the ROSA2 Framework. We formulate T 2PAM as a joint optimization problem over the coupled variables
+> ϕt={xt+1 , θ t}. During the Forward Phase (solid lines), the model generates a response ytconditioned on the history Ht−1. The
+> Backward Phase (dashed lines) approximates the full gradient ∇joint of the interaction loss Lvia two synergistic modules: the Textual Optimization (top, green) utilizes textual gradients ( ∇x) to refine the user feedback into a clearer instruction ( xt+1 →x∗
+> t+1 ), resolving context ambiguity; while the Parameter Optimization (bottom, blue) employs gradient updates ( ∇θ) to adjust the adapter weights (θt→θt+1 ), enhancing the intrinsic capability of model. This co-adaptation ensures the system becomes both “Clearer” in intent and “Stronger” in execution for the next turn.
+
+Addressing these factors in isolation proves insuffi-cient (Chen et al., 2025). Pure prompt engineering can-not remedy intrinsic capability deficits (Lee et al., 2025), whereas pure parameter adaptation is prone to learning spu-rious mappings from noisy inputs (Li et al., 2025a). As visu-alized in Figure 2(b), the optimization landscape of T 2PAM is characterized by coupled semantic and parametric gaps. Approaching this coupled system via independent updates (analogous to following partial derivatives ) often leads to convergence at suboptimal local minima: solely optimizing parameters gravitates towards an Overfitting Trap , while solely refining the context stalls in a Deficit Trap . Conse-quently, we posit that T 2PAM must be reformulated as a joint optimization problem. Crucially, we argue that these optimization paths are not merely additive but synergistic, with semantic clarity acting as a pre-conditioner for parametric alignment . By prioritizing the elimination of semantic ambiguity, we cleanse the learning signal, ensuring that the gradient descent for parameters is strictly oriented towards the true task intent rather than fitting accumulated noise. This co-adaptation allows us to approximate the full gradient of the interaction objective, enabling a unified tra-jectory that effectively bypasses partial-optimization traps and accelerates convergence to the Success Zone of true user intents. This perspective aligns with recent research on model alignment (Liu et al., 2023; Bo et al., 2025). Driven by this insight, we introduce ROSA2 , a unified framework designed to approximate the full gradient of the interaction objective by co-adapting the semantic con-text and model parameters. Instead of treating error sig-nals as a monolith, our approach effectively disentangles the optimization process: it employs textual gradients to sharpen the user intent (Words) and utilizes closed-form updates to enhance the model’s intrinsic execution capa-bilities (Weights). Theoretically, we demonstrate that this semantic pre-conditioning is rigorous, proving that it strictly bounds the magnitude of parameter shifts required to reach the optimal policy. This theoretical advantage translates directly into empirical gains: ROSA2 establishes a new state-of-the-art on the multiple benchmarks with a 30% av-erage accuracy improvement, while simultaneously cutting interaction costs by reducing average turns by 40%. These results validate our core hypothesis: precise context is the catalyst that maximizes the efficacy of parameter adaptation. Our contributions are summarized as follows: • We propose ROSA2 , to the best of our knowledge, the first work to reformulate test-time adaptation as a joint optimization of semantic context and model parameters, effectively resolving the error attribution dilemma inher-ent in conditional optimization methods. (Section 3) • We provide rigorous proofs showing that semantic refine-ment acts as a pre-conditioner to strictly reduce parameter shift (Theorem 4.1) and guarantee faster convergence to the optimal policy (Theorem 4.2). (Section 4) • Extensive evaluations demonstrate that ROSA2 achieves state-of-the-art results across diverse domains (e.g., 
+
++30.8% on MATH) while reducing interaction turns by nearly 40% , leading to lower total latency with negligible 2Words & Weights: Streamlining Multi-Turn Interactions via Co-Adaptation 1 2 3 4 5 6 7 8 9 10 
+
+> Interaction Turn
+> 20
+> 30
+> 40
+> 50
+> 60
+> 70
+> 80
+> Cumulative Accuracy (%)
+
+(a) Empirical Validation (Qwen3) 
+
+> Baseline
+> Prompt-Only
+> Param-Only
+> Ours (Joint)
+> Intervention
+> (Switch Method)
+> Semantic Gap
+> Parametric Gap
+
+(b) Optimization Landscape 
+
+> Success
+> Zone
+
+¼ ¤
+
+> user
+> Deficit
+> Trap
+> Overfitting
+> Trap
+> Start
+> Param-Only
+
+μt!μt + 1 
+
+> Prompt-Only
+
+xt!x ¤ 
+
+> t+ 1
+> Joint (Ours)
+
+rjoint 
+
+Figure 2. Empirical Observations and Theoretical Landscape. Figure (a) In the experimental results on MATH (Qwen3-8B) reveal that single-axis methods ( Green /Blue solid lines) suffer from premature stagnation. However, the immediate recovery observed in the Switch experiments ( Green /Blue dashed lines) suggests this bottleneck is structural. Figure (b) We map these dynamics to the optimization landscape using consistent color and line styling : the Prompt-Only path ( Green ) stalls in the Deficit Trap (Hitting capability ceilings), while the Param-Only path ( Blue ) gravitates towards the Overfitting Trap (Memorizing noise). The dashed arrows in Figure (b) visualize how the Switch Method escapes these local minima by activating the missing axis. Crucially, ROSA2 (Red )approximates the joint gradient ∇joint , forming an Optimal Trajectory that bypasses these traps and proceeds directly to the Success Zone , corresponding to the superior convergence shown in Figure (a). 
+
+memory overhead. (Section 5) 
+
+## 2. Motivation: The Traps of Conditional Optimization 
+
+T2PAM presents a joint optimization challenge involving both context ambiguity and model capability. Formally, we consider a policy π parameterized by both the context x
+
+(Words) and the model weights θ (Weights). We hypothesize that conditional optimization strategies, which update either 
+
+x or θ in isolation, inevitably converge to suboptimal states characterized by either persistent reasoning deficits (due to frozen parameters) or overfitting to noisy prompts (due to lack of context refinement). 
+
+2.1. Experimental Setup. 
+
+To empirically validate this hypothesis, we conducted a controlled study using the Qwen3-8B model on the MATH 
+
+dataset (Hendrycks et al., 2021b), simulating a challenging 10-turn interaction scenario. We compared four distinct opti-mization settings to isolate the effects of different variables: (1) Standard Inference : The model performs multi-turn rea-soning with both the prompt and model parameters frozen; (2) Prompt Optimization : We freeze the model parameters and exclusively update the system prompt using TextGrad; (3) Parameter Optimization : We fix the system prompt and exclusively update the model parameters via ROSA ; (4) 
+
+Switch Method : To test the limitations of conditional op-timization methods, we implement the Switch Method at the observed stagnation point (Turn 5). Specifically, for the model initially optimizing prompts, we freeze the prompt and switch to updating parameters; conversely, for the model initially optimizing parameters, we freeze the weights and switch to updating the prompt. 
+
+2.2. Observation: Stagnation and Recovery. 
+
+The empirical results in Figure 2 (a) demonstrate a notable trend. The Baseline (Gray dotted) exhibits limited self-correction capability, remaining nearly flat. Furthermore, conditional optimization methods, despite initial gains, suf-fer from diminishing returns and eventual premature stagna-tion. Specifically, the Prompt-Only method is constrained by policy misalignment , where semantic updates fail to bridge the reasoning gap, while the Param-Only method plateaus early due to overfitting . Crucially, a turning point occurs upon intervention: implementing the Switch Method 
+
+at Turn 5 (Dashed curves) triggers a distinct performance improvement. This recovery indicates that the stagnation was driven by the limitations of conditional optimization. 
+
+2.3. Theory: Traps of conditional optimization. 
+
+We map these empirical results to the theoretical optimiza-tion landscape in Figure 2 (b), identifying two distinct fail-ure modes inherent to conditional updates. The stagnation of the Prompt-Only method corresponds to the Deficit Trap 
+
+(Green zone): when parameters are frozen, purely semantic updates cannot rectify intrinsic reasoning deficits, leaving the model stuck despite having a refined prompt. Con-versely, the stagnation of the Param-Only method corre-3Words & Weights: Streamlining Multi-Turn Interactions via Co-Adaptation 
+
+sponds to the Overfitting Trap (Blue zone): without context refinement, parameter updates risk overfitting to ambiguous prompts. The Switch experiments validates these traps: in-troducing the missing optimization dimension allows the model to escape the local minima (dashed arrows), confirm-ing that both semantic clarity and parametric capability are required for sustained improvement. 
+
+2.4. From Conditional Optimization to Joint Optimization. 
+
+Building on the insight that semantic clarity and parametric capability must be co-adapted, we propose ROSA2 which implements a joint optimization strategy. By approximating the full gradient of the interaction objective from the very first turn, ROSA2 leverages the complementary strengths of semantic refinement and parametric adaptation to by-pass both the Deficit and Overfitting Traps. As shown in Figure 2(a) (Red Solid), it follows an Optimal Trajectory ,achieving significantly faster convergence and higher accu-racy. Driven by this insight, the following section details the co-adaptation framework of ROSA2 .
+
+## 3. Joint Optimization via Full-Gradient Approximation 
+
+Building on the aforementioned motivation in Section 2, we propose ROSA2 , a novel framework that treats T 2PAM as a joint optimization problem. By viewing the policy as a cou-pled function of Words (Context) and Weights (Parameters), 
+
+ROSA2 approximates the full gradient of the interaction ob-jective to strictly align the policy of model with the latent optimal user preference. 
+
+3.1. Problem Formulation: Joint Optimization in the Current Turn 
+
+As shown in Figure 1, for the t-th turn of a multi-turn interac-tion session, let Ht−1 = {(x1, y 1), . . . , (x∗
+
+> t−1
+
+, y t−1), x ∗ 
+
+> t
+
+}
+
+denote the immutable interaction history accumulated prior to generating the current response, containing the completed dialogue pairs from previous turns and the refined query x∗
+
+> t
+
+for the current turn. At the current turn t, the model oper-ates with the composed parameters θ = θbase + θt, where 
+
+θt represents the current learnable adapter weights. The response yt is generated according to the current policy πθ
+
+conditioned on the history: 
+
+yt ∼ πt(· | Ht−1, θ ). (1) Subsequently, the user provides feedback denoted as xt+1 ,which serves as the raw query for the next turn. Distinct from standard paradigms, we treat this feedback xt+1 as an optimizable variable (Words) alongside the model parame-ters θt (Weights). Thus, we define ϕt = {xt+1 , θ t} as the set of joint optimization variables for the current step. 
+
+The Joint Optimal Policy Construction. We postulate the existence of a Joint Optimal Policy π∗ that represents the ideal response distribution for the current turn. Follow-ing the principles of reward-weighted regression (Rafailov et al., 2023), we construct this target distribution by re-weighting the policy from the previous turn, denoted as 
+
+πt−1. In our setting, πt−1 serves as the reference policy for the current adaptation step (Wei et al., 2025b). Formally: 
+
+π∗ 
+
+> t
+
+(y | Ht−1) ≜ 1
+
+Zt
+
+πt−1(y | Ht−1) exp 
+
+ r(y)
+
+β
+
+
+
+, (2) where r(y) is the reward signal for the generated response from user feedback. Crucially, the partition function Zt
+
+depends solely on the policy πt and the fixed history: 
+
+Zt = Ey∼πt−1
+
+
+
+exp 
+
+ r(y)
+
+β
+
+ 
+
+. (3) Therefore, Zt is a constant scalar with respect to the current optimization variables ϕt = {xt+1 , θ t}.
+
+Optimization Objective. Our goal is to update the cur-rent policy πt (parameterized by x, θ ) to approximate this target π∗ 
+
+> t
+
+. We formulate this as minimizing the Forward KL Divergence , denoted as the loss function L:
+
+L(ϕt) = DKL 
+
+
+
+π∗ 
+
+> t
+
+(· | ϕt) πt(· | ϕt)
+
+
+
+. (4) Expanding the KL divergence: 
+
+L(ϕt) = Ey∼π∗ 
+
+> t
+
+[log π∗ 
+
+> t
+
+(y)] 
+
+| {z } 
+
+> −E(π∗
+> t)
+
+−Ey∼π∗ 
+
+> t
+
+[log πt(y | ϕt)] . (5) Since π∗ 
+
+> t
+
+is fixed by the forward pass (determined by πt−1
+
+and r), its entropy E(π∗) is independent of the optimizable variables ϕt. Consequently, minimizing the divergence is equivalent to minimizing the cross-entropy, or maximizing the expected log-likelihood of the optimal policy: 
+
+L(ϕt) ∼= −Ey∼π∗ [log πt(y | ϕt)] . (6) 
+
+Total Derivative and Co-Adaptation. To perform the update, we examine the total differential dL with respect to ϕt. Using importance sampling to estimate the gradient expectation under the previous policy distribution πt:
+
+∇ϕt L = −Ey∼πt
+
+ π∗(y)
+
+πt(y) ∇ϕt log πt(y | ϕt)
+
+
+
+= −Ey∼πt
+
+"
+
+1
+
+Zt
+
+exp 
+
+ r(y)
+
+β
+
+
+
+∇ϕt log πt(y | ϕt)
+
+#
+
+.
+
+(7) Expanding the gradient operator ∇ϕt reveals the coupled nature of the optimization. To strictly decrease the diver-gence, the total change in the loss function must follow the 4Words & Weights: Streamlining Multi-Turn Interactions via Co-Adaptation 
+
+full gradient in the joint space:                  
+
+> dL ∝ −1
+> Zt
+> E
+> y∼πt
+> "
+> exp
+> r(y)
+> β
+> |{z }
+> Reward Weight
+> ∇xlog πt·dx
+> |{z }
+> Optimizing Prompt
+> +∇θlog πt·dθ
+> |{z }
+> Optimizing Params
+> !#
+> .
+
+(8) Equation 8 theoretically mandates the T 2PAM: since Zt
+
+is a constant scaling factor derived from the previous turn, approximating the joint optimal policy requires simultane-ously rectifying the query xt and updating the parameters θt
+
+along the direction of the reward-weighted log-likelihood. 
+
+3.2. The ROSA2 Algorithm 
+
+Guided by the total differential derivation in Eq. 8, we pro-pose ROSA2 , a co-adaptation framework designed to itera-tively approximate the joint optimal policy through multi-turn interactions. The complete protocol is detailed in Algo-rithm 1. The process begins by initializing the turn counter 
+
+t = 1 , the learnable adapter parameters θ1 to zero, and the current history H containing the initial user query x1 (lines 1-2 in Algorithm 1). At each turn t, the workflow proceeds through two distinct phases: 
+
+Phase 1: Generation and Evaluation. To leverage the adapted knowledge, the system first composes the effective model parameters θ by adding the current adapter weights 
+
+θt to the frozen base model parameters θbase (line 5). A response ˆyt is then generated using the current policy πθ ,conditioned on the accumulated history H (line 6). Sub-sequently, the system receives a binary reward rt and the feedback of user for the next turn, denoted as xt+1 (line 7). If the response is accepted ( rt = +1 ) or the turn limit Tmax 
+
+is reached, the process terminates and returns ˆyt (lines 8-9). 
+
+Phase 2: Joint Optimization. If the response is rejected (rt = −1) and the session continues, ROSA2 triggers the co-adaptation process to jointly optimize the state for the next interaction. First, the Semantic Stream addresses context ambiguity. It utilizes the deficiency detected in the current response ˆyt to compute a semantic gradient, which is then used to refine the raw incoming feedback xt+1 into a more precise and instructive query x∗ 
+
+> t+1
+
+(lines 12-14). Uniquely, even if explicit user feedback is absent (i.e., xt+1 = ∅), this stream autonomously synthesizes a corrective query based on the gradient derived from the failure in ˆyt. This ensures that the model receives a semantically optimized instruction for the next turn, regardless of whether the user provided specific guidance. By generating such fine-grained feedback in every iteration, we effectively minimize the semantic gap between the intent of the user and the understanding of the model. 
+
+Algorithm 1 ROSA2 Co-Adaptation Protocol  
+
+> 1:
+
+Input: Initial Query x1, Base Model Parameters θbase ,Max Turns Tmax . 
+
+> 2:
+
+Initialize: Turn Counter t ← 1, Adaptation Parame-ters θ1 ← 0, Current History H0 ← { x1}. 
+
+> 3:
+
+while t ≤ Tmax do  
+
+> 4:
+
+// Phase 1: Generation and Evaluation  
+
+> 5:
+
+Compose parameters: θ ← θbase + θt. 
+
+> 6:
+
+Generate response: ˆyt ∼ π(· | Ht−1, θ ). 
+
+> 7:
+
+Receive reward rt and feedback xt+1 (next turn query) from Environment/User.  
+
+> 8:
+
+if rt = +1 or t = Tmax then  
+
+> 9:
+
+Return ˆyt // Task completed or limit reached  
+
+> 10:
+
+end if  
+
+> 11:
+
+// Phase 2: Joint Optimization  
+
+> 12:
+
+// Step A: Semantic Update (TextGrad)  
+
+> 13:
+
+Compute semantic gradient and refine query:  
+
+> 14:
+
+x∗ 
+
+> t+1
+
+← xt+1 − ∇ text L(ˆ yt) 
+
+> 15:
+
+// Step B: Parametric Update (ROSA)  
+
+> 16:
+
+Construct target distribution π∗ using πθ and rt. 
+
+> 17:
+
+θt+1 ← θt − ∇ θ L(θ | rt, π ∗, π θ ) 
+
+> 18:
+
+Update History: Ht ← Ht−1 ∪ { ˆyt, x ∗
+
+> t+1
+
+} 
+
+> 19:
+
+t ← t + 1  
+
+> 20:
+
+end while 
+
+Simultaneously, the Parametric Stream utilizes the binary reward ( rt) and the current policy πθ to estimate the latent target policy of the user π∗. It then computes a parameter update ∆θt to force the policy of the model πt to approx-imate π∗ (lines 15-17). The computational efficiency of this one-step update method makes it highly suitable for real-time multi-turn interactions, allowing for rapid iterative updates that eventually align the policy of the model with the preferences of the user. Finally, the system prepares for the next iteration by updat-ing the history H to include the current response ˆyt and the 
+
+refined query x∗
+
+> t+1
+
+, ensuring that subsequent generations are conditioned on the optimized context (lines 19-20). 
+
+Advantages. The ROSA2 framework provides a solution to T 2PAM explicitly derived from the full-gradient approx-imation. By co-adapting both the semantic context and parameters of the model, it overcomes the limitations of con-ditional optimization baselines. Specifically, the Semantic Stream guarantees that the feedback provided to the model is consistently clear and correct, effectively addressing sce-narios where explicit feedback is absent. Complementarily, the Parametric Stream ensures the model possesses the nec-essary capability to execute these instructions. This syner-gistic loop enables ROSA2 to robustly handle ambiguous inputs and recover from errors, significantly improving the success rate in complex multi-turn tasks. 5Words & Weights: Streamlining Multi-Turn Interactions via Co-Adaptation 
+
+## 4. Theoretical Results 
+
+Building upon the joint optimization formulation defined in Section 3.1, we now establish the convergence properties of the ROSA2 framework. Specifically, we analyze how the joint updates of the query x and parameters θ (Eq. 8) theoretically drive the policy of the model towards the latent optimal user policy π∗
+
+> user
+
+. This theoretical analysis proceeds in two stages. We first examine the mechanistic synergy 
+
+in Section 4.1, proving that semantic refinement strictly reduces the norm of the required parameter shift (Theo-rem 4.1). Subsequently, we extend this local property to a global perspective in Section 4.2, deriving a unified con-vergence bound (Theorem 4.2) that explicitly quantifies the reduction in divergence from the optimal policy of user while accounting for approximation errors. 
+
+4.1. Mechanism: Parametric Error Reduction 
+
+We first analyze the impact of optimizing the context x
+
+on the parametric optimization θ. A central insight is that refining the context x significantly reduces the magnitude of the required parameter shifts to achieve alignment. We formalize this phenomenon in the following theorem. 
+
+Theorem 4.1 (Reduction of Parameter Shift) . Let ∆θt(x)
+
+be the solution to the linearized parameter update defined in Eq. (6) of ROSA (Wei et al., 2025b) given a query x.If we successfully updates the query from xt to x∗ 
+
+> t
+
+such that the semantic gap to the user intent is reduced (i.e., 
+
+DKL (π∗
+
+> user
+
+∥π(·| x∗ 
+
+> t
+
+)) < D KL (π∗
+
+> user
+
+∥π(·| xt)) ), then the norm of the required parameter update satisfies: 
+
+∥∆θt(x∗ 
+
+> t
+
+)∥2 < ∥∆θt(xt)∥2 (9) 
+
+Remark. The detailed proof is provided in Section B.1. Theorem 4.1 underscores the synergistic necessity of simul-taneously updating x and θ. By aligning the input context with the model’s existing knowledge boundary first, we min-imize the residual error that the parameters must correct. 
+
+Empirical Evidence. This mechanism is strongly sup-ported by the experimental results in Figure 3. The para-metric error of ROSA2 (blue line, ∥∆θ∥2) is significantly reduced compared to the ROSA baseline (gray line), con-firming that semantic refinement strictly reduces the opti-mization difficulty for the parametric stream. 
+
+4.2. Unified Convergence Bound 
+
+Building on Theorem 4.1, we derive a unified bound that quantifies the overall performance of Co-Adaptation. This theorem extends the Theorem 4 in (Wei et al., 2025b) by explicitly accounting for the approximation errors. 
+
+Theorem 4.2 (Unified Convergence Bound) . Assume the log-policy function log π(y | x, θ ) is L-Lipschitz smooth 1 2 3 4 5 6 7 8 9 10 
+
+Interaction Turn t
+
+> 10 −9
+> 10 −8
+> 10 −7
+> 10 −6
+> 10 −5
+> 10 −4
+> 10 −3
+> 10 −2
+> 10 −1
+> Approx. Error (Log Scale)
+
+Dynamics of Approx. Error    
+
+> Baseline (ROSA): k¢μk2
+> Co-Adaptation (Semantic): k¢xk2
+> Co-Adaptation (Parametric): k¢μk2
+> Co-Adaptation (Total): Total Approx. Error
+
+Figure 3. Dynamics of approximation error terms. The plot com-pares the baseline parametric error (gray) against the decomposed errors of ROSA2 . The parametric error of ROSA2 (blue) is signif-icantly reduced compared to the baseline, verifying Theorem 4.1. Furthermore, the total error of ROSA2 (red) remains lower than the baseline despite the additional semantic cost (green), verifying Theorem 4.2, which decays exponentially. 
+
+with respect to the joint state ϕ = {x, θ }. After T turns of Co-Adaptation, the divergence between the final policy πϕT
+
+and the user optimal policy π∗ 
+
+> user
+
+is bounded by: 
+
+DKL (π∗
+
+> user
+
+∥πϕT ) ≤ DKL (π∗
+
+> user
+
+∥πϕ0 )
+
+| {z }
+
+> Initial Error
+
+− 1
+
+β
+
+> T
+
+X
+
+> t=1
+
+π∗
+
+> user
+
+(yt|x∗ 
+
+> t
+
+)
+
+| {z }
+
+> Improvement
+
++ L
+
+2
+
+> T
+
+X
+
+> t=1
+
+ ∥∆xt∥22 + ∥∆θt∥22
+
+| {z }
+
+> Approx. Error
+
+.
+
+(10) 
+
+where ∥∆xt∥22 and ∥∆θt∥22 represent the update steps in the semantic error and parametric error at turn t, respectively. 
+
+Remark. The detailed proof is provided in Section B.2. Theorem 4.2 formally decomposes the convergence dynam-ics into three interconnected components. First, the Initial Error serves as the constant baseline divergence at the start of the interaction. Second, the Improvement term quantifies the cumulative error reduction driven by user feedback. Cru-cially, co-adaptation amplifies this term by refining the query into a correct form x∗ 
+
+> t
+
+, which ensures the model generates responses yt with significantly higher probability mass un-der the optimal user policy π∗
+
+> user
+
+. Finally, the Approx. Error 
+
+reflects the penalty incurred from inexact updates. Although 
+
+ROSA2 introduces an additional semantic cost ∥∆xt∥22, it mitigates the total error (red line in Figure 3) through the mechanism established in Theorem 4.1. 
+
+Empirical Evidence: As illustrated in Figure 3, as the query context xt progressively approaches the optimal form 6Words & Weights: Streamlining Multi-Turn Interactions via Co-Adaptation 
+
+Table 1. Main Results on Standard Reasoning Benchmarks. We report the accuracy (%) across mathematical (MATH, MATH-500), general (MMLU-R, SuperGPQA), multilingual (MT-AIME24, MT-MATH100), and code generation (HumanEval) tasks. The gains are calculated relative to the Baseline. Best scores are bolded , and second-best scores are underlined. 
+
+Mathematical Reasoning General Reasoning Multilingual Reasoning Code Gen. Model Method MATH MATH-500 MMLU-R SuperGPQA MT-AIME24 MT-MATH100 HumanEval 
+
+Qwen2.5-0.5B -Instruct Baseline 23.0 24.0 9.4 3.8 2.6 15.4 31.1 TextGrad 31.2 (+8.2) 29.6 (+5.6) 12.4 (+3.0) 3.8 (+0.0) 2.2 (-0.4) 18.4 (+3.0) 36.6 (+5.5) 
+
+ROSA 29.2 (+6.2) 30.4 (+6.4) 11.4 (+2.0) 4.0 (+0.2) 3.8 (+1.2) 19.6 (+4.2) 38.4 (+7.3) 
+
+ROSA2 40.8 (+17.8) 39.6 (+15.6) 18.4 (+9.0) 6.4 (+2.6) 4.4 (+1.8) 25.2 (+9.8) 44.5 (+13.4) 
+
+Qwen3-0.6B -Instruct Baseline 19.6 22.4 24.0 3.8 3.2 26.2 41.5 TextGrad 65.0 (+45.4) 62.0 (+39.6) 46.4 (+22.4) 3.8 (+0.0) 7.0 (+3.8) 62.2 (+36.0) 65.8 (+24.4) 
+
+ROSA 66.2 (+46.6) 63.0 (+40.6) 48.8 (+24.8) 4.0 (+0.2) 7.2 (+4.0) 62.0 (+35.8) 72.0 (+30.5) 
+
+ROSA2 70.8 (+51.2) 71.6 (+49.2) 50.0 (+26.0) 6.4 (+2.6) 9.6 (+6.4) 73.4 (+47.2) 81.7 (+40.2) 
+
+Qwen2.5-7B -Base Baseline 47.0 49.4 39.8 17.8 17.0 60.4 57.9 TextGrad 54.8 (+7.8) 54.0 (+4.6) 60.2 (+20.4) 46.4 (+28.6) 37.6 (+20.6) 75.4 (+15.0) 72.0 (+14.0) 
+
+ROSA 63.4 (+16.4) 62.4 (+13.0) 60.2 (+20.4) 47.8 (+30.0) 37.0 (+20.0) 70.4 (+10.0) 74.4 (+16.5) 
+
+ROSA2 68.4 (+21.4) 67.2 (+17.8) 63.0 (+23.2) 48.8 (+31.0) 37.8 (+20.8) 78.2 (+17.8) 79.9 (+22.0) 
+
+Qwen3-8B Baseline 50.0 42.8 57.0 24.2 29.4 75.2 78.0 TextGrad 63.4 (+13.4) 62.4 (+19.6) 70.6 (+13.6) 40.0 (+15.8) 40.0 (+10.6) 81.2 (+6.0) 82.3 (+4.3) 
+
+ROSA 62.2 (+12.2) 60.8 (+18.0) 75.8 (+18.8) 38.6 (+14.4) 38.6 (+9.2) 88.4 (+13.2) 83.7 (+5.6) 
+
+ROSA2 80.8 (+30.8) 80.6 (+37.8) 84.4 (+27.4) 52.4 (+28.2) 44.4 (+15.0) 93.6 (+18.4) 88.4 (+10.4) 
+
+DeepSeek-R1 -Distill-Llama-8B Baseline 27.6 22.8 23.6 10.4 4.8 17.8 25.0 TextGrad 34.0 (+6.4) 31.6 (+8.8) 43.4 (+19.8) 20.8 (+10.4) 16.2 (+11.4) 30.4 (+12.6) 39.0 (+14.0) 
+
+ROSA 37.8 (+10.2) 37.6 (+14.8) 42.8 (+19.2) 21.4 (+11.0) 17.2 (+12.4) 38.6 (+20.8) 39.3 (+14.3) 
+
+ROSA2 54.2 (+26.6) 54.6 (+31.8) 59.4 (+35.8) 35.0 (+24.6) 21.4 (+16.6) 50.6 (+32.8) 40.2 (+15.2) 
+
+en en 1 2 3 4 5 6 7 8 9 10 
+
+Number of conversation turns 
+
+> 0
+> 10
+> 20
+> 30
+> Accuracy (%)
+
+AIME25          
+
+> 12345678910
+
+Number of conversation turns 
+
+> 0
+> 5
+> 10
+> 15
+> 20
+
+GPQA-Diamond          
+
+> 12345678910
+
+Number of conversation turns 
+
+> 0
+> 2
+> 4
+> 6
+> 8
+
+M_IMO          
+
+> 12345678910
+
+Number of conversation turns 
+
+> 0
+> 5
+> 10
+> 15
+
+BigCodeBench-Hard 
+
+Qwen3-8B Qwen3-8B + TextGrad Qwen3-8B + ROSA Qwen3-8B + ROSA2 
+
+Figure 4. Performance trajectory on challenging benchmarks. We plot the accuracy on AIME25, GPQA-Diamond, M IMO, and BigCodeBench-Hard as a function of interaction turns. ROSA2 (red line) demonstrates sustained accuracy improvements, successfully solving complex problems where baselines plateau. 
+
+x∗, the squared norm of the semantic update ∥∆xt∥22 (green line) exhibits an exponential decay. Consequently, the total approximation error of ROSA2 (red line) is initially high due to the large semantic discrepancy, but rapidly drops to remain significantly lower than the single-stream baseline (gray line). This empirically validates that ROSA2 achieves a lower overall approximation error. 
+
+## 5. Empirical Results 
+
+Following the protocol in Section 2.1, we employ an au-tomated pipeline across verifiable benchmarks, where cor-rectness is validated via ground-truth matching (reasoning) or execution-based unit tests (coding/agents). Interactions persist until the model succeeds or reaches a turn limit, al-lowing simultaneous measurement of efficacy (success rate) and efficiency (turn count). Detailed experimental setups are deferred to Appendix C. Our analysis focuses on: (1) reasoning performance (Section 5.1), (2) adaptability in sparse-reward environments (Section 5.2), and (3) computa-tional cost (Section 5.3). 
+
+5.1. Performance and Efficiency in Diverse Tasks 
+
+Overcoming Single-Axis Limitations. As shown in Ta-ble 1, ROSA2 consistently outperforms the single-axis base-lines, TextGrad (Words-only) and ROSA (Weights-only), across all evaluated model sizes (0.5B to 8B) and domains. This performance gap validates our core hypothesis regard-ing error attribution: TextGrad, while effective at refining prompts, often hits a capability ceiling on hard tasks where the frozen model simply lacks the intrinsic knowledge to execute the instruction. Conversely, ROSA, by updating 7Words & Weights: Streamlining Multi-Turn Interactions via Co-Adaptation 
+
+parameters on potentially ambiguous inputs, tends to over-fit to noise, leading to the stagnation observed in Figure 4. 
+
+ROSA2 breaks these bottlenecks: the semantic updates un-lock the potential for parameter adaptation, enabling rapid improvements on challenging tasks. 
+
+Pre-Conditioning Effect. To understand the source of our efficiency, we analyze the interaction dynamics in Ta-ble 2. ROSA2 achieves the highest Correction Uplift (e.g., 81.4% on MATH), confirming that the Semantic Stream 
+
+successfully rectifies initial misunderstandings. More impor-tantly, ROSA2 significantly reduces the Avg Turn required to reach a solution (e.g., -40% compared to ROSA). This reduction provides empirical validation for Theorem 4.2. As the interaction progresses, the continuous semantic re-finement actively suppresses the gradient estimation noise, ensuring that the cumulative Approximation Error remains significantly lower than that of ROSA. Consequently, this minimization leads to a tighter alignment with the latent user policy π∗
+
+> user
+
+, which directly translates into the observed higher correction rates and lower turns. 
+
+Table 2. Analysis of Interaction Dynamics on Qwen3-8B. Correction Uplift indicates the percentage of eventually solved problems that were corrected after the initial failure. Avg Turn 
+
+denotes the average interaction turns required to solve a problem.                                              
+
+> Dataset Method Correction Uplift ( ↑)Avg Turn ( ↓)MATH
+> Baseline 70.0% 7.2 TextGrad 75.1% (+5.1%) 6.0 (-1.2)
+> ROSA 77.3% (+7.3%) 6.3 (-0.9)
+> ROSA2 81.4% (+11.4%) 4.4 (-2.8)
+> MMLU
+> Baseline 50.9% 6.6 TextGrad 59.5% (+8.6%) 5.2 (-1.4)
+> ROSA 60.7% (+9.8%) 5.0 (-1.6)
+> ROSA2 64.9% (+14.0%) 4.1 (-2.5)
+> MT-AIME24
+> Baseline 66.7% 9.0 TextGrad 74.5% (+7.8%) 7.9 (-1.1)
+> ROSA 73.1% (+6.4%) 8.2 (-0.8)
+> ROSA2 77.5% (+10.8%) 7.7 (-1.3)
+
+5.2. Adaptability in Sparse-Reward Environments 
+
+We evaluate ROSA2 on UI agent tasks (OSWorld (Xie et al., 2024), AndroidWorld (Rawles et al., 2025)) characterized by sparse rewards and precise execution demands. Table 3 con-firms robust improvements across SFT and DPO backbones, highlighting the necessity of joint optimization. Single-axis methods fail here: TextGrad (Words-only) cannot rectify low-level motor precision errors, while ROSA (Weights-only) struggles to converge given sparse signals. 
+
+ROSA2 effectively navigates this dilemma by leveraging 
+
+Semantic Pre-conditioning to bridge the reward gap. Specifically, the Textual Optimization module retrospec-tively analyzes the sequence of unrewarded actions, syn-thesizing fine-grained corrective instructions that pinpoint specific execution failures. This process effectively ”den-sifies” the feedback, transforming a vague, delayed failure signal into a detailed supervision signal for the next attempt. Consequently, the Parameter Optimization can utilize this clarified context as a pre-conditioner to fine-tune the execu-tion policy with precision, rather than blindly searching in a sparse reward landscape. This synergy, where semantic retrospective feedback guides parametric actuation, is the fundamental reason ROSA2 achieves superior adaptability in agentic tasks. 
+
+Table 3. Adaptability in sparse-reward environments (UI Agents).                                 
+
+> Model OSWorld AndroidWorld
+> UI-TARS-7B-SFT (Qin et al., 2025) 13.2 27.6 UI-TARS-7B-SFT + TextGrad 13.7 (+0.5) 28.3 (+0.7)
+> UI-TARS-7B-SFT + ROSA 17.8 (+4.6) 30.9 (+3.3)
+> UI-TARS-7B-SFT + ROSA2 23.6 (+10.4) 35.3 (+7.7)
+> UI-TARS-7B-DPO 14.8 28.9 UI-TARS-7B-DPO + TextGrad 14.9 (+0.1) 28.7 (-0.2)
+> UI-TARS-7B-DPO + ROSA 18.0 (+3.2) 31.7 (+2.8)
+> UI-TARS-7B-DPO + ROSA2 24.4 (+10.6) 36.6 (+7.7)
+
+5.3. Computational Cost Analysis 
+
+Finally, we analyze the practical deployment costs in terms of latency and memory. As shown in Table 4, ROSA2 
+
+achieves a remarkable reduction in Avg Time per problem, a gain driven by two synergistic factors: (i) Intra-turn effi-ciency : the continuous optimization of Words and Weights 
+
+enables the model to resolve problems using significantly more concise Chain-of-Thought (CoT) trajectories, drasti-cally cutting the per-turn inference time; and (ii) Inter-turn efficiency : the reduction in total conversation turns as es-tablished in Section 5.1. Regarding memory, ROSA2 intro-duces negligible overhead (maximum +3 .1 GB on MATH), demonstrating that its high reasoning performance does not come at the cost of hardware accessibility. 
+
+Table 4. Computational Cost Analysis.                                
+
+> Dataset Method Avg Time (s) ( ↓)Peak Memory (GB) ( ↓)MATH Baseline 334.5 90.6
+> ROSA2 297.6 (-36.9) 93.7 (+3.1)
+> AIME25 Baseline 557.4 94.9
+> ROSA2 467.2 (-90.2) 95.4 (+0.5)
+> HumanEval Baseline 543.7 94.8
+> ROSA2 521.3 (-22.4) 95.2 (+0.4)
+> BigCodeBench-Hard Baseline 677.9 95.2
+> ROSA2 590.6 (-87.3) 95.5 (+0.3)
+
+## 6. Conclusions 
+
+We introduced ROSA2 , a joint optimization framework over context and parameters that effectively resolves the error at-tribution dilemma. By bypassing the local minima inherent to conditional baselines, ROSA2 achieves state-of-the-art accuracy with reduced latency across diverse benchmarks. 8Words & Weights: Streamlining Multi-Turn Interactions via Co-Adaptation 
+
+## Impact Statement 
+
+This paper presents work whose goal is to advance the field of Machine Learning, specifically within the domain of test-time adaptation for multi-turn interactions. Our framework demonstrates that co-adapting context and parameters can unlock state-of-the-art performance on reasoning and agen-tic benchmarks. While this work primarily contributes to the technical efficiency and accuracy of LLMs, it also highlights the potential for more capable UI agents. We believe there are no specific negative societal consequences that must be highlighted here, beyond the general considerations associ-ated with the deployment of increasingly capable generative AI models. 
+
+## References 
+
+AIME. AIME problems and solutions, 2025. URL 
+
+https://artofproblemsolving.com/wiki/ index.php/AIME_Problems_and_Solutions .Bo, X., Li, R., Sun, Z., Dai, Q., Zhang, Z., Tian, Z., Chen, X., and Dong, Z. Prompt and parameter co-optimization for large language models, 2025. URL 
+
+https://arxiv.org/abs/2509.24245 .Chen, M., Tworek, J., Jun, H., Yuan, Q., de Oliveira Pinto, H. P., Kaplan, J., Edwards, H., Burda, Y., Joseph, N., Brockman, G., Ray, A., Puri, R., Krueger, G., Petrov, M., Khlaaf, H., Sastry, G., Mishkin, P., Chan, B., Gray, S., Ryder, N., Pavlov, M., Power, A., Kaiser, L., Bavar-ian, M., Winter, C., Tillet, P., Such, F. P., Cummings, D., Plappert, M., Chantzis, F., Barnes, E., Herbert-Voss, A., Guss, W. H., Nichol, A., Paino, A., Tezak, N., Tang, J., Babuschkin, I., Balaji, S., Jain, S., Saun-ders, W., Hesse, C., Carr, A. N., Leike, J., Achiam, J., Misra, V., Morikawa, E., Radford, A., Knight, M., Brundage, M., Murati, M., Mayer, K., Welinder, P., Mc-Grew, B., Amodei, D., McCandlish, S., Sutskever, I., and Zaremba, W. Evaluating large language models trained on code, 2021. URL https://arxiv.org/abs/ 2107.03374 .Chen, M., Sun, R., Pfister, T., and Arik, S. O. Learn-ing to clarify: Multi-turn conversations with action-based contrastive self-training. In The Thirteenth In-ternational Conference on Learning Representations ,2025. URL https://openreview.net/forum? id=SIE6VFps9x .DeepSeek-AI, Guo, D., Yang, D., Zhang, H., Song, J., Zhang, R., Xu, R., Zhu, Q., Ma, S., Wang, P., Bi, X., Zhang, X., Yu, X., Wu, Y., Wu, Z. F., Gou, Z., Shao, Z., Li, Z., Gao, Z., Liu, A., Xue, B., Wang, B., Wu, B., Feng, B., Lu, C., Zhao, C., Deng, C., Zhang, C., Ruan, C., Dai, D., Chen, D., Ji, D., Li, E., Lin, F., Dai, F., Luo, F., Hao, G., Chen, G., Li, G., Zhang, H., Bao, H., Xu, H., Wang, H., Ding, H., Xin, H., Gao, H., Qu, H., Li, H., Guo, J., Li, J., Wang, J., Chen, J., Yuan, J., Qiu, J., Li, J., Cai, J. L., Ni, J., Liang, J., Chen, J., Dong, K., Hu, K., Gao, K., Guan, K., Huang, K., Yu, K., Wang, L., Zhang, L., Zhao, L., Wang, L., Zhang, L., Xu, L., Xia, L., Zhang, M., Zhang, M., Tang, M., Li, M., Wang, M., Li, M., Tian, N., Huang, P., Zhang, P., Wang, Q., Chen, Q., Du, Q., Ge, R., Zhang, R., Pan, R., Wang, R., Chen, R. J., Jin, R. L., Chen, R., Lu, S., Zhou, S., Chen, S., Ye, S., Wang, S., Yu, S., Zhou, S., Pan, S., Li, S. S., Zhou, S., Wu, S., Ye, S., Yun, T., Pei, T., Sun, T., Wang, T., Zeng, W., Zhao, W., Liu, W., Liang, W., Gao, W., Yu, W., Zhang, W., Xiao, W. L., An, W., Liu, X., Wang, X., Chen, X., Nie, X., Cheng, X., Liu, X., Xie, X., Liu, X., Yang, X., Li, X., Su, X., Lin, X., Li, X. Q., Jin, X., Shen, X., Chen, X., Sun, X., Wang, X., Song, X., Zhou, X., Wang, X., Shan, X., Li, Y. K., Wang, Y. Q., Wei, Y. X., Zhang, Y., Xu, Y., Li, Y., Zhao, Y., Sun, Y., Wang, Y., Yu, Y., Zhang, Y., Shi, Y., Xiong, Y., He, Y., Piao, Y., Wang, Y., Tan, Y., Ma, Y., Liu, Y., Guo, Y., Ou, Y., Wang, Y., Gong, Y., Zou, Y., He, Y., Xiong, Y., Luo, Y., You, Y., Liu, Y., Zhou, Y., Zhu, Y. X., Xu, Y., Huang, Y., Li, Y., Zheng, Y., Zhu, Y., Ma, Y., Tang, Y., Zha, Y., Yan, Y., Ren, Z. Z., Ren, Z., Sha, Z., Fu, Z., Xu, Z., Xie, Z., Zhang, Z., Hao, Z., Ma, Z., Yan, Z., Wu, Z., Gu, Z., Zhu, Z., Liu, Z., Li, Z., Xie, Z., Song, Z., Pan, Z., Huang, Z., Xu, Z., Zhang, Z., and Zhang, Z. Deepseek-r1: Incentivizing reasoning capability in llms via reinforcement learning, 2025. URL 
+
+https://arxiv.org/abs/2501.12948 .Deshpande, K., Sirdeshmukh, V., Mols, J. B., Jin, L., Hernandez-Cardona, E.-Y., Lee, D., Kritz, J., Primack, W. E., Yue, S., and Xing, C. MultiChallenge: A realis-tic multi-turn conversation evaluation benchmark chal-lenging to frontier LLMs. In Che, W., Nabende, J., Shutova, E., and Pilehvar, M. T. (eds.), Findings of the Association for Computational Linguistics: ACL 2025 , pp. 18632–18702, Vienna, Austria, July 2025. Association for Computational Linguistics. ISBN 979-8-89176-256-5. doi: 10.18653/v1/2025.findings-acl. 958. URL https://aclanthology.org/2025. findings-acl.958/ .Google. Gemini 3. https://aistudio.google. com/models/gemini-3 , 2025. Accessed: 2025. Hendrycks, D., Burns, C., Basart, S., Zou, A., Mazeika, M., Song, D., and Steinhardt, J. Measuring massive multitask language understanding. Proceedings of the International Conference on Learning Representations (ICLR) , 2021a. Hendrycks, D., Burns, C., Kadavath, S., Arora, A., Basart, S., Tang, E., Song, D., and Steinhardt, J. Measuring math-ematical problem solving with the math dataset. NeurIPS ,2021b. 9Words & Weights: Streamlining Multi-Turn Interactions via Co-Adaptation 
+
+Keluskar, A., Bhattacharjee, A., and Liu, H. Do llms under-stand ambiguity in text? a case study in open-world ques-tion answering, 2024. URL https://arxiv.org/ abs/2411.12395 .Laban, P., Hayashi, H., Zhou, Y., and Neville, J. Llms get lost in multi-turn conversation, 2025. URL https: //arxiv.org/abs/2505.06120 .Lee, Y., Boen, J., and Finn, C. Feedback descent: Open-ended text optimization via pairwise comparison, 2025. URL https://arxiv.org/abs/2511.07919 .Li, Y., Hu, X., Qu, X., Li, L., and Cheng, Y. Test-time preference optimization: On-the-fly alignment via iter-ative textual feedback. In Forty-second International Conference on Machine Learning , 2025a. URL https: //openreview.net/forum?id=ArifAHrEVD .Li, Y., Shen, X., Yao, X., Ding, X., Miao, Y., Krishnan, R., and Padman, R. Beyond single-turn: A survey on multi-turn interactions with large language models, 2025b. URL 
+
+https://arxiv.org/abs/2504.04717 .Lightman, H., Kosaraju, V., Burda, Y., Edwards, H., Baker, B., Lee, T., Leike, J., Schulman, J., Sutskever, I., and Cobbe, K. Let’s verify step by step. arXiv preprint arXiv:2305.20050 , 2023. Liu, J., Zhang, H., Zhuang, Z., Kang, Y., Wang, D., and Wang, B. Design from policies: Conservative test-time adaptation for offline policy optimization. In Thirty-seventh Conference on Neural Information Processing Systems , 2023. URL https://openreview.net/ forum?id=jZYf1GxH1V .OpenAI. Introducing gpt-5.2. https://openai.com/ index/introducing-gpt-5-2/ , 2025. Accessed: 2025. Ouyang, L., Wu, J., Jiang, X., Almeida, D., Wainwright, C. L., Mishkin, P., Zhang, C., Agarwal, S., Slama, K., Ray, A., Schulman, J., Hilton, J., Kelton, F., Miller, L., Simens, M., Askell, A., Welinder, P., Christiano, P., Leike, J., and Lowe, R. Training language models to follow instructions with human feedback, 2022. URL https: //arxiv.org/abs/2203.02155 .Qin, Y., Ye, Y., Fang, J., Wang, H., Liang, S., Tian, S., Zhang, J., Li, J., Li, Y., Huang, S., et al. Ui-tars: Pioneer-ing automated gui interaction with native agents. arXiv preprint arXiv:2501.12326 , 2025. Qwen, :, Yang, A., Yang, B., Zhang, B., Hui, B., Zheng, B., Yu, B., Li, C., Liu, D., Huang, F., Wei, H., Lin, H., Yang, J., Tu, J., Zhang, J., Yang, J., Yang, J., Zhou, J., Lin, J., Dang, K., Lu, K., Bao, K., Yang, K., Yu, L., Li, M., Xue, M., Zhang, P., Zhu, Q., Men, R., Lin, R., Li, T., Tang, T., Xia, T., Ren, X., Ren, X., Fan, Y., Su, Y., Zhang, Y., Wan, Y., Liu, Y., Cui, Z., Zhang, Z., and Qiu, Z. Qwen2.5 technical report, 2025. URL https: //arxiv.org/abs/2412.15115 .Rafailov, R., Sharma, A., Mitchell, E., Manning, C. D., Ermon, S., and Finn, C. Direct preference optimization: Your language model is secretly a reward model. In Thirty-seventh Conference on Neural Information Processing Systems , 2023. URL https://openreview.net/ forum?id=HPuSIXJaa9 .Rawles, C., Clinckemaillie, S., Chang, Y., Waltz, J., Lau, G., Fair, M., Li, A., Bishop, W., Li, W., Campbell-Ajala, F., Toyama, D., Berry, R., Tyamagundlu, D., Lillicrap, T., and Riva, O. Androidworld: A dynamic benchmarking environment for autonomous agents, 2025. URL https: //arxiv.org/abs/2405.14573 .Rein, D., Hou, B. L., Stickland, A. C., Petty, J., Pang, R. Y., Dirani, J., Michael, J., and Bowman, S. R. GPQA: A graduate-level google-proof q&a benchmark. In First Conference on Language Modeling , 2024. URL https: //openreview.net/forum?id=Ti67584b98 .Shao, Z., Wang, P., Zhu, Q., Xu, R., Song, J., Bi, X., Zhang, H., Zhang, M., Li, Y. K., Wu, Y., and Guo, D. Deepseekmath: Pushing the limits of mathemat-ical reasoning in open language models, 2024. URL 
+
+https://arxiv.org/abs/2402.03300 .Son, G., Hong, J., Ko, H., and Thorne, J. Linguistic gener-alizability of test-time scaling in mathematical reasoning. 
+
+arXiv preprint arXiv:2502.17407 , 2025. Tang, A., Soulier, L., and Guigue, V. Clarifying ambi-guities: on the role of ambiguity types in prompting methods for clarification generation. In Proceedings of the 48th International ACM SIGIR Conference on Re-search and Development in Information Retrieval , SIGIR ’25, pp. 20–30, New York, NY, USA, 2025a. Associa-tion for Computing Machinery. ISBN 9798400715921. doi: 10.1145/3726302.3729922. URL https://doi. org/10.1145/3726302.3729922 .Tang, A., Soulier, L., and Guigue, V. Clarifying ambiguities: on the role of ambiguity types in prompting methods for clarification generation, 2025b. URL https:// arxiv.org/abs/2504.12113 .Team, M.-A.-P., Du, X., Yao, Y., Ma, K., Wang, B., Zheng, T., Zhu, K., Liu, M., Liang, Y., Jin, X., Wei, Z., Zheng, C., Deng, K., Guo, S., Jia, S., Jiang, S., Liao, Y., Li, R., Li, Q., Li, S., Li, Y., Li, Y., Ma, D., Ni, Y., Que, H., Wang, Q., Wen, Z., Wu, S., Xing, T., Xu, M., Yang, Z., Wang, Z. M., Zhou, J., Bai, Y., Bu, X., Cai, C., Chen, L., Chen, Y., Cheng, C., Cheng, T., Ding, K., Huang, S., Huang, Y., Li, 10 Words & Weights: Streamlining Multi-Turn Interactions via Co-Adaptation 
+
+Y., Li, Y., Li, Z., Liang, T., Lin, C., Lin, H., Ma, Y., Peng, Z., Peng, Z., Qi, Q., Qiu, S., Qu, X., Tan, Y., Wang, Z., Wang, C., Wang, H., Wang, Y., Wang, Y., Xu, J., Yang, K., Yuan, R., Yue, Y., Zhan, T., Zhang, C., Zhang, J., Zhang, X., Zhang, X., Zhang, Y., Zhao, Y., Zheng, X., Zhong, C., Gao, Y., Li, Z., Liu, D., Liu, Q., Liu, T., Ni, S., Peng, J., Qin, Y., Su, W., Wang, G., Wang, S., Yang, J., Yang, M., Cao, M., Yue, X., Zhang, Z., Zhou, W., Liu, J., Lin, Q., Huang, W., and Zhang, G. Supergpqa: Scaling llm evaluation across 285 graduate disciplines, 2025. URL 
+
+https://arxiv.org/abs/2502.14739 .Wang, X., Wang, Z., Liu, J., Chen, Y., Yuan, L., Peng, H., and Ji, H. MINT: Evaluating LLMs in multi-turn inter-action with tools and language feedback. In The Twelfth International Conference on Learning Representations ,2024. URL https://openreview.net/forum? id=jp3gWrMuIZ .Wei, C., Shu, Y., He, Y. T., and Yu, F. Flexora: Flexi-ble low-rank adaptation for large language models. In Che, W., Nabende, J., Shutova, E., and Pilehvar, M. T. (eds.), Proceedings of the 63rd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , pp. 14643–14682, Vienna, Austria, July 2025a. Association for Computational Linguistics. ISBN 979-8-89176-251-0. doi: 10.18653/v1/2025.acl-long. 713. URL https://aclanthology.org/2025. acl-long.713/ .Wei, C., Wang, H., He, Y. T., Yu, F., and Shu, Y. Test-time policy adaptation for enhanced multi-turn interactions with LLMs. In First Workshop on Multi-Turn Interactions in Large Language Models , 2025b. URL https:// openreview.net/forum?id=6eN5FZJuLI .Wei, C., Yu, J., He, Y. T., Dong, H., Shu, Y., and Yu, F. Redit: Reward dithering for improved LLM policy optimiza-tion. In The Thirty-ninth Annual Conference on Neural Information Processing Systems , 2025c. URL https: //openreview.net/forum?id=pG1Y63MqHm .Xie, T., Zhang, D., Chen, J., Li, X., Zhao, S., Cao, R., Hua, T. J., Cheng, Z., Shin, D., Lei, F., Liu, Y., Xu, Y., Zhou, S., Savarese, S., Xiong, C., Zhong, V., and Yu, T. Osworld: Benchmarking multimodal agents for open-ended tasks in real computer environments, 2024. URL 
+
+https://arxiv.org/abs/2404.07972 .Yang, A., Li, A., Yang, B., Zhang, B., Hui, B., Zheng, B., Yu, B., Gao, C., Huang, C., Lv, C., Zheng, C., Liu, D., Zhou, F., Huang, F., Hu, F., Ge, H., Wei, H., Lin, H., Tang, J., Yang, J., Tu, J., Zhang, J., Yang, J., Yang, J., Zhou, J., Zhou, J., Lin, J., Dang, K., Bao, K., Yang, K., Yu, L., Deng, L., Li, M., Xue, M., Li, M., Zhang, P., Wang, P., Zhu, Q., Men, R., Gao, R., Liu, S., Luo, S., Li, T., Tang, T., Yin, W., Ren, X., Wang, X., Zhang, X., Ren, X., Fan, Y., Su, Y., Zhang, Y., Zhang, Y., Wan, Y., Liu, Y., Wang, Z., Cui, Z., Zhang, Z., Zhou, Z., and Qiu, Z. Qwen3 technical report, 2025. URL https: //arxiv.org/abs/2505.09388 .Yi, Z., Ouyang, J., Xu, Z., Liu, Y., Liao, T., Luo, H., and Shen, Y. A survey on recent advances in llm-based multi-turn dialogue systems, 2025. URL https://arxiv. org/abs/2402.18013 .Zuo, Y., Zhang, K., Sheng, L., Qu, S., Cui, G., Zhu, X., Li, H., Zhang, Y., Long, X., Hua, E., Qi, B., Sun, Y., Ma, Z., Yuan, L., Ding, N., and Zhou, B. TTRL: Test-time reinforcement learning. In The Thirty-ninth Annual Conference on Neural Information Processing Systems ,2025. URL https://openreview.net/forum? id=VuVhgEiu20 .11 Words & Weights: Streamlining Multi-Turn Interactions via Co-Adaptation 
+
+## A. Related Work 
+
+Adaptation via Context Refinement (Words). Approaches focusing on the “Words” axis, broadly categorized under Prompt Engineering, aim to optimize the external context x while keeping the model parameters θ frozen. Yi et al. (2025) review the progression of these methods from manual instruction design to automated strategies that dynamically refine inputs to align with user needs. Recent work has further emphasized the importance of clarifying input intent; for instance, Tang et al. (2025b) investigate the role of ambiguity types in prompting, demonstrating that sharpening semantic clarity can improve generation quality. However, these context-centric optimization methods face a fundamental theoretical ceiling: they cannot induce capabilities that do not exist within the frozen parameters. As argued by Chen et al. (2025) and Lee et al. (2025), semantic refinement alone is insufficient to remedy intrinsic capability deficits. Consequently, such methods often plateau in what Wei et al. (2025b) describe as a “Deficit Trap,” where the model understands the task intent but lacks the execution capacity to solve it. 
+
+Adaptation via Parameter Updates (Weights). Conversely, the paradigm of Test-Time Training (TTT) or Test-Time Policy Adaptation ( T 2P AM ) focuses on the “Weights” axis, allowing for the real-time update of internal parameters θ
+
+during inference. Wei et al. (2025b) introduced ROSA, a method that employs low-rank adaptation (LoRA) to minimize the divergence from a reward-weighted policy, effectively bridging the capability gap observed in frozen models. Similarly, Zuo et al. (2025) proposed Test-Time Reinforcement Learning (TTRL), which treats each interaction turn as a policy optimization step driven by reward signals. While these parameter-centric approaches offer a mechanism to enhance intrinsic model capabilities, they are highly sensitive to the quality of the learning signal. Li et al. (2025a) highlight that performing parameter updates on noisy or ambiguous interaction histories often leads to the learning of spurious correlations. Without the pre-conditioning of a clear context, these methods are prone to gravitating towards an “Overfitting Trap,” resulting in performance degradation over extended interaction turns. 
+
+## B. Proofs 
+
+B.1. Proof of Theorem 4.1 
+
+The proof follows from the closed-form solution of the linearized parameter update in ROSA. 
+
+Step 1: The Residual-Driven Update. According to Eq. (6) in ROSA (Wei et al., 2025b), the parameter update ∆θ is the least-squares solution to fitting the residual between the target distribution ˜π∗ and the current policy π:
+
+(JT J)∆ θ = JT R(x), where R(x) = ˜ π∗(·| x) − π(·| x, θ t−1) (11) The magnitude of the update is bounded by the magnitude of this residual vector R(x):
+
+|| ∆θt(x)|| 2 ≤ 1
+
+σmin (J) || R(x)|| 2 (12) 
+
+Step 2: Effect of Semantic Refinement. The Semantic Stream updates xt → x∗ 
+
+> t
+
+to minimize the semantic discrepancy, effectively bringing the current policy’s distribution closer to the user’s optimal policy π∗ 
+
+> user
+
+. Since the target ˜π∗ is constructed based on π∗ 
+
+> user
+
+, reducing the distance to π∗ 
+
+> user
+
+also reduces the distance to ˜π∗. Therefore, the refined query yields a smaller residual vector: 
+
+|| R(x∗ 
+
+> t
+
+)|| 2 < || R(xt)|| 2 (13) 
+
+Step 3: Conclusion. Substituting the reduced residual back into the bound from Step 1, we obtain: 
+
+|| ∆θt(x∗ 
+
+> t
+
+)|| 2 ≤ C · || R(x∗ 
+
+> t
+
+)|| 2 < C · || R(xt)|| 2 ≈ || ∆θt(xt)|| 2 (14) Thus, optimizing the query reduces the norm of the required parameter update. 
+
+B.2. Proof of Theorem 4.2 
+
+The proof relies on decomposing the total error into a ”theoretical improvement” component and an ”approximation error” component. We analyze the change in KL divergence at step t by introducing the theoretical target ˜π∗ 
+
+> t
+
+as an intermediate 12 Words & Weights: Streamlining Multi-Turn Interactions via Co-Adaptation 
+
+point. Using the telescoping sum property, the total error after T turns can be written as: 
+
+DKL (π∗ 
+
+> user
+
+|| πϕT ) − DKL (π∗ 
+
+> user
+
+|| πϕ0 ) = 
+
+> T
+
+X
+
+> t=1
+
+ DKL (π∗ 
+
+> user
+
+|| πϕt ) − DKL (π∗ 
+
+> user
+
+|| πϕt−1 )
+
+=
+
+> T
+
+X
+
+> t=1
+
+DKL (π∗ 
+
+> user
+
+|| ˜π∗ 
+
+> t
+
+) − DKL (π∗ 
+
+> user
+
+|| πϕt−1 )
+
+| {z }
+
+> Term A: Ideal Gain
+
++ DKL (π∗ 
+
+> user
+
+|| πϕt ) − DKL (π∗ 
+
+> user
+
+|| ˜π∗ 
+
+> t
+
+)
+
+| {z }
+
+> Term B: Approximation Cost
+
+!
+
+(15) 
+
+Bounding Term A. Since our target construction follows the reward-weighted regression, we invoke Theorem 2 from ROSA (Wei et al., 2025b), which guarantees monotonic error reduction: 
+
+DKL (π∗ 
+
+> user
+
+|| ˜π∗ 
+
+> t
+
+) − DKL (π∗ 
+
+> user
+
+|| πϕt−1 ) ≤ − 1
+
+β Ey∼π∗ 
+
+> user
+
+[rt(y)] (16) 
+
+Bounding Term B. Under the L-Lipschitz smoothness assumption on the joint policy π(y | x, θ ), the divergence between the target and actual policy is bounded by the squared Euclidean distance of the joint update: Term B ≤ DKL (˜ π∗ 
+
+> t
+
+|| πϕt ) ≤ L
+
+2 || ϕt − ϕt−1|| 22 = L
+
+2
+
+ || ∆xt|| 22 + || ∆θt|| 22
+
+ (17) Summing these bounds over t = 1 . . . T yields Theorem 4.2. 
+
+## C. Experimental Setup 
+
+To rigorously evaluate the efficacy, efficiency, and generalizability of ROSA2 , we conducted comprehensive experiments across a wide spectrum of tasks and model architectures. This section details the datasets, models, evaluation metrics, and reward mechanisms employed in our study. 
+
+C.1. Datasets 
+
+We assessed ROSA2 on a diverse suite of challenging benchmarks categorized into four distinct domains: Mathematical Reasoning, General Reasoning, Code Generation, and Multilingual Reasoning. Table 5 summarizes the statistics of these datasets. 
+
+Table 5. Summary of benchmarks used for evaluation. ”N/A” denotes datasets primarily used for testing that lack a standard pre-defined training split. 
+
+Domain Dataset Train Size Test Size 
+
+Mathematical Reasoning 
+
+MATH 7,500 5,000 
+
+AIME25 N/A 30 
+
+MATH-500 N/A 500 General Reasoning 
+
+GPQA-diamond N/A 198 
+
+MMLU-Redux N/A 3,000 
+
+SuperGPQA 26,500 N/A Code Generation HumanEval N/A 164 Multilingual Reasoning MCLM N/A 156 
+
+Mathematical Reasoning. This domain targets complex, multi-step problem-solving. We employed three standard benchmarks: 13 Words & Weights: Streamlining Multi-Turn Interactions via Co-Adaptation 
+
+• MATH (Hendrycks et al., 2021b): A collection of 12,500 challenging high-school level competition problems spanning algebra, geometry, and calculus. • AIME25 (AIME, 2025): A curated subset of 25 extremely difficult problems from the American Invitational Mathe-matics Examination, designed to probe advanced reasoning limits. • MATH-500 (Lightman et al., 2023): A widely recognized evaluation subset of the MATH test set, consisting of 500 problems selected for efficient model assessment. 
+
+General Reasoning. To evaluate knowledge application across broad topics, we utilized three expert-level QA datasets: • GPQA-diamond (Rein et al., 2024): A high-difficulty set of graduate-level questions written by domain experts; the ”diamond” subset ensures the highest quality. • MMLU-Redux (Hendrycks et al., 2021a): A refined version of the Massive Multitask Language Understanding benchmark, covering 57 subjects ranging from elementary math to professional law. • SuperGPQA (Team et al., 2025): An expansion of GPQA containing nearly 5,000 expert-validated questions across 285 graduate-level disciplines. 
+
+Code Generation. We assessed code synthesis capabilities using HumanEval (Chen et al., 2021). This benchmark comprises 164 hand-written programming problems equipped with function signatures, docstrings, and unit tests to verify functional correctness. 
+
+Multilingual Reasoning. Cross-lingual reasoning was evaluated using MCLM (Son et al., 2025), which translates challeng-ing English benchmarks into multiple languages. Our evaluation specifically focuses on the multilingual versions of IMO, AIME, and MATH problems ( M-IMO , MT-AIME24 , and MT-MATH100 ). 
+
+Evaluation Protocol. To simulate real-world deployment, our primary evaluation is conducted on official, held-out test sets. In cases where a dedicated test set is unavailable, or for specific ablation studies, we utilized corresponding training or development sets. Specifically, for SuperGPQA , we sampled a portion of the training data for testing purposes; for all other benchmarks, standard test sets were strictly observed. 
+
+C.2. Models 
+
+We selected a diverse array of open-source Large Language Models (LLMs) to ensure the robustness of our findings irrespective of model architecture or scale. As detailed in Table 6, our selection includes instruction-tuned variants designed for chat and instruction-following tasks. Note that to mitigate potential data contamination concerns with the Qwen2.5 
+
+series on specific benchmarks, we also validated results using the more recent Qwen3 and DeepSeek-R1 models.  
+
+> Table 6. Categorization of language models used in experiments.
+
+Category Model Params Type 
+
+Small-Scale Qwen2.5-0.5B-Instruct 0.5B Instruct 
+
+Qwen3-0.6B 0.6B Base Large-Scale Qwen2.5-7B-Instruct 7B Instruct 
+
+Qwen3-8B 8B Base Reasoning-Focused DeepSeek-R1-Distill-Llama-8B 8B Reasoning 
+
+DeepSeek-R1-Distill-Qwen-7B 7B Reasoning 
+
+Small-Scale Models. To evaluate ROSA2 in resource-constrained settings, we selected compact models from the Qwen family: Qwen2.5-0.5B-Instruct (Qwen et al., 2025), optimized for instruction following, and Qwen3-0.6B (Yang et al., 2025), representing the newer generation with architectural enhancements. 14 Words & Weights: Streamlining Multi-Turn Interactions via Co-Adaptation 
+
+Large-Scale Models. We tested scalability using capable base models: Qwen2.5-7B-Instruct (Qwen et al., 2025), a standard 7B parameter instruction-tuned model, and its successor Qwen3-8B (Yang et al., 2025). 
+
+Reasoning-Focused Models. We specifically included the DeepSeek-R1 series (DeepSeek-AI et al., 2025), which are optimized via reinforcement learning for complex reasoning. We utilized distilled variants based on both Llama (DeepSeek-R1-Distill-Llama-8B ) and Qwen ( DeepSeek-R1-Distill-Qwen-7B ) architectures to allow for controlled architectural comparisons. 
+
+C.3. Evaluation Metrics 
+
+Our evaluation framework focuses on two critical dimensions: downstream task performance and computational efficiency. 
+
+Performance Metrics. 
+
+• Accuracy: Defined as the proportion of unique problems correctly solved within a maximum of K conversational turns. Let P be the set of problems and Si ∈ { 0, 1} be an indicator variable where Si = 1 if problem i is solved at any turn t ≤ K. Accuracy is calculated as: Accuracy =
+
+P 
+
+> i∈P
+
+Si
+
+|P| (18) • Correction Uplift: This metric quantifies the model’s capacity to self-correct. It represents the percentage of problems initially answered incorrectly that were subsequently solved in later turns. Let Pfail ⊂ P denote problems failed at turn 
+
+t = 1 . The metric is defined as: Correction Uplift =
+
+P 
+
+> i∈P fail
+
+Si
+
+|P fail | × 100% (19) 
+
+Efficiency Metrics. To measure computational overhead, we track: • Avg Time : The average time solve per problem. • Peak GPU Memory: The maximum VRAM usage observed during the inference and update process. 
+
+C.4. Reward Models 
+
+We employed two distinct reward mechanisms to simulate varying feedback granularities found in real-world applications. 
+
+Rule-Based Reward Model (Sparse Feedback). This model simulates scenarios with definitive, binary judgments. It programmatically extracts the final answer (e.g., from a \boxed{} environment) and matches it against the ground truth. A reward of +1 .0 is assigned for an exact match, and −1.0 otherwise. The core implementation logic is provided below. 15 Words & Weights: Streamlining Multi-Turn Interactions via Co-Adaptation 
+
+Core logic for the rule-based reward model 
+
+class MathVerifyRewardModel: 
+
+def __init__(self, ground_truth_answer: str ): self.ground_truth_answer = ground_truth_answer 
+
+def get_reward(self, response_text: str ) -> float :
+
+# Returns +1.0 for match, -1.0 otherwise 
+
+return 1.0 if compute_score(response_text, self.ground_truth_answer) == 1.0 else -1.0 
+
+def compute_score(solution_str, ground_truth) -> float :retval = 0.0 
+
+try :string_in_last_boxed = last_boxed_only_string(solution_str) 
+
+if string_in_last_boxed is not None: answer = remove_boxed(string_in_last_boxed) 
+
+if is_equiv(answer, ground_truth): retval = 1.0 
+
+except Exception: 
+
+pass return retval 
+
+16

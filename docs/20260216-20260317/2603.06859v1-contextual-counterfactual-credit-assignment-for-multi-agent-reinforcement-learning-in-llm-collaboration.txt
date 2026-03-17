@@ -1,0 +1,1151 @@
+Title: Contextual Counterfactual Credit Assignment for Multi-Agent Reinforcement Learning in LLM Collaboration
+
+URL Source: https://arxiv.org/pdf/2603.06859v1
+
+Published Time: Tue, 10 Mar 2026 00:11:50 GMT
+
+Number of Pages: 23
+
+Markdown Content:
+# Contextual Counterfactual Credit Assignment for Multi-Agent Reinforcement Learning in LLM Collaboration 
+
+Yanjun Chen 1 2 Yirong Sun 1 Hanlin Wang 2 Xinming Zhang 1 Xiaoyu Shen 1 Wenjie Li 2 Wei Zhang 1
+
+## Abstract 
+
+Cooperative multi-agent reinforcement learning (MARL) systems powered by large language mod-els (LLMs) are frequently optimized via sparse terminal-only feedback. This shared signal en-tangles upstream decisions, obstructing accurate decision-level credit assignment. To address this trajectory-level diffusion, we introduce Contex-tual Counterfactual Credit Assignment ( C3 ). In-stead of distributing rewards across an entire episode, C3 isolates the causal impact of indi-vidual messages by freezing the exact transcript-derived context, evaluating context-matched alter-natives via fixed-continuation replay, and apply-ing a leave-one-out (LOO) baseline. This local-ized intervention extracts unbiased, low-variance marginal advantages for standard policy-gradient optimization. Evaluated across five mathemati-cal and coding benchmarks under matched bud-gets, C3 improves terminal performance over es-tablished baselines. Mechanistic diagnostics fur-ther show that these gains are accompanied by higher credit fidelity, lower contextual variance, and stronger inter-agent causal dependence. Our code is available at https://github.com /EIT-EAST-Lab/C3 .
+
+## 1. Introduction 
+
+Multi-agent systems powered by large language models (LLMs) have become a common paradigm for solving com-plex tasks through structured natural language protocols (Li et al., 2023; Qian et al., 2024; Wu et al., 2024; Fourney et al., 2024). However, optimizing these collaborative systems in-troduces a difficult credit assignment problem under sparse supervision (Oliehoek et al., 2016). Evaluation is computa-
+
+Contact email: yan-jun.chen@connect.polyu.hk. 1The College of Information Science and Technology, Eastern Institute of Tech-nology, Ningbo, China 2Department of Computing, The Hong Kong Polytechnic University, Hong Kong, China. Correspondence to: Wei Zhang <zhw@eitech.edu.cn >.
+
+Preprint. March 10, 2026. 
+
+tionally expensive and is often reduced to a single terminal score at the end of an episode. Because all specialized roles optimize against this shared outcome, the terminal evalua-tor entangles the effects of upstream decisions (Wolpert & Tumer, 2001; Foerster et al., 2018; Bernstein et al., 2002). The resulting learning signal cannot reliably isolate which message or deduction most affected the final outcome. Existing cooperative multi-agent reinforcement learning (MARL) methods struggle to resolve this diffusion. Critic-based algorithms such as Multi-Agent Proximal Policy Op-timization (MAPPO) attempt to isolate marginal contribu-tions through centralized learned value functions (Schulman et al., 2017; Yu et al., 2022; Wolpert & Tumer, 2001; Fo-erster et al., 2018). Yet, value approximation error and temporal-difference bias can accumulate over long-horizon textual interactions, often destabilizing policy improvement (Fujimoto et al., 2018; Parisi et al., 2019; Arjona-Medina et al., 2019). Recent outcome-based methods for language models avoid critics by sampling multiple completions and centering returns within a trajectory group (Shao et al., 2024; Ahmadian et al., 2024). Multi-Agent Group Relative Policy Optimization (MAGRPO) extends this approach to multi-turn collaboration (Liu et al., 2025). While group-relative centering can stabilize episodic training, it still distributes credit across the full interaction, limiting decision-level at-tribution. To bridge this gap, we propose Contextual Counterfactual Credit Assignment ( C3 ), a credit assignment method that frames collaboration training as a series of targeted causal interventions. Rather than diffusing rewards across an entire episode, C3 isolates credit at specific decision occurrences. The method leverages protocol-driven replay semantics to record interface states and freeze the exact transcript-derived context. At this frozen anchor, C3 samples context-matched alternative actions from a behavior snapshot and executes the downstream collaboration under a fixed continuation distribution. By applying a leave-one-out (LOO) baseline to these fixed-context replay returns, C3 isolates the marginal contribution of each action. This mechanism converts termi-nal scores into unbiased, low-variance advantages suitable for standard policy-gradient optimization. Localized re-play can also improve computational efficiency by reusing 1
+
+> arXiv:2603.06859v1 [cs.LG] 6 Mar 2026 Contextual Counterfactual Credit Assignment
+
+transcript prefixes and allocating evaluator calls only to counterfactual branches. We evaluate C3 across five mathematical and coding bench-marks under matched evaluator and inference budgets. C3 
+
+improves terminal performance over established baselines. Beyond terminal accuracy, we introduce shared replay-bucket diagnostics to study the underlying optimization mechanics. These diagnostics show that C3 increases credit fidelity relative to target advantages, reduces within-context variance, and increases inter-agent dependence measured via conditional mutual information. Together, these patterns support the view that better decision-level credit contributes to stronger multi-agent coordination. 
+
+Contributions. 
+
+• Protocol-Driven Formulation. We formalize terminal-only collaboration as an asynchronous event graph with deterministic replay semantics. This struc-ture provides the technical foundation for exact coun-terfactual evaluation at the individual decision level. • The C3 Methodology. We introduce an intervention framework replacing parametric value estimation with fixed-context Monte Carlo rollouts and LOO baselines to compute unbiased per-decision advantages. • Mechanistic Validation. We provide empirical evi-dence across reasoning domains showing that C3 im-proves cooperative performance while linking variance suppression, credit fidelity, and inter-agent influence. 
+
+## 2. Problem Setting 
+
+Axiomatic Foundations. This framework embeds stan-dard multi-agent interactions into a controlled mathematical environment governed by four foundational interface con-tracts. • Message as action. The system treats each complete textual message as an indivisible decision occurrence rather than a sequence of autoregressive token-level actions. • Deterministic context. The transcript context at any occurrence acts as a deterministic function of the task instance and the observable interaction history. • State reproduction. The system interface guarantees the exact reproduction of any observable context, per-mitting collaboration to resume reliably from a target occurrence. • Fixed continuation. All counterfactual quantities are evaluated against a fixed continuation distribution capturing all downstream stochasticity after restarting from a preserved state. 
+
+Cooperative POSG. A given task instance x induces a finite-horizon collaborative episode τ . We model this episode as a sequence of discrete decision occurrences where each occurrence mandates one textual action from a designated agent. All agents optimize toward a shared team feedback signal that is sparse and terminal. This structure instantiates a cooperative partially observable stochastic game (POSG) (Hansen et al., 2004). The framework ac-commodates established formulations including decentral-ized partially observable Markov decision processes (Dec-POMDPs) (Oliehoek et al., 2016) and extensive-form games with imperfect information (Ferguson, 2020). Operating strictly on observable interaction histories circumvents ex-plicit Markov state modeling. 
+
+Asynchronous Execution. While standard reinforcement learning assumes synchronous timesteps, LLM collabora-tion relies on protocol-driven asynchronous information routing. A collaboration protocol dictates a directed in-teraction template defined by event types and information dependencies. Let V represent the set of possible event types, while E ⊆ V × V encodes the precise topologi-cal routing of observable information between downstream events. A concrete episode τ induces an acyclic execution graph structured by a node set Vτ and an edge set Eτ . Each node u ∈ Vτ represents a realized occurrence characterized by an event type 
+
+σ(u) ∈ V, (1) where each directed edge in Eτ follows the realized exe-cution sequence. We adopt this event graph formulation because decision timing and dependency routing remain inherently protocol-defined. Should multiple occurrences manifest logically simultaneously, the system enforces a canonical serialization preserving all observable dependen-cies. 
+
+Information States. For any target occurrence u ∈ Vτ ,let P a (u) ⊆ Vτ denote the set of upstream occurrences whose observable outputs flow into u. The transcript Tu
+
+serves as the ordered immutable record of all messages and interface updates generated by P a (u) under the canonical serialization. The formal context constitutes a deterministic projection of the task instance and this specific transcript, defined as 
+
+hu ≜ h(x, Tu). (2) This context aligns with the information state induced by the observation structure in extensive-form games (Fergu-son, 2020). Fixing a context prefix does not eliminate downstream stochasticity. Because hu remains a partially observed state, latent environmental variables maintain 2Contextual Counterfactual Credit Assignment 𝑨𝒈𝒆𝒏𝒕 𝟏 … 𝒏 
+
+Input 
+
+> External Evaluator
+> Multi -Agent LLM Collaboration Environment
+
+x      
+
+> Feedback
+> Acyclic Execution Graph G=(𝑽 𝝉 ,𝑬 𝝉 )
+> Alternatives
+> under
+> Fixed Context
+> Context
+> Instance
+> Replay
+> Rollouts
+
+
+
+u𝟏 
+
+u𝟐 
+
+u𝟒 
+
+u𝟑 
+
+u𝟓 
+
+u𝟔 
+
+u𝟕  
+
+> Output  Replay Rollouts
+
+       
+
+> 𝒂 𝑩 ,κ𝟏 ,𝒋
+> ഥR=0.73
+> R = 0.70 R = 0.87 R = 0.62
+> V=B
+> V=C
+> Replay under
+> Behavior Continuation Distribution 𝑫 𝒃
+> Alternatives under Fixed Context
+
+        
+
+> 𝒂 𝑩 ,κ𝟏 ,𝟏 𝒂 𝑩 ,κ𝟏 ,𝟐 𝒂 𝑩 ,κ𝟏 ,𝟑
+> V=B
+> Fixed Context 𝒉 𝑩 ,𝜿 𝟏 from Replay State 𝝆 𝑩 ,𝜿 𝟏
+> Sample from 𝝅 𝒃 ⋅∣𝒉 𝑩 ,𝜿 𝟏
+> V= A
+> V=B
+> Context Instance
+
+    
+
+> Context
+> Instance
+> (B,κ𝟏 )
+> Context
+> Instance
+> (B,κ𝟐 )
+> Updated
+> Policies
+
+
+
+> Leave -one -out
+> Credit
+
+
+
+
+
+LOO Credit                                                 
+
+> ഥR=0.73 ഥR=0.80 ഥR=0.63
+> 𝒂 𝑩 ,κ𝟏 ,𝟏 𝒂 𝑩 ,κ𝟏 ,𝟐 𝒂 𝑩 ,κ𝟏 ,𝟑
+> ⚫A𝟑 =0.015 >0
+> 13
+> 0.63
+> 0.73
+> 2
+> 0.80
+> Bucket ( 𝐁 ,κ𝟏 ): Candidates j=1,2,3
+> 1
+> 0.63
+> 3
+> 0.73
+> 2
+> 0.80
+> LOO Baseline
+> 213
+> 0.80
+> 0.63
+> 0.73
+> Return
+> ⚫A𝟏 =-0.135 <0⚫A𝟐 =0.12 >0
+> 𝒉 𝒖 𝟏 =𝒉 (B,κ𝟏 )𝒉 𝒖 𝟑 =𝒉 (B,κ𝟐 )𝒉 𝒖 𝟐 =𝒉 (B,κ𝟏 )
+> Episode Return R(τ) =σ𝒓 𝒕
+> τ, R(τ)
+> (σ(u), 𝒉 𝒖 )
+
+𝒓 𝒕 
+
+> V= A
+> V=B
+
+Figure 1. Left : A collaborative episode formulated as an acyclic decision event graph. Each node conditions on a deterministic transcript-derived context and emits a single textual macro-action. An external evaluator issues a terminal score upon episode completion. 
+
+Right : The operational pipeline of C3 . Context instances are constructed from recorded replay states. Context-matched alternative actions are sampled from a frozen behavior policy πb. Fixed-continuation replays under Db estimate expected counterfactual returns. A LOO baseline across identical contexts extracts low-variance advantages for policy-gradient optimization. 
+
+stochastic continuations even conditioned on a fixed pre-fix. 
+
+Macro-Actions. Let the function i(σ(u)) map distinct event types to specific agent indices. At occurrence u,the acting agent samples a high-dimensional textual macro-action from its role-conditioned policy, formalized as 
+
+au ∼ π i(σ(u)) 
+
+θ (· | hu) . (3) This formulation encompasses both distinct policy networks and shared parameterizations dynamically conditioned on role indicators. 
+
+Deterministic Replay. While reversing physical environ-ment execution remains intractable, digital interfaces sup-port exact state reproduction. For selected occurrences, the system captures a replay state ρu that reproduces the observ-able context and empowers the interaction to branch from that state. This capability defines a continuation distribu-tion D encapsulating all conditional randomness following a restart from ρu. This stochasticity integrates downstream scheduling, subsequent textual generation, tool execution variations, and decoding noise. All subsequent counterfac-tual evaluations anchor on a fixed choice of D.
+
+Terminal Objective. An external evaluator processes the final artifact through the observable interface to produce a scalar score. The protocol defines evaluation checkpoints where checkpoint t yields a score rt. The cumulative episode return is 
+
+R(τ ) ≜ X
+
+t∈F (τ )
+
+rt, (4) with F(τ ) indexing the realized checkpoints. Under terminal-only supervision, F(τ ) contains exclusively the final checkpoint, making the singular evaluator score iden-tical to the total episode return. The fundamental learning objective maximizes this expected return, 
+
+max 
+
+θ E[R(τ )] , (5) where the expectation integrates decoding stochasticity, in-terface dynamics, and the continuation distribution. 
+
+Decision Value. Mapping this execution to an extensive-form POSG (Hansen et al., 2004), discrete text occurrences correspond to decision nodes, and the transcript-derived contexts hu embody their respective information states. For any fixed continuation distribution D, we define the continuation-conditioned value of a single decision within a fixed context as 
+
+QD (h, a ) ≜ ED [R | h, a ] . (6) This decision value constitutes the theoretical target for the counterfactual baseline. 
+
+Notation. Occurrences are denoted by u ∈ Vτ and their governing event types by v = σ(u). Contexts, replay states, and continuation distributions are represented as hu, ρu, and 
+
+D respectively. Expectations incorporate decoding stochas-ticity and all interface-induced randomness dictated by D.
+
+## 3. Method 
+
+Figure 1 delineates the operational pipeline of C3 . The methodology partitions the training data into discrete re-play buckets indexed by event type v and a deterministic 3Contextual Counterfactual Credit Assignment 
+
+context key κ. Within each isolated bucket, C3 freezes the transcript-derived context, intervenes on a single textual action, and evaluates context-matched alternatives through Monte Carlo replay under a fixed continuation distribution. The algorithm subsequently converts these counterfactual re-turns into low-variance advantages to guide standard policy-gradient optimization. 
+
+3.1. Context Freezing 
+
+At the onset of each training iteration, the algorithm isolates a frozen behavior snapshot, 
+
+πb ← πθ . (7) The system executes K reference rollouts under πb to ex-plore the environment and records all visited decision occur-rences. For every visited occurrence u, the algorithm logs its governing event type v = σ(u) alongside a preserved replay state ρu. This replay state captures the observable context and provides the technical foundation to restart the interaction seamlessly, as formalized in Sec. 2. The system defines the explicit context from this replay state as 
+
+hu ≜ h(x, ρ u), (8) and computes a deterministic context key 
+
+κ ≜ ID( hu). (9) The methodology identifies each context instance using the tuple (v, κ ). Including the event type v remains necessary because distinct event types dictate fundamentally differ-ent decision semantics, such as disparate role constraints or system prompts. Consequently, the algorithm confines all counterfactual comparisons within a fixed bucket, ensur-ing that candidate actions vary while the transcript context remains immutable. Appendix C details the context serial-ization and key construction protocols. 
+
+3.2. Fixed-Continuation Replay 
+
+C3 evaluates all alternative actions under a fixed continua-tion distribution. Throughout our framework, Db represents the behavior continuation distribution induced by the frozen snapshot πb under deterministic decoding configurations. Upon restarting from a designated replay state, the system samples all subsequent downstream decisions from πb and ensures all external sources of randomness strictly follow 
+
+Db.For each context instance (v, κ ), the algorithm selects one representative replay state ρv,κ and its associated context 
+
+hv,κ . The system then samples Nv,κ ≥ 2 distinct alternative actions under this identical context, 
+
+av,κ,j ∼ πb(· | hv,κ ), j = 1 , . . . , N v,κ . (10) To evaluate a specific alternative av,κ,j , the algorithm allo-cates cv,κ,j ≥ 1 independent replay rollouts. Each replay rollout initializes precisely at ρv,κ , executes the candidate action av,κ,j at the target node, and generates the subse-quent trajectory under Db until episode termination. Let 
+
+Rm denote the resulting terminal return defined in Eq. (4) .The algorithm aggregates these returns as 
+
+¯Rv,κ,j ≜ 1
+
+cv,κ,j cv,κ,j 
+
+X
+
+> m=1
+
+Rm. (11) This fixed replay mechanism mathematically defines the continuation-conditioned decision value under Db,
+
+QDb (h, a ) ≜ EDb [R | h, a ] , (12) representing the exact specialization of Eq. (6) to the behav-ior distribution. Under Db, the aggregated variable ¯Rv,κ,j 
+
+in Eq. (11) serves as an unbiased Monte Carlo estimate of 
+
+QDb (hv,κ , a v,κ,j ).This localized replay mechanism fundamentally improves computational efficiency. By leveraging the preserved re-play state ρv,κ , the algorithm bypasses the need to regen-erate the historical transcript prefix. The system allocates computational resources exclusively to generating targeted counterfactual branches, thereby maximizing the density of useful learning signals per generated token. 
+
+3.3. LOO Credit Extraction 
+
+Within each isolated context instance, C3 transforms the aggregated Monte Carlo returns into low-variance learning signals by deploying a count-weighted LOO baseline across the sampled alternatives. This baseline architecture removes context-level shifts, such as the inherent difficulty of the specific task prompt, and isolates the action-level marginal contribution. Furthermore, it prevents self-coupling between the evaluated alternative and its corresponding baseline. Define the total replay count within a specific context in-stance and its complementary LOO counterpart as 
+
+Cv,κ ≜
+
+> Nv,κ
+
+X
+
+> j′=1
+
+cv,κ,j ′ ,Cv,κ, −j ≜ Cv,κ − cv,κ,j .
+
+(13) The count-weighted baseline is formulated as 
+
+b−j (v, κ ) ≜ 1
+
+Cv,κ, −j
+
+X 
+
+> j′̸=j
+
+cv,κ,j ′ ¯Rv,κ,j ′ . (14) The final contextual counterfactual credit emerges as 
+
+Av,κ,j ≜ ¯Rv,κ,j − b−j (v, κ ). (15) 4Contextual Counterfactual Credit Assignment 
+
+Algorithm 1 Contextual Counterfactual Credit Assignment  
+
+> 1:
+
+Freeze behavior snapshot πb ← πθ . 
+
+> 2:
+
+Run K reference rollouts under πb and record visited occurrences with (σ(u), ρ u). 
+
+> 3:
+
+Construct the set of context instances S =
+
+{(σ(u), ID( h(x, ρ u))) }. 
+
+> 4:
+
+For each (v, κ ) ∈ S, select one representative replay state ρv,κ and compute hv,κ = h(x, ρ v,κ ). 
+
+> 5:
+
+For each (v, κ ) ∈ S, sample alternatives 
+
+{av,κ,j }Nv,κ  
+
+> j=1
+
+∼ πb(· | hv,κ ). 
+
+> 6:
+
+for each (v, κ ) ∈ S do  
+
+> 7:
+
+for each replay rollout allocated to candidate j do  
+
+> 8:
+
+Restart from ρv,κ , execute av,κ,j , then sample the continuation under Db. 
+
+> 9:
+
+Record return R and append it to bucket (v, κ, j ). 
+
+> 10:
+
+end for  
+
+> 11:
+
+end for  
+
+> 12:
+
+Compute ¯Rv,κ,j using Eq. (11).  
+
+> 13:
+
+Compute b−j (v, κ ) using Eq. (14) and Av,κ,j using Eq. (15).  
+
+> 14:
+
+Update πθ with PPO, where Av,κ,j weights the policy-gradient term for each tuple (hv,κ , a v,κ,j , A v,κ,j ).This formulation operationalizes the counterfactual baseline principle for cooperative credit assignment (Foerster et al., 2018; Wolpert & Tumer, 2001), isolating the causal impact of the textual intervention. 
+
+3.4. Policy Optimization 
+
+The complete C3 pipeline yields context-conditioned train-ing tuples of the form (hv,κ , a v,κ,j , A v,κ,j ). C3 functions as a credit-label generator rather than a novel gradient opti-mizer. The framework optimizes the parameterized policy 
+
+πθ using Proximal Policy Optimization (PPO) with a clipped surrogate objective and a Kullback-Leibler (KL) divergence penalty anchoring updates toward a reference policy πref 
+
+(Schulman et al., 2017; Ziegler et al., 2019). For any textual macro-action a, let π(a | h) denote its autoregressive likelihood under the identical context. The methodology defines the standard likelihood ratio as 
+
+rθ (h, a ) ≜ πθ (a | h)
+
+πb(a | h) . (16) The algorithm subsequently injects the advantages Av,κ,j 
+
+derived in Eq. (15) as explicit weights on the policy-gradient term within the standard Proximal Policy Optimization ob-jective. 
+
+## 4. Mechanistic Foundations 
+
+C3 converts a sparse terminal score into decision-level su-pervision through two interlocking mechanisms. First, fixed-context replay establishes a continuation-conditioned deci-sion value, allowing alternative actions to compete on an identical transcript foundation. Second, LOO baselines iso-late the marginal effect of an action by neutralizing context-level shifts without introducing bias at the behavior snapshot. These design choices imply three testable empirical signa-tures: higher credit fidelity against within-context target advantages, lower within-context variance, and an increase in inter-agent dependence. We study these signatures in Sec. 5. 
+
+4.1. Unbiased Counterfactual Gradient 
+
+C3 operates on the continuation-conditioned decision value under the behavior continuation distribution, defined as 
+
+QDb (h, a ) ≜ EDb [R | h, a ] , (17) which matches Eq. (12) . This fixed replay mechanism an-chors the learning supervision directly to the distribution of contexts visited under the frozen behavior snapshot, defining the replay-anchored objective 
+
+Jb(θ) ≜ Eh∼db Ea∼πθ (·| h)
+
+QDb (h, a ) , (18) where db represents the state distribution induced by rollouts under πb and the designated protocol. At a fixed context h, the optimal credit signal is the advan-tage relative to the policy-marginalized baseline under the same continuation distribution, 
+
+V Db 
+
+> πb
+
+(h) ≜ Ea′∼πb(·| h)
+
+QDb (h, a ′) . (19) This baseline defines the within-context target advantage, 
+
+A⋆ 
+
+> Db
+
+(h, a ) ≜ QDb (h, a ) − V Db 
+
+> πb
+
+(h). (20) The C3 credit formulation in Eq. (15) estimates A⋆ 
+
+> Db
+
+(h, a )
+
+in expectation. Because the LOO baseline is computed ex-clusively from parallel alternatives evaluated at the same context, it remains conditionally independent of the evalu-ated action. This structural independence avoids baseline self-coupling and ensures that the policy gradient remains theoretically unbiased at the behavior snapshot. Given un-biased replay estimates ¯Rj and conditionally independent LOO baselines b−j , the expected policy gradient matches the true gradient exactly, 
+
+E
+
+
+
+> N
+
+X
+
+> j=1
+
+( ¯Rj − b−j )∇θ log πθ (aj | h)
+
+
+
+> θ=θb
+
+= ∇θ Ea∼πθ (·| h)
+
+QDb (h, a )
+
+> θ=θb
+
+.
+
+(21) 5Contextual Counterfactual Credit Assignment 
+
+Appendix K provides the formal proof. This formulation operationalizes the counterfactual baseline principle (Foer-ster et al., 2018; Wolpert & Tumer, 2001) and yields valid update directions at the behavior snapshot while reducing gradient variance (Greensmith et al., 2001). 
+
+4.2. Contextual Variance Suppression 
+
+Under terminal-only supervision, raw returns exhibit high variance across contexts due to the intrinsic difficulty of the task instance and the quality of the upstream transcript. Monte Carlo replay also introduces execution noise even at a frozen context. We decompose this empirical return dynamic as 
+
+¯Rv,κ,j = m(hv,κ ) + δ(hv,κ , a v,κ,j ) + εv,κ,j , (22) where m(h) denotes the context-level shift, δ(h, a ) captures the marginal decision effect, and ε represents stochastic replay noise. Effective credit assignment must isolate the causal effect 
+
+δ(h, ·) and discard the nuisance parameter m(h). The LOO baseline neutralizes m(h) by forcing alternative actions to compete on a normalized scale within their specific bucket. Under a matched evaluator budget, this isolation stabilizes the credit scale across highly diverse tasks. If the system interface supports shared decoding seeds across alterna-tives, common random numbers can further suppress the noise term ε without altering the mathematical estimand, representing a variance reduction technique detailed in Ap-pendix L (Law et al., 2007). 
+
+4.3. Emergent Causal Dependence 
+
+Accurate credit assignment should induce measurable causal dependence between distinct agents. If upstream decisions receive high-fidelity credit, they should influence down-stream teammate behavior under Db. We quantify this form of collaboration using social influence, formulated as condi-tional mutual information (Jaques et al., 2019). For a context instance indexed by v and κ, let the random variable J index the injected alternative action and let Y rep-resent a discrete abstraction of the immediate downstream teammate response under Db. The shared replay buckets na-tively yield paired samples of J and Y at a rigidly fixed hv,κ ,enabling direct empirical estimation of this dependence, 
+
+Influence( hv,κ ) ≜ I(J; Y | hv,κ ). (23) An increase in this conditional mutual information indicates that the downstream policy conditions its behavior on the up-stream textual intervention. Combining this Influence metric with terminal performance and credit variance diagnostics establishes a unified evaluation framework. We deploy this framework in Sec. 5 to test the role of fixed-context replay and LOO baselines, and to assess whether empirical gains are consistent with improvements in decision-level credit quality. 
+
+## 5. Empirical Evaluation 
+
+We evaluate C3 under the terminal-only team-feedback regime using a sequential two-agent (2A) protocol. We match all reinforcement learning methods by terminal evalu-ator call budget. We first assess terminal performance, then test the three mechanistic signatures formalized in Sec. 4 using shared replay buckets that fix the transcript-derived context and enforce an identical continuation distribution. 
+
+5.1. Evaluation Framework Protocol. All evaluated methods use the protocol defined in Multi-Agent Reinforcement Fine-Tuning (Liao et al., 2025). The Reasoner generates a structured plan, and the Actor executes the final numerical answer or code sequence. The external evaluator Jext scores only the final Actor out-put upon episode termination. We share prompts, stopping conditions, decoding temperatures, tool configurations, and context key definitions across all evaluated methods to iso-late the learning algorithm as the independent variable. Ap-pendix B provides the full configuration specification. 
+
+Benchmarks. Both roles instantiate a single shared policy initialized from an identical instruction-tuned checkpoint, with Reasoner and Actor differentiated solely by system prompts. Every reinforcement learning baseline launches from this exact initialization. For mathematical reasoning, we deploy Qwen2.5-3B-Instruct and Qwen3-4B-Instruct-2507 (Team et al., 2024; Yang et al., 2025). For code gen-eration tasks, we utilize Qwen2.5-Coder-3B-Instruct (Hui et al., 2024). We measure performance across MATH500, CMATH, GSM8K, MBPP-test, and MBPP+ using deter-ministic terminal evaluators (Hendrycks et al., 2021; Wei et al., 2023; Cobbe et al., 2021; Austin et al., 2021; Liu et al., 2023). Math evaluations demand exact-match accu-racy, whereas code evaluations rely on strict unit-test pass rates. Appendix A catalogs the exact data splits and evalua-tor logic. 
+
+Budget Controls. Let B denote the terminal evaluator call budget per training instance per parameter update. Across all empirical runs, we enforce the constraint 
+
+B ≜ 8. (24) The main algorithmic distinction lies in how this evalua-tor budget translates into agent decision samples. For the MAPPO and MAGRPO baselines, the 8 budget units gen-erate 8 complete multi-agent trajectories. Consequently, each agent receives 8 coupled rollouts, totaling 16 agent 6Contextual Counterfactual Credit Assignment 
+
+decision samples derived from the same terminal scores. Conversely, C3 executes targeted replay rollouts at frozen context instances. Using the formalism from Sec. 3, the system enforces the budgetary ledger 
+
+X
+
+> (v,κ )∈SNv,κ
+
+X
+
+> j=1
+
+cv,κ,j = B. (25) Operationally, our C3 configuration deterministically par-titions the sampling topology: it allocates 2 rollouts to the Reasoner and 8 targeted replay rollouts, structured as four alternatives evaluated across two distinct contexts, to the Actor. This distribution yields exactly 10 independent agent decision samples, comprising two Reasoner actions and eight Actor actions. In this setting, C3 estimates marginal value using fewer total decision samples than the baselines, namely ten compared with sixteen, while preserving the same evaluator budget. All optimization methods train for five epochs with identical instance ordering. We report the empirical mean and standard deviation over five inde-pendent seeds. Greedy evaluation uses one deterministic trajectory per instance. We additionally compute pass@10 using ten parallel samples together with the unbiased esti-mator proposed by Chen (2021). Appendix G reports all seeds, learning curves, and confidence intervals. 
+
+Diagnostic Replay. We study the proposed mechanisms using shared replay buckets keyed by event type v and con-text key κ. Within each bucket, the framework locks the replay state ρv,κ , freezes decoding variables, and follows the continuation distribution Db induced by the behavior snap-shot πb. The system evaluates a matching set of contextual alternatives under this distribution to obtain the counter-factual returns ¯Rv,κ,j defined in Eq. (11) . These buckets enable empirical estimation of the within-context target ad-vantage from Eq. (20) . Appendix I and Appendix J detail the statistical estimators. 
+
+5.2. Algorithmic Baselines 
+
+Under terminal-only supervision, the main algorithmic vari-able is the per-decision credit formulation used to weight the policy gradient. We benchmark our method against es-tablished paradigms that represent different approaches to cooperative credit assignment. Supervised Fine-Tuning (SFT) assesses the raw instruction-tuned initialization without reinforcement interaction. MAPPO represents the critic-based paradigm, using a cen-tralized value network to approximate advantages from sparse returns (Schulman et al., 2017; Yu et al., 2022). MA-GRPO represents the trajectory-based outcome-alignment paradigm, eliminating the critic by centering raw episode returns within a sampled trajectory group (Liu et al., 2025). 
+
+C3 operates at the decision level, replacing trajectory-level credit with within-context replay advantages. Appendix H documents the exact architectural implementations. 
+
+5.3. Performance and Efficiency 
+
+Tables 1 and 2 benchmark terminal performance under matched evaluation resources. We prioritize greedy met-rics to capture deterministic protocol stability and highlight pass@10 to assess robustness under policy sampling. 
+
+High-Leverage Reasoning. Deploying the Qwen3-4B-Instruct-2507 architecture, C3 attains the highest greedy accuracy among the compared methods on MATH500, CMATH, and GSM8K. On the challenging MATH500 dataset, C3 reaches 82.80 greedy accuracy and 91.44 pass@10, outperforming both MAGRPO and MAPPO. This setting highlights a limitation of trajectory-level credit as-signment: in complex mathematical planning, the upstream Reasoner output substantially shapes the feasible solution space for the downstream Actor. Trajectory-level methods distribute terminal failure across the full sequence, whereas 
+
+C3 can compare targeted alternatives at the same context and estimate their marginal effects more directly. As task complexity decreases on CMATH and GSM8K, all algorithms approach saturation set by the base model ca-pacity. In this regime, terminal rewards become denser and less discriminative. C3 remains competitive in this setting. By employing the LOO baseline to remove context-level difficulty, C3 helps stabilize gradient updates, consistent with the analysis in Sec. 4.2. Figure 2 visualizes the training episodic return trajectory. In this setting, C3 reaches a higher plateau earlier and shows tighter confidence intervals. By allocating evaluator budget to targeted counterfactual branches rather than re-generating historical prefixes, C3 increases the density of useful learn-ing signals per training step. 
+
+Model Scaling. Transitioning to the Qwen2.5 series, C3 
+
+reaches 87.01 greedy accuracy on GSM8K and 7.98 pass rate on MBPP+. The MATH500 results show a narrower gap, reflecting the representation limits of the smaller base model. When base-model competence strongly constrains algorithmic performance, improvements in credit attribution naturally yield smaller absolute gains. Even so, C3 remains competitive across these settings. 
+
+Pareto Dominance. Figure 3 illustrates the computational trade-off. In this setting, C3 lies on the Pareto frontier, achieving high episodic return with 418M training tokens and outperforming MAPPO and MAGRPO on this curve. This token efficiency is consistent with the fixed-context replay design: by restarting from pre-computed execution states, the system avoids repeatedly generating long tran-7Contextual Counterfactual Credit Assignment 
+
+Table 1. Results on Qwen3-4B-Instruct-2507, math benchmarks. Accuracy (%) on MATH500, CMATH, and GSM8K. Mean ±
+
+standard deviation over five seeds. Bold indicates the best result. 
+
+MATH500 (Acc.) CMATH (Acc.) GSM8K (Acc.) 
+
+Method Greedy pass@1 pass@10 Greedy pass@1 pass@10 Greedy pass@1 pass@10 SFT 62.88 ±0.92 63.46 ±0.25 75.44 ±0.90 94.81 ±0.28 94.74 ±0.14 97.49 ±0.25 92.66 ±0.24 92.54 ±0.10 96.38 ±0.28 
+
+MAPPO 69.28 ±0.86 69.05 ±0.24 81.44 ±0.52 95.32 ±0.19 95.55 ±0.08 97.76 ±0.15 92.86 ±0.15 92.89 ±0.19 96.35 ±0.27 
+
+MAGRPO 74.52 ±0.36 73.76 ±0.26 83.80 ±0.66 96.08 ±0.22 95.85 ±0.10 97.87 ±0.19 93.36 ±0.29 93.16 ±0.11 96.39 ±0.20 
+
+C3(Ours) 82.80 ±0.63 82.65 ±0.35 91.44 ±0.26 96.34 ±0.20 96.26 ±0.09 97.85 ±0.12 93.45 ±0.16 93.39 ±0.07 96.33 ±0.25 
+
+Table 2. Results on Qwen2.5 instruction-tuned models, math and code benchmarks. Accuracy (%) on MATH500, CMATH, and GSM8K; pass rate on MBPP+ and MBPP-test. Mean ± standard deviation over five seeds. Bold indicates the best result.                                                                                     
+
+> MATH500 (Acc.) CMATH (Acc.) GSM8K (Acc.) MBPP+ (Pass) MBPP-test (Pass)
+> Method Greedy pass@1 pass@10 Greedy pass@1 pass@10 Greedy pass@1 pass@10 Greedy pass@1 pass@10 Greedy pass@1 pass@10 SFT 62.48 ±0.70 61.52 ±0.65 84.00 ±1.52 88.94 ±0.22 88.57 ±0.18 97.19 ±0.16 84.82 ±0.61 84.17 ±0.29 96.04 ±0.41 5.34 ±0.27 5.95 ±0.21 11.94 ±0.40 6.09 ±0.06 5.11 ±0.19 9.35 ±0.41
+> MAPPO 63.80 ±0.37 62.49 ±0.37 84.40 ±0.93 89.40 ±0.45 88.75 ±0.14 97.19 ±0.34 85.17 ±0.35 84.68 ±0.27 95.83 ±0.18 5.42 ±0.36 6.07 ±0.10 12.51 ±0.49 5.77 ±0.35 4.95 ±0.15 9.48 ±0.27
+> MAGRPO 64.67 ±1.03 63.54 ±0.58 84.73 ±0.64 90.26 ±0.55 90.41 ±0.01 97.27 ±0.09 85.00 ±0.16 85.29 ±0.11 95.44 ±0.43 6.40 ±0.30 6.29 ±0.28 13.08 ±0.58 5.85 ±0.14 5.72 ±0.13 9.53 ±0.40
+> C3(Ours) 63.60 ±0.91 64.73 ±0.19 84.68 ±0.64 91.46 ±0.28 90.85 ±0.19 97.21 ±0.19 87.01 ±0.36 85.68 ±0.13 95.15 ±0.20 7.98 ±0.19 7.08 ±0.11 12.86 ±0.56 5.89 ±0.19 5.24 ±0.13 9.81 ±0.47
+
+0 800 1.6k 2.4k 3.2k 4k 
+
+Cumulative Evaluator Calls 
+
+0 100 200 300 400 500 
+
+Step 
+
+0.60 
+
+0.66 
+
+0.72 
+
+0.78 
+
+0.84 
+
+0.90 
+
+> Episodic Return
+
+MAPPO MAGRPO C3 
+
+Figure 2. Training dynamics on Qwen3-4B-Instruct-2507, math suite. Training episodic return versus cumulative terminal evalua-tor calls. C3 reaches a higher plateau earlier, with lower variance across seeds. 
+
+script histories. 
+
+5.4. Mechanistic Validation 
+
+We next move from benchmark-level results to the internal mechanics of optimization. Specifically, we test whether the empirical improvements observed above co-occur with the three mechanistic signatures derived in Sec. 4. All subse-quent diagnostics probe the shared replay buckets to extract counterfactual statistics. Figure 4 is consistent with the proposed mechanisms. First, 
+
+C3 attains higher credit fidelity with respect to the target advantage, yielding a Spearman correlation of 0.270 and out-performing the trajectory-level baselines. Second, the LOO baseline reduces within-context variance to 0.00513, which helps stabilize gradient estimates across tasks. Third, C3 0 100M 200M 300M 400M 500M 600M 700M 
+
+Cumulative Training Tokens 
+
+0.60 
+
+0.66 
+
+0.72 
+
+0.78 
+
+0.84 
+
+0.90 
+
+> Episodic Return
+
+MAPPO MAGRPO C3 
+
+Figure 3. Training efficiency pareto on Qwen3-4B-Instruct-2507, math suite. Training episodic return versus cumulative training tokens. C3 reaches a favorable Pareto trade-off, converg-ing with a fraction of the token budget used by the trajectory-level baselines. 
+
+shows the highest inter-agent Influence metric. This larger conditional mutual information indicates that downstream policies respond more strongly to upstream reasoning inter-ventions. Taken together, these results are consistent with the view that better decision-level credit supports stronger multi-agent coordination. 0.0 
+
+0.2 
+
+0.4  
+
+> Spearman  ρ
+> 0.19
+> 0.26 0.27
+
+Fidelity 
+
+0.000 
+
+0.004 
+
+0.008  
+
+> Within-context var
+> 0.006 0.007
+> 0.005
+
+Variance 
+
+0.0 
+
+0.1 
+
+0.2   
+
+> Mutual info (nats)
+> 0.142
+> 0.182 0.170 0.187
+
+Influence 
+
+SFT MAPPO MAGRPO C3 
+
+Figure 4. Mechanistic validation on Qwen3 math, tracking fidelity, variance, and emergent influence. 
+
+8Contextual Counterfactual Credit Assignment 
+
+5.5. Architectural Ablations 
+
+We study the main structural contributions of the method through targeted ablations under a matched evaluator bud-get. w/o Replay removes the counterfactual anchor by sub-stituting fixed-context branches with full episode rollouts, thereby removing context matching. w/o LOO retains the replay geometry but replaces the baseline with the coupled full-sample average in Eq. (26). 
+
+b(v, κ ) ≜ 1
+
+Cv,κ 
+
+X
+
+> j′
+
+cv,κ,j ′ ¯Rv,κ,j ′ ,Av,κ,j ≜ ¯Rv,κ,j − b(v, κ ).
+
+(26) Table 3 summarizes the effects of these removals. Remov-ing fixed-context replay decreases terminal accuracy from 90.7% to 86.5%, indicating that context matching is im-portant for precise credit assignment. Removing the LOO baseline also lowers the Influence metric from 0.187 to 0.149. This pattern is consistent with the theoretical analy-sis: when context-level shifts are not removed, collaborative dependence becomes harder to capture cleanly.               
+
+> Table 3. Ablations on replay geometry and the LOO baseline. Method Terminal Acc. Fidelity ρInfluence C3 90.7% 0.273 0.187
+> w/o Replay 86.5% 0.258 0.162 w/o LOO 89.2% 0.262 0.149
+
+## 6. Related Work 
+
+Credit Assignment. Cooperative MARL seeks to isolate the marginal effect of individual decisions while optimiz-ing shared returns. Classical methods, including differ-ence rewards and Counterfactual Multi-Agent Policy Gra-dients (Wolpert & Tumer, 2001; Foerster et al., 2018), do so through baseline subtraction, typically implemented with a centralized critic. MAPPO scales this architecture to form advantage signals for policy optimization (Schulman et al., 2017; Yu et al., 2022). However, under long-horizon terminal-only supervision, critic approximation errors and temporal-difference bias can compound, destabilizing the update signal and obscuring early decision attribution (Fuji-moto et al., 2018; Parisi et al., 2019; Arjona-Medina et al., 2019). Value factorization methods alternatively target joint structural credit (Sunehag et al., 2017; Rashid et al., 2020; Wang et al., 2020). Yet, factorization typically assumes explicit Markov states and low-dimensional action spaces, which misalign with the high-dimensional, protocol-driven information flow of LLM interactions. C3 pursues the same counterfactual objective but replaces parametric value esti-mation with deterministic interface replay, yielding within-context advantages via Monte Carlo evaluation. 
+
+Multi-Agent LLMs. Modern multi-agent LLM systems coordinate specialized agents through structured protocols to synthesize joint artifacts (Li et al., 2023; Qian et al., 2024; Wu et al., 2024; Fourney et al., 2024). Recent re-inforcement fine-tuning research often operates under ter-minal evaluator constraints, which entangle upstream role decisions (Liao et al., 2025; Park et al., 2025; Liu et al., 2025). Most existing methods propagate this sparse super-vision through episode-level signals, such as critic-based advantages or group-relative trajectory centering (Liu et al., 2025). As a result, highly consequential upstream reason-ing steps and routine downstream formatting tokens may receive similar credit. C3 addresses this trajectory-level en-tanglement by performing credit assignment at the decision occurrence. By anchoring the transcript-derived context, substituting context-matched alternatives, and executing fixed-continuation replays, C3 converts diffused episode re-wards into per-decision causal advantages compatible with standard policy-gradient optimizers. 
+
+## 7. Conclusion 
+
+Trajectory-level credit diffusion under terminal-only super-vision remains a key bottleneck in optimizing multi-agent LLM collaboration, as a single end-of-episode score cannot isolate the marginal contributions of asynchronous decisions. 
+
+C3 addresses this limitation by casting credit assignment as a controlled causal intervention. Rather than diffusing trajectory rewards, C3 anchors the exact transcript-derived context, evaluates context-matched alternatives through de-terministic interface replay, and extracts unbiased marginal value using a LOO baseline without relying on parametric value approximation. Empirical evaluations show that this method improves terminal performance across mathemati-cal and coding benchmarks under matched computational budgets. Our mechanistic diagnostics further indicate that these gains are associated with higher credit fidelity, lower contextual variance, and stronger inter-agent causal depen-dence. Overall, these results suggest that high-fidelity su-pervision in collaborative LLMs can be computed through protocol-level interface replay rather than approximated solely through large critic models, and they point to natural extensions toward richer protocols and dynamic continua-tion distributions. 
+
+## Acknowledgements 
+
+This work was supported by the 2035 Key Research and Development Program of Ningbo City (Grant No. 2024Z127) and the Research Grants Council of Hong Kong (PolyU/15209724). 9Contextual Counterfactual Credit Assignment 
+
+## Impact Statement 
+
+C3 contributes a reusable experimental primitive for multi-agent systems research by making decision-level marginal effects measurable at concrete protocol occurrences. By tying each credit signal to a fixed transcript-derived context and a clear counterfactual question, C3 helps identify proto-col bottlenecks where upstream messages tightly constrain downstream solution spaces, enables repeatable ablations and failure forensics through shared-context replay, and quantifies when collaboration is genuinely present rather than an artifact of shared reward through influence mea-surements. These properties improve auditability and gov-ernance because attribution attaches to specific decisions that can be inspected, reproduced, and stress tested. At the same time, sharper credit and faster convergence can increase evaluator overoptimization, accelerate the discov-ery of scoring loopholes, and strengthen coordination on harmful objectives when applied without safeguards. We therefore recommend that deployments document the as-sumed continuation distribution and its limits, report the compute and energy overheads introduced by replay, and treat unusually high influence or anomalously low within-context credit variance as signals that warrant deeper safety review. 
+
+## References 
+
+Ahmadian, A., Cremer, C., Gall ´e, M., Fadaee, M., Kreutzer, J., Pietquin, O., ¨Ust ¨un, A., and Hooker, S. Back to basics: Revisiting reinforce style optimization for learning from human feedback in llms. ArXiv preprint , abs/2402.14740, 2024. URL https://arxiv.org/abs/2402.1 4740 .Arjona-Medina, J. A., Gillhofer, M., Widrich, M., Un-terthiner, T., Brandstetter, J., and Hochreiter, S. RUD-DER: return decomposition for delayed rewards. In Wal-lach, H. M., Larochelle, H., Beygelzimer, A., d’Alch ´e-Buc, F., Fox, E. B., and Garnett, R. (eds.), Advances in Neural Information Processing Systems 32: Annual Conference on Neural Information Processing Systems 2019, NeurIPS 2019, December 8-14, 2019, Vancouver, BC, Canada , pp. 13544–13555, 2019. URL https: //proceedings.neurips.cc/paper/2019/ hash/16105fb9cc614fc29e1bda00dab60d4 1-Abstract.html .Austin, J., Odena, A., Nye, M., Bosma, M., Michalewski, H., Dohan, D., Jiang, E., Cai, C., Terry, M., Le, Q., et al. Program synthesis with large language models. 
+
+ArXiv preprint , abs/2108.07732, 2021. URL https: //arxiv.org/abs/2108.07732 .Bernstein, D. S., Givan, R., Immerman, N., and Zilberstein, S. The complexity of decentralized control of markov decision processes. Mathematics of operations research ,27(4):819–840, 2002. Bestgen, Y. Please, don’t forget the difference and the con-fidence interval when seeking for the state-of-the-art sta-tus. In Calzolari, N., B ´echet, F., Blache, P., Choukri, K., Cieri, C., Declerck, T., Goggi, S., Isahara, H., Maegaard, B., Mariani, J., Mazo, H., Odijk, J., and Piperidis, S. (eds.), Proceedings of the Thirteenth Language Resources and Evaluation Conference , pp. 5956–5962, Marseille, France, 2022. European Language Resources Associa-tion. URL https://aclanthology.org/2022. lrec-1.640/ .Chen, M. Evaluating large language models trained on code. 
+
+ArXiv preprint , abs/2107.03374, 2021. URL https: //arxiv.org/abs/2107.03374 .Cobbe, K., Kosaraju, V., Bavarian, M., Chen, M., Jun, H., Kaiser, L., Plappert, M., Tworek, J., Hilton, J., Nakano, R., et al. Training verifiers to solve math word problems. 
+
+ArXiv preprint , abs/2110.14168, 2021. URL https: //arxiv.org/abs/2110.14168 .Ferguson, T. S. A course in game theory . World Scientific, 2020. Foerster, J. N., Farquhar, G., Afouras, T., Nardelli, N., and Whiteson, S. Counterfactual multi-agent policy gradi-ents. In McIlraith, S. A. and Weinberger, K. Q. (eds.), 
+
+Proceedings of the Thirty-Second AAAI Conference on Artificial Intelligence, (AAAI-18), the 30th innovative Ap-plications of Artificial Intelligence (IAAI-18), and the 8th AAAI Symposium on Educational Advances in Artificial Intelligence (EAAI-18), New Orleans, Louisiana, USA, February 2-7, 2018 , pp. 2974–2982. AAAI Press, 2018. URL https://www.aaai.org/ocs/index.p hp/AAAI/AAAI18/paper/view/17193 .Fourney, A., Bansal, G., Mozannar, H., Tan, C., Salinas, E., Niedtner, F., Proebsting, G., Bassman, G., Gerrits, J., Alber, J., et al. Magentic-one: A generalist multi-agent system for solving complex tasks. ArXiv preprint ,abs/2411.04468, 2024. URL https://arxiv.org/ abs/2411.04468 .Fujimoto, S., van Hoof, H., and Meger, D. Addressing function approximation error in actor-critic methods. In Dy, J. G. and Krause, A. (eds.), Proceedings of the 35th International Conference on Machine Learning, ICML 2018, Stockholmsm ¨assan, Stockholm, Sweden, July 10-15, 2018 , volume 80 of Proceedings of Machine Learning Research , pp. 1582–1591. PMLR, 2018. URL http: //proceedings.mlr.press/v80/fujimoto 18a.html .10 Contextual Counterfactual Credit Assignment 
+
+Greensmith, E., Bartlett, P. L., and Baxter, J. Variance reduc-tion techniques for gradient estimates in reinforcement learning. In Dietterich, T. G., Becker, S., and Ghahra-mani, Z. (eds.), Advances in Neural Information Process-ing Systems 14 [Neural Information Processing Systems: Natural and Synthetic, NIPS 2001, December 3-8, 2001, Vancouver, British Columbia, Canada] , pp. 1507–1514. MIT Press, 2001. URL https://proceedings.ne urips.cc/paper/2001/hash/584b98aac2d ddf59ee2cf19ca4ccb75e-Abstract.html .Hansen, E. A., Bernstein, D. S., and Zilberstein, S. Dynamic programming for partially observable stochastic games. In AAAI , volume 4, pp. 709–715, 2004. Hendrycks, D., Burns, C., Kadavath, S., Arora, A., Basart, S., Tang, E., Song, D., and Steinhardt, J. Measuring mathematical problem solving with the math dataset. 
+
+ArXiv preprint , abs/2103.03874, 2021. URL https: //arxiv.org/abs/2103.03874 .Hui, B., Yang, J., Cui, Z., Yang, J., Liu, D., Zhang, L., Liu, T., Zhang, J., Yu, B., Lu, K., et al. Qwen2. 5-coder technical report. ArXiv preprint , abs/2409.12186, 2024. URL https://arxiv.org/abs/2409.12186 .Jaques, N., Lazaridou, A., Hughes, E., G ¨ul c¸ ehre, C¸ ., Ortega, P. A., Strouse, D., Leibo, J. Z., and de Freitas, N. Social influence as intrinsic motivation for multi-agent deep rein-forcement learning. In Chaudhuri, K. and Salakhutdinov, R. (eds.), Proceedings of the 36th International Confer-ence on Machine Learning, ICML 2019, 9-15 June 2019, Long Beach, California, USA , volume 97 of Proceedings of Machine Learning Research , pp. 3040–3049. PMLR, 2019. URL http://proceedings.mlr.press/ v97/jaques19a.html .Law, A. M., Kelton, W. D., and Kelton, W. D. Simulation modeling and analysis , volume 3. Mcgraw-hill New York, 2007. Li, G., Hammoud, H., Itani, H., Khizbullin, D., and Ghanem, B. Camel: Communicative agents for” mind” exploration of large language model society. Advances in Neural Information Processing Systems , 36:51991–52008, 2023. Liao, J., Wen, M., Wang, J., and Zhang, W. Marft: Multi-agent reinforcement fine-tuning. ArXiv preprint ,abs/2504.16129, 2025. URL https://arxiv.org/ abs/2504.16129 .Liu, J., Xia, C. S., Wang, Y., and Zhang, L. Is your code generated by chatgpt really correct? rigorous evaluation of large language models for code generation. Advances in Neural Information Processing Systems , 36:21558– 21572, 2023. Liu, S., Chen, T., Liang, Z., Lyu, X., and Amato, C. Llm collaboration with multi-agent reinforcement learning. 
+
+ArXiv preprint , abs/2508.04652, 2025. URL https: //arxiv.org/abs/2508.04652 .Oliehoek, F. A., Amato, C., et al. A concise introduction to decentralized POMDPs , volume 1. Springer, 2016. Parisi, S., Tangkaratt, V., Peters, J., and Khan, M. E. Td-regularized actor-critic methods. Machine Learning , 108 (8):1467–1501, 2019. Park, C., Han, S., Guo, X., Ozdaglar, A. E., Zhang, K., and Kim, J.-K. Maporl: Multi-agent post-co-training for collaborative large language models with reinforcement learning. In Proceedings of the 63rd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , pp. 30215–30248, 2025. Qian, C., Liu, W., Liu, H., Chen, N., Dang, Y., Li, J., Yang, C., Chen, W., Su, Y., Cong, X., et al. Chatdev: Commu-nicative agents for software development. In Proceed-ings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , pp. 15174–15186, 2024. Rashid, T., Samvelyan, M., De Witt, C. S., Farquhar, G., Foerster, J., and Whiteson, S. Monotonic value function factorisation for deep multi-agent reinforcement learning. 
+
+Journal of Machine Learning Research , 21(178):1–51, 2020. Schulman, J., Wolski, F., Dhariwal, P., Radford, A., and Klimov, O. Proximal policy optimization algorithms. 
+
+ArXiv preprint , abs/1707.06347, 2017. URL https: //arxiv.org/abs/1707.06347 .Shao, Z., Wang, P., Zhu, Q., Xu, R., Song, J., Bi, X., Zhang, H., Zhang, M., Li, Y., Wu, Y., et al. Deepseekmath: Pushing the limits of mathematical reasoning in open language models. ArXiv preprint , abs/2402.03300, 2024. URL https://arxiv.org/abs/2402.03300 .Sunehag, P., Lever, G., Gruslys, A., Czarnecki, W. M., Zam-baldi, V., Jaderberg, M., Lanctot, M., Sonnerat, N., Leibo, J. Z., Tuyls, K., et al. Value-decomposition networks for cooperative multi-agent learning. ArXiv preprint ,abs/1706.05296, 2017. URL https://arxiv.or g/abs/1706.05296 .Team, Q. et al. Qwen2 technical report. ArXiv preprint ,abs/2407.10671, 2024. URL https://arxiv.org/ abs/2407.10671 .Wang, J., Ren, Z., Liu, T., Yu, Y., and Zhang, C. Qplex: Duplex dueling multi-agent q-learning. ArXiv preprint ,abs/2008.01062, 2020. URL https://arxiv.org/ abs/2008.01062 .11 Contextual Counterfactual Credit Assignment 
+
+Wei, T., Luan, J., Liu, W., Dong, S., and Wang, B. Cmath: Can your language model pass chinese elementary school math test? ArXiv preprint , abs/2306.16636, 2023. URL 
+
+https://arxiv.org/abs/2306.16636 .Wolpert, D. H. and Tumer, K. Optimal payoff functions for members of collectives. Advances in Complex Systems , 4 (02n03):265–279, 2001. Wu, Q., Bansal, G., Zhang, J., Wu, Y., Li, B., Zhu, E., Jiang, L., Zhang, X., Zhang, S., Liu, J., et al. Autogen: Enabling next-gen llm applications via multi-agent conversations. In First Conference on Language Modeling , 2024. Yang, A., Li, A., Yang, B., Zhang, B., Hui, B., Zheng, B., Yu, B., Gao, C., Huang, C., Lv, C., et al. Qwen3 technical report. ArXiv preprint , abs/2505.09388, 2025. URL https://arxiv.org/abs/2505.09388 .Yu, C., Velu, A., Vinitsky, E., Gao, J., Wang, Y., Bayen, A., and Wu, Y. The surprising effectiveness of ppo in cooper-ative multi-agent games. Advances in neural information processing systems , 35:24611–24624, 2022. Ziegler, D. M., Stiennon, N., Wu, J., Brown, T. B., Radford, A., Amodei, D., Christiano, P., and Irving, G. Fine-tuning language models from human preferences. ArXiv preprint ,abs/1909.08593, 2019. URL https://arxiv.org/ abs/1909.08593 .12 Contextual Counterfactual Credit Assignment 
+
+## A. Experimental Settings 
+
+Table 4 specifies the benchmarks, initializations, training corpora, and evaluators. Appendix G details the reporting metrics and decoding configurations. 
+
+Table 4. Experimental settings. Benchmarks, policy initialization models under the sequential two-agent (2A) protocol, training pools, evaluation splits, and terminal evaluators. 
+
+Benchmark Policy initialization Training pool Evaluation split and terminal evaluator 
+
+MATH500 Qwen2.5-3B-Instruct; Qwen3-4B-Instruct-2507 MATH-train plus CMATH-train MATH500, answer checker CMATH Qwen2.5-3B-Instruct; Qwen3-4B-Instruct-2507 MATH-train plus CMATH-train CMATH, answer checker GSM8K Qwen2.5-3B-Instruct; Qwen3-4B-Instruct-2507 MATH-train plus CMATH-train GSM8K-test, answer checker MBPP+ Qwen2.5-Coder-3B-Instruct MBPP-train MBPP+ with pinned tests, unit-test harness MBPP-test Qwen2.5-Coder-3B-Instruct MBPP-train MBPP-test, unit-test harness 
+
+## B. Protocol Specification 
+
+All methods evaluate under the sequential two-agent (2A) protocol. To strictly isolate the learning algorithm as the independent variable, the event topology, role prompts, message serialization, decoding, termination, and evaluator boundaries are fixed across all experiments. Table 5 summarizes this protocol. 
+
+Table 5. 2A contract. Each episode comprises exactly two decision occurrences. Only the actor output undergoes terminal scoring. 
+
+Step Event type Visible inputs Output Scored 
+
+1 reasoner Problem text Short plan No 2 actor Problem text plus full reasoner output Solution Yes 
+
+## Message Serialization 
+
+• Each occurrence acts as a single chat generation comprising one system message and one user message. • The immutable user schema maps the task instance to the Problem field and upstream outputs to the Context field. • Context is empty for the reasoner and contains the normalized reasoner output for the actor .• Upstream outputs are concatenated in protocol order, separated by exactly two newline characters. • Deterministic trimming and newline normalization ( \n ) are applied at all text boundaries. • Math outputs are sanitized to remove leaked wrapper markers while preserving mathematical syntax. Code outputs remain unsanitized. 
+
+Canonical user message Problem: <task instance text> Context: <upstream outputs in protocol order> 
+
+System Prompts 
+
+13 Contextual Counterfactual Credit Assignment 
+
+The following instructions are injected verbatim as the fixed system message for each role. 
+
+[Math] Reasoner. Two LLM agents in the Reasoner →Actor protocol collaborate step-by-step to solve math problems. You are the Reasoner : Analyze the original problem, historical actions, and reflection data when provided to determine the critical next step. Guide the Actor by providing concise reasoning for the optimal operation. 
+
+[Math] Actor. Two LLM agents in the Reasoner →Actor protocol collaborate step-by-step. You are the Actor :Execute operations using the original problem, action history, and Reasoner’s guidance. Provide final answer within 
+
+\boxed {} .
+
+[Code] Reasoner. Two LLM agents in the Reasoner →Actor protocol collaborate to solve Python coding problems. You are the Reasoner. Your job: Read the problem and any previous actions; give the Actor a short, actionable plan: algorithm choice, edge cases, and exact function signature or name to implement when given in the prompt. Rules: Do NOT write code. Keep it concise and structured; bullet points are fine. 
+
+[Code] Actor. Two LLM agents in the Reasoner →Actor protocol collaborate to solve Python coding problems. You are the Actor. Your job: Produce the final solution as executable Python code. Output rules: Output ONLY Python code: no explanations, no markdown fences, no \boxed {} . Define the required function with the correct name and signature as given in the prompt or tests. The code must run under standard Python 3. Do not read input() or 
+
+print() ; just define the function.              
+
+> Table 6. Decoding parameters and sequence constraints. Setting Training rollouts Evaluation
+> Prompt length cap 2560 tokens 2560 tokens Generation cap per role 512 tokens 512 tokens Temperature 0.7 Greedy 0.0, pass@10 0.7 Sampling filter top-p 0.8, top-k 20 top-p 0.8, top-k 20 Samples per instance protocol-defined Greedy 1, pass@10 10
+
+## Termination Conditions 
+
+• Generation terminates upon emitting the end-of-sequence token or reaching the per-role token limit. • The episode terminates immediately after the actor turn. • External tools are completely disabled during the interaction phase. • Code executes exclusively within the isolated evaluator sandbox at the terminal checkpoint. • The evaluator observes only the final actor output and checker-required metadata. 
+
+## C. Context Serialization 
+
+The framework maps a task instance and its transcript state to a deterministic context string h. Identical contexts therefore yield identical model input bytes and the same context key κ = ID( h).
+
+## Determinism Contract 
+
+• Included: problem text, fixed role order, transcript prefix visible at the target occurrence, target-role prompt, and 14 Contextual Counterfactual Credit Assignment 
+
+the deterministic chat wrapper. • Excluded: evaluator outputs, random seeds, absolute timestamps, log probabilities, and tool traces. • Operations: deterministic trimming, strict newline normalization, and math-specific sanitization. 
+
+## Collision Policy 
+
+The stable 63-bit integer hash is defined by applying the BLAKE2b-64 digest to the UTF-8 byte encoding of h:
+
+κ ≜
+
+
+
+BLAKE2b 64 (UTF-8 (h)) 
+
+
+
+mod 2 63 .
+
+Hash collisions are treated as fatal correctness failures. Auxiliary fingerprints (character lengths and secondary digests) enforce replay consistency. 
+
+## D. Training Configuration 
+
+We optimize a single role-conditioned policy with shared parameters. Protocol, prompts, context construction, decoding, evaluators, optimizer configuration, KL regularization, and the PPO infrastructure are matched across all methods. Training runs for five epochs with a fixed instance order per epoch. Reported results represent the mean and standard deviation across five seeds {0, 1, 2, 3, 4}.                        
+
+> Table 7. Shared optimization and generation hyperparameters. Setting Value
+> Policy loss PPO clipped surrogate with ratio clip ϵ= 0 .2
+> Discount factor and trace γ= 1 .0,λ= 1 .0under terminal-only supervision Reward clipping Clip return to [−10 ,10] before advantage construction Optimizer AdamW, betas 0.9,0.95 , max grad norm 1.0, weight decay 0
+> Learning rate Cosine schedule with warmup ratio 0.03
+> Lengths Prompt cap 2560, generation cap 512 per role Training decoding Temperature 0.7, top-p 0.8, top-k 20 Evaluation decoding Greedy temperature 0.0, pass@10 uses temperature 0.7
+
+## Budget Accounting 
+
+Let B denote the terminal evaluator call budget per training instance per parameter update. All runs enforce B = 8 
+
+(Eq. 24). One call consumes exactly one terminal scoring event. For MAPPO and MAGRPO, each unit budget corresponds to one complete 2A episode scored at termination. For C3, each unit budget corresponds to one targeted replay rollout: restarting from a recorded replay state, forcing one candidate action at the specific occurrence, executing the continuation, and querying the evaluator. Reference rollouts for recording replay states are unscored and consume zero budget. 
+
+## System Implementation 
+
+The implementation leverages distributed PPO with batched inference and prefix caching. Transcript generation and evaluators are deterministic given the run seed. Any batch violating the predefined evaluator budget is rejected. 
+
+15 Contextual Counterfactual Credit Assignment         
+
+> Table 8. Budget matching and mathematical credit granularity. Method Budget (B)Credit formulation assigned per update
+> C3 8Fixed-context counterfactual credit driven by a LOO baseline within each context instance MAPPO 8Critic-based advantage extracted under sparse terminal-only returns MAGRPO 8Group-centered trajectory advantage shared across the entire episode
+
+## E. Evaluator Semantics 
+
+The external evaluator processes the final actor output string and returns a deterministic scalar score r ∈ [0 , 1] upon episode termination. Gold labels and unit tests remain strictly hidden during interaction.                          
+
+> Table 9. Evaluators and deterministic score ranges. Benchmark Evaluator type Evaluator input Score r
+> MATH500 Answer checker Actor text plus gold answer {0,1}
+> CMATH Answer checker Actor text plus gold answer {0,1}
+> GSM8K Answer checker Actor text plus gold answer {0,1}
+> MBPP-test Unit tests Actor code plus hidden tests [0 ,1]
+> MBPP+ Pinned unit tests Actor code plus hidden tests [0 ,1]
+
+## Mathematical Verification 
+
+• Extracts exactly one final answer from the last answer-like span (balanced braces required for \boxed {} ). • Normalization trims whitespace, strips mathematical markers, removes trailing punctuation, and lowercases options. • Numeric strings are parsed and compared as exact rationals when viable. Otherwise, fallback normalized strings are evaluated. • Exact matches score 1, else 0. A guarded symbolic equivalence check acts as a fallback under strict timeout limits. 
+
+## Execution Sandbox 
+
+• Extracts code from the first ‘‘‘python block, any fenced block, or falls back to the full text. Empty or overlong code yields r = 0 .• Code and unit tests execute within an isolated subprocess governed by rigid wall-clock, central processing unit (CPU), and memory limits. Network and file I/O are disabled. • Score is r = passed /total for cleanly completed tests. • Timeouts, syntax errors, runtime exceptions, and sandbox violations count as failures. Missing tests yield r = 0 .
+
+## F. Dataset Partitions 
+
+The training phase utilizes MATH-train and CMATH-train for mathematical reasoning, and MBPP-train for code generation. Evaluation executes strictly on MATH500, CMATH, GSM8K-test, MBPP-test, and MBPP+. All splits are securely pinned via deterministic cryptographic identifiers. 16 Contextual Counterfactual Credit Assignment                            
+
+> Table 10. Datasets, evaluation splits, and stable cryptographic identifiers. EN and ZH denote English and Chinese.
+> Benchmark Source and split usage Lang. Stable instance identifier
+> MATH500 Subset of MATH test (Hendrycks et al., 2021) EN uid and uid sha
+> CMATH Held-out CMATH evaluation split (Wei et al., 2023) ZH uid sha
+> GSM8K-test Official GSM8K test split (Cobbe et al., 2021) EN uid and uid sha
+> MBPP-test Official MBPP test split (Austin et al., 2021) EN task id and uid sha
+> MBPP+ EvalPlus pinned tests (Liu et al., 2023) EN task id and uid sha
+
+## Contamination Prevention 
+
+• The protocol injects the raw input field verbatim into the Problem field. • The identifier uid sha is computed by applying Unicode Normalization Form C (NFC) to the input, standardiz-ing newlines to \n, and stripping trailing whitespace. • Split fingerprints are computed as Secure Hash Algorithm 256 (SHA-256) hashes of the sorted uid sha array. • We enforce a strict zero uid sha intersection between training pools and evaluation splits. • MBPP-test and MBPP+ share task IDs but employ entirely distinct test suites. 
+
+## G. Evaluation Metrics 
+
+An experimental run is uniquely defined by the initialization model, benchmark, method, and seed. Within a seed, rollouts and replays are deterministic functions of the seed and a per-instance counter. We report the final checkpoint obtained after epoch five.              
+
+> Table 11. Evaluation metrics and rigid decoding configurations. Metric Samples Temperature Definition
+> Greedy 10.0 Exactly one deterministic episode per instance pass@1 10.7 Exactly one stochastic episode per instance pass@10 10 0.7 Ten independent stochastic episodes per instance scored via the unbiased estimator
+
+The unbiased pass@ k metric computes 
+
+\pass@ k = 1 −
+
+ n−ck
+
+ nk
+
+ ,
+
+defaulting to zero when n − c < k . Invalid artifacts, sandbox timeouts, and harness errors unconditionally score as incorrect. 
+
+## Confidence Intervals 
+
+Instance scores are uniformly averaged across the evaluation set per seed. Mean and standard deviation are reported across five seeds. For relative improvements, we employ paired bootstrapping over instances within each seed (10,000 resamples), then average the deltas across seeds to extract 95% percentile intervals (Bestgen, 2022). 
+
+## H. Baseline Architectures 
+
+Methods differ strictly in the policy-gradient weighting signal and auxiliary learned components. All other variables (protocol, prompts, decoding, evaluators, budget B, PPO optimization, KL penalty) are matched. 17 Contextual Counterfactual Credit Assignment 
+
+Table 12. Architectural baselines and isolation of differences. Method Policy-gradient weighting signal Extra learned components 
+
+SFT Evaluates the initialized policy directly without rein-forcement updates None MAPPO Critic-based advantage extracted under sparse terminal-only returns Centralized critic possessing a scalar value head MAGRPO Group-centered advantage computed from multiple full episodes per instance, broadcast equally across the episode None C3 Fixed-context counterfactual mean returns utilizing LOO baselines localized exclusively within each con-text instance None 
+
+## Macro-Action Credit 
+
+Each completed role message constitutes one indivisible macro-action. Its log probability equals the sum of its constituent token log probabilities. A single scalar advantage is uniformly assigned to all tokens within that macro-action. 
+
+## I. Diagnostic Estimators 
+
+Diagnostics evaluate a frozen behavior snapshot πb from the final checkpoint under the fixed continuation distribution Db.
+
+## Bucket Construction and Replay 
+
+A diagnostic bucket isolates one decision occurrence at a fixed context, keyed by event type v and context hash 
+
+κ = ID( h). It stores one replay state ρv,κ to deterministically reconstruct hv,κ . Candidates {aj }Jj=1 are sampled from 
+
+πb(· | hv,κ ) and deduplicated by exact match. For candidate aj , the target role is forced to aj ; downstream roles are sampled from πb under Db until termination, yielding returns Rj,t .
+
+Table 13. Diagnostic hyperparameters defining bucket density. Quantity Symbol Meaning 
+
+Buckets per benchmark S Uniform stochastic sample spanning the evaluation split Candidates per bucket J Unique actions compared within one context Replays per candidate c Evaluator invocations allocated per candidate Value-only actions JV Supplementary actions used solely to calculate V Db 
+
+> πb
+
+(h)
+
+Total calls per bucket (J + JV ) · c
+
+## Advantage Estimation 
+
+18 Contextual Counterfactual Credit Assignment 
+
+For fixed context h and candidate aj ,
+
+QDb (h, a j ) = E[R | h, a j ], bQ(h, a j ) = ¯Rj = 1
+
+c
+
+> c
+
+X
+
+> t=1
+
+Rj,t .
+
+The policy-marginalized baseline V Db 
+
+> πb
+
+(h) is estimated utilizing JV value-only actions: 
+
+bV (h) = 
+
+P 
+
+> j∈J V
+
+c ¯Rj
+
+P 
+
+> j∈J V
+
+c , ∆j = bQ(h, a j ) − bV (h).
+
+The absolute diagnostic target advantage is defined as ∆j .
+
+## Credit Formalization and Fidelity 
+
+All methodologies share identical raw returns { ¯Rj } generated under h and Db. They differ exclusively in the baseline applied to formulate the credit label Aj :• C3 (LOO Baseline): b−j = 1
+
+> J−1
+
+P 
+
+> i̸=j
+
+¯Ri ⇒ AC3  
+
+> j
+
+= ¯Rj − b−j .• MAGRPO (Full-Sample Mean): b = 1
+
+> J
+
+PJi=1 ¯Ri ⇒ AMAGRPO  
+
+> j
+
+= ¯Rj − b.• MAPPO (Critic): Extracts Vψ (h) from the trained critic ⇒ AMAPPO  
+
+> j
+
+= ¯Rj − Vψ (h).Fidelity is the Spearman correlation between the assigned {Aj } and the target advantages {∆j }, uniformly pooled across buckets. 
+
+## J. Influence Estimation 
+
+Influence quantifies how injecting a candidate action alters the immediate downstream teammate action at a fixed context. This offline statistical evaluation operates independently of training optimization. 
+
+## State Discretization 
+
+Let J index the injected candidate and Y represent the downstream teammate’s first emitted message. The raw message is canonicalized using Unicode Normalization Form KC (NFKC), whitespace collapse, trimming, and length capping at 256. Y is defined as the Secure Hash Algorithm 1 (SHA-1) hexadecimal prefix of this string. The top 
+
+K = 64 most frequent symbols form the global vocabulary; the remainder collapse into the OTHER token. If the episode terminates before the teammate acts, Y maps to EMPTY .
+
+Table 14. Influence estimator parametric controls. Component Setting 
+
+Canonicalization NFKC, whitespace collapse, rigid trim, truncate to 256 chars Hash symbol SHA-1 hexadecimal prefix, L = 16 , structurally empty natively mapped to EMPTY 
+
+Vocabulary Global top K = 64 symbols, remaining data mapped to OTHER 
+
+Smoothing Dirichlet smoothing with α = 10 −2 per active symbol Units Natural logarithm, reported in nats 
+
+Anchored at context h, Influence is I(J; Y | h). Let cj,y represent the counts of symbol y among sampled continuations of 19 Contextual Counterfactual Credit Assignment 
+
+candidate j, and nj = P 
+
+> y
+
+cj,y . Enforcing a uniform intervention distribution bp(J = j) = 1 /J , the Dirichlet-smoothed conditionals evaluate to: 
+
+bpα(Y = y | J = j) = cj,y + αnj + α|Y| , bpα(Y = y) = X
+
+> j
+
+bp(J = j) bpα(Y = y | J = j).
+
+Consequently, the explicit mutual information resolves to: 
+
+bIα(J; Y | h) = X
+
+> j
+
+bp(J = j) X
+
+> y∈Y
+
+bpα(Y = y | J = j) log bpα(Y = y | J = j)
+
+bpα(Y = y) .
+
+## K. Theoretical Proofs 
+
+Isolate context h and fix the continuation distribution Db induced by the snapshot policy πb. Define 
+
+JDb (θ; h) = Ea∼πθ (·| h)
+
+QDb (h, a ), QDb (h, a ) = E[R | h, a ].
+
+Sample J ≥ 2 alternatives a1, . . . , a J independently from πb(· | h). For each aj , execute cj ≥ 1 replay rollouts yielding 
+
+¯Rj such that E[ ¯Rj | h, a j ] = QDb (h, a j ). Define 
+
+b−j =
+
+P 
+
+> i̸=j
+
+ci ¯Ri
+
+P 
+
+> i̸=j
+
+ci
+
+, Aj = ¯Rj − b−j .
+
+## Proof Sketch 
+
+• The unbiasedness of ¯Rj provides an unbiased reward term for QDb (h, a j ) via the standard likelihood-ratio identity. • The conditional independence of b−j from aj (given h) forces the baseline expectation to completely vanish at 
+
+θ = θb, mathematically grounded upon E[∇θ log πθ (aj | h)] |θ=θb = 0 .• The LOO configuration rigorously evades the self-coupling bias inherent to full-sample baselines while funda-mentally suppressing gradient variance. 
+
+## L. Variance Reduction 
+
+Replay estimation generates Monte Carlo returns anchored at a fixed context h forcing candidate aj :
+
+¯Rj = 1
+
+c
+
+> c
+
+X
+
+> t=1
+
+Rj,t , QDb (h, a j ) = E[Rj,t | h, a j ].
+
+Common random numbers (CRN) couple replays across candidates within a single bucket, ensuring that replay index t
+
+shares identical random number generator (RNG) streams across all evaluated candidates. 
+
+Table 15. Stochastic streams mathematically coupled within identical bucket keys. Source Extent of coupling across candidates Control mechanism 
+
+Token sampling Identical RNG stream bound to fixed replay index t
+
+Seed derived exclusively from bucket key com-bined with index t
+
+Harness RNG Identical RNG stream mapped per execution call Seed derived algebraically from base replay seed and call counter Timeout limits Perfectly identical boundary limits Inherits fixed limits uniformly shared across all candidates 
+
+This coupling alters cross-candidate statistical correlations but preserves each candidate marginal under Db. Consequently, 
+
+¯Rj remains an unbiased estimator of QDb (h, a j ). Coupling is disabled if replayability is compromised by nondeterministic operating-system (OS) scheduling or hidden mutable states. 20 Contextual Counterfactual Credit Assignment 
+
+## M. Compute Ledger 
+
+Table 16 quantifies the resource costs corresponding to Sec. 5.1. 
+
+## Metric Definitions 
+
+• Terminal Scoring Events (TSE): The absolute sum of terminal evaluator invocations during training (the primary fairness axis). • Total Training Tokens (TT): The total prompt and completion tokens generated across all training steps. • Agent Decision Samples (ADS): The cumulative physical decision samples evaluated during training, mathe-matically decomposed into ADS reas. and ADS actor .
+
+Table 16. Definitive compute ledger. TSE isolates Terminal Scoring Events. TT tracks Total Training Tokens. ADS aggregates Agent Decision Samples. 
+
+Suite Method TSE TT ADS ADS reas. ADS actor 
+
+3B-Math C3 4,672 422M 748k 144k 604k 3B-Math MAPPO 4,672 650M 1,196k 598k 598k 3B-Math MAGRPO 4,352 683M 1,114k 433k 681k 3B-Code C3 80 3.8M 12.8k 3.0k 9.8k 3B-Code MAPPO 80 5.5M 20.5k 10.2k 10.2k 3B-Code MAGRPO 80 5.5M 20.5k 11.0k 9.5k 4B-Math C3 4,672 418M 748k 135k 612k 4B-Math MAPPO 4,672 616M 1,196k 598k 598k 4B-Math MAGRPO 4,672 703M 1,196k 486k 710k 
+
+Efficiency Analysis: TSE is matched across the 3B-Code and 4B-Math suites. In these settings, C3 uses fewer total tokens and decision samples than both baselines. By reusing the preceding transcript prefix rather than regenerating full episodes from scratch, C3 avoids redundant computation. The role decomposition also shows that C3 allocates a larger fraction of decision samples to the actor role, consistent with evaluating alternative actor responses under a fixed upstream plan. 
+
+## N. Failure Taxonomy 
+
+The case studies below are drawn from MATH500 replay buckets under Qwen3-4B-Instruct-2507 using C3. 
+
+N.1. Categorical Failure Taxonomy 
+
+Table 17. Failure taxonomy. Distribution across 12 discrete cases (6 actor operations, 6 reasoner operations). 
+
+Category Count Description 
+
+Successful Credit Shift 6 The best alternative achieves a terminal return signifi-cantly higher than the real action ( ∆ ¯R > 0.2). Evaluator Ambiguity 4 All evaluated candidates yield structurally identical ter-minal returns ( |∆ ¯R| < 0.01 ). Misleading Plan 1 All downstream actions fail due to a critically flawed upstream plan ( ¯Rbest < 0.5). Over-Coupling 1 Outcomes are dominated by obscure factors outside the target role’s behavioral control. 
+
+21 Contextual Counterfactual Credit Assignment 
+
+N.2. Representative Cases Diagnosis: Successful Credit Shift Task: Find the smallest a > 0 such that all roots of x3 + ax 2 + ax + 1 = 0 are real. 
+
+Plan: Noted the palindromic structure and proposed the substitution y = x + 1 /x .
+
+Real Action ( ¯R = 0 .0): Followed the substitution but produced an incorrect answer due to an error analyzing |y| ≥ 2.
+
+Alternative ( ¯R = 1 .0): Correctly completed the |y| ≥ 2 analysis and output the accurate solution. 
+
+Diagnosis: Among 12 tested replay candidates at this context, only one achieved a correct score. The LOO mechanism therefore assigns the largest advantage to that candidate, isolating the failure point in the real action. 
+
+Diagnosis: Evaluator Ambiguity Task: Convert (0 , 3) from rectangular to polar coordinates. 
+
+Plan: Stated the standard polar conversion formulas. 
+
+Real Action ( ¯R = 1 .0): Output (3 , π/ 2) .
+
+Alternative ( ¯R = 1 .0): Output (3 , π/ 2) .
+
+Diagnosis: Both candidates produce functionally identical correct terminal answers. The resulting LOO advantage is zero across all samples, reflecting that this action variation has no measurable effect on the outcome. 
+
+Diagnosis: Misleading Plan Task: Find the number of distinct values obtainable from 2 · 3 · 4 · 5 + 1 by inserting parentheses. 
+
+Real Plan ( ¯R = 0 .0): Proposed a partial enumeration strategy. 
+
+Alternative ( ¯R = 0 .0): All 8 sampled reasoner plans still cause the actor to fail the terminal evaluation. 
+
+Diagnosis: The LOO advantage remains zero throughout this case. This illustrates a limitation of per-decision credit: it cannot rescue an outcome if the policy fails to generate any viable high-level plan within the replay pool. 
+
+## O. Extended Learning Dynamics 
+
+Figures 5 and 6 extend the training-dynamics and Pareto-efficiency analysis to the Qwen2.5-3B math and code suites. Across these configurations, C3 achieves higher episodic returns while remaining more token efficient, consistent with the compute ledger in Table 16. 22 Contextual Counterfactual Credit Assignment 0 800 1.6k 2.4k 3.2k 4k        
+
+> Cumulative Evaluator Calls
+> 0100 200 300 400 500
+> Step
+> 0.69
+> 0.72
+> 0.75
+> 0.78
+> 0.81
+> 0.84
+> Episodic Return
+> MAPPO MAGRPO C3
+
+(a) Training dynamics. 0 100M 200M 300M 400M 500M 600M    
+
+> Cumulative Training Tokens
+> 0.69
+> 0.72
+> 0.75
+> 0.78
+> 0.81
+> 0.84
+> Episodic Return
+> MAPPO MAGRPO C3
+
+(b) Efficiency pareto. 
+
+Figure 5. Qwen2.5-3B-Instruct, mathematical suite. Left: training episodic return mapped against terminal scoring events. Right: training episodic return mapped against cumulative training tokens. Shaded bands depict 95% confidence intervals across five seeds. C3 
+
+achieves higher returns while using fewer training tokens. 8 16 24 32 40 48 56 64 72 80            
+
+> Cumulative Evaluator Calls
+> 12345678910
+> Step
+> 0.04
+> 0.06
+> 0.08
+> 0.10
+> 0.12
+> Episodic Return
+> MAPPO MAGRPO C3
+
+(a) Training dynamics. 800k 1.6M 2.4M 3.2M 4M 4.8M    
+
+> Cumulative Training Tokens
+> 0.04
+> 0.06
+> 0.08
+> 0.10
+> 0.12
+> Episodic Return
+> MAPPO MAGRPO C3
+
+(b) Efficiency pareto. 
+
+Figure 6. Qwen2.5-Coder-3B-Instruct, code suite. Left: training episodic return mapped against terminal scoring events. Right: training episodic return mapped against cumulative training tokens. Shaded bands depict 95% confidence intervals across five seeds. C3 attains the highest return at the lowest aggregate token budget among the compared methods. 
+
+23

@@ -1,0 +1,1392 @@
+Title: DSDR: Dual-Scale Diversity Regularization for Exploration in LLM Reasoning
+
+URL Source: https://arxiv.org/pdf/2602.19895v1
+
+Published Time: Tue, 24 Feb 2026 02:54:34 GMT
+
+Number of Pages: 22
+
+Markdown Content:
+# DSDR : Dual-Scale Diversity Regularization for Exploration in LLM Reasoning 
+
+Zhongwei Wan * 1 Yun Shen * 1 Zhihao Dou 2 Donghao Zhou 3 Yu Zhang 4 Xin Wang 1 Hui Shen 5
+
+Jing Xiong 6 Chaofan Tao 6 Zixuan Zhong 7 Peizhou Huang 5 Mi Zhang 1
+
+## Abstract 
+
+Reinforcement learning with verifiers (RLVR) is a central paradigm for improving large language model (LLM) reasoning, yet existing methods often suffer from limited exploration. Policies tend to collapse onto a few reasoning patterns and prematurely stop deep exploration, while con-ventional entropy regularization introduces only local stochasticity and fails to induce meaningful path-level diversity, leading to weak and unsta-ble learning signals in group-based policy op-timization. We propose DSDR , a Dual-Scale 
+
+Diversity Regularization reinforcement learning framework that decomposes diversity in LLM reasoning into global and coupling components. Globally, DSDR promotes diversity among cor-rect reasoning trajectories to explore distinct solu-tion modes. Locally, it applies a length-invariant, token-level entropy regularization restricted to correct trajectories, preventing entropy collapse within each mode while preserving correctness. The two scales are coupled through a global-to-local allocation mechanism that emphasizes lo-cal regularization for more distinctive correct tra-jectories. We provide theoretical support show-ing that DSDR preserves optimal correctness un-der bounded regularization, sustains informative learning signals in group-based optimization, and yields a principled global-to-local coupling rule. Experiments on multiple reasoning benchmarks demonstrate consistent improvements in accu-racy and pass@k, highlighting the importance of dual-scale diversity for deep exploration in RLVR. Code is available at DSDR. 
+
+> 1
+
+The Ohio State University, USA 2Case Western Reserve University, USA 3The Chinese University of Hong Kong, Hong Kong 4Macquarie University, Australia 5University of Michigan, USA 6The University of Hong Kong, Hong Kong 7University College London, UK. Correspondence to: Zhongwei Wan 
+
+<wan.512@osu.edu >, Mi Zhang <mizhang.1@osu.edu >.
+
+Preprint. February 24, 2026. 
+
+## 1. Introduction 
+
+Reinforcement learning with verified reward (RLVR) (Liu et al., 2024; Shao et al., 2024) has recently emerged as a powerful paradigm for enhancing the reasoning capabilities of LLMs. Group-based policy optimization methods, such as GRPO (Guo et al., 2025), further improve training sta-bility by exploiting relative comparisons among sampled solutions, making RLVR practical at scale. By leveraging outcome-based supervision rather than token-level imitation, RLVR has enabled substantial improvements in math and code reasoning, logical inference, and multi-step problem solving, and has become a core component of recent ad-vances in reasoning-oriented LLM training (Comanici et al., 2025; Singh et al., 2025; Yang et al., 2025). Despite these successes, verified reward-maximizing RL training often exhibits limited deep exploration, even when alternative valid solution paths exist (Liu et al., 2025b; Shen, 2025; Wu et al., 2025; Chen et al., 2025a). This phenomenon is widely observed across RLVR pipelines: while models improve pass@1 accuracy, they often do so by concentrat-ing probability mass on a small set of homogeneous rea-soning patterns, leading to a collapse in solution diversity. Consequently, pass@k performance fails to improve and generalization deteriorates, especially when models are eval-uated on out-of-domain or more compositional reasoning tasks (Walder & Karkhanis, 2025; Jiang et al., 2025). A natural response is to encourage diversified exploration during training, yet existing methods remain insufficient. Entropy regularization (Shen, 2025; Chen et al., 2025c; Agarwal et al., 2025), widely used in RL and RLVR, injects token-level stochasticity but mainly induces local random-ness and fails to promote distinct reasoning paths. Con-versely, recent diversity-driven methods (Zhang et al., 2025; Chen et al., 2025b; Li et al., 2025; Hu et al., 2025) en-courage variation among generated solutions, sometimes with quality or correctness constraints. However, these ap-proaches are typically single-scale or weakly coupled across scales: token-level entropy or uncertainty control induces lo-cal stochasticity and rarely sustains distinct reasoning trajec-tories, while trajectory-level diversity alone fails to prevent intra-mode entropy collapse once a few correct templates dominate. Consequently, policies may still prematurely con-1
+
+> arXiv:2602.19895v1 [cs.LG] 23 Feb 2026
+
+DSDR: Dual-Scale Diversity Regularization for Exploration in LLM Reasoning Mean Token -level Entropy                                 
+
+> T1 T2 T3 ... Tn
+> T1 T2 T3 ... Tn
+> T1 T2 T3 ... Tn
+> T1 T2 T3 ... Tn
+> Diversity Exploration
+> Diversity Exploration
+> JDSDR
+> d₁
+> d₂
+> d₃
+> Mean Token -level Entropy
+> Coupling Weight
+> T1 T2 T3 ... Tn
+> T1 T2 T3 ... Tn
+> T1 T2 T3 ... Tn
+> T1 T2 T3 ... Tn
+> Diversified Exploration
+> Diversified Exploration
+> JDSDR
+> d₁
+> d₂
+> d₃
+> Hₙ: Mean Token -level Entropy
+> Wₙ: Coupling Weight
+> The dashed box represents
+> diversified explorations of
+> problem -solving steps.
+> Different Solving Steps Baseline Exploration
+> Correct Solution
+> Incorrect Solution
+> Solution Space DSDR Exploration
+> Correct Solution
+> Incorrect Solution
+> Solution Space
+
+Figure 1. (Left ): global-to-local coupling for enhanced exploration during RL training. ( Right ): baseline exploration collapses to local suboptimal solutions, while DSDR promotes diverse trajectories that escape local optima and reach the correct solution space. 
+
+centrate on a small set of correct reasoning modes, and in group-normalized RLVR this concentration weakens within-group preference signals as verifier rewards become nearly constant. The core tension between deep exploration and correctness therefore remains unresolved, requiring explo-ration to be correctness-aligned and explicitly coordinated across both trajectory- and token-scales. This motivates a dual-scale formulation of exploration for LLM reasoning. (i) At the global level, exploration re-quires discovering and maintaining multiple distinct reason-ing modes, corresponding to different solution paths. (ii) At the local level, exploration requires preventing prema-ture entropy collapse (Cui et al., 2025; Shen, 2025) within each mode, so that correct trajectories remain robust and expressive rather than brittle or over-confident. Crucially, these two forms of diversity are complementary and can be jointly optimized rather than treated in isolation, since not all correct modes are equally valuable for further exploration, motivating a mechanism that allocates local regularization based on global distinctiveness. Building on this insight, we propose DSDR , a Dual-Scale 
+
+Diversity Regularization framework for RL-based LLM rea-soning. DSDR integrates global diversity regularization over correct reasoning trajectories with a length-invariant, token-level entropy term applied exclusively to correct solu-tions. As illustrated in Figure 1, these two scales are cou-pled through a global-to-local allocation mechanism, which prioritizes local regularization for more distinctive correct trajectories. Additionally, this coupling prevents exploration from collapsing into narrow, locally suboptimal reasoning templates, instead promoting diverse trajectories that escape local optima and expand the correct solution space. We further provide theoretical support for DSDR, showing that bounded positive-only local entropy preserves optimal cor-rectness, while correct-only global shaping prevents signal degeneracy in group-normalized optimization. We also jus-tify the global-to-local softmax coupling from a principled objective view, explaining why dual-scale diversity strength-ens learning signals. Extensive experiments across multiple reasoning benchmarks demonstrate that DSDR consistently improves accuracy, pass@k performance, and training sta-bility, highlighting the importance of principled dual-scale diversity for deep exploration in RLVR. Our main contribu-tions are summarized as follows: • We introduce a dual-scale perspective on exploration in LLM reasoning, explicitly distinguishing global (inter-mode) and local (intra-mode) diversity and clarifying their complementary roles in RLVR. • We propose DSDR, a correctness-aligned dual-scale diver-sity regularization framework that couples global diversity with positive-only, length-invariant local entropy through a global-to-local allocation mechanism. • We provide theoretical support for correctness preserva-tion and signal preservation in group-normalized RLVR, together with a principled interpretation of the global-to-local coupling, validated by consistent empirical gains. 
+
+## 2. Related Work 
+
+RLVR and Exploration in LLMs. Reinforcement learning with verifiable rewards (RLVR) has become a prominent approach for improving LLM reasoning (Cobbe et al., 2021; Singh et al., 2025; Guo et al., 2025). While this training can elicit emergent reasoning behaviors such as verifica-tion and self-reflection (Gandhi et al., 2025; Wan et al., 2025), it often suffers from limited exploration, where poli-cies converge early to a narrow set of reasoning patterns, resulting in performance plateaus. To mitigate this issue, prior work has explored a range of exploration-enhancing strategies, including increasing policy stochasticity through entropy regularization or temperature adjustment (Hou et al., 2025), modifying optimization objectives via relaxed clip-ping or pass@k-based rewards (Yu et al., 2025; Chen et al., 2025c), and intervening in rollout dynamics to encourage mode switching, such as the sample-then-forget mecha-nism (Chen et al., 2025a). While these approaches im-prove exploration from different angles, they either rely on unstructured randomness, objective-level relaxation, or rollout-level interventions, and do not explicitly model how exploration should be coordinated across different scales of reasoning. Instead, our work attempt to address exploration 2DSDR: Dual-Scale Diversity Regularization for Exploration in LLM Reasoning z₁ z₂ ...  z₁      
+
+> z₁
+> z₂
+> zₘ
+> d₂
+> ...
+> d₂... dᵐ
+> ...
+> ₁
+> dᵐ₂
+> dₘ
+> ₂
+> dₘ
+> ₁
+> ₁
+> ₁
+> i≠j
+> ∑dʲᵢ=
+> d₂
+> d₃
+> dₘ
+> ⋅λ+
+> Correct -Only Global Diversity
+> J
+> Problem Input
+> Consider a particle starting at vertex
+> (0,0,0) of a unit cube. At each step,
+> the particle moves to a randomly
+> chosen adjacent vertex with equal
+> probability (1/3). What is the
+> expected number of steps required
+> for the particle to first reach the
+> opposite vertex (1,1,1)?
+> Policy Update
+> base
+> r₁
+> base
+> r₂
+> base
+> r₃
+> base
+> rₙ
+> Global -to -Local Coupling
+> DSDR
+> Policy Loss GRPO J
+> Local Pos -sample Entropy
+> Regularization
+> JLocal
+> Mean Token -level Entropy
+
+×
+
+> d₁
+> Softmax
+
+Figure 2. DSDR training pipeline for dual-scale exploration in RL. Correct-only global diversity promotes exploration across solution modes, while a global-to-local coupling mechanism allocates length-invariant local entropy regularization to distinctive correct trajectories. Both signals are integrated into policy updates to enable deep exploration without sacrificing correctness. 
+
+limitations by structuring diversity directly within policy optimization across global-to-local scales, enabling deep exploration without modifying rollout procedures. 
+
+Diversity and Entropy Control for LLM Reasoning. Re-cent studies have explored promoting diversity in LLM reasoning by manipulating uncertainty at different levels of the policy. Token-level methods selectively encourage stochastic actions through entropy bonuses, clipping, or KL constraints (Cui et al., 2025; Liu et al., 2025a; Yu et al., 2025; Agarwal et al., 2025; Shen, 2025; Yao et al., 2025), which can alleviate premature collapse but primarily operate at a local action level. While effective in increasing short-term randomness, these methods do not explicitly encourage diversity across complete reasoning trajectories. More re-cent approaches consider diversity at a global level. Chen et al. (2025c) and Walder & Karkhanis (2025) leverage pass@k as a training signal to encourage multiple candidate solutions, while, in a concurrent work, Cui et al. (2025) train a partitioning classifier to measure and amplify di-versity in the advantage function. Closely related, some approaches (Chen et al., 2025b; Li et al., 2025; Hu et al., 2025) promotes global diversity among candidate solutions to improve deep exploration. However, above methods treat global and local diversity signals largely independently and do not specify how diversity at different scales should in-teract during optimization. In contrast, DSDR explicitly decomposes diversity into global and local components and couples them through a global-to-local allocation mecha-nism, which adaptively concentrates local entropy regular-ization on more distinctive correct reasoning trajectories. 
+
+## 3. Methodology 
+
+3.1. Preliminaries 
+
+We briefly review Group Relative Policy Optimization (GRPO) (Guo et al., 2025), which serves as the optimization backbone for reinforcement learning with verifiable rewards (RLVR) in reasoning tasks. Given an input prompt q, a policy πθ generates an output sequence o = ( o1, . . . , o T )
+
+following autoregressive factorization 
+
+πθ (o | q) = 
+
+> T
+
+Y
+
+> t=1
+
+πθ (ot | q, o <t ). (1) A verifier provides a scalar reward r = R(q, o ) for the completed sequence, which is typically binary for verifiable reasoning tasks. GRPO samples a group of G candidate outputs {oi}Gi=1 from a lagged behavior policy πθold and computes rewards {ri}Gi=1 . To obtain a group-relative learn-ing signal, rewards are normalized within each group to form advantages. Specifically, the advantage Ai for each response is computed as 
+
+Ai = ri − mean( r1, r 2, . . . , r G)std( r1, r 2, . . . , r G) , (2) where {ri}Gi=1 are rewards from the group and std( ·) de-notes the standard deviation with a small constant added for numerical stability. Optimization is performed using a PPO-style clipped surrogate objective at the token level. Let 
+
+Ti denote the length of oi, and define the token-wise im-portance ratio ρi,t = πθ (oi,t | q, o i,<t )/π θold (oi,t | q, o i,<t ).3DSDR: Dual-Scale Diversity Regularization for Exploration in LLM Reasoning 
+
+The GRPO objective is then given by 
+
+JGRPO (θ) = Eq
+
+h 1
+
+> GG
+
+X
+
+> i=1 1
+> Ti
+> Ti
+
+X
+
+> t=1
+
+min  ρi,t Ai,
+
+clip( ρi,t , 1 − ϵc, 1 + ϵc) Ai
+
+i
+
+− β D KL (πθ (· | q) ∥ πref (· | q)) .
+
+(3) where ϵc denotes the clipping threshold, β controls the KL regularization strength, and πref is a fixed reference policy. GRPO leverages relative comparisons within each group to stabilize optimization, but its learning signal critically depends on reward variation across sampled trajectories. 
+
+3.2. DSDR: Dual-Scale Diversity Regularization 
+
+We adopt the group-based RLVR training protocol defined earlier: for each prompt q, we sample a group of G roll-outs {oi}Gi=1 ∼ πθold (· | q) and obtain verifiable rewards 
+
+ri ∈ { 0, 1}. DSDR augments the backbone with two di-versity regularizers that operate at different scales and are explicitly coupled, as shown in Figure 2. At the global (trajectory) scale , DSDR assigns extra credit to correct so-lutions that are more distinct within the group, which keeps the learning signal informative even when many rollouts are correct and prevents premature convergence to a single reasoning template. At the local (token) scale , DSDR en-courages controlled entropy along positive trajectories to avoid the typical correct-mode collapse where the model becomes highly confident token-by-token and loses nearby correct variants. The coupling is key: global distinctiveness determines where local entropy should be strongest, so lo-cal regularization expands probability mass around unique correct paths rather than uniformly perturbing all positives. 3.2.1. G LOBAL -S CALE DIVERSITY SIGNALS 
+
+For each rollout oi in a group {o1, . . . , o G}, we compute a bounded per-response diversity score d(oi) ∈ [0 , 1] . The design goal is pragmatic: (i) it should reflect trajectory-level 
+
+differences (not merely token noise), (ii) it should be cheap 
+
+relative to rollout generation, and (iii) it should be well-scaled so it can be safely mixed into RLVR rewards without dominating correctness. We use two coupling signals. 
+
+Semantic Level. Let fϕ be a frozen text encoder that maps a full response oi to a vector zi ∈ Rd. We normalize em-beddings so that cosine similarity becomes a stable inner product: 
+
+zi = fϕ(oi), ¯zi = zi
+
+∥zi∥2
+
+. (4) Given two responses oi, o j , we define their embedding dis-similarity via cosine distance. We scale it into [0 , 1] to make it numerically comparable with other bounded components: 
+
+˜demb (oi, o j ) = 1 − ¯z⊤ 
+
+> i
+
+¯zj
+
+2 ∈ [0 , 1] . (5) The intuition is simple: if two responses encode similar reasoning semantics, their embeddings align and ˜demb is small; if they represent different solution directions, similar-ity drops and the distance increases. To turn pairwise dis-tances into a per-response score, we use the group-average dissimilarity: 
+
+Demb (oi) = 1
+
+G − 1
+
+X 
+
+> j̸=i
+
+˜demb (oi, o j ). (6) This aggregation matters for optimization stability. A single most different neighbor can be noisy; averaging across G−1
+
+comparisons yields a smoother signal that is less sensitive to an outlier rollout. Computationally, Eq. (6) is efficient: with ¯Z = [¯ z1, . . . , ¯zG] ∈ RG×d, all pairwise similarities are obtained via a single matrix product ¯Z ¯Z⊤ followed by an elementwise transform. 
+
+Formula Level. Semantic similarity alone can miss an important axis of reasoning variation in math tasks: two solutions may appear similar at the surface level while rely-ing on different symbolic manipulations, or vice versa. To capture this aspect, we introduce an Formula-level unique-ness signal, following the prior work (Wu et al., 2024; Chen et al., 2025b; Hu et al., 2025) while adopting a formulation aligned with our group-based setting. Let S(oi) denote the set of extracted mathematical expressions appearing in re-sponse oi. For each formula f ∈ S(oi), we define a binary indicator that measures whether f is unique relative to the rest of the group: 
+
+Iuniq (f, o i) = 1
+
+f / ∈ [ 
+
+> j̸=i
+
+S(oj )
+
+ . (7) The equational diversity of response oi is then computed as the average uniqueness of its constituent formulas: 
+
+Deq (oi) = 
+
+
+
+1
+
+|S(oi)|
+
+P 
+
+> f∈S(oi)
+
+Iuniq (f, o i), |S(oi)| > 0,
+
+0, otherwise .
+
+(8) This definition is intentionally conservative: responses that contain no detectable formulas contribute no equational novelty. When formulas are present, the averaging form encourages structural diversity in symbolic reasoning while remaining invariant to non-mathematical paraphrasing. 
+
+Combined Global Diversity. Both components are bounded in [0 , 1] , so we combine them into a single global diversity score by simple averaging: 
+
+d(oi) = 12
+
+ Demb (oi) + Deq (oi). (9) This combination yields a bounded and well-scaled scalar signal for reward shaping across diverse reasoning tasks. 4DSDR: Dual-Scale Diversity Regularization for Exploration in LLM Reasoning 
+
+The embedding-based component captures trajectory-level semantic differences broadly. while the equation-based com-ponent provides a complementary, paraphrase-robust notion of novelty when symbolic manipulations are present. 
+
+Correct-Only Global Diversity Reward. We incorporate global-level diversity into RLVR only when it is consistent with the task objective. In particular, we avoid the fail-ure case where responses are rewarded for being different despite incorrect reasoning. Accordingly, DSDR applies diversity shaping exclusively to positive rollouts and explic-itly limits its influence. To prevent reward hacking (Pan et al., 2022) and avoid the diversity signal overpowering correctness, we apply a clipped technique (Sullivan et al., 2023; Li et al., 2023) only to correct rollouts and define the augmented reward as 
+
+˜ri = ri+λd ¯di·1(ri = 1) , ¯di = clip( d(oi); 0 , σ d) . (10) Where λd ≥ 0 controls the bonus strength and σd bounds the contribution of the diversity term. Equation (10) ad-dresses a concrete optimization issue in group-relative meth-ods: when many rollouts are correct, verifier rewards can become nearly constant within a group, shrinking reward variance and weakening within-group preference gradients. By introducing controlled dispersion among correct solu-tions, DSDR preserves a meaningful learning signal that differentiates alternative correct trajectories without creat-ing incentives to explore incorrect ones. A formal statement and proof are provided in Appendix C.4. 3.2.2. G LOBAL -TO -L OCAL COUPLING OVER CORRECT 
+
+TRAJECTORIES 
+
+Global diversity should not only determine which correct solutions are reinforced, but also where local entropy regu-larization is most effective. Intuitively, if a correct trajectory is already redundant within the group, expanding its neigh-borhood adds little coverage. In contrast, when a trajectory is globally distinctive, local expansion around it helps popu-late underexplored regions of the correct solution manifold. Let P = {i ∈ [G] | ri = 1 } denote the set of correct rollouts. We allocate local regularization strength via a diversity-weighted softmax over correct responses: 
+
+wi =
+
+
+
+exp( τ ¯di)
+
+P 
+
+> j∈P
+
+exp( τ ¯dj ) , i ∈ P ,
+
+0, i / ∈ P ,
+
+(11) where τ > 0 is a temperature parameter. This construction defines a probability distribution over correct rollouts (i.e., P 
+
+> i
+
+wi = 1 when P̸ = ∅). As τ increases, the allocation concentrates on the most globally distinctive correct solu-tions; as τ → 0, it reduces to uniform weighting across correct solutions. This allocation view unifies DSDR’s dual-scale regularization: global diversity measures inter-trajectory novelty, while local entropy concentrates explo-ration within trajectories where novelty is highest. Theo-retically, this diversity-softmax coupling can be derived as the self-normalized policy-gradient weighting induced by a correct-only, diversity-tilted objective, as claimed in Theo-rem 3.1 and Appendix C.6. A further principled optimality analysis of this softmax allocation is given in Appendix C.5. 3.2.3. L OCAL POSITIVE -S AMPLE REGULARIZATION 
+
+A direct way to promote diversity is to encourage high entropy in the model’s output distribution. However, for long-form generation, response-level entropy is confounded by length: longer outputs naturally accumulate more token-level uncertainty, so higher entropy may partially reflect more tokens. DSDR instead adopts token-level condi-tional entropy , averaged over timesteps (Agarwal et al., 2025; Cui et al., 2025), so that the objective measures per-step uncertainty rather than length accumulation. Let 
+
+o = ( o1, . . . , o T ) ∼ πθold (· | q). We start from the time-averaged conditional entropy: 
+
+Jent (θ) = Eq, o ∼πθold (·| q)
+
+"
+
+1
+
+T
+
+> T
+
+X
+
+> t=1
+
+H(πθ (· | q, o <t )) 
+
+#
+
+.
+
+(12) Using H(π) = −Ea∼π [log π(a)] , each entropy term can be written as an expectation of log πθ (·). The remaining practical issue is that rollouts are sampled from πθold , while the inner expectation is taken under πθ . We therefore re-express the inner expectation using standard importance sampling (Precup et al., 2000; Sheng et al., 2025b; Yao et al., 2025), allowing it to be estimated from the observed tokens ot without resampling: 
+
+Ea∼πθ (·| s)[g(a)] = Ea∼πθold (·| s)
+
+ πθ (a | s)
+
+πθold (a | s) g(a)
+
+
+
+.
+
+(13) Applied at each timestep with s = ( q, o <t ) and g(a) = log πθ (a | s), this yields a tractable surrogate objec-tive that is differentiable with respect to θ while reusing group-sampled rollouts. For each group rollout oi =(oi, 1, . . . , o i,T i ), we define the per-token importance ratio: 
+
+ρi,t = πθ (oi,t | q, o i,<t )
+
+πθold (oi,t | q, o i,<t ) . (14) DSDR then defines the local objective as 
+
+Jlocal (θ) = E
+
+"
+
+−
+
+> G
+
+X
+
+> i=1
+
+1(ri = 1) wi
+
+1
+
+TiTiX
+
+> t=1
+
+ρi,t g(oi,t )
+
+#
+
+,
+
+(15) where g(a) = log πθ (a | q, o <t ). The formulation reflects three deliberate choices. Time averaging removes incen-tives to increase length solely to amplify the regularizer, 5DSDR: Dual-Scale Diversity Regularization for Exploration in LLM Reasoning 
+
+yielding a per-decision signal. Restricting the objective to correct rollouts ensures that local entropy refines correct trajectories rather than encouraging noise on incorrect ones. The allocation weight wi couples local and global scales, so globally distinctive solutions receive stronger local regular-ization, focusing exploration on underrepresented reasoning modes. Furthermore, an information-theoretic decomposi-tion and correctness-preservation guarantee under bounded local regularization are given in Appendix C.2. 3.2.4. DSDR O BJECTIVE 
+
+Let JGRPO (θ; ˜ r) denote the group-relative policy optimiza-tion objective defined earlier, computed using the aug-mented rewards ˜ri from Eq. (10) when forming group ad-vantages. DSDR optimizes 
+
+JDSDR (θ) = JGRPO (θ; ˜ r) + λℓ Jlocal (θ), (16) where λℓ ≥ 0 controls the strength of local regulariza-tion. Eq. (16) makes the dual-scale structure explicit: the global term induces preferences among correct trajectories, while the local term mitigates token-level collapse around them, jointly enabling broad exploration with stable behav-ior within the correct set. 
+
+Theorem 3.1 (Diversity-tilted policy gradient induces DSDR global-to-local softmax coupling) . Fix a prompt 
+
+q. Let ¯d(q, o ) ∈ [0 , σ d] denote a bounded (clipped) global diversity score for a completed rollout o (e.g., Eq. (10) ), and let R(q, o ) ∈ { 0, 1} be the verifiable reward. For τ > 0,define the correct-only diversity-tilted objective 
+
+Jτ (θ; q) = 1
+
+τ log Zτ (θ; q),Zτ (θ; q) = Eo∼πθ (·| q)
+
+exp  τ ¯d(q, o ) 1(R(q, o ) = 1)  .
+
+(17) 
+
+Assume Zτ (θ; q) > 0. Then the policy gradient of Jτ admits the form 
+
+∇θ Jτ (θ; q) = Eo∼πθ (·| q)
+
+Aθτ (q, o ) ∇θ log πθ (o | q) ,
+
+(18) 
+
+where the diversity-tilted advantage is 
+
+Aθτ (q, o ) = 1
+
+τ
+
+exp  τ ¯d(q, o ) 1(R(q, o ) = 1) 
+
+Zτ (θ; q) − 1
+
+!
+
+.
+
+(19) 
+
+Moreover, given i.i.d. rollouts {oi}Gi=1 ∼ πθ (· | q) with rewards ri = R(q, o i), the self-normalized Monte Carlo form of (18) assigns weights 
+
+ˆwi = exp( τ ¯di) 1(ri = 1) 
+
+PGj=1 exp( τ ¯dj ) 1(rj = 1) , (20) 
+
+which reduces to a diversity-softmax over correct rollouts: 
+
+ˆwi ∝ exp( τ ¯di) on P = {i : ri = 1 }, matching DSDR’s coupling rule in Eq. (11) .
+
+## 4. Experiments 
+
+4.1. Experiment Settings Backbone Models. For fair comparison, we conduct all ex-periments on the filtered DAPO-Math-17K (Hugging Face, 2025), which removes the duplicated samples. Training is performed on four base models with increasing capac-ity: Qwen2.5-Math-1.5B (Yang et al., 2024), Qwen3-1.7B and 4B (Yang et al., 2025). We adopt all-MiniLM-L6-v2 (Reimers & Gurevych, 2019) as a lightweight sentence encoder for extracting response embeddings. 
+
+Training Setting. We use the same training configuration for all models. The batch size is 256, with 8 rollouts per prompt during policy optimization and a learning rate of 1e-6. The maximum response length is set to 4096 for Qwen2.5-Math-1.5B and 8192 for Qwen3-1.7B and Qwen3-4B in our experiment setting. 
+
+Evaluation Setting. Evaluation is conducted on a di-verse set of mathematical reasoning benchmarks, includ-ing AIME2024 (Zhang & Math-AI, 2024) and AIME2025, MATH500 (Cobbe et al., 2021), Minerva Math (Lewkowycz et al., 2022), and Olympiad-level problems (He et al., 2024). For each benchmark, we report pass@1, computed from a single rollout per problem, and Avg@16, computed by av-eraging correctness over 16 independent rollouts. Avg@16 reflects the overall quality and stability of the model’s sam-pling distribution under a fixed sampling budget. In addition, we evaluate Pass@k for k ∈ { 2, 4, ..., 64 } by sampling 64 independent rollouts per problem. We compare our method with GRPO (Shao et al., 2024), DAPO (Yu et al., 2025) and the corresponding base models. 
+
+4.2. Main Results Overall Performance. Our main experimental results are summarized in Table 1, covering five representative math reasoning benchmarks across three model scales. Overall, DSDR consistently outperforms all compared baselines, in-cluding Backbone, GRPO, and DAPO, demonstrating robust and scalable improvements in both Pass@1 and Avg@16 accuracy. On Qwen2.5-Math-1.5B, DSDR achieves the best average performance (25.4 / 25.6), with clear gains on challenging benchmarks such as AIME24, MATH500, and Minerva, where multiple valid reasoning paths exist. These improvements suggest that DSDR better preserves informative learning signals under group-relative optimiza-tion by differentiating correct trajectories, mitigating the reward-variance collapse that arises when many rollouts are correct. The advantage of DSDR becomes more pronounced as model scale increases. On Qwen3-1.7B and Qwen3-4B, DSDR achieves 36.8 / 36.8 and 48.0 / 46.8 average perfor-mance respectively, substantially outperforming both GRPO and DAPO at each scale, with especially large margins on AIME24 and AIME25. Importantly, DSDR consistently 6DSDR: Dual-Scale Diversity Regularization for Exploration in LLM Reasoning                                                                                                                                               
+
+> Table 1. Results on different reasoning benchmarks. We report Pass@1 and Avg@16 (%) accuracy across different model scales. DSDR consistently outperforms Backbone, GRPO, and DAPO across most benchmarks and achieves the best average performance. Ablation results (w/o GD, w/o GC) show consistent performance drops, suggesting that both global diversity (GD) and global-to-local coupling (GC) regularization play important roles in DSDR.
+> Models AIME24 AIME25 MATH500 Minerva Olympiad Average Qwen2.5-math-1.5B , Max Response Length = 4K tokens Backbone 10.0 / 3.0 3.3 / 3.0 27.4 / 21.0 5.9 / 3.9 13.1 / 9.9 11.9 / 8.2 GRPO 16.7 / 15.2 3.5 / 8.5 57.8 / 58.3 14.0 / 15.0 24.0 / 22.9 23.2 / 24.0 DAPO 13.3 / 14.4 6.7 / 6.3 54.8 / 55.3 15.8 / 15.2 22.7 / 21.4 22.7 / 22.5
+> DSDR 20.0 /18.8 6.7 / 10.2 59.0 / 57.5 18.0 /18.0 23.1 / 23.7 25.4 /25.6 Qwen3-1.7B , Max Response Length = 8K tokens Backbone 13.3 / 10.6 10.0 / 7.3 57.6 / 56.5 17.3 / 17.5 23.7 / 25.3 24.4 / 23.4 GRPO 16.7 / 21.0 20.0 / 15.8 57.4 / 60.7 18.4 / 19.9 29.5 / 31.2 28.4 / 29.7 DAPO 20.0 / 20.4 10.0 / 21.0 63.8 / 64.0 21.3 / 22.3 32.9 / 32.9 29.6 / 32.1
+> DSDR 36.7 /32.1 23.2 / 27.3 64.4 /65.4 23.3 / 23.4 36.4 / 36.0 36.8 /36.8
+> w/o GD 23.3 / 20.6 13.3/ 19.0 61.6 / 63.5 20.6 / 21.4 29.8 / 32.5 29.7 / 31.4 w/o GC 30.0 / 26.5 23.3 / 24.0 63.0 / 64.6 23.5 / 23.4 35.9/ 36.1 35.1 / 34.9
+> Qwen3-4B , Max Response Length = 8K tokens Backbone 13.33 / 20.63 16.67 / 16.04 64.8 / 65.75 26.10 / 24.61 32.79 / 32.69 30.74 / 31.94 GRPO 36.67 / 37.50 33.33 / 35.21 64.0 / 63.83 25.00 / 23.62 37.54 / 37.70 39.31 / 39.57 DAPO 33.33 / 38.38 40.00 / 33.13 59.0 / 62.74 25.74 / 27.37 36.65 / 39.42 38.94 / 40.21
+> DSDR 56.67 /52.08 50.00 /46.46 66.2 /66.18 26.84 /27.87 40.36 /42.43 48.01 /46.80
+> w/o GD 46.67 / 45.00 43.33 / 40.42 63.6 / 64.74 26.47 / 27.44 40.65 / 41.20 44.14 / 43.76 w/o GC 26.67 / 44.38 23.33 / 35.63 58.0 / 62.78 20.21 / 24.59 33.98 / 40.60 32.04 / 41.20
+
+improves Avg@16 alongside Pass@1, indicating that the gains are not driven by occasional lucky samples but by systematically expanding the diversity of correct reasoning trajectories. Across scales, by promoting exploration ex-clusively within the correct solution space, DSDR enables more effective and stable exploration in RL-based LLM reasoning, leading to consistent and scalable performance gains. 
+
+Performance on Pass@k Evaluation. Figure 3 presents the pass@k performance for k ∈ { 2, 4, ..., 64 } across our method, DAPO and the base model Qwen3-1.7B, qwen3-4B on five benchmarks. Overall, DSDR consistently outper-forms the base model and DAPO across a wide range of k, with the most pronounced gains observed on AIME2024, AIME2025, and Olympiad. On these benchmarks, the per-formance gap between DSDR and the baselines continues to widen as k increases, indicating that DSDR effectively expands the set of correct reasoning trajectories rather than merely sharpening a single dominant solution. On Min-erva, where baseline pass@k values are relatively low and correct solutions are sparse, the absolute gains are more modest; nevertheless, DSDR maintains a consistent advan-tage over both the base model and DAPO across k, suggest-ing improved exploration even in low-reward regimes. On MATH500, where baseline accuracy is already high, DSDR delivers stable improvements across all k without satura-tion or degradation at large k. Importantly, DSDR does not exhibit performance drop-offs at high k, highlighting its ability to promote exploration within the correct solution space rather than drifting toward noisy or incorrect samples. These results demonstrate that DSDR yields more reliable and scalable improvements in pass@k. 
+
+4.3. Ablation Study 
+
+We conduct ablation studies on Qwen3-1.7B and 4B. Table 1 reports Avg@16 and Pass@1 for variants without global diversity (GD) and without global-to-local coupling (GC). Removing global diversity causes a clear drop in average performance across benchmarks and model sizes (1.7B and 4B), indicating that trajectory-level diversity is necessary to preserve informative learning signals when many rollouts are correct and verifier rewards saturate. Removing global-to-local coupling also degrades performance, with larger drops on AIME and Olympiad, where discovering multiple valid reasoning strategies is critical. This shows that local entropy alone is insufficient; instead, local regularization must be guided by global distinctiveness to expand under-explored correct trajectories. Overall, the ablations confirm that GD and GC are complementary: GD differentiates cor-rect solutions at the trajectory level, while GC focuses local exploration, jointly enabling the consistent gains of DSDR. 7DSDR: Dual-Scale Diversity Regularization for Exploration in LLM Reasoning 21 22 23 24 25 26                                             
+
+> 0.30
+> 0.35
+> 0.40
+> 0.45
+> Qwen3-1.7B
+> Pass@k
+> Olympiad
+> 212223242526
+> 0.20
+> 0.25
+> 0.30
+> 0.35
+> MINERVA
+> 212223242526
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> AIME2024
+> 212223242526
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> AIME2025
+> 212223242526
+> 0.625
+> 0.650
+> 0.675
+> 0.700
+> 0.725
+> 0.750
+> 0.775
+> MATH500
+> 212223242526
+> 0.375
+> 0.400
+> 0.425
+> 0.450
+> 0.475
+> 0.500
+> Qwen3-4B
+> Pass@k
+> 212223242526
+> 0.28
+> 0.30
+> 0.32
+> 0.34
+> 0.36
+> 0.38
+> 212223242526
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> 0.8
+> 212223242526
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> 212223242526
+> 0.650
+> 0.675
+> 0.700
+> 0.725
+> 0.750
+> 0.775
+
+Base DAPO DSDR 
+
+Figure 3. Pass@k performance across five benchmarks for both Qwen3-1.7B and Qwen3-4B. The Base models serve as backbones. DSDR consistently outperforms both the Base models and DAPO across all values of k.. 0 20 40 60 80 100 
+
+> Steps
+> 0.12
+> 0.15
+> 0.18
+> 0.20
+> 0.23
+> 0.25
+> 0.28
+> 0.30
+> Avg@16
+
+AIME2024 Avg@16      
+
+> 020 40 60 80 100
+> Steps
+> 0.00
+> 1.00
+> 2.00
+> 3.00
+> 4.00
+> 5.00
+> 6.00
+> 7.00
+> Entropy
+
+Entropy      
+
+> 020 40 60 80 100
+> Steps
+> 0.398
+> 0.400
+> 0.402
+> 0.404
+> 0.406
+> 0.408
+> 0.410
+> Semantic Similarity
+
+Semantic Level      
+
+> 020 40 60 80 100
+> Steps
+> 0.70
+> 0.72
+> 0.74
+> 0.76
+> 0.78
+> Formula Similarity
+
+Formula Level        
+
+> 50 60 70 80
+> GRPO DSDR DSDR w/o GD DSDR w/o GC DAPO
+
+Figure 4. Training dynamics across methods conducted on Qwen3-1.7 model. From left to right, we report AIME2024 Avg@16, policy entropy, semantic-level diversity similarity, and formula-level diversity similarity. Results are shown for GRPO, DSDR, DSDR w/o GD, DSDR w/o GC, and DAPO. Minverva Olympiadbench AIME2025 AIME2024      
+
+> 0.0
+> 0.5
+> 1.0
+> 1.5
+> 2.0
+> 2.5
+> 3.0
+> 3.5
+> Diversity (0 10)
+> 2.53
+> 2.28 2.25
+> 2.83
+> 3.35 3.28
+> 2.42
+> 3.35
+> DAPO Diversity DSDR Diversity DAPO pass@32 DSDR pass@32
+> 0.35
+> 0.40
+> 0.45
+> 0.50
+> 0.55
+> 0.60
+> pass@32
+
+Figure 5. We generate 32 test-time rollouts per problem on four benchmarks and evaluate response diversity using an LLM-as-a-Judge (1–10 scale). The figure reports diversity scores and corresponding pass@32 for DAPO and DSDR. 
+
+4.4. Training Dynamics Analysis 
+
+Figure 4 shows the training dynamics of DSDR vs. other methods. As training progresses, DSDR achieves con-sistently higher Avg@16 than GRPO and DAPO on AIME2024, indicating that DSDR improves performance while simultaneously enhancing exploration, preventing the policy from collapsing into a single dominant reasoning pattern. The entropy dynamics further highlight the role of DSDR’s dual-scale design: DSDR w/o GD exhibits a rapid and excessive increase in entropy, reflecting uncon-trolled random exploration without global diversity guid-ance, while DSDR w/o GC, which removes token-level entropy regularization, shows diminishing exploration ca-pacity in later stages as the policy becomes overly concen-trated. In contrast, GRPO and DAPO maintain relatively low and flat entropy, suggesting limited exploration. By combining correct-only global diversity (GD) with global-to-local coupling (GC), DSDR achieves a balanced entropy profile that increases exploration without instability. This effect is further reflected in the semantic- and formula-level similarity curves, where DSDR maintains lower semantic similarity and sustained symbolic diversity among rollouts 8DSDR: Dual-Scale Diversity Regularization for Exploration in LLM Reasoning 0 20 40 60 80 100 120            
+
+> Steps
+> 0.00
+> 0.05
+> 0.10
+> 0.15
+> 0.20
+> 0.25
+> Avg@16
+> Test Scores (DSDR w/o GD)
+> = 0.001( AIME 25)
+> = 0.002( AIME 25)
+> = 0.01( AIME 25)
+> = 0.001( AIME 24)
+> = 0.002( AIME 24)
+> = 0.01( AIME 24)
+> 020 40 60 80 100
+> Steps
+> 0.10
+> 0.15
+> 0.20
+> 0.25
+> 0.30
+> Avg@16
+> Test Scores (DSDR w/o GC)
+> d= 0.001( AIME 25)
+> d= 0.01( AIME 25)
+> d= 0.1( AIME 25)
+> d= 0.001( AIME 24)
+> d= 0.01( AIME 24)
+> d= 0.1( AIME 24)
+
+Figure 6. Hyperparameter sensitivity of DSDR on Qwen3-1.7B. Left: varying λℓ shows that overly large entropy regularization destabilizes training. Right: λd = 0 .001 achieves the best and most stable Avg@16 performance on AIME2024/2025. 
+
+throughout training, indicating that the model continues to explore multiple distinct reasoning trajectories while pre-serving correctness. Together, these dynamics demonstrate that DSDR enables stable and targeted exploration, prevent-ing both random drift and premature mode collapse. 
+
+4.5. Diversity Analysis 
+
+Figure 5 compares response diversity and pass@32 across four benchmarks using 32 test-time rollouts. We use GPT-5.2 (Singh et al., 2025) to evaluate the diversity, which aggregates semantic, logical, and formula-level differences, scored on a 1–10 scale. The diversity judge prompt is pro-vided in Appendix B.3. As shown in the figure, DSDR consistently produces higher diversity scores than DAPO across all datasets, indicating that its generated responses cover a broader range of reasoning strategies rather than collapsing into similar solution patterns. Importantly, these diversity gains are accompanied by higher pass@32 per-formance, demonstrating that increased diversity does not come at the cost of correctness. It indicates that by ap-plying correct-only global diversity regularization, DSDR encourages distinct correct trajectories, while the global-to-local coupling further expands locally around the most distinctive solutions instead of injecting uniform random-ness. As a result, DSDR is able to improve exploration as well as performance, yielding both higher-quality diversity and stronger pass@k performance compared to DAPO. 
+
+4.6. Hyperparameter Sensitivity of λℓ and λd
+
+We study the sensitivity of DSDR to the local coefficient λℓ
+
+and global diversity factor λd on Qwen3-1.7B (Figure 6). For λℓ ∈ { 0.001 , 0.002 , 0.01 }, moderate regularization im-proves performance, while values larger than 0.01 cause training instability and collapse, indicating that excessive entropy-driven exploration disrupts correctness-aligned op-timization. λℓ = 0 .001 yields the most stable and consis-tently strong results and is used in our main experiments. For λd, we observe that 0.001 achieves the best average performance on AIME2024 and AIME2025 with stable training dynamics, whereas larger values introduce addi-tional variance without consistent gains. We therefore adopt 
+
+λd = 0 .001 as the default setting. Overall, DSDR remains stable within a reasonable regularization range. 
+
+## 5. Conclusion 
+
+In this paper, we introduced DSDR , a correctness-aligned dual-scale diversity regularization framework for RLVR that improves exploration in LLM reasoning. DSDR promotes 
+
+global diversity among correct trajectories to sustain mul-tiple solution modes, and applies a local , length-invariant token-level entropy regularizer exclusively to correct trajec-tories to prevent intra-mode entropy collapse. A global-to-local allocation mechanism tightly couples the two scales, focusing local regularization on globally distinctive correct trajectories. Our analysis shows that bounded local regu-larization preserves correctness while correct-only global shaping maintains informative learning signals under group-based optimization. Experiments across diverse reason-ing benchmarks demonstrate consistent gains in accuracy, pass@k, and training stability, underscoring the importance of coordinating trajectory- and token-level exploration in RLVR for stable and robust policy optimization. 
+
+## 6. Impact Statements 
+
+This work introduces DSDR, a dual-scale diversity regular-ization framework for reinforcement learning with verifiable rewards (RLVR) in large language model (LLM) reasoning. By promoting correctness-aligned exploration at both tra-jectory and token levels, DSDR aims to improve reasoning robustness, stability, and sample efficiency. The proposed approach is intended to support the development of more reliable reasoning-oriented LLMs, with potential benefits for applications that require multi-step decision making and formal reasoning. 
+
+## References 
+
+Agarwal, S., Zhang, Z., Yuan, L., Han, J., and Peng, H. The unreasonable effectiveness of entropy minimization in llm reasoning. arXiv preprint arXiv:2505.15134 , 2025. Boyd, S. and Vandenberghe, L. Convex optimization . Cam-bridge university press, 2004. Chen, L., Han, X., Wang, Q., Han, B., Bai, J., Schutze, H., and Wong, K.-F. Eepo: Exploration-enhanced pol-icy optimization via sample-then-forget, 2025a. URL 
+
+https://arxiv.org/abs/2510.05837 .Chen, Y., Chakraborty, S., Wolf, L., Paschalidis, Y., and Pacchiano, A. Post-training large language mod-els for diverse high-quality responses. arXiv preprint arXiv:2509.04784 , 2025b. Chen, Z., Qin, X., Wu, Y., Ling, Y., Ye, Q., Zhao, W. X., 9DSDR: Dual-Scale Diversity Regularization for Exploration in LLM Reasoning 
+
+and Shi, G. Pass@ k training for adaptively balancing exploration and exploitation of large reasoning models. 
+
+arXiv preprint arXiv:2508.10751 , 2025c. Cobbe, K., Kosaraju, V., Bavarian, M., Chen, M., Jun, H., Kaiser, L., Plappert, M., Tworek, J., Hilton, J., Nakano, R., et al. Training verifiers to solve math word problems. 
+
+arXiv preprint arXiv:2110.14168 , 2021. Comanici, G., Bieber, E., Schaekermann, M., Pasupat, I., Sachdeva, N., Dhillon, I., Blistein, M., Ram, O., Zhang, D., Rosen, E., et al. Gemini 2.5: Pushing the frontier with advanced reasoning, multimodality, long context, and next generation agentic capabilities. arXiv preprint arXiv:2507.06261 , 2025. Cover, T. M. Elements of information theory . John Wiley & Sons, 1999. Cui, G., Zhang, Y., Chen, J., Yuan, L., Wang, Z., Zuo, Y., Li, H., Fan, Y., Chen, H., Chen, W., et al. The entropy mech-anism of reinforcement learning for reasoning language models. arXiv preprint arXiv:2505.22617 , 2025. Gandhi, K., Chakravarthy, A., Singh, A., Lile, N., and Goodman, N. D. Cognitive behaviors that enable self-improving reasoners, or, four habits of highly effective stars. arXiv preprint arXiv:2503.01307 , 2025. Guo, D., Yang, D., Zhang, H., Song, J., Wang, P., Zhu, Q., Xu, R., Zhang, R., Ma, S., Bi, X., et al. Deepseek-r1 incentivizes reasoning in llms through reinforcement learning. Nature , 645(8081):633–638, 2025. He, C., Luo, R., Bai, Y., Hu, S., Thai, Z., Shen, J., Hu, J., Han, X., Huang, Y., Zhang, Y., et al. Olympiadbench: A challenging benchmark for promoting agi with olympiad-level bilingual multimodal scientific problems. In Pro-ceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) ,pp. 3828–3850, 2024. Hou, Z., Lv, X., Lu, R., Zhang, J., Li, Y., Yao, Z., Li, J., Tang, J., and Dong, Y. Advancing language model reasoning through reinforcement learning and inference scaling. arXiv preprint arXiv:2501.11651 , 2025. Hu, Z., Zhang, S., Li, Y., Yan, J., Hu, X., Cui, L., Qu, X., Chen, C., Cheng, Y., and Wang, Z. Diversity-incentivized exploration for versatile reasoning. arXiv preprint arXiv:2509.26209 , 2025. Hugging Face. Open r1: A fully open reproduction of deepseek-r1, January 2025. URL https://github. com/huggingface/open-r1 .Jaynes, E. T. Information theory and statistical mechanics. 
+
+Physical review , 106(4):620, 1957. Jiang, Y., Huang, J., Yuan, Y., Mao, X., Yue, Y., Zhao, Q., and Yan, L. Risk-sensitive rl for alleviating explo-ration dilemmas in large language models. arXiv preprint arXiv:2509.24261 , 2025. Lewkowycz, A., Andreassen, A., Dohan, D., Dyer, E., Michalewski, H., Ramasesh, V., Slone, A., Anil, C., Schlag, I., Gutman-Solo, T., et al. Solving quantitative reasoning problems with language models. Advances in neural information processing systems , 35:3843–3857, 2022. Li, M., Zhao, X., Lee, J. H., Weber, C., and Wermter, S. Internally rewarded reinforcement learning. In In-ternational Conference on Machine Learning , pp. 20556– 20574. PMLR, 2023. Li, T., Zhang, Y., Yu, P., Saha, S., Khashabi, D., Weston, J., Lanchantin, J., and Wang, T. Jointly reinforcing diversity and quality in language model generations, 2025. URL 
+
+https://arxiv.org/abs/2509.02534 .Liu, A., Feng, B., Xue, B., Wang, B., Wu, B., Lu, C., Zhao, C., Deng, C., Zhang, C., Ruan, C., et al. Deepseek-v3 technical report. arXiv preprint arXiv:2412.19437 , 2024. Liu, J., He, C., Lin, Y., Yang, M., Shen, F., and Liu, S. Ettrl: Balancing exploration and exploitation in llm test-time reinforcement learning via entropy mechanism. arXiv preprint arXiv:2508.11356 , 2025a. Liu, M., Diao, S., Lu, X., Hu, J., Dong, X., Choi, Y., Kautz, J., and Dong, Y. Prorl: Prolonged reinforcement learning expands reasoning boundaries in large language models. 
+
+arXiv preprint arXiv:2505.24864 , 2025b. Pan, A., Bhatia, K., and Steinhardt, J. The effects of reward misspecification: Mapping and mitigating misaligned models. arXiv preprint arXiv:2201.03544 , 2022. Precup, D., Sutton, R. S., and Singh, S. Eligibility traces for off-policy policy evaluation. 2000. Reimers, N. and Gurevych, I. Sentence-bert: Sentence embeddings using siamese bert-networks. arXiv preprint arXiv:1908.10084 , 2019. Schulman, J., Wolski, F., Dhariwal, P., Radford, A., and Klimov, O. Proximal policy optimization algorithms. 
+
+arXiv preprint arXiv:1707.06347 , 2017. Shao, Z., Wang, P., Zhu, Q., Xu, R., Song, J., Bi, X., Zhang, H., Zhang, M., Li, Y., Wu, Y., et al. Deepseekmath: Push-ing the limits of mathematical reasoning in open language models. arXiv preprint arXiv:2402.03300 , 2024. Shen, H. On entropy control in llm-rl algorithms. arXiv preprint arXiv:2509.03493 , 2025. 10 DSDR: Dual-Scale Diversity Regularization for Exploration in LLM Reasoning 
+
+Sheng, G., Zhang, C., Ye, Z., Wu, X., Zhang, W., Zhang, R., Peng, Y., Lin, H., and Wu, C. Hybridflow: A flexible and efficient rlhf framework. In Proceedings of the Twentieth European Conference on Computer Systems , pp. 1279– 1297, 2025a. Sheng, Y., Huang, Y., Liu, S., Zhang, H., and Zeng, A. Espo: Entropy importance sampling policy optimization. arXiv preprint arXiv:2512.00499 , 2025b. Singh, A., Fry, A., Perelman, A., Tart, A., Ganesh, A., El-Kishky, A., McLaughlin, A., Low, A., Ostrow, A., Ananthram, A., et al. Openai gpt-5 system card. arXiv preprint arXiv:2601.03267 , 2025. Sullivan, R., Kumar, A., Huang, S., Dickerson, J., and Suarez, J. Reward scale robustness for proximal policy optimization via dreamerv3 tricks. Advances in Neural Information Processing Systems , 36:1352–1362, 2023. Sutton, R. S., McAllester, D., Singh, S., and Mansour, Y. Policy gradient methods for reinforcement learning with function approximation. Advances in neural information processing systems , 12, 1999. Walder, C. and Karkhanis, D. Pass@ k policy optimization: Solving harder reinforcement learning problems. arXiv preprint arXiv:2505.15201 , 2025. Wan, Z., Dou, Z., Liu, C., Zhang, Y., Cui, D., Zhao, Q., Shen, H., Xiong, J., Xin, Y., Jiang, Y., et al. Srpo: En-hancing multimodal llm reasoning via reflection-aware reinforcement learning. arXiv preprint arXiv:2506.01713 ,2025. Williams, R. J. Simple statistical gradient-following algo-rithms for connectionist reinforcement learning. Machine learning , 8(3):229–256, 1992. Wu, F., Xuan, W., Lu, X., Liu, M., Dong, Y., Harchaoui, Z., and Choi, Y. The invisible leash: Why rlvr may or may not escape its origin. arXiv preprint arXiv:2507.14843 ,2025. Wu, T., Li, X., and Liu, P. Progress or regress? self-improvement reversal in post-training. arXiv preprint arXiv:2407.05013 , 2024. Yang, A., Zhang, B., Hui, B., Gao, B., Yu, B., Li, C., Liu, D., Tu, J., Zhou, J., Lin, J., et al. Qwen2. 5-math techni-cal report: Toward mathematical expert model via self-improvement. arXiv preprint arXiv:2409.12122 , 2024. Yang, A., Li, A., Yang, B., Zhang, B., Hui, B., Zheng, B., Yu, B., Gao, C., Huang, C., Lv, C., et al. Qwen3 technical report. arXiv preprint arXiv:2505.09388 , 2025. Yao, J., Cheng, R., Wu, X., Wu, J., and Tan, K. C. Diversity-aware policy optimization for large language model rea-soning. arXiv preprint arXiv:2505.23433 , 2025. Yu, Q., Zhang, Z., Zhu, R., Yuan, Y., Zuo, X., Yue, Y., Dai, W., Fan, T., Liu, G., Liu, L., et al. Dapo: An open-source llm reinforcement learning system at scale. arXiv preprint arXiv:2503.14476 , 2025. Zhang, Q., Wu, H., Zhang, C., Zhao, P., and Bian, Y. Right question is already half the answer: Fully unsu-pervised llm reasoning incentivization. arXiv preprint arXiv:2504.05812 , 2025. Zhang, Y. and Math-AI, T. American invitational mathemat-ics examination (aime) 2024, 2024. 11 DSDR: Dual-Scale Diversity Regularization for Exploration in LLM Reasoning 
+
+## A. Implementation Details 
+
+We provide more details for experiments in Section 4. We provide additional experimental details in Section 4. All models are trained using the VERL framework (Sheng et al., 2025a) and deployed on 8 × NVIDIA A100 GPUs (40GB). Table 2 and Table 3 summarize the training and evaluation hyperparameters. Unless otherwise specified, we adopt a rollout group size of n = 8 , a learning rate of 1 × 10 −6, and binary verifier rewards. We conduct hyperparameter sweeps over the global diversity scaling factor λd ∈ { 0.001 , 0.01 , 0.1}, the local regularization coefficient λℓ ∈ { 0.001 , 0.002 , 0.01 }, and the coupling temperature τ ∈ { 1, 5, 10 }. Empirically, we find that λd = 0 .001 , λℓ = 0 .001 , and τ = 5 consistently yield the best or near-best performance across benchmarks; these values are therefore used as defaults in all reported experiments.  
+
+> Table 2. Summary of training details.
+
+Training Settings 
+
+Hardware 8×A100 GPUs (40GB) Base models Qwen2.5-Math-1.5B / Qwen3-1.7B, 4B Training dataset open-r1/DAPO-Math-17K-Processed Max response length 4096 / 8192 Batch / mini-batch size 256 / 16 Rollout group size n 8Learning rate 1 × 10 −6
+
+Temperature (training) 1.0 Clip range (ϵlow , ϵ high ) (0.2, 0.28) / (0.2, 0.2) for GRPO only Reward type Binary reward Coupling temperature parameter τ {1, 5, 10 }
+
+Reward scaling factor λd {0.001 , 0.01 , 0.1}
+
+Regularization coefficient λℓ {0.001 , 0.002 , 0.01 } 
+
+> Table 3. Evaluation settings.
+
+Evaluation settings 
+
+Max response length 4096 / 8192 Top-p (eval) 0.9 Temperature (eval) 0.1 for Pass@1; 0.7 for Avg@16 
+
+## B. Additional Results 
+
+B.1. Additional Training Dynamics Analysis 
+
+As shown in figure 7, DSDR steadily improves both Avg@16 and Pass@16 over training, indicating that performance gains are accompanied by sustained exploration rather than convergence to a narrow solution mode. In contrast, GRPO and DAPO display slower growth and earlier saturation, suggesting limited ability to expand the set of correct solutions. And removing global diversity (w/o GD) results in large fluctuations in the policy-gradient loss, reflecting unstable learning when trajectory-level differentiation among correct rollouts is absent. on the other hand, without global-to-local coupling (w/o GC), leads to weaker late-stage improvements and a sharp increase in the clip ratio, indicating overly aggressive updates and reduced robustness as token-level exploration diminishes. By jointly enforcing correct-only global diversity and diversity-guided local regularization, DSDR maintains controlled updates and effective exploration throughout training, which translates into more reliable and higher final performance. 
+
+B.2. Case Study 
+
+In this section, we present generated samples during testing. One sample with 16 test-time rollouts, DSDR achieves 7 correct solutions, compared to only 2 for DAPO. We show two example responses generated by DSDR, which arrive at the correct answer through distinct reasoning processes, illustrating its ability to explore multiple valid solution paths. In contrast, we present two responses generated by DAPO, which exhibit more limited diversity. This demonstrates that DSDR 12 DSDR: Dual-Scale Diversity Regularization for Exploration in LLM Reasoning 0 20 40 60 80 100                    
+
+> Steps
+> 0.08
+> 0.10
+> 0.12
+> 0.15
+> 0.17
+> 0.20
+> 0.23
+> 0.25
+> Avg@16
+> AIME2025 Avg@16
+> 020 40 60 80 100
+> Steps
+> 0.20
+> 0.25
+> 0.30
+> 0.35
+> 0.40
+> 0.45
+> 0.50
+> Pass@16
+> AIME2025 Pass@16
+> 020 40 60 80 100
+> Steps
+> 0.00
+> 0.10
+> 0.20
+> 0.30
+> 0.40
+> 0.50
+> PG Loss
+> PG Loss
+> 020 40 60 80 100
+> Steps
+> 0.000
+> 0.050
+> 0.100
+> 0.150
+> 0.200
+> 0.250
+> 0.300
+> Clip Ratio
+> response_length/clip_ratio
+> GRPO DSDR DSDR w/o GD DSDR w/o GC DAPO
+
+Figure 7. Training dynamics across methods conducted on Qwen3-1.7B model. From left to right, we show Avg@16 and Pass@16 for AIME2025, PG loss, and response length/clip ratio, comparing GRPO, DSDR, DSDR w/o GD, DSDR w/o GC, and DAPO. 
+
+improves exploration without sacrificing solution fidelity: by maintaining controlled diversity across rollouts, the model avoids mode collapse while consistently discovering correct reasoning paths, leading to stronger overall performance. B.2.1. S AMPLES GENERATED BY DSDR Two generated samples by DSDR are shown below, and the yellow boxes highlight the different solution strategies used to solve this problem. 
+
+Generated Sample: Answer 1 
+
+Problem. 
+
+Let N be the greatest four-digit positive integer with the property that whenever one of its digits is changed to 1, the resulting number is divisible by 7. Let Q and R be the quotient and remainder, respectively, when N is divided by 
+
+1000 . Find Q + R. Ground Truth: 699 
+
+Answer. 
+
+We are given a four-digit number N such that whenever one of its digits is changed to 1, the resulting number is divisible by 7. We are to find Q + R, where N = 1000 Q + R, and Q and R are the quotient and remainder when 
+
+N is divided by 1000. STEP 1: U NDERSTAND THE CONDITION 
+
+Let’s consider all possible changes to the digits of N , and the resulting number must be divisible by 7. Let N = ABCD , where A, B, C, D are digits (each from 0 to 9, with A̸ = 0 ). We must ensure that for every digit position (i.e., for each digit A, B, C, D ), changing that digit to 1 results in a number divisible by 7. This means: - Changing the first digit A to 1: 1BCD must be divisible by 7. - Changing the second digit B to 1: AB 1D must be divisible by 7. - Changing the third digit C to 1: ABD 1 must be divisible by 7. - Changing the fourth digit D to 1: 
+
+ABC 1 must be divisible by 7. So we have four divisibility conditions: 
+
+1BCD ≡ 0, AB 1D ≡ 0, ABD 1 ≡ 0, ABC 1 ≡ 0 (mod 7) .
+
+STEP 2: R EPRESENT THE NUMBERS ALGEBRAICALLY 
+
+Let N = 1000 A + 100 B + 10 C + D.13 DSDR: Dual-Scale Diversity Regularization for Exploration in LLM Reasoning 
+
+The four conditions become: 1000 + 100 B + 10 C + D ≡ 0 (mod 7) ,
+
+1000 A + 100 + 10 C + D ≡ 0 (mod 7) ,
+
+1000 A + 100 B + 10 + D ≡ 0 (mod 7) ,
+
+1000 A + 100 B + 10 C + 1 ≡ 0 (mod 7) .
+
+STEP 3: U SE MODULAR ARITHMETIC TO SIMPLIFY 
+
+Using 
+
+1000 ≡ 6, 100 ≡ 2, 10 ≡ 3 (mod 7) ,
+
+we obtain four congruences, which are then manipulated to derive relations among A, B, C, D .STEP 4: S OLVING RELATIONS 
+
+Through successive subtraction and modular inversion, we find: 
+
+A = 5 , B = 6 .
+
+Solving the remaining congruences yields two admissible digit pairs: 
+
+(C, D ) ∈ { (2 , 4) , (9 , 4) }.
+
+Each candidate is then explicitly checked by substituting back into all four digit-replacement conditions to verify divisibility by 7.
+
+Both 5624 and 5694 satisfy the conditions. Since the problem asks for the greatest such number, we select 
+
+N = 5694 .
+
+Thus, 
+
+Q = 5 , R = 694 , Q + R = 699 .
+
+FINAL ANSWER 
+
+699 
+
+Generated Sample: Answer 2 
+
+Problem. 
+
+Let N be the greatest four-digit positive integer with the property that whenever one of its digits is changed to 1, the resulting number is divisible by 7. Let Q and R be the quotient and remainder, respectively, when N is divided by 
+
+1000 . Find Q + R. Ground Truth: 699 
+
+Answer. 
+
+We are given a four-digit number N , such that whenever one of its digits is changed to 1, the resulting number is divisible by 7. We are to find Q + R, where Q is the quotient and R is the remainder when N is divided by 1000. STEP 1: U NDERSTANDING THE PROBLEM 
+
+We need to find the greatest four-digit number N such that any single digit change to 1 results in a number divisible by 7. Let N = ABCD , where A, B, C, D are digits with A̸ = 0 .For each digit position, changing that digit to 1 must yield a number divisible by 7. 
+
+14 DSDR: Dual-Scale Diversity Regularization for Exploration in LLM Reasoning 
+
+STEP 2: F ORMULATING CONDITIONS 
+
+Case 1: Change the thousands digit A to 1: 
+
+1000 + BCD ≡ 0 (mod 7) ⇒ BCD ≡ 1 (mod 7) .
+
+Case 2: Change the hundreds digit B to 1: 
+
+1000 A + 100 + 10 C + D ≡ 0 (mod 7) ⇒ 6A + 3 C + D ≡ 5 (mod 7) .
+
+Case 3: Change the tens digit C to 1: 
+
+1000 A + 100 B + 10 + D ≡ 0 (mod 7) ⇒ 6A + 2 B + D ≡ 4 (mod 7) .
+
+Case 4: Change the units digit D to 1: 
+
+1000 A + 100 B + 10 C + 1 ≡ 0 (mod 7) ⇒ 6A + 2 B + 3 C ≡ 6 (mod 7) .
+
+STEP 3: S UMMARIZE THE CONDITIONS 
+
+Using 100 ≡ 2, 10 ≡ 3 (mod 7) , we obtain: 
+
+2B + 3 C + D ≡ 1 (mod 7) .
+
+Together with the other three congruences, we form a system in A, B, C, D .STEP 4: S OLVE THE SYSTEM OF CONGRUENCES 
+
+By subtracting equations and eliminating variables, we obtain: 
+
+3A − B ≡ 2 (mod 7) , 3C − D ≡ 2 (mod 7) , 2B − 3C ≡ 6 (mod 7) .
+
+STEP 5: E XPRESS VARIABLES 
+
+Solving step-by-step yields: 
+
+A = 5 , B = 6 ,
+
+and 
+
+C ∈ { 2, 9}, D = 4 .
+
+This branching step yields two admissible candidates: 
+
+N ∈ { 5624 , 5694 }.
+
+STEP 8: V ERIFICATION 
+
+All four digit-replacement conditions are explicitly checked and satisfied for 
+
+N = 5694 .
+
+STEP 9: C OMPUTE Q + R
+
+Since 5694 = 1000 · 5 + 694 , we have: 
+
+Q = 5 , R = 694 , Q + R = 699 .
+
+FINAL ANSWER 
+
+699 
+
+15 DSDR: Dual-Scale Diversity Regularization for Exploration in LLM Reasoning 
+
+B.2.2. S AMPLES GENERATED BY DAPO Two samples generated by DAPO are shown below, and the red boxes highlight the erroneous solution strategies that lead to failure. 
+
+Generated Sample: Answer 1 
+
+Problem. 
+
+Let N be the greatest four-digit positive integer with the property that whenever one of its digits is changed to 1, the resulting number is divisible by 7. Let Q and R be the quotient and remainder, respectively, when N is divided by 
+
+1000 . Find Q + R. Ground Truth: 699 
+
+Answer. 
+
+We are given a four-digit number N such that any change of one digit to 1 results in a number divisible by 7 .Let’s denote N as a four-digit number: 
+
+N = 1000 a + 100 b + 10 c + d
+
+Where: • a, b, c, d are digits (integers from 0 to 9, with a̸ = 0 since N is a four-digit number), • a ∈ { 1, 2, . . . , 9}, b, c, d ∈ { 0, 1, . . . , 9}.STEP 1: U NDERSTANDING THE CONDITION 
+
+The problem says: Whenever one digit is changed to 1, the resulting number is divisible by 7 .So, there are four different cases: 1. Change a to 1: 1000 + 100 b + 10 c + d
+
+2. Change b to 1: 1000 a + 100 + 10 c + d
+
+3. Change c to 1: 1000 a + 100 b + 10 + d
+
+4. Change d to 1: 1000 a + 100 b + 10 c + 1 
+
+Each must be divisible by 7, giving: 
+
+1000 + 100 b + 10 c + d ≡ 0 (mod 7) ,
+
+1000 a + 100 + 10 c + d ≡ 0 (mod 7) ,
+
+1000 a + 100 b + 10 + d ≡ 0 (mod 7) ,
+
+1000 a + 100 b + 10 c + 1 ≡ 0 (mod 7) .
+
+Using 
+
+1000 ≡ 6, 100 ≡ 2, 10 ≡ 3 (mod 7) ,
+
+we obtain: 2b + 3 c + d ≡ 1 (mod 7) (1) 6a + 3 c + d ≡ 5 (mod 7) (2) 6a + 2 b + d ≡ 4 (mod 7) (3) 6a + 2 b + 3 c ≡ 6 (mod 7) (4) 
+
+We now attempt to solve this system of congruences. 
+
+Logical error starts here (unsupported assumption). 
+
+Assume a = 1 (the smallest possible digit, since N is a four-digit number), then try values of b, c, d that satisfy the congruences. 16 DSDR: Dual-Scale Diversity Regularization for Exploration in LLM Reasoning 
+
+From this point onward, the reasoning proceeds by ad-hoc guessing and trial-based arguments that are not logically implied by the modular system above. Eventually, the solution concludes: 
+
+Q = 111 , R = 1 , Q + R = 112 
+
+FINAL ANSWER 
+
+112 
+
+Generated Sample: Answer 2 
+
+Problem. 
+
+Let N be the greatest four-digit positive integer with the property that whenever one of its digits is changed to 1, the resulting number is divisible by 7. Let Q and R be the quotient and remainder, respectively, when N is divided by 
+
+1000 . Find Q + R. Ground Truth: 699 
+
+Answer. 
+
+We are asked to find the greatest four-digit number N such that if any one of its digits is changed to 1 , the resulting number is divisible by 7. Then, given N = 1000 Q + R, we are to find Q + R.STEP 1: U NDERSTAND THE CONDITION 
+
+Let’s denote N as a four-digit number: 
+
+N = 1000 a + 100 b + 10 c + d
+
+where a, b, c, d ∈ { 0, 1, . . . , 9}, with a̸ = 0 .Changing each digit to 1 gives the conditions: 
+
+1000 + 100 b + 10 c + d ≡ 0 (mod 7) ,
+
+1000 a + 100 + 10 c + d ≡ 0 (mod 7) ,
+
+1000 a + 100 b + 10 + d ≡ 0 (mod 7) ,
+
+1000 a + 100 b + 10 c + 1 ≡ 0 (mod 7) .
+
+Using 
+
+1000 ≡ 6, 100 ≡ 2, 10 ≡ 3 (mod 7) ,
+
+we obtain: 2b + 3 c + d ≡ 1 (mod 7) ,
+
+6a + 3 c + d ≡ 5 (mod 7) ,
+
+6a + 2 b + d ≡ 4 (mod 7) ,
+
+6a + 2 b + 3 c ≡ 6 (mod 7) .
+
+Logical error starts here (invalid constraint assumption). 
+
+Let’s suppose that all four expressions are congruent to the same value x (mod 7) , and in particular, assume 
+
+x = 0 (i.e., N ≡ 0 (mod 7)) .
+
+From this point onward, the reasoning proceeds by enumerating digit values under the unsupported assumption that all four congruences must equal the same residue class, which is not implied by the original system. The solution eventually concludes: 
+
+Q = 9 , R = 888 , Q + R = 897 .
+
+17 DSDR: Dual-Scale Diversity Regularization for Exploration in LLM Reasoning 
+
+FINAL ANSWER 
+
+897 
+
+B.3. Prompt Template Prompt Template for Diversity Scoring System: You are a strict but fair grader. You will be given one math problem and 32 independent rollouts (solutions) . Your task is to score diversity across rollouts. Evaluate the following three dimensions on a 0–10 scale :• logic diversity : differences in reasoning flow or step order • formula diversity : differences in formulas, identities, or techniques used • semantic diversity : differences in overall semantic approach or framing Then output overall diversity as the average of the three scores ( 0–10 , rounded to one decimal ). Be objective and do not prefer any model. Output JSON only. 
+
+## C. Theoretical Analysis of DSDR 
+
+This appendix part provides formal justification for the key design choices in DSDR (Sec. 3.2): (i) the correct-only global diversity reward (Eq. (10) ), (ii) the global-to-local coupling weights (Eq. (11) ), and (iii) the positive-only , length-invariant token-level entropy regularizer (Eq. (15)). 
+
+C.1. Setup, Notation, and Standing Assumptions 
+
+We consider RLVR with verifiable reward on prompts q ∼ D . A policy π(· | q) induces an output random variable O (a sequence of tokens) and a verifier reward R(q, O ) ∈ { 0, 1}. For group-based training (GRPO-style), for each prompt q we sample a group {oi}Gi=1 and obtain rewards {ri}Gi=1 with ri = R(q, o i).
+
+Augmented Reward (Correct-Only Global Diversity Reward) For each rollout oi, we compute a diversity score d(oi)
+
+and use a clipped score 
+
+¯di = clip  d(oi); 0 , σ d
+
+ ∈ [0 , σ d]. (21) The augmented reward used for group advantage computation is 
+
+˜ri = ri + λd ¯di 1(ri = 1) , λd ≥ 0. (22) 
+
+Group Normalization Define the empirical mean and standard deviation of {˜ri}Gi=1 :
+
+μ˜r = 1
+
+G
+
+> G
+
+X
+
+> i=1
+
+˜ri, σ˜r =
+
+vuut 1
+
+G
+
+> G
+
+X
+
+> i=1
+
+(˜ ri − μ˜r )2. (23) In practice we use a stabilized standard deviation σ˜r,ε > 0, e.g., σ˜r,ε = σ˜r + ε or σ˜r,ε = pσ2˜r + ε2 with ε > 0. The normalized advantages are 
+
+˜Ai = ˜ri − μ˜r
+
+σ˜r,ε 
+
+. (24) All results below remain valid under either stabilization choice as long as ε > 0.18 DSDR: Dual-Scale Diversity Regularization for Exploration in LLM Reasoning 
+
+Entropy Conventions. The action space at each decoding step is the vocabulary V, assumed finite. All logarithms are natural logs. Standard entropy identities and bounds follow classical information theory (Cover, 1999). 
+
+Correctness Gap Assumption For Proposition C.2, we assume a strict gap 
+
+∆ := J⋆R − JR > 0, (25) where J⋆R is optimal correctness and JR is the best correctness strictly below optimal. This separation commonly holds when the set of achievable correctness values is discrete under a restricted policy class. 
+
+C.2. Inter-/Intra-mode Decomposition (Formal Complementarity) 
+
+DSDR introduces two diversity mechanisms operating at different scales: a global (sequence-level) preference among correct trajectories (Eq. (10) ) and a local (token-level) positive-only entropy regularizer (Eq. (15) ). This subsection provides an information-theoretic lens clarifying why these two terms are complementary rather than redundant: global shaping targets inter-mode coverage (deep exploration across distinct reasoning modes), while local entropy targets intra-mode 
+
+thickening (maintaining non-collapsed variability within a mode). We view generation as a mixture over latent “reasoning modes” Z (e.g., distinct solution strategies). For each prompt q,suppose 
+
+Z ∼ p(z | q), O ∼ p(o | z, q ). (26) 
+
+Lemma C.1 (Inter-/intra-mode entropy decomposition) . For any fixed prompt q,
+
+H(O | q) = I(O; Z | q) + H(O | Z, q ), (27) 
+
+where I(O; Z | q) is conditional mutual information. Proof. This is a standard identity (Cover, 1999). By definition, I(O; Z | q) = H(O | q) − H(O | Z, q ). Rearranging yields (27). 
+
+Interpretation of DSDR. I(O; Z | q) captures inter-mode diversity (deep exploration across reasoning modes), while 
+
+H(O | Z, q ) captures intra-mode diversity (variation within a mode). DSDR’s global shaping primarily promotes inter-mode coverage, while local positive-only entropy discourages intra-mode collapse. 
+
+C.3. Correctness Preservation Under Bounded Local Regularization 
+
+The local objective in DSDR (Eq. (15) ) increases token-level entropy only along correct trajectories and is length-normalized to avoid incentivizing longer outputs. A natural concern is whether adding this regularizer could sacrifice verifiable correctness. This subsection shows that, at the population level, a sufficiently small local regularization weight cannot make a lower-correctness policy optimal; it can only break ties among correctness-optimal policies. 
+
+Entropy Upper Bound for Length-invariant Token Entropy. For any categorical distribution over |V| tokens, entropy is maximized by the uniform distribution, so 0 ≤ H (π(· | s)) ≤ log |V| (Cover, 1999). Define the length-invariant per-token conditional entropy functional 
+
+JH (π) = E
+
+"
+
+1
+
+T
+
+> T
+
+X
+
+> t=1
+
+H π(· | q, o <t )#
+
+. (28) Then 
+
+0 ≤ JH (π) ≤ Hmax := log |V| . (29) The same upper bound also holds for the positive-only variant J+ 
+
+> H
+
+(π) = E[1(R(q, O ) = 1) · 1
+
+> T
+
+P 
+
+> t
+
+H(·)] since 1(·) ≤ 1.
+
+Proposition C.2 (Correctness preservation under bounded λℓ). Define the population correctness objective 
+
+JR(π) = Eq∼D , o ∼π(·| q)[R(q, o )] ∈ [0 , 1] , (30) 19 DSDR: Dual-Scale Diversity Regularization for Exploration in LLM Reasoning 
+
+and let J⋆R = sup π JR(π). Define the best correctness among strictly suboptimal policies 
+
+JR = sup  
+
+> π:JR(π)<J ⋆R
+
+JR(π), ∆ := J⋆R − JR > 0. (31) 
+
+Let JH (π) be any regularizer satisfying 0 ≤ JH (π) ≤ Hmax (e.g., (28) ). Consider the regularized objective 
+
+Jreg (π) = JR(π) + λℓJH (π), λℓ ≥ 0. (32) 
+
+If λℓ < ∆/H max , then every maximizer π⋆ 
+
+> reg
+
+∈ arg max π Jreg (π) is correctness-optimal: 
+
+JR(π⋆
+
+> reg
+
+) = J⋆R. (33) 
+
+Proof. Take any correctness-suboptimal policy π with JR(π) ≤ JR. Using JH (π) ≤ Hmax ,
+
+Jreg (π) = JR(π) + λℓJH (π) ≤ JR + λℓHmax . (34) Take any correctness-optimal policy π⋆ with JR(π⋆) = J⋆R. Since JH (π⋆) ≥ 0,
+
+Jreg (π⋆) = J⋆R + λℓJH (π⋆) ≥ J⋆R. (35) If λℓ < ∆/H max , then 
+
+JR + λℓHmax < J R + ∆ = J⋆R ≤ Jreg (π⋆). (36) Thus every correctness-suboptimal π has strictly smaller Jreg (π) than some correctness-optimal π⋆, so no correctness-suboptimal policy can maximize Jreg . Hence any maximizer satisfies (33). 
+
+C.4. GRPO Signal Preservation via Correct-Only Global Diversity Reward 
+
+DSDR’s augmented reward (Eq. (10) ) is motivated by a concrete optimization issue in group-relative methods: when verifier rewards become nearly constant within a group (e.g., many correct rollouts), the within-group variance shrinks and the group-normalized advantages used in GRPO can degenerate. This subsection formalizes two points aligned with Sec. 3.2: (i) verifier-only rewards yield informative groups only when the sampled group mixes successes and failures, and (ii) DSDR’s correct-only diversity bonus creates controlled dispersion among correct solutions, ensuring non-degenerate group-normalized advantages whenever diversity scores differ. 
+
+Lemma C.3 (Probability of a mixed verifier-reward group) . Fix prompt q. Let r1, . . . , r G be i.i.d. Bernoulli( p), where 
+
+p = Pr( R(q, O ) = 1) . (37) 
+
+Let Mix = {∃ i, j : ri̸ = rj } denote the mixed-group event. Then 
+
+Pr(Mix) = Pmix (p; G) = 1 − pG − (1 − p)G. (38) 
+
+Proof. The complement of Mix is the disjoint union of “all ones” and “all zeros”, with probabilities pG and (1 − p)G,respectively. Therefore Pr(Mix) = 1 − pG − (1 − p)G.
+
+Proposition C.4 (Non-vanishing GRPO signal under correct-only diversity bonus) . Let ˜ri be defined in (22) and ˜Ai be the stabilized group-normalized advantages in (24) . If there exist i̸ = j such that ˜ri̸ = ˜ rj , then 
+
+Var(˜ r1, . . . , ˜rG) > 0 and { ˜Ai}Gi=1 are not all zero. (39) 
+
+In particular, in a solve-all group ( ri = 1 for all i), 
+
+˜ri = 1 + λd ¯di. (40) 
+
+If λd > 0 and { ¯di} are not all identical, then group-relative advantages remain non-degenerate even though verifier rewards are constant. 
+
+20 DSDR: Dual-Scale Diversity Regularization for Exploration in LLM Reasoning 
+
+Proof. If ˜ri are not all identical, then letting μ˜r be the group mean in (23) , there exists an index i such that ˜ri̸ = μ˜r , hence 
+
+Var(˜ r1, . . . , ˜rG) = 1
+
+G
+
+> G
+
+X
+
+> k=1
+
+(˜ rk − μ˜r )2 > 0. (41) Because σ˜r,ε > 0 by construction, for that index i we have ˜Ai = (˜ ri − μ˜r )/σ ˜r,ε ̸ = 0 , so the advantages are not all zero. The solve-all case follows by substituting (40) : if λd > 0 and ¯di are not all equal, then ˜ri are not all equal and the above applies. 
+
+Remark (Connection to PPO/GRPO). In PPO-style clipped surrogate objectives (Schulman et al., 2017) and GRPO-style group-relative updates (e.g., (Guo et al., 2025)), the reward-driven policy-improvement term is scaled by normalized advantages. If all advantages were zero, the reward-driven gradient would vanish (leaving only KL regularization). Proposition C.4 guarantees non-degenerate preference signal whenever diversity induces non-constant ˜ri.
+
+C.5. Optimality of Diversity-Softmax Global-to-Local Coupling 
+
+DSDR couples global and local regularization by allocating the local entropy budget across correct trajectories according to the diversity-softmax weights (Eq. (11) ). This subsection shows that the softmax allocation is not an ad-hoc heuristic: it is the unique solution of an entropy-regularized resource allocation problem. This provides a principled interpretation of the temperature τ as a concentration–exploration control knob. 
+
+Proposition C.5 (Softmax allocation optimality) . Assume P = {i : ri = 1 }̸ = ∅. Consider allocating a local-entropy budget across correct rollouts with a distribution w over P:
+
+wi ≥ 0, X
+
+> i∈P
+
+wi = 1 . (42) 
+
+For τ > 0, the diversity-softmax weights 
+
+w⋆i = exp( τ ¯di)
+
+P 
+
+> j∈P
+
+exp( τ ¯dj ) (43) 
+
+are the unique maximizer of the entropy-regularized allocation problem 
+
+max 
+
+> w∈∆( P)
+
+
+
+τ X
+
+> i∈P
+
+wi ¯di + H(w)
+
+
+
+, H(w) = − X
+
+> i∈P
+
+wi log wi, (44) 
+
+where ∆( P) is the simplex in (42) .Proof. This is the classical maximum-entropy / Gibbs distribution derivation (Jaynes, 1957); we provide a convex-optimization proof via KKT conditions (Boyd & Vandenberghe, 2004). 
+
+(Uniqueness) The objective in (44) is linear in w plus entropy H(w), which is strictly concave over the simplex inte-rior (Cover, 1999; Boyd & Vandenberghe, 2004). Hence the objective is strictly concave and the maximizer is unique. 
+
+(Stationarity) Form the Lagrangian with multiplier α for P 
+
+> i∈P
+
+wi = 1 :
+
+L(w, α ) = τ X
+
+> i∈P
+
+wi ¯di − X
+
+> i∈P
+
+wi log wi + α
+
+ X 
+
+> i∈P
+
+wi − 1
+
+
+
+. (45) At an interior optimum, stationarity gives 
+
+∂L
+
+∂w i
+
+= τ ¯di − (1 + log wi) + α = 0 ⇒ log wi = τ ¯di + α − 1. (46) Exponentiating yields wi = C exp( τ ¯di) with C = exp( α − 1) . Enforcing the simplex constraint implies C =
+
+  P  
+
+> j∈P
+
+exp( τ ¯dj )−1, yielding (43). By strict concavity, this stationary point is the unique global maximizer. 21 DSDR: Dual-Scale Diversity Regularization for Exploration in LLM Reasoning 
+
+Equivalent KL-Regularized Form. Let u be the uniform distribution on P. Using H(w) = log |P| − DKL (w∥u), the problem (44) is equivalent (up to an additive constant) to 
+
+max 
+
+> w∈∆( P)
+
+ τ Ei∼w[ ¯di] − DKL (w∥u) ,
+
+highlighting the exploration–concentration tradeoff controlled by τ .
+
+C.6. Proof of Theorem 3.1 
+
+Proof. Fix q and define 
+
+f (q, o ) = exp  τ ¯d(q, o ) 1(R(q, o ) = 1) ≥ 0.
+
+By definition, 
+
+Jτ (θ; q) = 1
+
+τ log Zτ (θ; q), Zτ (θ; q) = Eo∼πθ (·| q)[f (q, o )] .
+
+Since Zτ (θ; q) > 0 by assumption, we can differentiate: 
+
+∇θ Jτ (θ; q) = 1
+
+τ · 1
+
+Zτ (θ; q) ∇θ Zτ (θ; q). (47) Using the score-function (log-derivative) identity (Williams, 1992; Sutton et al., 1999), 
+
+∇θ Eo∼πθ (·| q)[f (q, o )] = Eo∼πθ (·| q)[f (q, o ) ∇θ log πθ (o | q)] , (48) we obtain 
+
+∇θ Zτ (θ; q) = Eo∼πθ (·| q)[f (q, o ) ∇θ log πθ (o | q)] . (49) Substituting (49) into (47) yields 
+
+∇θ Jτ (θ; q) = Eo∼πθ (·| q)
+
+ 1
+
+τf (q, o )
+
+Zτ (θ; q) ∇θ log πθ (o | q)
+
+
+
+. (50) Next, note that 
+
+Eo∼πθ (·| q)[∇θ log πθ (o | q)] = ∇θ
+
+Z
+
+πθ (o | q) do = ∇θ 1 = 0 ,
+
+so subtracting the constant baseline 1/τ does not change the expectation ( ?): 
+
+∇θ Jτ (θ; q) = Eo∼πθ (·| q)
+
+ 1
+
+τ
+
+ f (q, o )
+
+Zτ (θ; q) − 1
+
+
+
+∇θ log πθ (o | q)
+
+
+
+. (51) Expanding f (q, o ) and Zτ (θ; q) gives exactly (18)–(19). Finally, for the Monte Carlo form, let {oi}Gi=1 be i.i.d. samples from πθ (· | q) and define fi = f (q, o i) = exp( τ ¯di)1(ri = 1) .A plug-in estimator for Zτ (θ; q) is ˆZ = (1 /G ) PGj=1 fj , and for the numerator d∇Z = (1 /G ) PGi=1 fi∇θ log πθ (oi | q).Thus the ratio form in (50) yields 
+
+\∇θ Jτ (θ; q) = 1
+
+τ · d∇Z
+
+ˆZ = 1
+
+τ
+
+> G
+
+X
+
+> i=1
+
+fi
+
+PGj=1 fj
+
+∇θ log πθ (oi | q),
+
+which corresponds to weights ˆwi = fi/ PGj=1 fj , proving (20) . Because fi = 0 whenever ri = 0 , restricting to the correct set P = {i : ri = 1 } gives ˆwi ∝ exp( τ ¯di) on P, matching Eq. (11). 22

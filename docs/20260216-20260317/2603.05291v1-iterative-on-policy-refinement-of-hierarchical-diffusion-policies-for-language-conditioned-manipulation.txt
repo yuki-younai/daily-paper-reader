@@ -1,0 +1,911 @@
+Title: Iterative On-Policy Refinement of Hierarchical Diffusion Policies for Language-Conditioned Manipulation
+
+URL Source: https://arxiv.org/pdf/2603.05291v1
+
+Published Time: Fri, 06 Mar 2026 02:22:09 GMT
+
+Number of Pages: 24
+
+Markdown Content:
+# Iterative On-Policy Refinement of Hierarchical Diffusion Policies for Language-Conditioned Manipulation 
+
+Cl´ emence Grislain 1 Olivier Sigaud 1 Mohamed Chetouani 1
+
+## Abstract 
+
+Hierarchical policies for language-conditioned manipulation decompose tasks into subgoals, where a high-level planner guides a low-level con-troller. However, these hierarchical agents often fail because the planner generates subgoals with-out considering the actual limitations of the con-troller. Existing solutions attempt to bridge this gap via intermediate modules or shared represen-tations, but they remain limited by their reliance on fixed offline datasets. We propose HD-ExpIt, a framework for iterative fine-tuning of hierarchical diffusion policies via environment feedback. HD-ExpIt organizes training into a self-reinforcing cycle: it utilizes diffusion-based planning to au-tonomously discover successful behaviors, which are then distilled back into the hierarchical policy. This loop enables both components to improve while implicitly grounding the planner in the con-troller’s actual capabilities without requiring ex-plicit proxy models. Empirically, HD-ExpIt sig-nificantly improves hierarchical policies trained solely on offline data, achieving state-of-the-art performance on the long-horizon CALVIN bench-mark among methods trained from scratch. 1
+
+## 1. Introduction 
+
+Learning robotic manipulation from language requires map-ping multimodal inputs, typically visual observations and natural language instructions, into continuous robot actions. Directly mapping these high-dimensional inputs to actions is particularly challenging in settings involving long-horizon and diverse tasks (Yao et al., 2023). While monolithic Vision-Language-Action (VLA) models have demonstrated impressive performance, they typically necessitate exten-sive pre-training on massive datasets (Kawaharazuka et al., 
+
+> 1
+
+ISIR, Sorbonne Universit ´e, CNRS, Paris, France. Correspon-dence to: Cl´ emence Grislain <grislain@isir.upmc.fr >.
+
+Preprint. March 6, 2026. 
+
+> 1
+
+Code and checkpoints are available at https://github. com/clemgris/HD-ExpIt .
+
+2025). To achieve similar task complexity without such overhead, hierarchical policies have emerged as a widely adopted approach (Bai et al., 2025), decomposing decision-making into a high-level planner (HL) and a low-level controller (LL). Through this decomposition, HL reasons over sparse subgoal representations to enable efficient long-horizon planning, while LL focuses on reaching each sub-goal through fine-grained control. This temporal abstraction simplifies the learning problem, as each component han-dles a shorter temporal horizon than a direct end-to-end policy. Prior work has explored various types of subgoals, including keypoints (Chen et al., 2024; Xian et al., 2023), contact points (Wen et al., 2024), end-effector poses (Ma et al., 2024), and visual subgoals (Black et al., 2024b; Zhang et al., 2024; Reuss et al., 2024; Liang et al., 2024; Xie et al., 2025). Recently, many of these methods build on advances in image and video editing models (Rombach et al., 2022; Liu et al., 2024) to use diffusion models as a planner capable of representing high-dimensional subgoal distributions. However, a fundamental bottleneck remains: the effective coordination between HL and LL. For a hierarchical agent to perform well, HL must generate subgoals that are not only task-relevant but also within the capacity of the current LL. A ”HL-LL coupling mismatch” can lead to compounding errors and ultimately failure. Prior work has explored sev-eral strategies to mitigate this, including intermediate “glue” modules (Ajay et al., 2023; Hatch et al., 2025; Kang & Kuo, 2025) to adapt plans or shared representations (Reuss et al., 2024; Zhang et al., 2024; Xie et al., 2025) to enforce tighter coupling (see Figure 1(a)(b)(c)). However, these approaches require learning either proxy models of LL ca-pacities, which, when integrated to the pipeline, can induce training instability and increase inference overhead, or a shared representation space that must satisfy the divergent requirements of HL and LL. More critically, as we show in this paper, these approaches are constrained by their reliance on fixed, pre-collected datasets, limiting their generalization to unseen settings (Julian et al., 2021). To overcome this limitation, we propose HD-ExpIt (Hierarchical Diffusion with Exp ert It eration), a framework for iterative fine-tuning of hierarchical diffusion policies from environment feedback. HD-ExpIt organizes the train-ing process into a self-reinforcing cycle inspired by the 1
+
+> arXiv:2603.05291v1 [cs.RO] 5 Mar 2026 Iterative On-Policy Refinement of Hierarchical Diffusion Policies for Language-Conditioned Manipulation
+
+Expert Iteration algorithm (Anthony et al., 2017). Rather than using traditional search-based experts (e.g., MCTS), which are computationally prohibitive for continuous ma-nipulation, we utilize the stochastic nature of the diffusion planner as a generative search mechanism to autonomously discover successful behaviors. Within each iteration of this loop, HL and LL are trained in a supervised fashion on the accumulated dataset (initialized from a fixed, pre-collected set). The resulting policy is then deployed to collect suc-cessful demonstrations across diverse contexts via repeated sampling and feedback-filtering. Finally, these trajectories are aggregated back into the training set to seed the next iteration. Through this iterative cycle, both components improve and align: HL proposes new subgoals to guide exploration of LL, while the reward feedback enables the collection of new task-relevant plans and further grounds HL in the actual capabilities of LL. This closed-loop refine-ment allows the agent to improve performance over the one obtained from the initial offline dataset while retaining the simplicity and stability of supervised training. Empirically, HD-ExpIt significantly improves hierarchical diffusion policies on a Franka-3Blocks and the CALVIN benchmarks. Notably, our framework more than doubles the success rate for completing five consecutive tasks compared to policies trained only on the fixed offline dataset. Con-sequently, HD-ExpIt achieves state-of-the-art performance among methods trained from scratch. Beyond absolute per-formance, we provide evidence that these results stem from component synergetic improvement and implicit alignment. To summarize, our contributions are threefold: 
+
+• We propose HD-ExpIt, a simple and stable framework for the continual improvement of hierarchical diffusion poli-cies through a self-reinforcing training loop. This cycle leverages the stochasticity of diffusion planner to discover successful behaviors and distills them back into the policy through supervised learning. 
+
+• We introduce a training paradigm where environment feedback implicitly aligns HL with the capabilities of LL. 
+
+• We provide an empirical evaluation on a Franka-3Blocks environment and the challenging CALVIN benchmark, where HD-ExpIt significantly improves policies trained solely on offline datasets and achieves state-of-the-art per-formance among methods trained from scratch. 
+
+## 2. Related Work 
+
+2.1. Hierarchical policies for language-conditioned manipulation 
+
+To improve diffusion-based hierarchical policies, prior work has proposed various methods to align generated plans with LL capabilities. TaKSIE (Kang & Kuo, 2025) and HL-Glue (Hatch et al., 2025) introduce an intermediate ”glue” model between HL and LL to perform subgoal selection based on estimated task progress reflecting LL’s preferences (Figure 1(b)). While this approach improves performance, it often requires frequent replanning, thereby increasing inference-time overhead. HIP (Ajay et al., 2023) uses an auxiliary model during training to encourage high-level plans that match LL ’s preferences (Figure 1(b)). Instead of directly computing the log-likelihood of expert actions w.r.t. the action distribution of LL —which is computationally prohibitive—they train an auxiliary model to represent this signal and use it to regularize a diffusion HL. Yet, this regularization directly impacts HL diffusion training, which can lead to high variance and training instability. Other methods bypass the need for an auxiliary model by jointly training HL and LL. Prior work enforces coupling by using joint representations across hierarchy levels (Fig-ure 1(c)), either through shared network layers (MDT (Reuss et al., 2024)) or by planning directly in the visual embedding space of LL (LDC (Zhang et al., 2024); LDP (Xie et al., 2025)). However, learning a representation space that sat-isfies both HL —which must ground semantic instructions into spatial modifications of the scene—and LL —which requires detailed object representations for fine-grained con-trol—remains a significant challenge. Furthermore, while these prior works have improved the performance of hierarchical policies on multi-task language-conditioned manipulation, they typically train both compo-nents in a single offline stage without iterative improvement from environment feedback. Consequently, these methods rely on an initial offline dataset, which limits their ability to generalize to unseen settings. In contrast, our approach implicitly aligns HL with the capabilities of LL through iterative on-policy refinement, bypassing the need for ex-plicit proxy models or shared representations while enabling continual improvement and generalization beyond the initial training dataset coverage. 
+
+2.2. Fine-tuning diffusion-based and hierarchical policies with environment feedback 
+
+Fine-tuning policies from environment feedback has emerged as a promising approach to improve manipula-tion policies beyond the performance of supervised learning (Julian et al., 2021; Hu et al., 2025; Tang et al., 2025). How-ever, traditional reinforcement learning methods are often unstable when applied to hierarchical policies (Levy et al., 2019; Hutsebaut-Buysse et al., 2022), making convergence difficult in long-horizon tasks (Nachum et al., 2018). This challenge is further amplified for diffusion-based policies, since gradient-based fine-tuning must propagate through multi-step stochastic denoising processes, significantly in-creasing training variance (Ren et al., 2025). Furthermore, 2Iterative On-Policy Refinement of Hierarchical Diffusion Policies for Language-Conditioned Manipulation                         
+
+> Figure 1. HD-ExpIt compared with common hierarchical policy training paradigms. Left: Existing strategies for training hierarchical policies from a fixed, offline dataset D0:(a) independent supervised training of HL and LL; (b) integration of an intermediate ”glue” model to bridge planning and control; and (c) joint training via shared cross-level representations. Right (d) : The proposed HD-ExpIt framework utilizes an iterative refinement cycle: (1) independent supervised updates of the policy components from the current dataset Dt;(2) on-policy rollout collection where the diffusion planner’s stochasticity serves as a generative search mechanism to discover successful trajectories, which are filtered based on environment feedback to capture LL’s actual capabilities; and (3) dataset aggregation where these successful trajectories Rtare either added to or used as the training set for the next iteration. Far Right: Detail of the hierarchical interaction during data collection, where for contexts in C(Dt)HL generates Ksubgoal sequences ˆζexecuted by LL via action chunks ac.
+
+existing methods for fine-tuning flat diffusion models to maximize a reward function, either require dense rewards (Fan et al., 2023; Black et al., 2024a) or rely on preference datasets (Wallace et al., 2024; Yang et al., 2024), neither of which are typically available in language-conditioned manipulation. Closer to our work, SAILOR (Jain et al., 2025) and DifNav (Shi et al., 2025) progressively improve diffusion policies using iterative search or data aggrega-tion. While these approaches demonstrate the potential of iterative policy improvement, they focus on flat diffusion policies and often rely on oracle expert labels. In contrast, our framework extends iterative refinement to hierarchical diffusion policies, fine-tuning directly from en-vironment feedback without relying on an external expert policy. Our approach follows an iterative process inspired by Expert Iteration, which has proven effective for fine-tuning large language model agents (Havrilla et al., 2024; Guo et al., 2025). This design addresses both sparse (often binary) re-wards in robotic manipulation and the training instability that arises when combining hierarchical architectures with diffusion-based planning. By utilizing feedback-based fil-tering instead of direct policy gradients, HD-ExpIt provides a stable mechanism to improve planning and execution. 
+
+## 3. Problem Statement 
+
+We consider a problem of multi-task language-conditioned manipulation from visual observation. This problem can be formalized as a Goal Conditioned Partially Observable Markov Decision Process (GC-POMDP) (Kaelbling et al., 1998): M = ( S, A, T , ρ 0, Ω, O, G, R ), where S denotes the state space, with the initial state sampled from the distri-bution ρ0. The agent receives partial observations, which are images o = O(s) ∈ Ω = R3×H×W , where H and W are the image height and width. The agent selects actions in the action space A (such as joint configurations or d-DoF com-mands) conditioned on the observation O(s) and a textual goal g ∈ G ⊆ V ∗, where V is a vocabulary and V∗ the set of all finite sequences over V. The goal set G can be grouped into subsets Gl corresponding to different tasks l ∈ L. The transition function T governs the environment dynamics. The pair (s0, l ) characterizes the multimodal task context and (o0 = O(s0), g ∈ Gl) is the corresponding agent obser-vation. The binary reward function R : τ × (s0, l ) → { 0, 1}
+
+indicates whether the trajectory τ = ( s0, a 0, . . . , s N , a N )
+
+successfully completes task l.In this setting, the objective is to find an optimal policy π∗
+
+that maximizes the expected return: 
+
+E s0×l∼ρ0×Lτ ∼π(O(s0), g ∼Gl)
+
+[R(τ, s 0, l )] .
+
+## 4. Method 
+
+To address multi-task language-conditioned manipulation, we consider a hierarchical agent composed of a diffusion-based high-level planner (HL) that generates a sequence of visual subgoals (plan) and a low-level controller (LL) that produces the robot actions required to execute this plan. The hierarchical policy is updated by iterating between 3Iterative On-Policy Refinement of Hierarchical Diffusion Policies for Language-Conditioned Manipulation 
+
+supervised training, data collection from an approximate expert constructed via on-policy repeated sampling and feedback-based filtering, and dataset aggregation. Our method, HD-ExpIt, described in Figure 1(d), creates a sim-ple self-reinforcing cycle where both components iteratively improve and align, ultimately improving the agent. 
+
+4.1. Hierarchical Diffusion Policy High-level visual planner: HL noted πHL ϕ , is a diffusion model conditioned on the textual goal g and the initial en-vironment observation o0 = O(s0), with s0 ∼ ρ0. To simplify notation, we conflate the true task context (s0, l )
+
+with the agent’s observable context (o0, g ). The model out-puts a sequence of visual subgoals of size M , which are observations ˆζ = {ˆo1, . . . , ˆoM } that depict the robot in the environment achieving the task specified by the textual goal. Prior work (Black et al., 2024b; Hatch et al., 2025; Reuss et al., 2024; Kang & Kuo, 2025) generates subgoals online. In contrast, we produce a full plan (subgoal sequence) at once (Ko et al., 2024; Du et al., 2023; Liang et al., 2024; Zhang et al., 2024), invoking HL only during replanning to reduce computational cost. Furthermore, predicting the entire plan simplifies the recovery logic: if the task is not successful after following the fixed-length plan, it signals failure and triggers replanning. This reduces flexibility but enables faster inference and simpler replanning. 
+
+Low-level controller: LL noted πLL ψ , is a goal-conditioned policy that takes as input a target observation otarget and the current observation osource , and outputs a chunk of n
+
+actions ac = {a0, . . . , a n−1} that aims to update the envi-ronment from the state with observation osource to the state with observation otarget .
+
+Sampling: At inference time, the environment is initialized in a state s0 ∼ ρ0 and the agent has to achieve a task l
+
+characterized by a free-form textual goal g ∼ Gl. πHL ϕ
+
+receives the multimodal task context (o0 = O(s0), g ) com-posed of the initial observation of the environment and the goal, and outputs a sequence of subgoals ˆζ depicting the robot completing the task l. These generated subgoals are then provided to πll ψ , which produces the actions to be ex-ecuted in the environment to execute the plan. Figure 1(d) describes a full policy rollout. 
+
+HL-LL coupling mismatch: An observation transition 
+
+(ˆ oi, ˆoi+1 ) is feasible if the controller πLL ψ can produce an action chunk ac such that the environment transition 
+
+T (s, a c)—where O(s) = ˆ oi—results in a state s′, satisfy-ing O(s′) ≈ ˆoi+1 , with high probability. We define the 
+
+feasible region of LL πLL ψ as the subspace of all plans 
+
+ˆζ = {ˆo1, . . . , ˆoM } such that every transition (ˆ oi, ˆoi+1 ) is feasible. A coupling mismatch occurs when HL πHL θ gener-ates a plan ˆζ outside of this subspace. 
+
+4.2. Training 
+
+Expert iteration (Anthony et al., 2017) aims to distill an ex-pensive search-based expert policy π∗ into a student policy 
+
+π, where the expert uses Monte Carlo Tree Search (MCTS) guided by the current student. Training alternates between generating trajectories from the expert based on environ-ment feedback, and updating the student via supervised training on the newly collected demonstrations. In HD-ExpIt, we adopt the same paradigm to iteratively improve our hierarchical policy. However, instead of using MCTS guided by the current policy, which is impractical for continuous robotic manipulation, we build an approximate expert by repeated sampling from the current policy, simi-larly to (Havrilla et al., 2024; Guo et al., 2025). We propose that the stochastic nature of diffusion-based planning acts as an implicit generative search mechanism, allowing the agent to discover successful plans absent from the initial static dataset and inherently aligned with the LL capabilities. In the following, the method is described at iteration t of HD-ExpIt training loop. During each iteration, the policy is updated using the current dataset (Section 4.2.1); new trajectories are collected by on-policy repeatedly sampling and success filtering (Section 4.2.2); these data are then ag-gregated to form a new dataset that serves as training dataset for the next iteration (Section 4.2.3). Introduced notations are summarized in Appendix A, while the pseudo-code de-tailing the training process is provided in Appendix C. 4.2.1. P OLICY UPDATE WITH SUPERVISED TRAINING 
+
+At iteration t of HD-ExpIt training loop, the policy is updated by training both components independently in a supervised fashion on a dataset Dt = {τ ∗ =
+
+{s∗
+
+> 0
+
+, a ∗
+
+> 0
+
+, . . . , s ∗ 
+
+> N
+
+, a ∗ 
+
+> N
+
+}, l ∗}} , where τ is a state–action tra-jectory that successfully achieves task l∗. πHL ϕ and πLL ψ
+
+trained on Dt together define the hierarchical policy πt.For the first iteration t = 0 , we assume access to an initial expert dataset D0, often available in language-conditioned manipulation benchmarks. While standard hierarchical ap-proaches rely solely on such fixed, pre-collected datasets, HD-ExpIt uses them as a starting point for further refine-ment using environment feedback. 
+
+High-level planner: For each trajectory τ ∗ in Dt, we ex-tract a sparse sequence of subgoals ζ∗ consisting of M
+
+observations, along with the initial one o∗ 
+
+> 0
+
+= O(s∗
+
+> 0
+
+):
+
+ζ∗ = {o1 = O(s∗ 
+
+> x1
+
+), . . . , o M = O(s∗ 
+
+> xM
+
+)}, oi = ζ∗[i].
+
+HL is trained using the velocity parameterization of diffusion models (Karras et al., 2022), following prior works (Rom-bach et al., 2022; Ko et al., 2024). In this formulation, the target velocity is a linear combination of the denoised sample ζ0 = ζ∗ and the noise ϵj : v = αj ϵj − βj ζ0. At dif-4Iterative On-Policy Refinement of Hierarchical Diffusion Policies for Language-Conditioned Manipulation 
+
+fusion step j, the noisy sample is ζj = αj ζ0 + βj ϵj , with 
+
+ϵj ∼ N (0 , I M ×3×H×W ). The coefficients αj and βj define HL noise schedule. The network vϕ is trained to predict this velocity from the noisy subgoal sequence, conditioned on the clear initial observation of the environment o∗ 
+
+> 0
+
+and the goal g, using an MSE loss: 
+
+LHL (ϕ) =  αj ϵj − βj ζ0 − vϕ(ζj , j, o ∗
+
+> 0
+
+, g ) 22
+
+. (1) This formulation ensures that HL learns to denoise noisy subgoal sequences while capturing the spatial and temporal visual dynamics of the environment associated with execut-ing a task specified by a textual goal g.
+
+Low-level controller: LL learns to predict chunk of ac-tions of fixed size n that visually transform the environ-ment from a source observation to a target observation. To construct the training dataset from Dt, we extract con-tiguous action segments. For each demonstration τ ∗ =
+
+{s∗
+
+> 0
+
+, a ∗
+
+> 0
+
+, . . . , s ∗ 
+
+> N
+
+, a ∗ 
+
+> N
+
+} ∈ Dt, we sample a variable-length action chunk a∗ 
+
+> c
+
+= {a∗ 
+
+> i
+
+, . . . , a ∗
+
+> i+m
+
+}, where the chunk length 
+
+m is drawn uniformly between nmin and n. If m < n , the sequence is padded with a static action to match the required chunk size. This way, the network always outputs fixed-size chunks but learns to predict effective action sequences of varying lengths, improving robustness to following plans with different temporal granularity. Along with each chunk, we store the initial observation osource = O(s∗ 
+
+> i
+
+) and the re-sulting target observation otarget = O(s∗
+
+> i+m+1
+
+) and train LL with the MSE loss: 
+
+LLL (ψ) = a∗ 
+
+> c
+
+− πLL ψ (osource , o target ) 22 .
+
+4.2.2. R OLLOUTS COLLECTION 
+
+Collecting approximate expert demonstrations: The trained policy πt is then used to approximate an expert policy ˆπ∗ 
+
+> t
+
+through repeated sampling. Although this approx-imate expert policy ˆπ∗ 
+
+> t
+
+is not directly used, it is distilled into the next policy πt+1 through data aggregation. To col-lect trajectories from ˆπ∗ 
+
+> t
+
+, for each context (s0, l ) in a set of contexts C(Dt), we execute K rollouts τ using πt and use environment feedback to select the successful ones. The stochasticity of the diffusion-based HL allows these K sam-ples to effectively search the plan space, while the reward filter allows to identify feasible plans for LL. To ensure a balanced, non-redundant exploration dataset, we retain one unique successful trajectory per context and cap the total trajectories per task. This way, we build an exploration dataset of the approximate expert ˆπ∗ 
+
+> t
+
+:               
+
+> Rt=[
+> (s0,l )∈C (Dt)
+> n
+> τk∗∼πt(o0, g )
+> k∗= arg min
+> k∈[1 ,K ]
+> {R(τk, s 0, l ) = 1 }
+> o
+> ,
+> with o0=O(s0)and g∼Gl.
+
+HL leverages the inherent generalization capabilities of diffusion models (Xu et al., 2025) to generate task-relevant plans in unseen contexts. By combining this generative flexibility with repeated sam-pling and a diverse context set C(Dt), the agent effectively explores the state space to discover and collect successful trajectories for Rt.Crucially, as iterations t progress, expert plans ζ0 used to train HL in Equation 1 transition from offline expert sub-goals to subgoals collected via ˆπ∗ 
+
+> t
+
+, which are by construction achievable by the current LL. This allows HL to implicitly learn to generate subgoals within the feasible region of LL. 
+
+Exploration via diverse context sets: It is crucial to construct a context set C(Dt) that encourages exploration through diverse initial states s0. While the true initial state distribution ρ0 is often unknown, environments typically provide a reset function ρreset , which only covers a subset of possible states. To expose the agent to a broader range of initial states, we leverage non-initial states visited by the ap-proximate expert in Dt to build new contexts. Specifically, we consider two types of contexts for rollouts collection: 1) Environment-reset contexts: initial observations sampled from the reset of the environment, o0 = O(s0 ∼ ρreset ) and a randomly sampled goal g ∼ Gl∼L, for all tasks l ∈ L.2) Expert-replayed contexts: initial observations sampled from the last state of an expert trajectory in Dt, o0 = o∗
+
+> N
+
+and a randomly sampled goal g ∼ Gl∼L, for all tasks l ∈ L.In the second category, using non-initial states sampled from the expert dataset allows the agent to explore from contexts that could not be seen through standard environment resets and unseen w.r.t initial states seen in Dt. A similar idea is used in DAgger (Ross et al., 2011), where the agent collects rollouts starting from states visited by the expert with the current policy and queries the expert for the correct actions at each state. However, unlike DAgger, which requires a real-time access to the expert policy to label actions, HD-ExpIt uses environment rewards to retrospectively validate the agent’s own exploration, making the process fully au-tonomous. 4.2.3. D ATASETS AGGREGATION 
+
+The data collected from the approximate expert ˆπ∗ 
+
+> t
+
+are then aggregated with the previous dataset to define a new training dataset Dt+1 which is used to update the policy as described in 4.2.1. We consider two aggregation strategies: 1) Standard HD-ExpIt merges the exploration dataset and the previous training dataset, Dt+1 = Dt ∪ R t, and retrains the agent from scratch. 2) HD-ExpIt-ft (for fine-tuning ) uses the exploration dataset as the training dataset Dt+1 = Rt and trains starting from 5Iterative On-Policy Refinement of Hierarchical Diffusion Policies for Language-Conditioned Manipulation 
+
+the current policy πt rather than training from scratch. The first updating strategy optimizes the policy over the en-tire aggregated datasets, which helps mitigate catastrophic forgetting. It is also the standard approach used for fine-tuning LLM agents with ExpIt-like methods (Havrilla et al., 2024; Guo et al., 2025). However, its computational cost scales quadratically with the number iterations Niter as the training set grows. To improve efficiency, the second strat-egy continues training from the previous policy πt. While this ensures a linear cost relative to Niter , it introduces the risk of forgetting knowledge from earlier iterations. 
+
+## 5. Experimental Setup 
+
+5.1. Architectures 
+
+The high-level planner is based on AVDC (Ko et al., 2024), utilizing a 3D CNN U-Net to generate subgoal sequences conditioned on the initial observation o0 and a frozen CLIP (Radford et al., 2021) embedding of the textual goal 
+
+g. For the main experiments, we use the DDPM (Ho et al., 2020) noise scheduler for both training and inference, while we investigate the use of DDIM (Song et al., 2021) to re-duce inference overhead in Appendix F.6. For the low-level controller, we evaluate two architectures adapted for goal-conditioning: a Diffusion Policy (DP) (Chi et al., 2023) and an Action Chunk Transformer (ACT) (Zhao et al., 2023). By default, HD-ExpIt uses the DP controller, while the ACT variant is denoted as HD-ACT-ExpIt. Further architectural details and hyperparameters are provided in Appendix B. 
+
+5.2. Environments Franka-3Blocks environment: To highlight the benefits of our method for improving hierarchical diffusion (HD) poli-cies, we evaluate versions of HD-ExpIt in an environment composed of 10 manipulation tasks defined by fixed lan-guage instructions. In order to construct the initial training set D0, we use a hand-crafted expert with access to privi-leged environment and robot state information. The policies are evaluated on 100 randomly sampled settings per tasks. 
+
+CALVIN environment: To evaluate our method against baselines, we train our policy with the different HD-ExpIt variants in the CALVIN environment (Mees et al., 2022b). This environment contains 34 language-conditioned manipu-lation tasks and provides an initial training set D0 collected through human teleoperation. We consider the D → D
+
+setting, where the agent sees the same environment at train and test. Each task l has 10 textual goals g in training, while evaluation uses unseen textual goals. We consider two evaluation protocols: Multi-Task Language-Conditioned (MTLC): complete each task in 30 unseen fixed settings and textual goals. This protocol aims to evaluate general-ization to contexts unseen in D0. Long-Horizon MTLC (LH-MTLC): complete 5 consecutive tasks, starting from 1000 contexts sampled from the fixed environment reset distribution with unseen textual goals. This protocol is more challenging and evaluates the capacity of the policy to main-tain performance over long sequences. The main metric is success rate (SR), with LH-MTLC also reporting the average number of instructions completed in a row (Avg. Len.). Further details on the environments can be found in Appendix D. 
+
+5.3. Baselines 
+
+To evaluate the effectiveness of our training method, we compare the performance of our hierarchical diffusion (HD) policy trained solely on the fixed initial dataset D0 (corre-sponding to iteration 0) with the policy after up to 3 itera-tions of HD-ExpIt and HD-ExpIt-ft using either ACT or DP controllers. We further compare our approach against hierar-chical policies from prior work, all trained from scratch on the CALVIN dataset. Each of these baselines represents a distinct strategy for improving hierarchical agents by align-ing HL with LL (see Figure 1(a)(b)(c) with further details in Appendix E): 
+
+• Independent HL–LL training: SuSIE (Black et al., 2024b). 
+
+• Alignment through a ”glue” model based on estimated task progress: TaKSIE (Kang & Kuo, 2025). 
+
+• Alignment through shared representations: HULC (Mees et al., 2022a) and MDT (Reuss et al., 2024), which use an autoregressive HL, and LDC (Zhang et al., 2024), which uses a diffusion-based HL. 
+
+## 6. Results 
+
+6.1. Main benchmarks: Does HD-ExpIt improve the performance of HD policies? 
+
+To evaluate the benefits of iterative fine-tuning, we apply HD-ExpIt for up to 3 iterations on the Franka-3Blocks and CALVIN environments. Figures 3(a) and (b) illustrate the evolution of the mean success rate in the Franka-3Blocks environment and the average successful sequence length in CALVIN LH-MTLC, respectively. These results demon-strate that both HD-ExpIt and HD-ExpIt-ft yield significant improvements over the initial hierarchical policy trained solely on D0. In Franka-3Blocks a single iteration of our method increases the SR from 70% to over 94%. In the more complex CALVIN benchmark, which features greater task and semantic diversity (see Appendix D), the improvement curve is more gradual but consistently upward. Figure 2 demonstrates improvement on the fixed settings of MTLC ( 89 .8% → 95 .2% SR), outperforming fixed-dataset baselines, while the results in Table 1 show substantial gains on LH-MTLC ( 2.69 → 4.28 Avg. Len.), highlighting supe-6Iterative On-Policy Refinement of Hierarchical Diffusion Policies for Language-Conditioned Manipulation LDC* 
+
+> SUSIE*
+> HULC
+> TaKSIE*
+> MDT
+> HD (iter 0)
+> HD-ExpIt-ft (iter 3)
+> HD-ExpIt (iter 3)
+> 70
+> 75
+> 80
+> 85
+> 90
+> 95
+> 100 Success Rate (%)
+
+Figure 2. HD-ExpIt improves HD policies to achieve SOTA results on CALVIN MTLC. Mean success rate across tasks of the HD policy trained on 
+
+D0 and after three iterations of each ver-sion of HD-ExpIt compared to baselines (∗ for results from previous work, bars indicates standard error over 3 seeds for ours and re-evaluated methods). 
+
+Table 1. HD-ExpIt improves HD policies to achieve SOTA results on CALVIN LH-MTLC. 
+
+Comparison of HD policies trained with different variants of our method (after 3 iterations) against baselines on CALVIN LH-MTLC. We report the percentage of trials successfully completing 1 to 5 consecutive instructions (mean over 3 seeds), alongside the average successful sequence length (Avg. Len.) and its standard error. The best performance for each metric is highlighted in bold , while the second best is underlined . Results from previous work are marked with ∗. Performance gains relative to the initial HD policies with same architectures trained on D0 (iter 0) are shown in green.                                                                                                      
+
+> Method No. Instructions in a Row (1000 chains) Avg. Len. ( ↑)12345Baselines  HULC* 82.7% 64.9% 50.4% 38.5% 28.3% 2.64 (±0.05)
+> SuSIE* 87.7% 67.4% 49.8% 41.9% 33.7% 2.80 (±0.15)
+> LDC* 88.7% 69.9% 54.5% 42.7% 32.2% 2.88 (±0.11)
+> TaKSIE* 90.4% 73.9% 61.7% 51.2% 40.8% 3.18 (±0.02)
+> MDT* 93.7% 84.5% 74.1% 64.4% 55.6% 3.72 (±0.05)
+> Ours
+> HD-ACT (iter 0) 76.0% 49.3% 31.4% 19.9% 12.3% 1.89 (±0.02)
+> HD-ACT-ExpIt-ft (iter 3) 87.0% 71.2% 56.2% 43.6% 31.8% 2.90 (±0.03) (×1.15) (×1.44) (×1.79) (×2.19) (×2.58) (×1.53)
+> HD (iter 0) 83.9% 65.2% 51.4% 39.5% 29.2% 2.69 (±0.02)
+> HD-ExpIt-ft (iter 3) 93.2% 85.4% 76.6% 66.9% 57.3% 3.80 (±0.01) (×1.11) (×1.31) (×1.49) (×1.69) (×1.96) (×1.41)
+> HD-ExpIt (iter 3) 97.5% 92.7% 86.6% 79.3% 71.3% 4.28 (±0.03) (×1.16) (×1.42) (×1.68) (×2.01) (×2.44) (×1.59) iter 0
+> iter 1
+> iter 2
+> iter 3
+> 60
+> 65
+> 70
+> 75
+> 80
+> 85
+> 90
+> 95
+> 100
+> Mean SR across tasks (%)
+> HD-ExpIt HD-ExpIt-ft iter 0
+> iter 1
+> iter 2
+> iter 3
+> 1.0
+> 1.5
+> 2.0
+> 2.5
+> 3.0
+> 3.5
+> 4.0
+> 4.5
+> 5.0
+> Avg. Len.
+> HD-ExpIt HD-ExpIt-ft HD-ACT-ExpIt-ft
+
+Figure 3. All variants of HD-ExpIt significantly improve HD policies in both the Franka-3Blocks and CALVIN environments. 
+
+Performance of HD policies is shown after 0 (trained solely on D0), to 3 iterations of variants of HD-ExpIt. Scatter represent the mean metric, while shaded areas denote the standard error across 3 seeds. (a) Mean success rate across tasks in Franka-3Blocks. (b) Mean successful sequence length in CALVIN LH-MTLC. 
+
+rior generalization capabilities of policies fine-tuned with our method. A detailed task-wise analysis in Appendix F.2 further reveals that, while D0 training suffices for simple tasks, the most significant gains from our method occur in the most complex tasks, where the initial policy originally performs poorly. Qualitative analyses of these failure modes are also reported in Appendix F.7. 
+
+Comparing LL architectures: Figure 3 also reports the im-provement curve for HD-ACT-ExpIt-ft, which uses an ACT controller instead of a DP. We observe that while the ACT-based policy initially performs worse (further highlighting the advantages of DP controllers over ACT in handling multi-modal action distributions) HD-ExpIt still enables sig-nificant iterative improvement, going from 1.89 consecutive successful tasks on average to 2.90 in LH-MTLC (Table 1). 
+
+Long-horizon performance: Critically, on CALVIN LH-MTLC (Table 1), three iterations of HD-ExpIt more than double the success rate for five consecutive tasks for both controller types ( ×2.58 for ACT and ×2.44 for DP); inter-mediate iteration gains are detailed in Appendix F. Notably, when using the diffusion-based controller, both HD-ExpIt and HD-ExpIt-ft outperform all baselines, achieving a new SOTA on CALVIN ( D → D) LH-MTLC among methods trained from scratch. This demonstrates that our fine-tuning strategy significantly improves the generalization capabili-ties of the agent beyond the coverage of the initial dataset 
+
+D0, notably due to the exploration strategy detailed in Sec-tion 4.2.2 as shown in Appendix F.3. 
+
+Comparison of update strategies: On the simpler Franka-3Blocks environment, the two versions of our method per-forms similarly (see Figure 3.(a)). On CALVIN, while HD-ExpIt-ft achieves significant gains, the best overall re-sults are achieved with HD-ExpIt (Table 1). Performance with HD-ExpIt-ft tends to plateau, as shown in Figure 3, whereas policies trained with HD-ExpIt show continued growth. However, as discussed in Appendix F.5, this sus-tained improvement comes at a higher computational cost. 
+
+6.2. Component analysis: Does HD-ExpIt improve both HL and LL components? 
+
+HL planner improvement: To isolate the improvement of HL, we fix two LL (DP and ACT, both trained with 3 iterations of HD-ExpIt-ft) and compare the performance of 7Iterative On-Policy Refinement of Hierarchical Diffusion Policies for Language-Conditioned Manipulation                        
+
+> Table 2. Cross-evaluation of different HLs, trained on D0and after 3 iterations of our method using ACT or DP, paired with these LLs on CALVIN LH-MTLC. We report the mean success sequence length (Avg. Len.) and standard error across 3 seeds. HL-LL training pairs are highlighted in blue, best results in bold .LL HL HD (iter 0) HD-ACT-ExpIt-ft (iter 3) HD-ExpIt-ft (iter 3) HD-ACT-ExpIt-ft (iter 3) 2.50 (±0.03) 2.90 (±0.03) 3.20 (±0.02)
+> HD-ExpIt-ft (iter 3) 2.82 (±0.01) 3.65 (±0.01) 3.80 (±0.01)
+
+the resulting policies when combined with different plan-ners: the initial planner (trained on D0), HL trained with HD-ACT-ExpIt-ft, and HL trained with HD-ExpIt-ft, both for three iterations. Table 2 shows the performance of these policies on CALVIN LH-MTLC. The results demonstrate that both HL fine-tuned with our method (whether paired with ACT or DP during training) outperform the initial HL for both controllers, even when paired with a LL not used during their specific training process. This indicates that HL fine-tuned with our method learns to generate fundamentally better plans that generalize to different LL. More surpris-ingly, HL trained with the DP controller performs better when paired with ACT than the HL that was actually trained with ACT ( 3.20 vs 2.90 Avg. Len.). This occurs despite both planners sharing the same architecture, starting from the same HL initialization trained on D0, and being trained on the same number of data at each iteration. This result demonstrates a synergistic mechanism: being paired with a stronger initial controller (DP) leads to the collection of higher-quality data, which in turn results in a more capable and generalizable HL. 
+
+LL controller improvement: To evaluate the improvement of LL, we utilize ground truth (GT) subgoals extracted from the CALVIN MTLC validation set. Table 3 compares the performance of hierarchical agents guided by GT subgoals with the LL trained solely on D0 against the LL fine-tuned with three iterations of HD-ExpIt. We observe that the LL fine-tuned with our method outperforms the one trained only on D0. Since this improvement occurs under GT guidance, it is independent of HL ’s performance, thereby demonstrat-ing the intrinsic improvement of LL. 
+
+6.3. HL-LL alignment: Through HD-ExpIt, does HL learn to plan within LL feasible region? 
+
+We also use the GT subgoals to evaluate the extent to which HL has learned to generate plans within the feasible region of LL. These GT subgoals are, by definition, task-relevant and represent valid robotic motions. However, because they are derived from human teleoperation trajectories, they are not necessarily tailored to the specific capacities of LL.                
+
+> Table 3. Cross-evaluation of HD policies with LLs trained solely on D0(iter 0) and trained with 3 iterations of HD-ExpIt (iter 3), guided by ground truth (GT) subgoals, and the respective HL with and without replanning. Results are reported as mean success rates and standard errors across 3 seeds on CALVIN MTLC. HL LL SR (%) GT HD (iter 0) 90.0 ( ±0.1) HD (iter 0) w/o replan. 83.3 ( ±0.1) HD (iter 0) 89.8 ( ±0.5) GT HD-ExpIt (iter 3) 91.2 ( ±0.5) HD-ExpIt (iter 3) w/o replan. 92.1 ( ±0.3) HD-ExpIt (iter 3) 95.2 ( ±0.2)
+
+For a fair comparison, we disable the replanning mecha-nism, forcing HL to succeed in a single attempt (further discussion on replanning can be found in Appendix F.4). We compare the performance of LL when guided by HL trained with HD-ExpIt versus when guided by GT subgoals. As shown in Table 3, the policy trained with HD-ExpIt, with disabled replanning, outperforms the GT-guided baseline, while using the same DP controller ( 92 .1% vs 91 .2% SR). It demonstrates that HL has successfully internalized the capabilities of LL, generating subgoals that are not only task-relevant but also more feasible for the specific controller than the GT subgoals extracted from human-generated tra-jectories. Importantly, unlike prior methods that explicitly model LL preferences or enforce shared representations, our approach learns feasibility implicitly by training HL only on trajectories LL has successfully executed. 
+
+## 7. Conclusion 
+
+In this paper, we introduced HD-ExpIt, a framework for the iterative fine-tuning of hierarchical diffusion policies via environment feedback. By organizing training into a self-reinforcing cycle, our method mitigates the limitations of static offline datasets while keeping the simplicity and stability of supervised learning. We leverage the stochas-ticity of the diffusion planner as a generative search mech-anism, using repeated on-policy sampling and feedback-filtering to discover successful demonstrations that reflect the controller’s actual capabilities. These behaviors are then distilled back into the hierarchical policy, improving both components while enabling implicit cross-level alignment. Through extensive experiments, we demonstrate that our method significantly improves the performance of hierarchi-cal diffusion policies trained solely on fixed initial datasets, ultimately reaching SOTA performance on the long-horizon multi-task CALVIN benchmark. We show that these gains stem from the inherent improvement of both components as well as the alignment of the high-level planner with the controller’s capabilities, grounding planning into execution. 8Iterative On-Policy Refinement of Hierarchical Diffusion Policies for Language-Conditioned Manipulation 
+
+## Impact Statement 
+
+This paper presents work whose goal is to advance the field of language-conditioned robotic manipulation. While im-proving hierarchical planning contributes to the long-term goal of general-purpose robotics, there are no immediate societal consequences of this research that we feel must be specifically highlighted here. 
+
+## Acknowledgments 
+
+This work used IDRIS HPC resources under the allocation 2025-[AD011015740R1] made by GENCI. It was supported by the European Commission’s Horizon Europe Framework Programme under grant No 101070381 (PILLAR-robots), and was partially funded by the French National Research Agency (ANR) under the OSTENSIVE projects (ANR-24-CE33-6907-01). 
+
+## References 
+
+Ajay, A., Han, S., Du, Y., Li, S., Gupta, A., Jaakkola, T. S., Tenenbaum, J. B., Kaelbling, L. P., Srivastava, A., and Agrawal, P. Compositional foundation models for hierar-chical planning. In Oh, A., Naumann, T., Globerson, A., Saenko, K., Hardt, M., and Levine, S. (eds.), Advances in Neural Information Processing Systems 36: Annual Conference on Neural Information Processing Systems 2023, NeurIPS 2023, New Orleans, LA, USA, December 10 - 16, 2023 , 2023. Anthony, T., Tian, Z., and Barber, D. Thinking fast and slow with deep learning and tree search. In Guyon, I., von Luxburg, U., Bengio, S., Wallach, H. M., Fergus, R., Vishwanathan, S. V. N., and Garnett, R. (eds.), Advances in Neural Information Processing Systems 30: Annual Conference on Neural Information Processing Systems 2017, December 4-9, 2017, Long Beach, CA, USA , pp. 5360–5370, 2017. Bai, S., Song, W., Chen, J., Ji, Y., Zhong, Z., Yang, J., Zhao, H., Zhou, W., Zhao, W., Li, Z., Ding, P., Chi, C., Li, H., Xu, C., Zheng, X., Wang, D., Zhang, S., and Chen, B. Towards a unified understanding of robot manipulation: A comprehensive survey, 2025. URL https://arxiv. org/abs/2510.10903 .Black, K., Janner, M., Du, Y., Kostrikov, I., and Levine, S. Training diffusion models with reinforcement learning. In The Twelfth International Conference on Learning Representations, ICLR 2024, Vienna, Austria, May 7-11, 2024 . OpenReview.net, 2024a. Black, K., Nakamoto, M., Atreya, P., Walke, H. R., Finn, C., Kumar, A., and Levine, S. Zero-shot robotic manipula-tion with pre-trained image-editing diffusion models. In 
+
+The Twelfth International Conference on Learning Repre-sentations, ICLR 2024, Vienna, Austria, May 7-11, 2024 .OpenReview.net, 2024b. Brooks, T., Holynski, A., and Efros, A. A. Instruct-pix2pix: Learning to follow image editing instructions. In IEEE/CVF Conference on Computer Vision and Pat-tern Recognition, CVPR 2023, Vancouver, BC, Canada, June 17-24, 2023 , pp. 18392–18402. IEEE, 2023. doi: 10.1109/CVPR52729.2023.01764. URL https:// doi.org/10.1109/CVPR52729.2023.01764 .Chen, C., Deng, F., Kawaguchi, K., Gulcehre, C., and Ahn, S. Simple hierarchical planning with diffusion. In The Twelfth International Conference on Learning Represen-tations, ICLR 2024, Vienna, Austria, May 7-11, 2024 .OpenReview.net, 2024. Chi, C., Feng, S., Du, Y., Xu, Z., Cousineau, E., Burch-fiel, B. C., and Song, S. Diffusion Policy: Visuomotor Policy Learning via Action Diffusion. In Proceedings of Robotics: Science and Systems , Daegu, Republic of Korea, 2023. doi: 10.15607/RSS.2023.XIX.026. Coumans, E. and Bai, Y. Pybullet, a python module for physics simulation for games, robotics and machine learn-ing. http://pybullet.org , 2016–2019. Du, Y., Yang, S., Dai, B., Dai, H., Nachum, O., Tenen-baum, J., Schuurmans, D., and Abbeel, P. Learning uni-versal policies via text-guided video generation. In Oh, A., Naumann, T., Globerson, A., Saenko, K., Hardt, M., and Levine, S. (eds.), Advances in Neural Information Processing Systems 36: Annual Conference on Neural In-formation Processing Systems 2023, NeurIPS 2023, New Orleans, LA, USA, December 10 - 16, 2023 , 2023. Fan, Y., Watkins, O., Du, Y., Liu, H., Ryu, M., Boutilier, C., Abbeel, P., Ghavamzadeh, M., Lee, K., and Lee, K. Reinforcement learning for fine-tuning text-to-image dif-fusion models. In Thirty-seventh Conference on Neural Information Processing Systems , 2023. Guo, D., Yang, D., Zhang, H., Song, J., Wang, P., Zhu, Q., Xu, R., Zhang, R., Ma, S., Bi, X., Zhang, X., Yu, X., Wu, Y., Wu, Z. F., Gou, Z., Shao, Z., Li, Z., Gao, Z., Liu, A., Xue, B., Wang, B., Wu, B., Feng, B., Lu, C., Zhao, C., Deng, C., Ruan, C., Dai, D., Chen, D., Ji, D., Li, E., Lin, F., Dai, F., Luo, F., Hao, G., Chen, G., Li, G., Zhang, H., Xu, H., Ding, H., Gao, H., Qu, H., Li, H., Guo, J., Li, J., Chen, J., Yuan, J., Tu, J., Qiu, J., Li, J., Cai, J. L., Ni, J., Liang, J., Chen, J., Dong, K., Hu, K., You, K., Gao, K., Guan, K., Huang, K., Yu, K., Wang, L., Zhang, L., Zhao, L., Wang, L., Zhang, L., Xu, L., Xia, L., Zhang, M., Zhang, M., Tang, M., Zhou, M., Li, M., Wang, M., Li, M., Tian, N., Huang, P., Zhang, P., Wang, Q., Chen, Q., Du, Q., Ge, R., Zhang, R., Pan, R., Wang, R., Chen, 9Iterative On-Policy Refinement of Hierarchical Diffusion Policies for Language-Conditioned Manipulation 
+
+R. J., Jin, R. L., Chen, R., Lu, S., Zhou, S., Chen, S., Ye, S., Wang, S., Yu, S., Zhou, S., Pan, S., Li, S. S., Zhou, S., Wu, S., Yun, T., Pei, T., Sun, T., Wang, T., Zeng, W., Liu, W., Liang, W., Gao, W., Yu, W., Zhang, W., Xiao, W. L., An, W., Liu, X., Wang, X., Chen, X., Nie, X., Cheng, X., Liu, X., Xie, X., Liu, X., Yang, X., Li, X., Su, X., Lin, X., Li, X. Q., Jin, X., Shen, X., Chen, X., Sun, X., Wang, X., Song, X., Zhou, X., Wang, X., Shan, X., Li, Y. K., Wang, Y. Q., Wei, Y. X., Zhang, Y., Xu, Y., Li, Y., Zhao, Y., Sun, Y., Wang, Y., Yu, Y., Zhang, Y., Shi, Y., Xiong, Y., He, Y., Piao, Y., Wang, Y., Tan, Y., Ma, Y., Liu, Y., Guo, Y., Ou, Y., Wang, Y., Gong, Y., Zou, Y., He, Y., Xiong, Y., Luo, Y., You, Y., Liu, Y., Zhou, Y., Zhu, Y. X., Huang, Y., Li, Y., Zheng, Y., Zhu, Y., Ma, Y., Tang, Y., Zha, Y., Yan, Y., Ren, Z. Z., Ren, Z., Sha, Z., Fu, Z., Xu, Z., Xie, Z., Zhang, Z., Hao, Z., Ma, Z., Yan, Z., Wu, Z., Gu, Z., Zhu, Z., Liu, Z., Li, Z., Xie, Z., Song, Z., Pan, Z., Huang, Z., Xu, Z., Zhang, Z., and Zhang, Z. Deepseek-r1 incentivizes reasoning in llms through reinforcement learning. Nature , 645(8081):633–638, September 2025. Hatch, K. B., Balakrishna, A., Mees, O., Nair, S., Park, S., Wulfe, B., Itkina, M., Eysenbach, B., Levine, S., Kollar, T., and Burchfiel, B. Ghil-glue: Hierarchical control with filtered subgoal images. In Proceedings of the IEEE International Conference on Robotics and Automation (ICRA) , Atlanta, USA, 2025. Havrilla, A., Du, Y., Raparthy, S. C., Nalmpantis, C., Dwivedi-Yu, J., Zhuravinskyi, M., Hambro, E., Sukhbaatar, S., and Raileanu, R. Teaching large language models to reason with reinforcement learning, 2024. URL 
+
+https://arxiv.org/abs/2403.04642 .Ho, J., Jain, A., and Abbeel, P. Denoising diffusion proba-bilistic models. In Larochelle, H., Ranzato, M., Hadsell, R., Balcan, M., and Lin, H. (eds.), Advances in Neural In-formation Processing Systems 33: Annual Conference on Neural Information Processing Systems 2020, NeurIPS 2020, December 6-12, 2020, virtual , 2020. Hu, J., Hendrix, R., Farhadi, A., Kembhavi, A., Mart ´ın-Mart ´ın, R., Stone, P., Zeng, K.-H., and Ehsani, K. Flare: Achieving masterful and adaptive robot policies with large-scale reinforcement learning fine-tuning. In ICRA ,May 2025. Hutsebaut-Buysse, M., Mets, K., and Latr ´e, S. Hierar-chical reinforcement learning: A survey and open re-search challenges. Machine Learning and Knowledge Extraction , 4(1):172–221, 2022. ISSN 2504-4990. doi: 10.3390/make4010009. Jain, A. K., Mohta, V., Kim, S., Bhardwaj, A., Ren, J., Feng, Y., Choudhury, S., and Swamy, G. A smooth sea never made a skilled SAILOR: Robust imitation via learning to search. In The Thirty-ninth Annual Conference on Neural Information Processing Systems , 2025. James, S., Ma, Z., Arrojo, D. R., and Davison, A. J. Rlbench: The robot learning benchmark and learning environment. volume 5, pp. 3019–3026, 2020. doi: 10.1109/LRA.2020. 2974707. Julian, R., Swanson, B., Sukhatme, G., Levine, S., Finn, C., and Hausman, K. Never stop learning: The effectiveness of fine-tuning in robotic reinforcement learning. In Kober, J., Ramos, F., and Tomlin, C. (eds.), Proceedings of the 2020 Conference on Robot Learning , volume 155 of Pro-ceedings of Machine Learning Research , pp. 2120–2136. PMLR, 16–18 Nov 2021. Kaelbling, L. P., Littman, M. L., and Cassandra, A. R. Planning and acting in partially observable stochastic do-mains. Artificial Intelligence , 101(1):99–134, 1998. ISSN 0004-3702. doi: https://doi.org/10.1016/S0004-3702(98) 00023-X. Kang, X. and Kuo, Y.-L. Incorporating task progress knowledge for subgoal generation in robotic manipula-tion through image edits. In 2025 IEEE/CVF Winter Conference on Applications of Computer Vision (WACV) ,pp. 7490–7499, 2025. doi: 10.1109/WACV61041.2025. 00728. Karamcheti, S., Nair, S., Chen, A. S., Kollar, T., Finn, C., Sadigh, D., and Liang, P. Language-Driven Representa-tion Learning for Robotics. In Proceedings of Robotics: Science and Systems , Daegu, Republic of Korea, July 2023. doi: 10.15607/RSS.2023.XIX.032. Karras, T., Aittala, M., Aila, T., and Laine, S. Elucidating the design space of diffusion-based generative models. In Koyejo, S., Mohamed, S., Agarwal, A., Belgrave, D., Cho, K., and Oh, A. (eds.), Advances in Neural Infor-mation Processing Systems 35: Annual Conference on Neural Information Processing Systems 2022, NeurIPS 2022, New Orleans, LA, USA, November 28 - December 9, 2022 , 2022. Kawaharazuka, K., Oh, J., Yamada, J., Posner, I., and Zhu, Y. Vision-language-action models for robotics: A review towards real-world applications. IEEE Ac-cess , 13:162467–162504, 2025. ISSN 2169-3536. doi: 10.1109/access.2025.3609980. URL http://dx.doi. org/10.1109/ACCESS.2025.3609980 .Kingma, D. P. and Ba, J. Adam: A method for stochastic optimization. In Bengio, Y. and LeCun, Y. (eds.), 3rd International Conference on Learning Representations, ICLR 2015, San Diego, CA, USA, May 7-9, 2015, Confer-ence Track Proceedings , 2015. 10 Iterative On-Policy Refinement of Hierarchical Diffusion Policies for Language-Conditioned Manipulation 
+
+Ko, P., Mao, J., Du, Y., Sun, S., and Tenenbaum, J. B. Learning to act from actionless videos through dense correspondences. In The Twelfth International Confer-ence on Learning Representations, ICLR 2024, Vienna, Austria, May 7-11, 2024 . OpenReview.net, 2024. Levy, A., Konidaris, G. D., Jr., R. P., and Saenko, K. Learn-ing multi-level hierarchies with hindsight. In 7th Inter-national Conference on Learning Representations, ICLR 2019, New Orleans, LA, USA, May 6-9, 2019 . OpenRe-view.net, 2019. Liang, Z., Mu, Y., Ma, H., Tomizuka, M., Ding, M., and Luo, P. Skilldiffuser: Interpretable hierarchical planning via skill abstractions in diffusion-based task execution. In 
+
+IEEE/CVF Conference on Computer Vision and Pattern Recognition, CVPR 2024, Seattle, WA, USA, June 16-22, 2024 , pp. 16467–16476. IEEE, 2024. doi: 10.1109/ CVPR52733.2024.01558. Liu, Y., Zhang, K., Li, Y., Yan, Z., Gao, C., Chen, R., Yuan, Z., Huang, Y., Sun, H., Gao, J., He, L., and Sun, L. Sora: A review on background, technology, limitations, and opportunities of large vision models, 2024. URL 
+
+https://arxiv.org/abs/2402.17177 .Ma, X., Patidar, S., Haughton, I., and James, S. Hierarchical diffusion policy for kinematics-aware multi-task robotic manipulation. In IEEE/CVF Conference on Computer Vision and Pattern Recognition, CVPR 2024, Seattle, WA, USA, June 16-22, 2024 , pp. 18081–18090. IEEE, 2024. doi: 10.1109/CVPR52733.2024.01712. Ma, Y. J., Kumar, V., Zhang, A., Bastani, O., and Jayaraman, D. LIV: language-image representations and rewards for robotic control. In Krause, A., Brunskill, E., Cho, K., Engelhardt, B., Sabato, S., and Scarlett, J. (eds.), Inter-national Conference on Machine Learning, ICML 2023, 23-29 July 2023, Honolulu, Hawaii, USA , volume 202 of 
+
+Proceedings of Machine Learning Research , pp. 23301– 23320. PMLR, 2023. URL https://proceedings. mlr.press/v202/ma23b.html .Mees, O., Hermann, L., and Burgard, W. What matters in language conditioned robotic imitation learning over unstructured data. IEEE Robotics and Automation Letters (RA-L) , 7(4):11205–11212, 2022a. Mees, O., Hermann, L., Rosete-Beas, E., and Burgard, W. CALVIN: A benchmark for language-conditioned policy learning for long-horizon robot manipulation tasks. IEEE Robotics and Automation Letters (RA-L) , 7(3):7327–7334, 2022b. Nachum, O., Gu, S., Lee, H., and Levine, S. Data-efficient hierarchical reinforcement learning. In Bengio, S., Wal-lach, H. M., Larochelle, H., Grauman, K., Cesa-Bianchi, N., and Garnett, R. (eds.), Advances in Neural Informa-tion Processing Systems 31: Annual Conference on Neu-ral Information Processing Systems 2018, NeurIPS 2018, December 3-8, 2018, Montr ´eal, Canada , pp. 3307–3317, 2018. Perez, E., Strub, F., de Vries, H., Dumoulin, V., and Courville, A. C. Film: Visual reasoning with a general conditioning layer. In McIlraith, S. A. and Weinberger, K. Q. (eds.), Proceedings of the Thirty-Second AAAI Con-ference on Artificial Intelligence, (AAAI-18), the 30th in-novative Applications of Artificial Intelligence (IAAI-18), and the 8th AAAI Symposium on Educational Advances in Artificial Intelligence (EAAI-18), New Orleans, Louisiana, USA, February 2-7, 2018 , pp. 3942–3951. AAAI Press, 2018. Radford, A., Kim, J. W., Hallacy, C., Ramesh, A., Goh, G., Agarwal, S., Sastry, G., Askell, A., Mishkin, P., Clark, J., Krueger, G., and Sutskever, I. Learning transferable visual models from natural language supervision. In Meila, M. and Zhang, T. (eds.), Proceedings of the 38th International Conference on Machine Learning, ICML 2021, 18-24 July 2021, Virtual Event , volume 139 of 
+
+Proceedings of Machine Learning Research , pp. 8748– 8763. PMLR, 2021. Ren, A., Lidard, J., Ankile, L., Simeonov, A., Agrawal, P., Majumdar, A., Burchfiel, B., Dai, H., and Simchowitz, M. Diffusion policy policy optimization. In Yue, Y., Garg, A., Peng, N., Sha, F., and Yu, R. (eds.), International Conference on Learning Representations , volume 2025, pp. 77288–77329, 2025. Reuss, M., Ya ˘gmurlu, ¨O. E., Wenzel, F., and Li-outikov, R. Multimodal diffusion transformer: Learn-ing versatile behavior from multimodal goals. In 
+
+Proceedings of Robotics: Science and Systems (RSS) ,2024. URL https://roboticsconference. org/2024/program/papers/121/ . Poster Paper, Paper ID 121. Rombach, R., Blattmann, A., Lorenz, D., Esser, P., and Ommer, B. High-resolution image synthesis with latent diffusion models. In 2022 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , pp. 10674–10685, 2022. doi: 10.1109/CVPR52688.2022. 01042. Ross, S., Gordon, G., and Bagnell, D. A reduction of im-itation learning and structured prediction to no-regret online learning. In Gordon, G., Dunson, D., and Dud ´ık, M. (eds.), Proceedings of the Fourteenth International Conference on Artificial Intelligence and Statistics , vol-ume 15 of Proceedings of Machine Learning Research ,pp. 627–635, Fort Lauderdale, FL, USA, 2011. PMLR. 11 Iterative On-Policy Refinement of Hierarchical Diffusion Policies for Language-Conditioned Manipulation 
+
+Shi, H., Deng, X., Li, Z., Chen, G., Wang, Y., and Nie, L. Dagger diffusion navigation: Dagger boosted diffu-sion policy for vision-language navigation, 2025. URL 
+
+https://arxiv.org/abs/2508.09444 .Song, J., Meng, C., and Ermon, S. Denoising diffusion im-plicit models. In 9th International Conference on Learn-ing Representations, ICLR 2021, Virtual Event, Austria, May 3-7, 2021 . OpenReview.net, 2021. Tang, C., Abbatematteo, B., Hu, J., Chandra, R., Mart ´ın-Mart ´ın, R., and Stone, P. Deep reinforce-ment learning for robotics: A survey of real-world suc-cesses. Annual Review of Control, Robotics, and Au-tonomous Systems , 8:153–188, 2025. doi: 10.1146/ annurev-control-030323-022510. Wallace, B., Dang, M., Rafailov, R., Zhou, L., Lou, A., Pu-rushwalkam, S., Ermon, S., Xiong, C., Joty, S., and Naik, N. Diffusion model alignment using direct preference optimization. In IEEE/CVF Conference on Computer Vision and Pattern Recognition, CVPR 2024, Seattle, WA, USA, June 16-22, 2024 , pp. 8228–8238. IEEE, 2024. doi: 10.1109/CVPR52733.2024.00786. Wen, C., Lin, X., So, J. I. R., Chen, K., Dou, Q., Gao, Y., and Abbeel, P. Any - point trajectory modeling for policy learning. In Proceedings of Robotics: Science and Systems (RSS) , Delft, Netherlands, July 2024. Poster Paper, Paper ID 92. Xian, Z., Gkanatsios, N., Gervet, T., Ke, T.-W., and Fragki-adaki, K. Chaineddiffuser: Unifying trajectory diffusion and keypose prediction for robotic manipulation. In Tan, J., Toussaint, M., and Darvish, K. (eds.), Proceedings of The 7th Conference on Robot Learning , volume 229 of 
+
+Proceedings of Machine Learning Research , pp. 2323– 2339. PMLR, 2023. Xie, A., Rybkin, O., Sadigh, D., and Finn, C. Latent diffu-sion planning for imitation learning. In Singh, A., Fazel, M., Hsu, D., Lacoste-Julien, S., Berkenkamp, F., Maharaj, T., Wagstaff, K., and Zhu, J. (eds.), Proceedings of the 42nd International Conference on Machine Learning , vol-ume 267 of Proceedings of Machine Learning Research ,pp. 68710–68724. PMLR, 13–19 Jul 2025. Xu, C., Guo, J., Liang, Y., Huang, H., Zou, H., Zheng, X., Yu, S., Chu, X., Cao, J., and Wang, T. Diffusion mod-els for reinforcement learning: Foundations, taxonomy, and development, 2025. URL https://arxiv.org/ abs/2510.12253 .Yang, K., Tao, J., Lyu, J., Ge, C., Chen, J., Shen, W., Zhu, X., and Li, X. Using human feedback to fine-tune diffu-sion models without any reward model. In IEEE/CVF Conference on Computer Vision and Pattern Recogni-tion, CVPR 2024, Seattle, WA, USA, June 16-22, 2024 ,pp. 8941–8951. IEEE, 2024. doi: 10.1109/CVPR52733. 2024.00854. Yao, X., Zhou, H., Mees, O., Meng, Y., Xiao, T., Bisk, Y., Oh, J., Johns, E., Shridhar, M., Shah, D., Thomason, J., Huang, K., Chai, J., Bing, Z., and Knoll, A. Bridging language and action: A survey of language-conditioned robot manipulation, 2023. Yu, T., Quillen, D., He, Z., Julian, R., Hausman, K., Finn, C., and Levine, S. Meta-world: A benchmark and evalua-tion for multi-task and meta reinforcement learning. In Kaelbling, L. P., Kragic, D., and Sugiura, K. (eds.), Pro-ceedings of the Conference on Robot Learning , volume 100 of Proceedings of Machine Learning Research , pp. 1094–1100. PMLR, Oct–Nov 2020. Zhang, E., Lu, Y., Huang, S., Wang, W. Y., and Zhang, A. Language control diffusion: Efficiently scaling through space, time, and tasks. In The Twelfth International Con-ference on Learning Representations, ICLR 2024, Vienna, Austria, May 7-11, 2024 . OpenReview.net, 2024. Zhao, T. Z., Kumar, V., Levine, S., and Finn, C. Learn-ing fine-grained bimanual manipulation with low-cost hardware. In Proceedings of Robotics: Science and Sys-tems (RSS) , Daegu, Republic of Korea, July 2023. doi: 10.15607/RSS.2023.XIX.016. 12 Iterative On-Policy Refinement of Hierarchical Diffusion Policies for Language-Conditioned Manipulation 
+
+## A. Notations  
+
+> Table 4. List of Notations
+
+Symbol Description 
+
+x ∼ X x sampled from a uniform distribution over the set XX ∗ Set of all finite sequences over X
+
+S Environment state space 
+
+ρ0 ∈ P (S) Initial state distribution 
+
+ρreset ∈ P (S) Environment reset state distribution 
+
+Ω = R3×H×W Observation space (pixel space) 
+
+H × W Height and width of the pixel space 
+
+o = O(s) ∈ R3×W ×H Observation 
+
+A Action space 
+
+τ ∈ (S × A)∗ State-action pairs trajectory 
+
+V Vocabulary 
+
+G ⊂ V ∗ Set of textual goals 
+
+L Set of tasks 
+
+Gl ⊂ V ∗ Set of goals characterizing task lg ∈ Gl Textual goal characterizing a task l
+
+T : S × A → S Environment transition function 
+
+R : τ × (s0 × l) → { 0, 1} Environment success (binary) reward function 
+
+Tmax ∈ N Environment maximum number of steps allowed to complete a task 
+
+πHL ϕ High-level visual planner with parameters ϕζ = {o1, . . . , o M } ∈ ΩM Sequence of subgoals 
+
+{x1, . . . , x M } Indexes of states used as subgoals in trajectory τ = {a0, s 0, . . . , a N , s N }
+
+M ∈ N Number of subgoals in ζζ[i] = oi ∈ Ω i-th subgoal of the sequence ζζj ∈ ΩM j-th denoised sample in the HL diffusion process (with j HL diffusion step) 
+
+αj , β j j-th HL diffusion parameters 
+
+πLL ψ Low-level controller with parameters ψn ∈ N Size of the action chunk 
+
+ac ∈ An Action chunk 
+
+π Hierarchical policy composed of a high-level planner πHL and a low-level controller πLL 
+
+π−1 A randomly initialized hierarchical policy 
+
+t HD-ExpIt iteration step 
+
+Niter ∈ N Number of expert iterations 
+
+Dt Expert demonstrations dataset used to train the policy πt
+
+Rt Exploration dataset collected from approximate expert ˆπ∗
+
+> t
+
+C(D) Contexts extracted from expert dataset DK ∈ N Number of sampling trials per context 
+
+Ndata ∈ N Maximum number of data in R per task 
+
+## B. Architecture and hyperparameter details 
+
+B.1. High-level planner: 
+
+The HL component of HD-ExpIt is based on AVDC (Ko et al., 2024). At each diffusion step j, the model is conditioned on the initial observation by concatenating o0 to the noisy observations oji for i ∈ { 1, . . . , M } in the sequence to be denoised 
+
+ζj , and is conditioned on the textual goal g by extracting goal features and injecting them into the downsampling, middle, and upsampling layers of the 3D CNN U-Net. The textual goal is embedded with CLIP (Radford et al., 2021) which is frozen during training. The total number of trainable parameters of HL is 200M. 13 Iterative On-Policy Refinement of Hierarchical Diffusion Policies for Language-Conditioned Manipulation 
+
+Sampling and guidance: We apply classifier-free guidance (CFG) with parameter λ specifically on the goal conditioning. During rollout collection, we set λ = 3 to favor exploration; for evaluation, we increase to λ = 5 to reduce stochasticity. The main experiments utilize a DDPM (Ho et al., 2020) scheduler with 100 steps. In Appendix F.6, we investigate the impact of using a DDIM (Song et al., 2021) scheduler with 10, 30, 50, and 70 steps to reduce inference overhead. 
+
+Subgoal extraction: We utilize a fixed sequence of M = 8 subgoals. For a trajectory τ = {s0, a 0, . . . , s N , a N }, we extract M + 1 observations from states with indices {x0, . . . , x M }, where x0 = 0 (initial) and xM = N (task completion). Intermediate indices x1 . . . x M −1 are sampled evenly along the temporal horizon. 
+
+B.2. Low-level controller: 
+
+In our experiments, we consider two types of LL controllers: • A goal-conditioned diffusion policy (DP) , based on the architecture introduced in (Chi et al., 2023). This architecture uses 1D CNN layers and denoises an action chunk by injecting observation features into the denoising process through FiLM layers (Perez et al., 2018). We extend this conditioning to also incorporate the target observation otarget . This is the default controller used in our method (250M trainable parameters). • A goal-conditioned Action Chunk Transformer (ACT) from (Zhao et al., 2023), based on a ResNet18 vision encoder and transformer encoder-decoder (51M training parameters). In a similar way as with the DP controller, we extend the ACT architecture to integrate conditioning on both the current observation and a target observation (using the same vision encoder). 
+
+Action Chunking: For both environments, the controller outputs a fixed-length action sequence of size n = 8 . To extract the ground-truth action chunks from the expert trajectories τ = {s0, a 0, . . . , s N , a N } (as described in Section 4.2.1) we extract chunks of size m sampled between 8 and N 
+
+> 8
+
+and apply static padding if m < 8. These parameters are chosen based on the target environments, where trajectories are capped at a maximum length of N = 64 (i.e., 8 × 8 steps). Note that the action chunk is executed in the environment in an open-loop manner. 
+
+B.3. HD-ExpIt Training: For both components, we first train on D0 up to loss con-vergence to establish the initial number of gradient updates N0 (this depends on the environment and the specific controller architecture as detailed in Table 5). We then apply different schedules depending on the training strategy to find the number of gradient updates Nt at iteration t:
+
+• HD-ExpIt (standard): We use a linear schedule Nt = Nt−1 +0.5N0 to accommodate the increasing size of the aggregated dataset. 
+
+• HD-ExpIt-ft (fine-tuning): We apply a fixed schedule of Nt =0.1N0 for LL and Nt = 0 .2N0 for HL, for each iteration.  
+
+> Table 5. Training hyperparameters for both environments and the different component architectures.
+
+Environment Component Batch size N0
+
+CALVIN HL 16 5e5
+
+LL ACT 128 5e5
+
+LL DP 64 1e6
+
+Franka-3Blocks HL 64 1e5
+
+LL DP 64 3e5
+
+HD-ExpIt (with a DP controller) on the CALVIN benchmark (with hyperparameter values mentioned in Table 5) requires approximately 65 hours on two NVIDIA H100 GPUs for 1 e6 gradient updates of HL, and 70 hours on a single H100 GPU for 1 e6 updates of LL. For both components, we use the Adam optimizer (Kingma & Ba, 2015) with learning rates 1e−4.
+
+Rollouts collection: For the data collection process described in Section 4.2.2, we collect as many demonstrations per task as in the initial dataset D0, that is a total of 150 demonstrations in CALVIN and 100 in Franka-3Blocks. Specifically, for CALVIN, we sample 100 demonstrations from expert-replayed contexts and 50 demonstrations from environment-reset contexts per task at each iteration. We chose to sample more heavily from expert-replayed contexts because they provide greater diversity, as demonstrated in Appendix F.3. For the Franka-3Blocks environment, we sample 50 demonstrations from expert-replayed contexts and 50 from environment resets. For both environments, we allow K = 5 trials per context. Notably, across all experiments, we were able to successfully collect the target amount of data for every task. However, 14 Iterative On-Policy Refinement of Hierarchical Diffusion Policies for Language-Conditioned Manipulation 
+
+when starting from weaker initial policies, we recommend increasing K or reducing the per-iteration data collection target to ensure that the generative search remains computationally feasible. 
+
+## C. HD-ExpIt pseudo-code 
+
+Algorithm 1 details the complete training procedure of our proposed method as depicted in Figure 1. The specific update and data aggregation strategies of HD-ExpIt are highlighted in purple, while those for HD-ExpIt-ft are highlighted in blue. This procedure encompasses the three phases described in Section 4: first, the supervised update of both components on the current dataset (Algorithm 2); second, the collection of rollouts from both environment-reset and expert-replayed contexts. Algorithm 3 details this collection process, which builds upon the hierarchical inference procedure described in Algorithm 4 (see far right of Figure 1). Note that data collection from these two context types is performed separately to ensure diverse demonstrations are captured. Finally, the newly collected data are aggregated with (or replace) the current training set to form the data for the next iteration. 
+
+Algorithm 1 HD-ExpIt  
+
+> 1:
+
+Input: π−1: randomly initialized hierarchical agent 
+
+D0: initial expert demonstrations 
+
+Niter : number of expert iterations 
+
+Ndata : maximum number of trajectories to be collected per task at each expert iteration 
+
+K: number of rollout trials per context 
+
+M : number of subgoals per trajectory 
+
+n: action chunk size 
+
+env : environment 
+
+Tmax : maximum environment steps 
+
+N1: number of gradient updates for training from scratch (HL and LL) (strategy 1) 
+
+N2 < N 1: number of gradient updates for fine-tuning from previous policy (HL and LL) (strategy 2)  
+
+> 2:
+
+D ← D0, π ← π−1 
+
+> 3:
+
+for t = 1 to Niter do  
+
+> 4:
+
+π ← SupervisedTraining (π−1, D, N 1) ▷ Policy update from scratch (strategy 1)  
+
+> 5:
+
+π ← SupervisedTraining (π, D, N 2) ▷ Policy fine-tuning (strategy 2)  
+
+> 6:
+
+Rexp-cxt ← CollectTrajectories( πHL , π LL , C(D), K, N data , M, n, env, T max ) ▷ Expert-replayed contexts  
+
+> 7:
+
+Rreset-cxt ← CollectTrajectories( πHL , π LL , ρ reset , K, N data , M, n, env, T max ) ▷ Environment-reset contexts  
+
+> 8:
+
+R ← R exp-cxt ∪ R reset-cxt  
+
+> 9:
+
+D ← D ∪ R ▷ Dataset update strategy (1): augment existing dataset  
+
+> 10:
+
+D ← R ▷ Dataset update strategy (2): replace dataset for fine-tuning  
+
+> 11:
+
+end for Algorithm 2 SupervisedTraining 
+
+Input: π, dataset D, number of gradient updates N
+
+Update both components πHL and πLL independently in a supervised fashion on D as detailed in Section 4.2.1 for 
+
+N = ( NHL , N LL ) gradient updates, respectively for HL and LL. 15 Iterative On-Policy Refinement of Hierarchical Diffusion Policies for Language-Conditioned Manipulation 
+
+Algorithm 3 CollectTrajectories 
+
+Input: πHL , π LL , Cctx , K, N data , M, n, env, T max , Rollout 
+
+R ← ∅ 
+
+for (s0, l ) ∈ C ctx do for k = 1 to K do 
+
+τ ∼ Rollout( πHL , π LL , o 0, g, M, n, env, T max ) ▷ Sample from current policy 
+
+if R(τ, s 0, l ) = 1 and Count (l, R) < N data then 
+
+R ← R ∪ { τ } ▷ Filter based on feedback 
+
+break ▷ Keep only one successful trajectories per context 
+
+end if end for if ∀l ∈ L , Count (l, R) ≥ Ndata then break end if end for return R
+
+Algorithm 4 Rollout 
+
+Input: πHL ϕ , πLL ψ , task context (o0, g ), number of subgoals M , action chunk size n, environment env , maximum environment steps Tmax 
+
+d ← 0, done ← false , x ← o0
+
+repeat 
+
+ˆζ ← πHL ϕ (x, g ) ▷ Sample visual plan 
+
+for i = 1 to M do 
+
+ac ← πLL ψ (x, ˆζ[i]) ▷ Sample action chunk 
+
+(x, done ) ← env. step (ac) ▷ Update environment 
+
+d ← d + n
+
+end for until done = true or d ≥ Tmax 
+
+## D. Environments 
+
+Table 6. Environment characteristics 
+
+Franka-3Blocks CALVIN 
+
+No. Tasks 10 34 Evaluation textual goal Seen Unseen No. textual goals in training per task 1 10 No. initial training data per task 100 150 No. evaluation settings per tasks (MTLC) 100 30 Initial settings sampling (MTLC) ρreset fixed No. tasks to complete in a row (LH-MTLC) - 5Initial settings sampling (LH-MTLC) - ρreset 
+
+(a) Franka-3Blocks envi-ronment 
+
+(b) CALVIN environment 
+
+Figure 4. Environments 
+
+Franka-3Blocks environment: As a proof of concept of the benefits of HD-ExpIt, we build a block manipulation environment based on the PyBullet physical simulator (Coumans & Bai, 2016–2019), which contains a Franka arm and three blocks (red, blue, and green) on a table, as shown in Figure 4(a). To create the initial demonstrations dataset D0, we design a hard-coded expert relying on privileged information about the environment state (object positions and orientations, and the full robot state) and collect 100 demonstrations per task. We consider 10 tasks from three categories: lift tasks (3 tasks, one for each block); push tasks (6 tasks, pushing each block either right or left ); and stack tasks (1 task for stacking any pair of blocks). To characterize each task, we define a single language instruction per task, which is used for both training and evaluation, in order to reduce the complexity of generalizing to unseen textual goals. 16 Iterative On-Policy Refinement of Hierarchical Diffusion Policies for Language-Conditioned Manipulation 
+
+CALVIN environment: To further evaluate HD-ExpIt on a more challenging setting, we test it on the two CALVIN Multi-Task Language-Conditioned (MTLC) and Long-Horizon Multi-Task Language-Conditioned (LH-MTLC) bench-marks. CALVIN introduces a multi-task setup where, unlike other environments such as Meta-World (Yu et al., 2020) or RLBench (James et al., 2020), almost every task can be executed in every setting. In other words, the setting does not induce the task, which is closer to real world multi-task problems. 0.00 0.01 0.02 0.03 0.04 0.05 0.06 0.07 0.08 
+
+> Normalized frequency
+> open_drawer
+> place_in_slider
+> move_slider_right
+> move_slider_left
+> close_drawer
+> turn_on_lightbulb
+> turn_on_led
+> lift_blue_block_table
+> lift_red_block_table
+> stack_block
+> place_in_drawer
+> turn_off_led
+> lift_pink_block_table
+> lift_red_block_slider
+> turn_off_lightbulb
+> lift_blue_block_slider
+> lift_pink_block_slider
+> push_into_drawer
+> rotate_blue_block_right
+> push_red_block_right
+> rotate_red_block_right
+> push_pink_block_left
+> push_red_block_left
+> push_blue_block_right
+> rotate_pink_block_right
+> rotate_blue_block_left
+> push_pink_block_right
+> push_blue_block_left
+> rotate_red_block_left
+> rotate_pink_block_left
+> unstack_block
+> lift_blue_block_drawer
+> lift_red_block_drawer
+> lift_pink_block_drawer
+> block rotation slider actuation drawer actuation block lifting targeted object placement light control stack unstack block pushing MTLC
+
+Figure 5. Task distributions in CALVIN LH-MTLC and MTLC (uniform). 
+
+In the version we consider (task D → D), the envi-ronment consists of a table with two lights (a LED and a light bulb ) activated through different mechanical processes, a slider and a drawer. A Franka robot inter-acts with the table components as well as with three blocks of different shapes and colors (pink, red, and blue), as depicted in Figure 4(b). The environment includes 34 language-conditioned tasks, each associ-ated with 11 textual goals: 10 for training and 1 for evaluation. These tasks can be categorized into: block spatial manipulation, slider actuation, drawer actua-tion, block lifting, targeted object placement, light control, stack and unstack. We assign a unique color to each category and plot the task distribution for both benchmarks, MTLC and LH-MTLC, in Figure 5. We observe that while the distribution is uniform in MTLC, LH-MTLC privileges certain categories over others due to the constraint of executing tasks sequen-tially. To construct the initial dataset D0, the benchmark provides 150 demonstrations per task collected via teleoperation, and 30 demonstrations per task for evaluation that are used as unseen initial settings for the MTLC benchmark. We further use these trajectories to extract ground truth subgoals in Section 6. 
+
+## E. Baselines details 
+
+As mentioned in Section 5, we consider baselines belonging to three training paradigms of hierarchical policies for language-conditioned manipulation (see Figure 1(a)(b)(c)). We compare against these baselines on the CALVIN environment, using results from prior work when available or re-evaluating the baselines (using available checkpoints) when not (especially for MTLC). All these methods are trained solely on a fixed offline dataset and are categorized as follows: 
+
+• Independent training: Most existing hierarchical frameworks in robot learning train HL and LL independently, decoupling high-level planning from low-level control. In this work, we consider SuSIE (Black et al., 2024b) as a representative of this category. This baseline is one of the first methods to use an image-editing model in a hierarchical policy for language-conditioned manipulation. SuSIE uses for HL a pre-trained text-to-image generative diffusion model, InstructPix2Pix (Brooks et al., 2023), fine-tuned on robot video data, and a diffusion-based controller utilizing MLP layers and a ResNet-50 vision encoder. This method generates one subgoal at a time. 
+
+• ”Glue” models: Methods have been proposed to enhance hierarchical diffusion policies through ”glue” models that aim at bridging planning and control, hence mitigating the HL-LL coupling mismatch defined in Section 4. Among these methods, we use TaKSIE (Kang & Kuo, 2025) as a baseline, which is based on SuSIE but improves it by incorporating a task-progress estimator fine-tuned from the pre-trained model LIV (Ma et al., 2023) to select plans that help LL advance in the task. Except for the task progress estimator, this method shares the same characteristics as SuSIE. 
+
+• Shared representations: The final class of methods enforces coupling through shared cross-level representations. An early and widely used CALVIN baseline in this category is HULC (Mees et al., 2022a). In this method, the hierarchical policy is trained end-to-end with HL generating global discrete latent plans and LL learning local policies that are conditioned on these plans. LDC (Zhang et al., 2024) first trains a controller based on the HULC architecture (utilizing its discrete latent space) and then uses the trained latent space of this LL to generate plans using a diffusion HL. This way, HL generates compressed plans that contain exactly the information required by LL to solve the task. MDT (Reuss et al., 2024) is, at 17 Iterative On-Policy Refinement of Hierarchical Diffusion Policies for Language-Conditioned Manipulation 
+
+the time of writing, the current SOTA on the CALVIN ( D → D) LH-MTLC benchmark among methods trained from scratch. In this method, HL is a transformer-based model that encodes the task context and current observation, leveraging a pre-trained Voltron (Karamcheti et al., 2023) vision-encoder, into a latent goal representation. This latent is then used to condition an attention-based diffusion LL. The framework is trained using a joint objective: HL learns to represent the plan by predicting the next visual subgoal, while LL is trained via a diffusion loss to map these goal-conditioned latents to continuous actions. This ensures the latent space both encapsulates the necessary temporal information for planning and provides effective guidance for the low-level controller. 
+
+## F. Additional results 
+
+F.1. Main benchmarks 
+
+Table 8 (MTLC) and Table 7 (LH-MTLC) provide a detailed breakdown of the results presented in Section 6. We include performance metrics for the intermediate iterations of HD-ExpIt, HD-ExpIt-ft, and HD-ACT-ExpIt, as well as the ablation study using only environment-reset data collection (HD-ExpIt-ft reset only), which is further discussed in Appendix F.3. All results are reported with standard error calculated over three seeds, along with those for the baselines. 
+
+Table 7. Comparison of HD policies trained with different variants of our method (after 0 to 3 iterations) against baselines on CALVIN LH-MTLC. We report the percentage of trials successfully completing 1 to 5 consecutive instructions (mean over 3 seeds), alongside the average successful sequence length (Avg. Len.) and its standard error. The best performance for each metric is highlighted in bold , while the second best is underlined. Results from previous work are marked with ∗.Method No. Instructions in a Row (1000 chains) 1 2 3 4 5 Avg. Len. ( ↑)Baselines  HULC* 82.7% 64.9% 50.4% 38.5% 28.3% 2.64 ( ± 0.05) SuSIE* 87.7% 67.4% 49.8% 41.9% 33.7% 2.80 ( ± 0.15) LDC* 88.7% 69.9% 54.5% 42.7% 32.2% 2.88 ( ± 0.11) TaKSIE* 90.4% 73.9% 61.7% 51.2% 40.8% 3.18 ( ± 0.02) MDT* 93.7% 84.5% 74.1% 64.4% 55.6% 3.72 ( ± 0.05) 
+
+> Ours
+
+HD (iter 0) 83.9% (± 0.2) 65.2% (± 0.5) 51.4% (± 0.4) 39.5% (± 0.5) 29.2% (± 1.0) 2.69 ( ± 0.02) HD-ExpIt-ft (iter 1) 91.2% (± 0.1) 79.9% (± 0.3) 69.8% (± 0.4) 59.9% (± 0.8) 50.7% (± 0.7) 3.52 ( ± 0.02) HD-ExpIt-ft (iter 2) 93.2% (± 0.3) 85.1% (± 0.1) 76.2% (± 0.2) 66.1% (± 0.5) 55.9% (± 0.5) 3.76 ( ± 0.01) HD-ExpIt-ft (iter 3) 93.2% (± 0.2) 85.4% (± 0.2) 76.6% (± 0.4) 66.9% (± 0.2) 57.3% (± 0.5) 3.80 ( ± 0.01) HD-ExpIt-ft (reset only) (iter 1) 88.5% (± 0.3) 68.8% (± 0.3) 47.7% (± 0.1) 29.3% (± 0.3) 15.1% (± 0.9) 2.50 ( ± 0.02) HD-ExpIt (iter 1) 91.5% (± 0.4) 81.5% (± 0.7) 73.3% (± 0.8) 63.6% (± 1.0) 54.0% (± 0.4) 3.64 ( ± 0.04) HD-ExpIt (iter 2) 95.1% (± 0.3) 88.9% (± 0.0) 82.0% (± 0.3) 74.2% (± 0.2) 64.1% (± 0.4) 4.05 ( ± 0.01) HD-ExpIt (iter 3) 97.5% (± 1.) 92.7% (± 0.3) 86.6% (± 0.5) 79.3% (± 1.0) 71.3% (± 1.0) 4.28 (± 0.03) HD-ACT (iter 0) 76.0% (± 0.3) 49.3% (± 0.7) 31.4% (± 1.0) 19.9% (± 0.6) 12.3% (± 0.4) 1.89 ( ± 0.02) HD-ACT-ExpIt-ft (iter 1) 85.3% (± 0.1) 66.0% (± 0.4) 50.8% (± 0.3) 37.8% (± 0.2) 27.0% (± 0.7) 2.67 ( ± 0.01) HD-ACT-ExpIt-ft (iter 2) 88.6% (± 0.8) 72.6% (± 0.7) 57.0% (± 0.8) 43.7% (± 0.4) 32.7% (± 0.6) 2.94 ( ± 0.03) HD-ACT-ExpIt-ft (iter 3) 87.0% (± 0.6) 71.2% (± 1.0) 56.2% (± 0.8) 43.6% (± 0.4) 31.8% (± 0.3) 2.90 ( ± 0.03) 
+
+18 Iterative On-Policy Refinement of Hierarchical Diffusion Policies for Language-Conditioned Manipulation 
+
+Baselines: In both MTLC and LH-MTLC, the strongest baseline performance is achieved by TaKSIE (Kang & Kuo, 2025) and MDT (Reuss et al., 2024), both of which introduce mechanisms to bridge the HL-LL mismatch. Specifically, TaKSIE leverages a learned model of task progress to trigger replanning, while MDT introduces cross-level weights within the architecture to enforce coupling. Conversely, SuSIE (Black et al., 2024b) performs among the worst in both benchmarks, as it relies on independent training of HL and LL. On LH-MTLC, our initial architecture trained solely on D0 achieves similar, though slightly lower, performance due to this same lack of alignment between planning and control leading to HL-LL mismatch. However, on MTLC, our initial model outper-forms SuSIE; this may be attributed to our planner predicting an entire sequence of subgoals, thereby encapsulating both the spatial and temporal evolution of the environment, whereas SuSIE predicts only a single subgoal at a time.      
+
+> Table 8. Both versions of HD-ExpIt improve HD poli-cies and achieve SOTA performances on CALVIN MTLC after only one iteration. Mean success rate across tasks with standard error over 3 seeds of HD policies fine-tuned with 0 to 3 iterations of HD-ExpIt and HD-ExpIt-ft compared with baselines. Best results in bold , second best underlined , and results from prior work marked with ∗.
+
+Method Success Rate ( ↑)Baselines  LDC* 74.01 % SuSIE* 79.73 % HULC 81.77 ( ± 0.55) % TaKSIE* 86.80 % MDT 89.53 ( ± 0.27) % 
+
+> Ours
+
+HD (iter 0) 89.77 ( ± 0.46) % HD-ExpIt-ft (iter 1) 92.70 ( ± 0.47) % HD-ExpIt-ft (iter 2) 91.87 ( ± 0.27) % HD-ExpIt-ft (iter 3) 92.57 ( ±0.29) % HD-ExpIt (iter 1) 92.07 ( ± 0.43) % HD-ExpIt (iter 2) 93.43 ( ± 0.09) % HD-ExpIt (iter 3) 95. 20 (± 0.25) % 
+
+Intermediate iterations: As shown in Table 8 and Table 7, the two update strategies—HD-ExpIt and HD-ExpIt-ft —perform comparably after the first iteration. However, while HD-ExpIt-ft plateaus after this initial stage on MTLC, HD-ExpIt demonstrates sustained improvement, ultimately reaching 95 .20% . A similar trend is observed in Table 7 for LH-MTLC: the performance of HD-ExpIt-ft (using both ACT and DP controllers) plateaus after the second iteration, whereas HD-ExpIt exhibits consistent growth across all iterations. This phenomenon may be attributed to the limited training budget allocated to HD-ExpIt-ft for computational efficiency (see Appendix B); it is possible that increasing the number of gradient updates per iteration would mitigate this plateau. Consequently, the peak performances across both benchmarks are achieved by the second and third iterations of HD-ExpIt. 19 Iterative On-Policy Refinement of Hierarchical Diffusion Policies for Language-Conditioned Manipulation 
+
+F.2. Task-wise analysis 
+
+Figure 6 illustrates the improvement in mean success rate across task categories in CALVIN (defined in Appendix D) when training with HD-ExpIt, with similar results shown for the Franka-3Blocks environment in Figure 7. We ob-serve that the success rate increases monotonically for all categories, demonstrating that our method positively im-pacts performance across the entire task distribution. This consistent growth is likely facilitated by our data collection strategy, which ensures a balanced training set by collecting an equal number of new demonstrations for every task. As shown in Figure 6, after three iterations of HD-ExpIt, all task categories except stack reach a mean success rate of at least 85% in CALVIN. This consistent performance across tasks explains that the policies trained with our method per-form similarly on both MTLC and LH-MTLC for achieving single tasks (see Table 8 and Table 7), even though the task distribution differs between the two benchmarks (Ap-pendix D). On both environments, the most significant gains are obtained in the block pushing and block rotation (for CALVIN) categories. These represent some of the most dif-ficult tasks (alongside stack ) because they require the agent to ground textual goals into specific spatial movements. Qualitatively, we observe that the initial agent trained only on D0 achieves between 50% and 60% success on these tasks, effectively choosing almost at random the correct movement direction (e.g., left vs. right). This phenomenon is further discussed in Appendix F.7. Iterative refinement improves the grounding capabilities of the agent, mapping semantic instructions to the required physical movements. While the stack category remains challenging due to its reliance on fine-grained control rather than high-level se-mantic understanding, HD-ExpIt still yields a significant performance increase of approximately ×1.25 in CALVIN and ×1.43 in Franka-3Blocks, over the initial hierarchical policy trained solely on D0.iter 0 iter 1 iter 2 iter 3 
+
+> 30
+> 40
+> 50
+> 60
+> 70
+> 80
+> 90
+> 100 Mean SR per Task Category (%)
+> block rotation block pushing slider actuation drawer actuation block lifting targeted object placement light control stack unstack
+
+Figure 6. Iterative refinement yields the most significant improve-ments on complex tasks. Mean success rates across task categories, with shaded regions indicating the standard error across tasks within each category, over 0–3 iterations of HD-ExpIt in the CALVIN LH-MTLC environment. iter 0 iter 1 iter 2 iter 3 
+
+> 20
+> 40
+> 60
+> 80
+> 100 Mean SR per Task Category (%)
+> block lifting stack block pushing
+
+Figure 7. Mean success rates by task category in the Franka-3Blocks environment. Results are shown over 0–3 iterations of HD-ExpIt, with shaded regions indicating the standard error across tasks within each category. 
+
+20 Iterative On-Policy Refinement of Hierarchical Diffusion Policies for Language-Conditioned Manipulation 
+
+F.3. Exploration context 
+
+To analyze the importance of augmenting the context set with expert-replayed states, we compare HD-ExpIt-ft in the LH-MTLC benchmark against a baseline where the explo-ration set of contexts C(Dt) is constructed solely from the environment reset distribution ρreset (see Section 4.2.2). To ensure a fair comparison, we maintain a constant num-ber of sampled trajectories per task in both settings. The performance of the resulting hierarchical policy after one iteration is reported in Table 9. As hypothesized, restricting collection to ρreset reduces the diversity of the exploration dataset, which degrades overall performance. While this restricted approach yields some gains in short-horizon sce-narios, where the state remains close to the reset distribution, performance sharply deteriorates when the task chain gets longer. Specifically, the success rate for completing 3 or more consecutive tasks falls below that of the initial policy, and is even almost divided by two ( ×0.52 ) for complet-ing 5 tasks in a row. This degradation is a direct conse-quence of the accumulating distributional shift inherent in long-horizon manipulation: as the agent executes sequential tasks, the environment state progressively diverges from the narrow support of ρreset . Without expert-replayed con-texts, the agent lacks the exploration required to handle these downstream states. Figure 8 further highlights the necessity of expert-replayed contexts for robust exploration; it demonstrates that the diversity of reset contexts is highly limited compared to the broad state distribution provided by expert-replayed trajectories, which is essential for the agent to generalize across long-horizon sequences.                         
+
+> Table 9. Performance of the HD policy trained with one itera-tion of HD-ExpIt-ft on CALVIN LH-MTLC. Results report the mean and standard error across 3 seeds. Performance improvements relative to the HD policy trained on D0are marked in green, while degradations are marked in red. Method 12345Avg. Len. ( ↑)HD-ExpIt-ft 88.5% 68.8% 47.7% 29.3% 15.1% 2.50 (±0.02)
+> (reset only) (iter 1) (×1.05 ) ( ×1.06 ) ( ×0.93 ) ( ×0.74 ) ( ×0.52 )(×0.93 )
+> Figure 8. Expert-replayed contexts increase the diversity of the context set, enhancing exploration. PCA visualization of the envi-ronment initial states for contexts in D0, in the expert-replayed set extracted from D0, and sampled from the environment reset state distribution.
+
+F.4. Replanning 
+
+A central mechanism in hierarchical agents is the ability to replan when LL fails to execute a plan or when HL generates task-irrelevant plans. This capacity is essential for robotic agents to handle execution errors, but it requires strong generalization from HL, as it must generate new plans from failed states. To assess the importance of this mechanism, we evaluate our HD policy trained solely on D0, and after 3 iterations of HD-ExpIt with and without replanning on CALVIN MTLC. Table 3 shows that the replanning mechanism provides a performance gain of ∼ 3% to the final policy. This highlights the critical role of the replanning mechanism and demonstrates the robustness and generalization capabilities of our agent trained with HD-ExpIt, as it successfully recovers from states resulting from execution errors. Furthermore, we observe that the reliance on replanning decreases with our iterative refinement, as the initial HD policy performances dropped by 6% with disabled replanning while the final policy only drop by 3% . This can be explained by two factors: HL has improved, generating more task-relevant plans (see Section 6.2); and it has learn to generate plans that LL can achieve (Section 6.3). Consequently, the planner generates higher-quality initial plans, reducing its dependency on the replanning mechanism. 21 Iterative On-Policy Refinement of Hierarchical Diffusion Policies for Language-Conditioned Manipulation 
+
+F.5. Computational cost 
+
+A primary limitation of data aggregation is the increasing computational cost during training; as the dataset grows, the number of gradient updates required for convergence scales accordingly. Specifically, since HD-ExpIt retrains the hierarchical policy from scratch on all aggregated data, its total computational cost scales quadratically with the number of iterations. In order to mitigate this issue, we introduce HD-ExpIt-ft, which fine-tunes the previous policy rather than starting from scratch and exhibits linear scaling, as it initializes the agent from the policy from the previous iteration (see Figure 9(b)). However, while HD-ExpIt-ft ultimately reaches lower peak performance than HD-ExpIt on CALVIN, both variants behave similarly on the simpler Franka-3Blocks environment, despite HD-ExpIt-ft being significantly less computationally costly. Notably, on CALVIN, three iterations of HD-ExpIt-ft achieve performance similar to (and even slightly above) one iteration of HD-ExpIt while remaining less costly (see Figure 9(a)). Further, when starting from a stronger initial policy, HD-ExpIt-ft can be an effective solution for improvement with minimal computational cost. In this work, we used a small fraction of the initial number of gradient steps for training to limit costs, but this number could be increased to potentially mitigate the plateauing effect observed with HD-ExpIt-ft (see Figure 3). Yet, for greater improvement on more complex problems, the best performance is still achieved by HD-ExpIt. 10 72 × 10 6 3 × 10 6 
+
+> 4 × 10 66 × 10 6
+> Total gradient updates
+> 2.0
+> 2.5
+> 3.0
+> 3.5
+> 4.0
+> 4.5
+> 5.0 Avg. Len.
+> HD-ExpIt HD-ExpIt-ft
+
+(a) Average successful sequence length (Avg. Len.) in CALVIN LH-MTLC of policies trained with up to three iterations of HD-ExpIt and HD-ExpIt-ft as a function of the required total number of gradient updates. iter 0 
+
+> iter 1
+> iter 2
+> iter 3
+> 10 7
+> 2 × 10 6
+> 3 × 10 6
+> 4 × 10 6
+> 6 × 10 6
+> Total gradient updates  HD-ExpIt HD-ExpIt-ft
+
+(b) Total number of gradient updates re-quired by iteration of HD-ExpIt and HD-ExpIt-ft when training of the CALVIN en-vironment. 
+
+Figure 9. HD-ExpIt achieves better performance but requires more computation than HD-ExpIt-ft. Total number of gradient updates for training HL and LL (log scale) for HD-ExpIt and HD-ExpIt-ft against performance and training iterations. 
+
+22 Iterative On-Policy Refinement of Hierarchical Diffusion Policies for Language-Conditioned Manipulation 
+
+F.6. Reducing inference overhead 
+
+A limitation faced by any hierarchical policy is that the decomposi-tion of the policy into levels increases the inference overhead. This is especially true when using diffusion for HL; to generate a plan, the model must go through multiple stochastic denoising steps, creating a time bottleneck. Generating the entire plan (rather than online subgoals which requires more calls to HL) partially mitigates this, but it remains a limitation for real-world deployment. To address this issue, we investigated the use of faster noise schedulers during inference. HL was trained using the DDPM (Ho et al., 2020) noise scheduler with 100 diffusion steps; we then evaluate the hierarchical policy using HL sampled with the DDIM (Song et al., 2021) noise scheduler with 10, 30, 50, and 70 diffusion steps, setting η = 0 for deterministic plan generation. While using fewer diffusion steps can hinder the quality of generation, it can significantly increase the prediction speed of the hierarchical policy. Figure 10 (top) reports the mean results (Avg. Len.) over 3 seeds obtained with DDIM with different numbers of diffusion steps versus DDPM, along with the time in seconds for predicting one action (bottom) (this also includes the time for updating the physical simulator, though this is negligi-ble). We ran these experiments on the same machine with one V100 GPU. We observe that while using DDIM with fewer diffusion steps significantly accelerates action prediction (up to ×2.7 for DDIM 10), the performance does not degrade. In fact, we can assume that while using DDIM with fewer diffusion steps hinders generation at the pixel level, it does not impact the guidance provided to LL within the hierarchical policy. 3 
+
+> 4
+> 5
+> Avg. Len.
+> DDIM_10
+> DDIM_30
+> DDIM_50
+> DDIM_70
+> DDPM_100
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> Time (s)
+> Figure 10. Planning with the DDIM noise scheduler re-duces inference time without degrading performance.
+> Average successful sequence length in LH-MTLC with stan-dard error when sampling with the DDIM noise scheduler (10, 30, 50, and 70 diffusion steps) compared to DDPM (100 diffusion steps, matching training conditions). We also report the mean inference time for a single action predic-tion, including both planning and control, for each noise scheduler. Mean and standard error are reported over 3 seeds.
+
+F.7. Failure analysis 
+
+In order to provide a qualitative analysis of the improvement in plan generation to support the results in Section 6.2, we collected plans generated before and after applying HD-ExpIt for three iterations. These plans were generated for the same context extracted from the validation set of CALVIN MTLC and indicate whether they led to success or failure. Figure 11 illustrates these examples. Failure cases A, B, and C demonstrate that when trained solely on D0, HL generates plans that are not always task-relevant. Failure case A can be attributed to the limited coverage of D0. In fact, the agent might never have seen an initial state for the task ’move the slider left’ where the slider is already positioned almost to the left. As a consequence, HL generated a plan that ignores the task and where the agent achieves another task (likely the task whose initial state distribution in D0 is closest to the example initial observation, in this case ’Turn on the led’). Failure cases B and C can be explained by the lack of grounding capabilities of the initial agent; in both cases, the plans depict the robot interacting with the right object but performing the task incorrectly (pushing right for B and rotating left for C). For all these examples, the policies trained with HD-ExpIt (iter 3) avoid these errors and generate plans that align with the task and ultimately lead to success. Examples D and E demonstrate that the initial planner can generate plans that are task-relevant but not consistent with either the initial observation of the environment (D) or with the physics of the world (E). In D, the red and blue blocks, while present in the initial observation, are no longer present in the generated plan, while in E, the plan depicts the robot moving toward the blue block, which transforms into a red block in the last generated image (likely to match the initial instruction). These errors are common in generative diffusion models as the generation is not constrained by physical rules. In contrast, the plans generated by the policy trained with HD-ExpIt demonstrate consistency with the initial observation and a higher consistency with physical rules, leading to higher success rates. Qualitatively, we observe that the remaining failures of the fine-tuned HD policy are due to fine-grained control, as shown in Example F, where both the initial and the fine-tuned planners generate a task-relevant and feasible plan but fail due to control errors. 23 Iterative On-Policy Refinement of Hierarchical Diffusion Policies for Language-Conditioned Manipulation “Lift the blue block from the slider cabinet” 
+
+❌
+
+✅
+
+❌
+
+✅
+
+❌
+
+✅
+
+❌
+
+✅
+
+❌
+
+✅
+
+❌
+
+❌
+
+# A. 
+
+# B. 
+
+# C. 
+
+# D. 
+
+# E. 
+
+# F. 
+
+> iter 0 iter 3 iter 0 iter 3 iter 0 iter 3 iter 0 iter 3 iter 0 iter 3 iter 0 iter 3
+
+“Lift the red block from the table” 
+
+“Lift the pink block from the drawer” 
+
+“Push the blue block left” 
+
+“Rotate the pink block right” 
+
+“Move the slider left” 
+
+Figure 11. HD-ExpIt enables the generation of more task-relevant and feasible plans. Qualitative analyses comparing plans generated by the HD policy trained solely on D0 (iter 0) versus plans generated after three iterations of HD-ExpIt (iter 3) for same validation contexts in CALVIN MTLC. The symbol check ¥ indicates that the plan led to success, while the symbol cross q indicates failure. 
+
+24

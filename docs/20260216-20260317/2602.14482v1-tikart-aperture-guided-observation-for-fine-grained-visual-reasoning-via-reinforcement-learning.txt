@@ -1,0 +1,603 @@
+Title: TikArt: Aperture-Guided Observation for Fine-Grained Visual Reasoning via Reinforcement Learning
+
+URL Source: https://arxiv.org/pdf/2602.14482v1
+
+Published Time: Tue, 17 Feb 2026 02:59:05 GMT
+
+Number of Pages: 17
+
+Markdown Content:
+## TikArt: Aperture-Guided Observation for Fine-Grained Visual Reasoning via Reinforcement Learning 
+
+Hao Ding 1*, Zhichuan Yang 2*, Weijie Ge 3, Ziqin Gao 1, Chaoyi Lu 2, Lei Zhao 1†1Zhejiang University, 2Xi’an Jiaotong University, 
+
+> 3
+
+Zhejiang University of Science and Technology 
+
+Abstract 
+
+We address fine-grained visual reasoning in multimodal large language models (MLLMs), where key evidence may reside in tiny ob-jects, cluttered regions, or subtle markings that are lost under a single global image encod-ing. We introduce TikArt (Thinking Aperture), an aperture-guided agent that casts multi-step vision-language reasoning as a decision pro-cess over regions of interest. TikArt follows a Think-Aperture-Observe loop, alternating be-tween language generation and two aperture ac-tions: Zoom extracts rectangular crops, while Segment invokes SAM2 to obtain mask-based crops for irregular targets. After every ac-tion, the model must produce an explicit ob-servation, turning local visual cues into per-sistent linguistic memory. Built on Qwen3-VL-8B, TikArt optimizes its reasoning pol-icy with AGRPO, a GRPO-style reinforcement learning algorithm with a two-stage curricu-lum: it warms up segmentation actions and then jointly optimizes visual math, fine-grained VQA, and segmentation, using rewards that couple task success with purposeful aperture use. Experiments on V*, HR-Bench-4K/8K, MME-RealWorld-Lite, MMStar, RefCOCO, and ReasonSeg show consistent gains over the backbone and yield interpretable aperture tra-jectories for high-resolution reasoning. 
+
+1 Introduction 
+
+Multimodal large language models (MLLMs) like GPT4o, QwenVL series, Gemini family and in-ternVL (Bai et al., 2023; OpenAI, 2024; Team et al., 2024; Wang et al., 2025c) have achieved strong performance on general vision–language tasks such as open-domain VQA, captioning, and image-grounded dialogue. Yet they still struggle with fine-grained visual reasoning. When crucial   
+
+> *Equal contribution.
+> †Corresponding author.
+
+Figure 1: The TikArt Framework. The model employs a Think-Aperture-Observe (TAO) Loop to iteratively per-ceive fine-grained visual details ( vt) before generating the final answer. 
+
+evidence lies in tiny objects, faint textures, sym-bolic marks, or partially occluded regions, main-stream MLLMs typically process the whole image once into a fixed set of visual tokens and then rea-son purely in the text domain. Visual evidence be-comes effectively static along the chain-of-thought, and the model can only reweight a coarse global representation instead of actively revisiting infor-mative details. High-resolution benchmarks such as V ∗ (Wu and Xie, 2024) and HR-Bench (Wang et al., 2025d), together with reasoning-style seg-mentation and visual math tasks, show that simply scaling model size or context length is insufficient to close this gap. Humans, in contrast, seldom rely on a single global snapshot. We naturally move our gaze across regions of interest (RoIs), alternating be-tween deciding where to look and interpreting what we see . Each fixation reveals new local evidence that influences the next decision, forming a sequen-tial, interactive process. Inspired by this perspec-1
+
+> arXiv:2602.14482v1 [cs.CV] 16 Feb 2026
+
+INPUT   
+
+> Original Image
+> Task 2: Segmentation
+> Mask the statue of the lion near the car.
+
+APERTURE CHAIN  OF  THOUGHT       
+
+> Observation : Lion is foreground. A car is visible behind it and to the left.
+> Observation :Segmentation confirms the car's specific location behind and left of the statue.
+> Aperture Action : Zoom (Target: Statue of Lion)
+> Aperture Action:
+> Segment(Target: Car)
+> Aperture 1:
+> Zoomed Crop
+> Aperture 2:
+> Segmentation Crop
+
+OUTPUT 
+
+Task 1 ：    
+
+> Final Answer
+> To the left behind of statue of lion
+> Task 2 ：
+> Final Mask
+> Segment Anything 2
+> Task 1: VQA
+> What is the position of the car relative to the statue of the lion
+> Final Thought: Based on the visual evidence and the segmentation, the car is clearly positioned behind the lion statue and to its left.
+> Thought 1: To determine the position of the car relative to the lion statue, I need to identify both objects clearly in the image.
+
+Figure 2: TikArt performs aperture-guided observation across modalities. A single reasoning trajectory alternates between selecting regions of interest (RoIs) and describing what is seen there. In the example, the same sequence of aperture decisions supports a spatial VQA query (blue arrows) and a segmentation instruction (yellow arrows), while the dashed links indicate the underlying high-resolution image from which RoIs are extracted and refined. Segmentation masks are obtained by SAM2(Ravi et al., 2024). 
+
+tive, we introduce the notion of an aperture : a localized RoI crop that serves as a controllable win-dow of visual focus. Reasoning then becomes a process of “thinking in apertures”: the agent repeat-edly selects apertures on the image and updates its beliefs based on what is observed there. Recent work on “thinking with images” has be-gun to expose similar behaviors in MLLMs by in-terleaving visual operations with textual reason-ing (Zheng et al., 2025; Hong et al., 2025). How-ever, existing systems often rely on fixed workflows or loosely coupled external modules, and their vi-sual operations are not tightly integrated with the internal decision-making process. A critical inter-face is often under-specified: after a visual action is taken, how is the newly acquired evidence ex-plicitly committed into subsequent reasoning in a grounded, reusable, and human-auditable manner? If the outcome of an action remains latent (e.g., re-peated crops/segmentations without an explicit evi-dence statement), the reasoning trace becomes dif-ficult to audit, and learning signals become weakly coupled to what the model actually extracted. This leaves two questions underexplored: (i) how to cast multimodal reasoning itself as a decision pro-cess over RoIs, and (ii) how to ensure that each visual decision is grounded by an explicit, human-interpretable observation rather than being a latent, opaque operation. Addressing these questions natu-rally calls for two coupled components: an aperture policy that decides where and how to look, and an observation policy that decides what to state about the selected region. In this work, we address these questions with 
+
+TikArt . We call the resulting interleaved sequence of apertures and observations an Aperture Chain-of-Thought (A-CoT) . We view interleaved multi-step visual reasoning (Trivedi et al., 2023; Gao et al., 2025; Chen et al., 2025) as a Markov Deci-sion Process (MDP) (Puterman, 1990) over RoIs: at each step, an agent observes the current multi-modal state (image, question, textual history, and previously inspected apertures), chooses an aper-ture action that selects or refines a region of interest, and then produces a natural-language observation 
+
+describing the newly obtained visual evidence. Cru-cially, TikArt enforces a mandatory Observation phase after every aperture action: the model must explicitly describe what appears in the selected re-gion before proceeding. These observations are appended to the chain-of-thought, turning local vi-sual cues into persistent linguistic memory. This 2yields a Think–Aperture–Observe loop in which the agent must decide when to look again, where to place the next aperture, and how to verbalize what it perceives before committing to an answer. Within this framework, TikArt learns two prim-itive aperture actions that resemble human eye and hand movements. A zoom action extracts a bounded RoI, akin to directing foveal vision to-ward a particular icon, formula panel, or table cell. A segmentation action isolates irregular or cluttered foreground regions via mask-based cropping, sim-ilar to mentally tracing the outline of an object or group of objects; in practice, this is realized by invoking a segmentation module such as SAM2. From the agent’s perspective, both are unified as RoI-centric decisions about where and how to fo-cus, and both must be justified by the subsequent observation. TikArt instantiates this aperture-guided obser-vation paradigm on Qwen3-VL-8B (Bai et al., 2025). Rather than supervising explicit chains of thought or hand-crafted aperture traces, we adopt a dual-stage reinforcement learning (RL) pipeline based on Group Relative Policy Opti-mization(GRPO) (Shao et al., 2024) without in-termediate supervised fine-tuning (SFT), thereby avoiding dependence on scarce high-quality image-conditioned chain-of-thought data. The first stage emphasizes visually grounded behaviors, and the second applies multi-task RL over visual math, fine-grained VQA, and segmentation. Importantly, we also report a training-free prompt-only vari-ant ( w/o GRPO ) that directly applies the same Think–Aperture–Observe prompting to the back-bone at inference time. It already yields non-trivial gains, while full AGRPO further improves the aper-ture policy and can be more latency-efficient (Ap-pendix A). Ablations (Sec. 4.5) show that remov-ing either aperture actions or the Observation phase leads to unstable training and clear drops in high-resolution perception, highlighting that observation is not merely explanatory but central to the decision process. Extensive experiments demonstrate that aperture-guided observation substantially improves fine-grained visual reasoning. On V ∗ and HR-Bench 4K/8K, TikArt-8B achieves large gains over its Qwen3-VL-8B-Instruct backbone (e.g., double-digit improvements on V ∗ and HR-Bench-8K), approaches or even surpasses larger open-source models such as Qwen3-VL-32B and 235B, and matches or outperforms strong proprietary sys-tems (e.g., GPT-5 (OpenAI, 2025), Gemini-2.5 (Co-manici et al., 2025)) on the most challenging high-resolution settings under our standardized evalua-tion. On MME-RealWorld-Lite (Zhang et al., 2024) and MMStar (Chen et al., 2024), TikArt consis-tently improves perception and reasoning scores and narrows the gap to GPT-4o and Gemini-2.5 while remaining significantly stronger than 8B-scale baselines. Beyond recognition-style bench-marks, TikArt attains competitive performance on RefCOCO (Yu et al., 2016) and exhibits particu-larly strong gains on the reasoning-oriented Rea-sonSeg benchmark (Lai et al., 2024), indicating that the same RoI-centric decision policy naturally extends from question answering to pixel-level grounding. We also report aperture-usage statis-tics and inference latency for both training-free and RL-trained variants to characterize the accuracy– cost trade-off of iterative perception (Appendix A). Our contributions are threefold: 1. We identify fine-grained visual reasoning un-der high-resolution inputs as a core bottleneck of current MLLMs and empirically show that strong proprietary and open-source models still struggle when critical evidence is local-ized in small or complex regions. 2. We propose aperture-guided observation ,which formalizes multimodal reasoning as an MDP over regions of interest with a Think– Aperture–Observe loop, explicitly separating an aperture policy (where and how to look) from an observation policy (what to verbalize about what is seen and commit into text). 3. We develop and train TikArt , an aperture-guided agent built on Qwen3-VL-8B and opti-mized via a dual-stage, GRPO-style reinforce-ment learning pipeline without SFT. TikArt learns to coordinate zoom and segmenta-tion aperture actions and their associated ob-servations without chain-of-thought supervi-sion, and we additionally report a training-free prompt-only variant ( w/o GRPO ) to isolate the effect of the prompting/interface from RL, yielding consistent gains with interpretable aperture trajectories. 
+
+2 Related Work 
+
+Segment Models Foundation segmentation mod-els aim to provide open-vocabulary, high-quality masks with flexible prompting. Segment Anything 3Inputs 
+
+> [Original Image
+> PLACEHOLDER]
+> Original Image
+> What is the value on the small tag?
+> Instruction
+
+Aperture Thinking Loop (Multimodal CoT)            
+
+> Final Answer / Segmentation Sampled Trajectories (τ)
+> (Action sequence + Final Answer)
+> Reward Mechanism
+> (No Explicit CoT Supervision)
+> Ground Truth
+> (QA Labels / Mask GT)
+> Task-Specific Rewards (R task )
+> Rmath
+> (Rule)
+> Rvqa
+> (Correction)
+> Rseg
+> (IoU & S-Measure)
+> Action_Reward
+> Final Reward
+> R(τ) = 0.8*R task + 1.2*R aperture
+> Raperture
+> (Bonus for valid usage)
+> No
+> TikArt Agent
+> (Base: Qwen3-VL-8B)
+> Multimodal LLM
+> (Policy Model)
+> Decision:
+> Need Fine-grained
+> Visual?
+> Zoom Action
+> (Crop via bbox)
+> *For structured objects
+> Zoomed Patch
+> (Clean Focus)
+> Seg Action
+> (SAM + Gaussian Noise BG)
+> *For irregular shapes
+> New Visual Token feedback
+> New Visual Token feedback
+> Observe & Think
+> Yes
+> Yes
+> Policy Update via AGRPO
+> (Maximize Expected Reward)
+> Blue :Model Agent
+> Purple :Aperture Actions
+> Green Dashed: Generated Apertures
+> Yellow :Outputs/Trajectories
+> Red: Reward/Training Signal
+> Seg Patch
+> (Foreground +
+> Noisy BG)
+> Solid Arrow: Inference Flow
+> Dashed Arrow: Action Reference
+> Thick Red Arrow: Policy Update
+
+Figure 3: Overview of TikArt Framework. TikArt unifies token-level reasoning, visual aperture generation, and reinforcement learning signals. The model alternates between language generation and action invocation (Zoom/Segment) to form an aperture trajectory, while AGRPO provides task and action rewards to shape aperture-guided reasoning. 
+
+(SAM) (Kirillov et al., 2023) trains a ViT-based image encoder with a lightweight mask decoder over large-scale mask data, framing segmentation as a unified “promptable” task (e.g., point/box/-mask prompts) that generalizes widely in a zero-shot manner (Kirillov et al., 2023). SAM2 ex-tends this paradigm to video, introducing streaming memory and a data engine for scalable video seg-mentation, enabling interactive, temporally con-sistent segmentation across frames. LISA (Lai et al., 2024) has connected the segment tasks with MLLMs and realizes end - to -end segmentation us-ing large language models (LLMs). More re-cently, reinforcement learning has been explored to strengthen such segmentation-capable multimodal systems. Seg-R1 applies GRPO-style RL to train an LMM to generate spatial prompts (points/boxes) that guide SAM2, demonstrating strong transfer to referring/reasoning segmentation despite limited training supervision (You and Wu, 2025) 
+
+MLLMs and Visual Reasoning Evolved from foundation MLLMs, Tool augmentation offers a practical route to overcome static visual representa-tions by allowing models to act (call tools) between reasoning steps. In text-only settings, ReAct inter-leaves explicit reasoning traces with actions (e.g., API calls), improving both performance and inter-pretability (Yao et al., 2023). This idea naturally extends to multimodal systems. MM-ReAct gener-alizes ReAct to multimodality by composing a pool of vision experts, allowing the LLM to request spe-cialist perception when needed for advanced visual understanding (Yang et al., 2023). A newer wave of “think-with-image” methods makes iterative visual operations part of the reasoning loop. (Hu et al., 2024; Su et al., 2025; Yu et al., 2025b) With the ad-vancement of reinforcement learning (RL) in LLMs like GRPO, DeepEyes likewise explores multi-step, query-oriented visual reasoning with iterative “look closer” style operations, strengthening fine-grained perception during inference. Inspired by existing works, we propose TikArt , which combines the segment models in Visual Reasoning .
+
+3 Method 
+
+TikArt equips Qwen3-VL-8B (Bai et al., 2025) with aperture-guided visual interaction, allowing the model to dynamically reasoning. As illustrated in Fig. 3, the model interleaves language reason-ing with aperture actions that extract local visual evidence, forming a unified Aperture Chain-of-Thought (A-CoT). The improvements in Table 1 and Table 2 demonstrate that explicit aperture con-trol is highly beneficial for high-resolution percep-tion and multimodal reasoning. 
+
+3.1 A-CoT as a Markov Decision Process 
+
+Given an image I and query q, TikArt generates a sequence of actions from a combined vocabu-lary V ∪ T , where V is the text token vocabulary 4Model Params V∗ HR Bench 4K HR Bench 8K Attr Spatial Overall FSP FCP Overall FSP FCP Overall                                                                                                                                                                                                               
+
+> Proprietary models
+> GPT-4o -71.30 ∗69.74 ∗70.68 ∗68.75 ∗59.00 ∗63.87 ∗60.75 ∗60.00 ∗60.38 ∗
+> GPT-5 -74.78 78.95 76.44 78.00 77.00 77.50 70.50 72.75 71.62 GPT-5-nano -58.26 72.37 63.87 69.00 61.75 65.38 65.75 61.50 63.63 Gemini-2.5-pro -84.35 71.05 79.06 88.75 87.00 87.87 84.50 82.75 83.62
+> Gemini-2.5-flash -84.35 73.68 80.10 85.00 77.00 81.00 79.00 73.50 76.25
+> Visual Reasoning Models
+> Pixel-Reasoner (Wang et al., 2025a) 7B --84.30 ∗--74.00 ∗--66.90 ∗
+> Thyme (Zhang et al., 2025) 7B --82.20 ∗--77.00 ∗--72.00 ∗
+> LVR (Li et al., 2025) 7B 81.7 ∗79.0 ∗80.6 ∗------Deepeyes 7B 84.35 ∗81.58 ∗83.03 ∗83.75 ∗58.74 ∗71.25 ∗77.00 ∗53.25 ∗65.13 ∗
+> Monet-7B (Wang et al., 2025b) 7B 83.48 ∗82.89 ∗83.25 ∗85.25 ∗56.75 ∗71.00 ∗79.75 ∗56.25 ∗68.00 ∗
+> Open-source models
+> LLaVA-OneVision-1.5 8B 83.48 85.53 84.29 72.00 46.50 59.25 59.50 43.75 51.62 Qwen3-VL-235B-A22B-Instruct 235B †88.50 78.95 84.66 90.50 71.75 81.13 82.25 70.00 76.13 Qwen3-VL-Instruct 32B 84.35 85.53 84.82 90.50 69.00 79.75 84.75 68.00 76.38 Qwen3-VL-Thinking 8B 71.30 75.00 72.77 81.00 60.00 70.50 73.75 60.50 67.13 Qwen3-VL-Instruct 8B 73.04 73.68 73.82 90.50 57.75 74.13 81.25 55.75 68.50
+> Fusion experiments (ours)
+> TikArt 8B 91.30 86.84 89.53 93.75 70.75 82.25 84.50 68.25 76.38
+> ∆(vs Qwen3-VL-8B-Instruct) +18.3 +13.2 +15.7 +3.3 +13.0 +8.1 +3.3 +12.5 +7.9 w/o Observation 89.57 81.58 86.39 94.00 67.25 80.63 85.25 64.75 75.00 w/o Zoom Action 76.32 86.42 80.34 93.75 65.25 79.50 85.25 64.25 74.75 w/o Segment Action 82.60 84.21 83.24 93.25 59.75 76.50 89.25 61.50 75.38 w/o GRPO 78.26 71.05 75.39 92.00 70.25 81.13 76.50 70.25 73.38
+
+Table 1: Results on high-resolution perception benchmarks V ∗, HR Bench 4K and HR Bench 8K. TikArt greatly improves V* and HR - Bench 4K/8K over Qwen3 - VL -8B - Instruct and narrows the gap to Qwen3 - VL -32B/235B and GPT - 5/Gemini -2.5. Values with ∗ are taken from (Wang et al., 2025b; Hong et al., 2025). The best result in each column is in bold and the second best is underlined . “Params” denotes model parameter size. Ablations ( w/o ·)remove one component/action and are trained unless stated otherwise; w/o GRPO is prompt-only (training-free), evaluated under the same inference setup. The green row ( ∆) reports the absolute improvement of TikArt over Qwen3-VL-8B-Instruct. † denotes MoE model with 235B total params and 22B active params per token. 
+
+and T contains decision tokens such as <ZOOM> ,
+
+<SEGMENT> , and <ANSWER> . Each inference step corresponds to a transition in an MDP. The multimodal state at time t is: 
+
+st = ( I, q, h t−1, A1: t−1), (1) where ht−1 is the partially generated A-CoT, and 
+
+A1: t−1 denotes all previously extracted apertures (RoIs). A full rollout is: 
+
+τ = {(st, a t, v t)}Tt=1 , (2) where at is the token-level action and vt is either a Zoom crop, a segmentation-based local view, or a null view when no aperture is applied. TikArt follows a structured reasoning loop: 
+
+Think → Aperture → Observe → · · · → Answer .
+
+Unlike static single-pass vision encoders, this loop enables active perception and dynamic state transi-tions driven by visual exploration. 
+
+3.2 Mandatory Observation: Grounding What the Model Sees 
+
+A defining element of TikArt is the mandatory Observation phase triggered after every aperture action. Once the local view vt is obtained, the model must output a natural-language description of its content. This mechanism is crucial: 
+
+Grounded aperture usage. Observation forces the model to explicitly describe what appears inside the aperture—tiny characters, contour edges, sym-bolic strokes, or small object instances—ensuring that aperture actions meaningfully contribute to reasoning. 
+
+Converting visual cues into persistent memory. 
+
+Fine-grained details may be lost in visual embed-dings; verbalizing them turns local cues into stable linguistic memory for subsequent steps. 
+
+Improved reinforcement learning stability. Dur-ing AGRPO, poor apertures lead to vague or incor-rect observations, lowering return. Thus, Observa-tion provides a tight perception–reward link: good apertures facilitate accurate descriptions, which in turn correlate with task success. The ablations in Table 1 and Table 2 confirm its necessity. 
+
+3.3 Visual Apertures 
+
+Apertures act as explicit visual actions that control where the model looks. 5Zoom. For structured regions, TikArt predicts a bounding box: 
+
+bt = ( x1, y 1, x 2, y 2) ∈ [0 , 1000] 4, (3) which defines the crop vzoom  
+
+> t
+
+.
+
+Segmentation (via SAM2). For irregular or clut-tered scenes, TikArt predicts (bt, p t, ℓ t) as input to SAM2 to obtain a binary mask Mt. The final aperture view is: 
+
+vseg  
+
+> t
+
+= Mt ⊙ I + (1 − Mt) ⊙ N, (4) where N is Gaussian noise, suppressing back-ground distraction and highlighting foreground ge-ometry. 
+
+3.4 AGRPO: Reinforcement Learning for Aperture Reasoning 
+
+The TikArt policy is jointly optimized using 
+
+AGRPO , a GRPO-based reinforcement learner with token-level credit assignment. No chain-of-thought or action labels are provided; aperture usage and observation behaviors emerge from reward opti-mization . AGRPO shares several hyperparameters (clip-higher, βKL = 0 ) with the DAPO(Yu et al., 2025a) variant of GRPO used in prior work, and differs mainly in its aperture-aware action space and reward shaping; additional implementation de-tails are given in the experimental setup. The optimization objective is: 
+
+max  
+
+> θ
+
+Eτ ∼πθ [Rfinal (τ )] . (5) Multiple rollouts per prompt form a group base-line, while the clip-higher mechanism encourages trajectories with high final reward. Since AGRPO assigns advantages at the token level, it teaches the policy when to look, where to look, and how to describe what is seen. 
+
+3.5 Two-Stage Training Strategy 
+
+Directly learning aperture reasoning from scratch is unstable. Segmentation mistakes early in training produce misleading visual states, leading the policy to avoid aperture usage altogether. TikArt therefore adopts a two-stage curriculum. Fig 4 
+
+Stage I: Segmentation warm-up. The model is first trained solely on segmentation-style data to learn reliable box/point/label predictions for SAM2. This stabilizes the aperture-extraction process so that segmentation views are meaningful rather than  
+
+> Figure 4: Two-stage training pipeline of TikArt. Stage 1 warms up the Segmentation action head to produce re-liable foreground masks. Stage 2 applies multi-task AGRPO over visual math, fine-grained VQA, and seg-mentation tasks to learn aperture-guided reasoning.
+
+noisy, and narrows the early action space, reducing the difficulty of RL exploration. 
+
+Stage II: Multi-task AGRPO. The model is then trained on mixed tasks including visual math, fine-grained VQA, and segmentation scenarios. This stage teaches the model to choose between Zoom and Segmentation, integrate observations into long-horizon reasoning, and form coherent A-CoT traces. The curriculum prevents reward hacking and leads to a stable aperture-usage policy. 
+
+3.6 Reward Design 
+
+TikArt’s final reward combines task success and meaningful aperture usage: 
+
+Rfinal (τ ) = β1 Rtask (τ ) + β2 Raperture (τ ), (6) where β1, β 2 > 0 control the trade-off between task performance and aperture usage. In our exper-iments, we set β1 = 0 .8 and β2 = 1 .2. We include an alternative reward weighting ( β1 = 1 .0, β 2 =0.8) in the action count curve in Fig. 5b. Setting 
+
+β2 < β 1 leads to a rapid drop in aperture usage and performance, indicating that insufficient aperture incentives cause the model to underutilize visual actions. 
+
+Task reward. For visual math and VQA, Rtask ∈{0, 1} is based on answer correctness. For segmen-tation, we use a continuous reward defined as a con-6Model Params MME-RealWorld-Lite MMStar                                                                                         
+
+> Perc. Reas. All.
+> Proprietary models
+> GPT-4o -49.81 53.89 45.73 60.93 GPT-5 -56.94 55.47 56.22 76.47 GPT-5-nano -46.11 49.40 42.82 66.12 Gemini-2.5-pro -52.10 50.73 53.48 79.40
+> Gemini-2.5-flash -49.70 47.32 52.07 76.15
+> Open-source models
+> LLaVA-OneVision-1.5 8B 38.69 36.53 37.61 60.73 Deepeyes 7B 55.30 46.29 50.79 51.47 Monet-7B 7B 58.34 ∗51.07 ∗55.50 ∗-Qwen3-VL-Instruct 235B †56.30 60.78 51.82 -Qwen3-VL-Instruct 32B 45.07 51.07 39.07 70.93 Qwen3-VL-Thinking 8B 44.05 34.80 39.43 70.80 Qwen3-VL-Instruct 8B 49.02 34.27 41.64 65.07
+> Fusion experiments (ours)
+> TikArt 8B 60.48 53.47 56.97 69.07
+> ∆(Qwen3-VL-Instruct) +11.5 +19.2 +15.3 +4.0 w/o Observation 58.43 48.91 53.67 65.67 w/o Zoom Action 57.91 47.20 52.56 40.53 w/o Segment Action 53.51 47.87 50.69 66.93 w/o GRPO 50.65 46.55 48.60 66.38
+
+Table 2: Results on MME-RealWorld-Lite and MM-Star. TikArt narrows the gap to strong proprietary sys-tems. Ablation settings are the same as in Table 1. “Perc.”, “Reas.” and “All.” denote Perception, Reason-ing and Overall scores, respectively;Values with ∗ are from (Wang et al., 2025b); † denotes MoE models. 
+
+vex combination of the IoU- and S-measure–based scores (Fan et al., 2017): 
+
+Rseg = (1 − α) RIoU + α R S, (7) where RIoU and RS denote the IoU and S-measure scores, respectively. We set α = 0 .3 in our ex-periments. To discard extremely low-quality seg-mentations, we further clip this reward by setting 
+
+Rseg = 0 whenever the computed value falls below 
+
+0.1.
+
+Aperture reward. The aperture reward 
+
+Raperture (τ ) ∈ {0, 1} encourages purposeful aperture usage: it is set to 1 only when the trajectory both invokes at least one aperture action and achieves Rtask (τ ) > 0.3, and 0 otherwise. 
+
+4 Experiments and Ablations 
+
+4.1 Experimental Setup Benchmarks. We evaluate TikArt on four fam-ilies of tasks: (1) high-resolution fine-grained reasoning on V ∗ ,MME-RealWorld-Lite and HR-Bench 4K/8K; (2) general multimodal understand-ing on MMStar; (3) referring segmentation on Re-fCOCO; and (4) reasoning-oriented segmentation on ReasonSeg. These benchmarks collectively cover small-object perception, spatial reasoning, real-world understanding, and pixel-level ground-ing.                                                           
+
+> Model Params RefCOCO ReasonSeg-test
+> val testa testb giou ciou Grounded SAM ----21.3 ∗16.4 ∗
+> LISA 13B 74.9 ∗79.1 ∗72.4 ∗61.3 ∗62.2 ∗
+> SegR1 7B 74.3 ∗78.7 ∗67.6 ∗56.7 ∗53.7 ∗
+> VisionReasoner 7B ---63.6 ∗-SAM-R1 7B 79.2 ∗--60.2 ∗54.3 ∗
+> TikArt 8B 77.1 79.6 69.1 73.8 73.2
+> w/o Observation 74.1 75.4 66.1 70.0 68.7 w/o Zoom Action 74.9 82.3 73.3 67.2 65.8 w/o Aperture 73.8 74.2 64.2 69.6 68.1
+
+Table 3: Results on referring segmentation and rea-soning segmentation benchmarks. TikArt brings Rea-sonSeg performance up to or beyond RL segmentation baselines while retaining strong RefCOCO scores. Val-ues marked with ∗ are taken from prior work (Lai et al., 2024; You and Wu, 2025; Huang et al., 2025). The best result in each column is shown in bold . TikArt w/o Aperture disables aperture control; w/o Zoom Action disallows the zoom action; w/o Observation removes the observation module. 
+
+Models and baselines. TikArt is built on Qwen3-VL-8B-Instruct and compared against its backbone, larger open-source models (LLaVA-OneVision-1.5-8B(An et al., 2025),Qwen3-VL-32B/235B), and strong proprietary systems (GPT-4o, GPT-5, GPT-5-nano, Gemini-2.5-Pro/Flash). All models are evaluated under a unified API-style setting with identical prompts and, for closed-source models, the same preprocessed images to ensure a fair com-parison. 
+
+Prompt protocol. All evaluations use identical task prompts; differences are limited to a fixed tool-control prompt required for tool calls (Appendix E). DeepEyes follows its official prompt. 
+
+4.2 High-Resolution Fine-Grained Reasoning 
+
+Table 1 summarizes results on V ∗ and HR-Bench 4K/8K. TikArt-8B delivers substantial gains over its Qwen3-VL-8B backbone, improving the overall V∗ score by around +15 points and HR-Bench 8K by roughly +8 points. Under the same evaluation protocol, TikArt-8B approaches or even surpasses Qwen3-VL-32B and 235B on several metrics, and matches or outperforms GPT-5 and Gemini-2.5 on the most challenging 8K settings, despite using a significantly smaller backbone. 
+
+4.3 Real-World Multimodal Benchmarks 
+
+On the high-resolution real-world benchmark MME-RealWorld-Lite and the broader MMStar suite (Table 2), TikArt consistently improves over Qwen3-VL-8B-Instruct across both perception and reasoning dimensions. While proprietary mod-70 100 200 300 400 
+
+> Step
+> 0.00
+> 0.05
+> 0.10
+> 0.15
+> 0.20
+> 0.25
+> 0.30
+> 0.35
+> 0.40
+> 0.45
+> Entropy
+> max=1.80
+> TikArt(Ours)
+> w/o Observation
+> w/o Seg. Act.
+> w/o Zoom Act.
+
+(a) Policy entropy 0 100 200 300 400     
+
+> Step
+> 0.50
+> 0.75
+> 1.00
+> 1.25
+> 1.50
+> 1.75
+> 2.00
+> 2.25
+> 2.50
+> Action Count
+> TikArt(Ours)
+> w/o Observation
+> w/o Seg. Act.
+> w/o Zoom Act.
+> 1= 1.0, 2= 0.8
+
+(b) Aperture action count 0 100 200 300 400  
+
+> Step
+> 0.6
+> 0.8
+> 1.0
+> 1.2
+> 1.4
+> Reward
+> TikArt(Ours)
+> w/o Observation
+> w/o Seg. Act.
+> w/o Zoom Act.
+
+(c) Group reward 
+
+Figure 5: Training dynamics of TikArt and GRPO-based variants under AGRPO. We plot (a) policy entropy, (b) the average number of aperture actions per trajectory, and (c) group reward over training steps. TikArt converges to a stable policy with moderate entropy and a reasonable aperture usage rate, while removing Observation leads to exploding entropy (above 2.0), uncontrolled aperture actions, and degraded reward. The w/o Segment Action 
+
+variant tends to under-use apertures, whereas the w/o Zoom Action variant becomes more deterministic with lower entropy. The purple curve corresponds to a variant with different reward weights ( β1 = 1 .0, β 2 = 0 .8), illustrating the impact of reward design. For other benchmarks, we evaluate the w/o Observation variant using its checkpoint at step 260, before the onset of training divergence. 
+
+els such as GPT-4o and Gemini-2.5 still hold a lead on some aggregate scores, TikArt substan-tially narrows the gap and, on multiple fine-grained categories involving local cues (e.g., object at-tributes, chart details), matches or exceeds their performance. These results suggest that aperture-guided observation benefits not only synthetic high-resolution benchmarks but also real-world high-resolution evaluation and broad multimodal under-standing . 
+
+4.4 Segmentation 
+
+Table 3 reports segmentation performance of differ-ent vision–language models. TikArt-8B achieves the best ReasonSeg scores among all listed models while maintaining competitive RefCOCO perfor-mance. TikArt yields clear improvements over its backbone and other baselines, indicating that the learned region-of-interest policy naturally transfers from question answering to pixel-level grounding in complex scenes. 
+
+4.5 Ablation Studies 
+
+We conduct ablation studies to understand the con-tribution of aperture-guided observation. First, re-moving the Observation phase (i.e., the model still selects apertures but does not verbalize what it sees) leads to unstable training and a noticeable drop on V ∗ and HR-Bench, confirming that ex-plicit observations are essential for both credit as-signment and interpretability. Second, when we restrict the agent to a single aperture primitive, per-formance degrades on complementary cases. In the w/o Segment Action variant, the model strug-gles with thin or irregular objects, while the w/o Zoom Action variant underperforms on structured layouts such as panels and tables. We also report a training-free baseline (w/o GRPO) that applies the TikArt prompts to Qwen3-VL-8B-Instruct at inference time. This prompt-only variant already brings non-trivial gains over the backbone, while full AGRPO training remains crucial for learning when and where to act. While iterative reasoning in-curs overhead, our RL policy converges to a highly efficient strategy, averaging only 1.36 actions per trajectory on MME-RealWorld-Lite (Appendix A). Notably, ablating Observation increases latency, as the ungrounded agent fails to learn concise explo-ration. 
+
+5 Conclusion 
+
+In this paper, we introduce TikArt , a novel frame-work that enhances fine-grained visual reasoning in MLLMs through aperture-guided observation . By formalizing multimodal reasoning as a Markov De-cision Process within a Think–Aperture–Observe 
+
+loop, TikArt enables models to actively seek, iso-late, and interpret critical visual details via uni-fied Zoom and Segmentation actions. Optimized via AGRPO—a multi-stage reinforcement learning strategy that obviates the need for explicit chain-of-thought supervision—TikArt significantly outper-forms its backbone and bridges the gap with much larger proprietary models on challenging high-resolution benchmarks like V ∗ and HR-Bench. Our results demonstrate that empowering MLLMs 8with the agency to control their visual focus not only improves accuracy on intricate tasks but also yields interpretable reasoning trajectories, paving the way for more autonomous and precise multi-modal agents. 
+
+Limitations 
+
+Note on fairness. Because TikArt performs iter-ative perception and may invoke an external seg-menter, it can incur additional inference cost com-pared to single-pass MLLMs. We therefore report aperture usage statistics and latency, and we en-courage evaluation under matched compute bud-gets when comparing tool-augmented and non-tool baselines. 
+
+Reliance on external segmentation backbones. 
+
+Although our aperture policy is learned via RL, while calling a frozen SAM2, the segmentation action relies on an off-the-shelf SAM2 back-bone to produce mask-based apertures, which makes TikArt’s performance partially dependent on SAM2’s accuracy, inductive biases, and prompt sensitivity. Since SAM2 is not jointly optimized with the language policy, systematic segmentation errors (e.g., fragmented masks, missed thin struc-tures, or failures under severe occlusion and do-main shift) can corrupt the returned RoI view and propagate to downstream reasoning, while being difficult to correct purely in the text domain. More-over, invoking SAM2 introduces additional deploy-ment complexity and inference-time overhead, and the need to predict box/point/label prompts adds an extra failure channel when spatial grounding is uncertain. Finally, our mask-based cropping (fore-ground highlighting with background suppression) may remove contextual cues that are useful for re-lational reasoning, suggesting a trade-off between object isolation and global context that future work could mitigate with more integrated or hierarchical visual front-ends. 
+
+Reinforcement learning cost and stability. 
+
+Training TikArt with GRPO-style reinforcement learning over long multimodal trajectories is sub-stantially more expensive than supervised fine-tuning. It requires sampling multiple trajectories per input, computing task and aperture-related re-wards, and backpropagating through multiple aper-ture and observation steps. The learned policy can be sensitive to reward shaping, task mixture, and curriculum choices. While our two-stage training procedure stabilizes learning for Qwen3-VL-8B, scaling TikArt to larger backbones, broader data, or richer action spaces may amplify these challenges. 
+
+Inference-time overhead. Aperture-guided rea-soning incurs additional computational cost at in-ference time. Each aperture action requires pro-cessing an RoI, and segmentation actions invoke a heavyweight segmentation backbone. Although the learned policy tends to use a small number of apertures per trajectory, TikArt remains slower and more resource-intensive than single-pass MLLMs that operate on a fixed global encoding. This over-head may be problematic in latency-sensitive or resource-constrained settings. We provide quan-titative latency and aperture-usage statistics on MME-RealWorld-Lite in Appendix A (Fig. 6, Fig. 7, and Fig. 8). 
+
+Limited action space and global context. 
+
+TikArt currently uses a small set of cropping-like aperture actions (zoom and segmentation). This design is effective for fine-grained perception and reasoning segmentation, but it does not fully cap-ture the richness of potential visual decisions (e.g., grouping multiple objects, simulating alternative viewpoints, or performing geometry-aware trans-formations). Moreover, repeated focusing on lo-cal apertures may bias the policy toward details at the expense of global context. Although the back-bone retains the original image, there is no explicit mechanism to reason hierarchically across multiple spatial scales. 
+
+Backbone and benchmark coverage. Our ex-periments instantiate TikArt on a single 8B-scale backbone (Qwen3-VL-8B) and evaluate on a se-lected set of high-resolution, multimodal, and seg-mentation benchmarks. While the gains are con-sistent and substantial within this setup, it remains unclear how well aperture-guided observation trans-fers to other backbone families, parameter scales, or domains such as video and 3D perception. Ad-ditional evaluation is needed to assess robustness under stronger distribution shifts and long-horizon tasks. 
+
+References 
+
+> Xiang An, Yin Xie, Kaicheng Yang, Wenkang Zhang, Xiuwei Zhao, Zheng Cheng, Yirui Wang, Songcen Xu, Changrui Chen, Chunsheng Wu, and 1 others. 2025. Llava-onevision-1.5: Fully open framework
+
+9for democratized multimodal training. arXiv preprint arXiv:2509.23661 .Jinze Bai, Shuai Bai, Yunfei Chu, Zeyu Cui, Kai Dang, Xiaodong Deng, Yang Fan, Wenbin Ge, Yu Han, Fei Huang, and 1 others. 2023. Qwen technical report. 
+
+arXiv preprint arXiv:2309.16609 .Shuai Bai, Yuxuan Cai, Ruizhe Chen, Keqin Chen, Xionghui Chen, Zesen Cheng, Lianghao Deng, Wei Ding, Chang Gao, Chunjiang Ge, Wenbin Ge, Zhi-fang Guo, Qidong Huang, Jie Huang, Fei Huang, Binyuan Hui, Shutong Jiang, Zhaohai Li, Mingsheng Li, and 45 others. 2025. Qwen3-vl technical report. 
+
+Preprint , arXiv:2511.21631. Chao Chen, Zhixin Ma, Yongqi Li, Yupeng Hu, Yinwei Wei, Wenjie Li, and Liqiang Nie. 2025. Reasoning in the dark: Interleaved vision-text reasoning in latent space. Preprint , arXiv:2510.12603. Lin Chen, Jinsong Li, Xiaoyi Dong, Pan Zhang, Yuhang Zang, Zehui Chen, Haodong Duan, Jiaqi Wang, Yu Qiao, Dahua Lin, and 1 others. 2024. Are we on the right way for evaluating large vision-language models? Advances in Neural Information Processing Systems , 37:27056–27087. Gheorghe Comanici, Eric Bieber, Mike Schaekermann, Ice Pasupat, Noveen Sachdeva, Inderjit Dhillon, Mar-cel Blistein, Ori Ram, Dan Zhang, Evan Rosen, and 1 others. 2025. Gemini 2.5: Pushing the frontier with advanced reasoning, multimodality, long context, and next generation agentic capabilities. arXiv preprint arXiv:2507.06261 .Deng-Ping Fan, Ming-Ming Cheng, Yun Liu, Tao Li, and Ali Borji. 2017. Structure-measure: A new way to evaluate foreground maps. In Proceedings of the IEEE international conference on computer vision ,pages 4548–4557. Jun Gao, Yongqi Li, Ziqiang Cao, and Wenjie Li. 2025. Interleaved-modal chain-of-thought. Preprint ,arXiv:2411.19488. Jack Hong, Chenxiao Zhao, ChengLin Zhu, Wei-heng Lu, Guohai Xu, and Xing Yu. 2025. Deep-EyesV2: Toward Agentic Multimodal Model. ArXiv:2511.05271 [cs]. Yushi Hu, Weijia Shi, Xingyu Fu, Dan Roth, Mari Os-tendorf, Luke Zettlemoyer, Noah A Smith, and Ran-jay Krishna. 2024. Visual sketchpad: Sketching as a visual chain of thought for multimodal language models. Preprint , arXiv:2406.09403. Jiaqi Huang, Zunnan Xu, Jun Zhou, Ting Liu, Yicheng Xiao, Mingwen Ou, Bowen Ji, Xiu Li, and Kehong Yuan. 2025. Sam-r1: Leveraging sam for reward feedback in multimodal segmentation via reinforce-ment learning. Preprint , arXiv:2505.22596. Alexander Kirillov, Eric Mintun, Nikhila Ravi, Hanzi Mao, Chloe Rolland, Laura Gustafson, Tete Xiao, Spencer Whitehead, Alexander C. Berg, Wan-Yen Lo, Piotr Dollár, and Ross Girshick. 2023. Segment anything. Preprint , arXiv:2304.02643. Xin Lai, Zhuotao Tian, Yukang Chen, Yanwei Li, Yuhui Yuan, Shu Liu, and Jiaya Jia. 2024. Lisa: Reason-ing segmentation via large language model. In Pro-ceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition , pages 9579–9589. Bangzheng Li, Ximeng Sun, Jiang Liu, Ze Wang, Jialian Wu, Xiaodong Yu, Hao Chen, Emad Barsoum, Muhao Chen, and Zicheng Liu. 2025. Latent visual reasoning. Preprint , arXiv:2509.24251. OpenAI. 2024. Gpt-4o system card. Preprint ,arXiv:2410.21276. OpenAI. 2025. GPT-5 System Card. System card, OpenAI. Accessed: 2026-01-04. Martin L Puterman. 1990. Markov decision processes. 
+
+Handbooks in operations research and management science , 2:331–434. Nikhila Ravi, Valentin Gabeur, Yuan-Ting Hu, Rong-hang Hu, Chaitanya Ryali, Tengyu Ma, Haitham Khedr, Roman Rädle, Chloe Rolland, Laura Gustafson, Eric Mintun, Junting Pan, Kalyan Va-sudev Alwala, Nicolas Carion, Chao-Yuan Wu, Ross Girshick, Piotr Dollár, and Christoph Feichtenhofer. 2024. Sam 2: Segment anything in images and videos. Preprint , arXiv:2408.00714. Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, Y. K. Li, Y. Wu, and Daya Guo. 2024. Deepseekmath: Pushing the limits of mathemati-cal reasoning in open language models. Preprint ,arXiv:2402.03300. Zhaochen Su, Peng Xia, Hangyu Guo, Zhenhua Liu, Yan Ma, Xiaoye Qu, Jiaqi Liu, Yanshu Li, Kaide Zeng, Zhengyuan Yang, Linjie Li, Yu Cheng, Heng Ji, Junxian He, and Yi R. Fung. 2025. Think-ing with images for multimodal reasoning: Foun-dations, methods, and future frontiers. Preprint ,arXiv:2506.23918. Gemini Team, Petko Georgiev, Ving Ian Lei, Ryan Burnell, Libin Bai, Anmol Gulati, Garrett Tanzer, Damien Vincent, Zhufeng Pan, Shibo Wang, Soroosh Mariooryad, Yifan Ding, Xinyang Geng, Fred Al-cober, Roy Frostig, Mark Omernick, Lexi Walker, Cosmin Paduraru, Christina Sorokin, and 1118 oth-ers. 2024. Gemini 1.5: Unlocking multimodal un-derstanding across millions of tokens of context. 
+
+Preprint , arXiv:2403.05530. Harsh Trivedi, Niranjan Balasubramanian, Tushar Khot, and Ashish Sabharwal. 2023. Interleav-ing retrieval with chain-of-thought reasoning for knowledge-intensive multi-step questions. Preprint ,arXiv:2212.10509. 
+
+10 Haozhe Wang, Alex Su, Weiming Ren, Fangzhen Lin, and Wenhu Chen. 2025a. Pixel reasoner: Incentiviz-ing pixel-space reasoning with curiosity-driven rein-forcement learning. Preprint , arXiv:2505.15966. Qixun Wang, Yang Shi, Yifei Wang, Yuanxing Zhang, Pengfei Wan, Kun Gai, Xianghua Ying, and Yisen Wang. 2025b. Monet: Reasoning in La-tent Visual Space Beyond Images and Language. ArXiv:2511.21395 [cs]. Weiyun Wang, Zhangwei Gao, Lixin Gu, Hengjun Pu, Long Cui, Xingguang Wei, Zhaoyang Liu, Linglin Jing, Shenglong Ye, Jie Shao, Zhaokai Wang, Zhe Chen, Hongjie Zhang, Ganlin Yang, Haomin Wang, Qi Wei, Jinhui Yin, Wenhao Li, Erfei Cui, and 56 others. 2025c. Internvl3.5: Advancing open-source multimodal models in versatility, reasoning, and effi-ciency. Preprint , arXiv:2508.18265. Wenbin Wang, Liang Ding, Minyan Zeng, Xiabin Zhou, Li Shen, Yong Luo, Wei Yu, and Dacheng Tao. 2025d. Divide, conquer and combine: A training-free frame-work for high-resolution image perception in mul-timodal large language models. In Proceedings of the AAAI Conference on Artificial Intelligence , vol-ume 39, pages 7907–7915. Penghao Wu and Saining Xie. 2024. V?: Guided visual search as a core mechanism in multimodal llms. In 
+
+Proceedings of the IEEE/CVF Conference on Com-puter Vision and Pattern Recognition , pages 13084– 13094. Zhengyuan Yang, Linjie Li, Jianfeng Wang, Kevin Lin, Ehsan Azarnasab, Faisal Ahmed, Zicheng Liu, Ce Liu, Michael Zeng, and Lijuan Wang. 2023. Mm-react: Prompting chatgpt for multimodal reasoning and action. Preprint , arXiv:2303.11381. Shunyu Yao, Jeffrey Zhao, Dian Yu, Nan Du, Izhak Shafran, Karthik Narasimhan, and Yuan Cao. 2023. React: Synergizing reasoning and acting in language models. Preprint , arXiv:2210.03629. Zuyao You and Zuxuan Wu. 2025. Seg-r1: Segmenta-tion can be surprisingly simple with reinforcement learning. Preprint , arXiv:2506.22624. Licheng Yu, Patrick Poirson, Shan Yang, Alexander C. Berg, and Tamara L. Berg. 2016. Modeling context in referring expressions. Preprint , arXiv:1608.00272. Qiying Yu, Zheng Zhang, Ruofei Zhu, Yufeng Yuan, Xi-aochen Zuo, Yu Yue, Weinan Dai, Tiantian Fan, Gao-hong Liu, Lingjun Liu, and 1 others. 2025a. Dapo: An open-source llm reinforcement learning system at scale. arXiv preprint arXiv:2503.14476 .Xuan Yu, Dayan Guan, and Yanfeng Gu. 2025b. Zoom-refine: Boosting high-resolution multimodal under-standing via localized zoom and self-refinement. 
+
+Preprint , arXiv:2506.01663. Yi-Fan Zhang, Xingyu Lu, Shukang Yin, Chaoyou Fu, Wei Chen, Xiao Hu, Bin Wen, Kaiyu Jiang, Changyi Liu, Tianke Zhang, Haonan Fan, Kaibing Chen, Jiankang Chen, Haojie Ding, Kaiyu Tang, Zhang Zhang, Liang Wang, Fan Yang, Tingting Gao, and Guorui Zhou. 2025. Thyme: Think Beyond Images. ArXiv:2508.11630 [cs]. Yi-Fan Zhang, Huanyu Zhang, Haochen Tian, Chaoyou Fu, Shuangqing Zhang, Junfei Wu, Feng Li, Kun Wang, Qingsong Wen, Zhang Zhang, and 1 oth-ers. 2024. Mme-realworld: Could your multimodal llm challenge high-resolution real-world scenarios that are difficult for humans? arXiv preprint arXiv:2408.13257 .Ziwei Zheng, Michael Yang, Jack Hong, Chenx-iao Zhao, Guohai Xu, Le Yang, Chao Shen, and Xing Yu. 2025. DeepEyes: Incentivizing "Think-ing with Images" via Reinforcement Learning. ArXiv:2505.14362 [cs]. 
+
+11 A Efficiency and Aperture Usage Statistics 
+
+This appendix complements the qualitative discus-sion of inference-time overhead by reporting (i) the distribution of the number of aperture actions per trajectory, (ii) the average aperture count, and (iii) the average inference time. All statistics in this section are measured on the MME-RealWorld-Lite evaluation set under the same evaluation pro-tocol described in Appendix E. We focus on these statistics because TikArt may invoke additional computation beyond single-pass MLLMs: each aperture action requires processing an RoI, and segmentation actions may call a heavyweight seg-mentation backbone. 
+
+What is measured. We count the number of 
+
+aperture actions taken within one trajectory (episode) and report its empirical distribution (Fig. 6). We also report the mean aperture count (Fig. 7) and the average end-to-end inference time (Fig. 8) on MME-RealWorld-Lite. Finally, to iso-late the effect of aperture usage on runtime, we report the average inference time conditioned on the number of aperture actions (Fig. 9). 
+
+Key observations. First, TikArt concentrates on a small number of apertures per trajectory on MME-RealWorld-Lite, suggesting that the learned pol-icy typically uses a limited number of zoom-in steps to gather evidence (Fig. 6). Second, remov-ing the mandatory Observation phase substantially increases the average aperture usage (Fig. 7) and introduces a heavier tail with more frequent high-count trajectories (Fig. 6), indicating less controlled exploration. Finally, the increased aperture us-age correlates with significantly higher latency on MME-RealWorld-Lite (Fig. 8), consistent with the fact that each additional aperture/segmentation step adds compute. This trend is further confirmed when we stratify runtime by aperture count: la-tency increases monotonically as the number of apertures grows (Fig. 9). 
+
+B Datasets and Settings 
+
+This appendix summarizes the main hardware, training and dataset hyperparameters used for GRPO alignment of Qwen3-VL-8B-Instruct on the TikArt tasks. 0 1 2 3 4 5 6 7 8 9
+
+> Aperture Count
+> 0
+> 1000
+> 2000
+> 3000
+> 4000
+> 5000
+> 6000
+> Frequency
+> Qwen3-VL-8B-Thinking
+> Qwen3-VL-8B-Instruct
+> TikArt(Ours)
+> TikArt w/o Observation
+> TikArt w/o Zoom Action
+> TikArt w/o Segment Action
+> TikArt w/o GRPO
+
+Figure 6: Distribution of the number of aperture ac-tions per trajectory on MME-RealWorld-Lite (log-scale frequency). TikArt concentrates on a small number of apertures, while removing the mandatory Observation phase produces a heavier tail with more frequent high-count trajectories. 0 1 2 3 4 5 6
+
+> Aperture Count
+> Qwen3-VL-8B-Thinking
+> Qwen3-VL-8B-Instruct
+> TikArt(Ours)
+> TikArt w/o Observation
+> TikArt w/o Zoom Action
+> TikArt w/o Segment Action
+> TikArt w/o GRPO
+> 0.00
+> 0.00
+> 1.36
+> 6.05
+> 1.61
+> 0.45
+> 1.12
+> Avg Aperture Count Comparison
+
+Figure 7: Average aperture count per trajectory on MME-RealWorld-Lite. TikArt uses 1.36 apertures on average, whereas the w/o Observation ablation increases this number to 6.05, suggesting that Observation helps regularize and stabilize purposeful aperture usage. 
+
+B.1 Training Configuration Hardware and system. All GRPO experiments are conducted on a single node with 8 NVIDIA Tesla A100 GPUs. Distributed training uses Deep-Speed ZeRO Stage 3 with CPU offloading enabled for both model parameters and optimizer states. NCCL is used as the communication backend and the timeout is increased to 1,800 seconds (environ-ment variable NCCL_TIMEOUT=1800000 ) to avoid failures during long GRPO iterations. 
+
+B.2 Training Datasets 
+
+Our full training pipeline follows a two-stage de-sign, inspired by the data composition strategy de-scribed in DeepEyes and adapted to the needs of TikArt. In the first stage (Seg pre-training), we train the model exclusively on 2,000 segmentation-focused samples from COCO2017. This stage is designed to establish reliable competence in segmentation-oriented tool usage, including bound-ing box grounding, point-based prompting, and label recognition, mirroring the fine-grained per-ception emphasis observed in the Visual Search portion of the DeepEyes dataset. During this stage, the objective is not general vision–language rea-12 0 2 4 6 8 10 12 14 
+
+> Time (seconds)
+> Qwen3-VL-8B-Thinking
+> Qwen3-VL-8B-Instruct
+> TikArt(Ours)
+> TikArt w/o Observation
+> TikArt w/o Zoom Action
+> TikArt w/o Segment Action
+> TikArt w/o GRPO
+> 6.92s
+> 2.37s
+> 5.55s
+> 13.68s
+> 4.74s
+> 3.32s
+> 6.56s
+> Avg Time Comparison
+
+Figure 8: Average inference time (seconds) on MME-RealWorld-Lite. TikArt increases latency relative to the single-pass backbone (e.g., 5.55s vs. 2.37s for Qwen3-VL-8B-Instruct), and removing Observation further am-plifies the cost (13.68s), consistent with increased aper-ture usage. 0 2 4 6 8
+
+> Aperture Count
+> 5
+> 10
+> 15
+> 20
+> 25
+> 30
+> 35
+> Average Time (seconds)
+> Average Time by Aperture Count
+> Qwen3-VL-8B-Thinking
+> Qwen3-VL-8B-Instruct
+> TikArt(Ours)
+> TikArt w/o Observation
+> TikArt w/o Zoom Action
+> TikArt w/o Segment Action
+> TikArt w/o GRPO
+
+Figure 9: Average inference time (seconds) on MME-RealWorld-Lite conditioned on the number of aperture actions. Runtime increases monotonically with aperture count, reflecting the extra compute incurred by each additional RoI/segmentation step. 
+
+soning but rather ensuring that the model develops stable, consistent w/o Zoom Action variant invoca-tion behavior. In the second stage (multi-task training), we expand the data distribution to a mixture of per-ception, reasoning, and chart-style tasks. Follow-ing the structure of the DeepEyes corpus—where 47% of data targets fine-grained natural-image perception, 30% consists of chart understanding, and 23% focuses on multimodal reasoning—we construct a dataset comprising 40,000 randomly sampled instances from the DeepEyes-47K collec-tion together with an additional 15,000 samples drawn from COCO2017, ReasonSeg(train split), and ADE20K. This multi-source mixture supports learning across three task families: visual math-ematics, general visual question answering, and segmentation. The natural-image samples encour-age precise visual grounding; the chart-like sam-ples introduce abstract structured visual semantics; and the reasoning-oriented samples enhance robust-ness across logical, numerical, and multi-step infer-ence scenarios. This balanced composition follows the same design rationale as DeepEyes, where di-verse visual distributions and reasoning styles help activate tool-aware multimodal reasoning capabili-ties. Our final mixed corpus thereby supports stable GRPO training while enabling the emergence of tool-integrated visual–linguistic reasoning. 
+
+C Discussion 
+
+C.1 Aperture-guided observation as a decision process 
+
+TikArt views multi-step visual reasoning as a Markov decision process over regions of interest (RoIs). Instead of relying on a single global en-coding of the image, the agent repeatedly selects 
+
+apertures —localized RoI crops that act as control-lable windows of visual focus—and updates its internal state based on what is observed there. This formulation brings the model closer to human vi-sual cognition, where reasoning proceeds through a sequence of fixations and saccades over informa-tive parts of the scene rather than a single holistic glance. In this MDP view, three components become explicit: (i) the state, which combines the original image, the textual query, the history of language tokens, and previously inspected apertures; (ii) the action, which decides where and how to place the next aperture; and (iii) the observation, a natural-language description of the selected region. The Think–Aperture–Observe loop we adopt makes all three observable, allowing us to inspect how the model trades off between exploring new RoIs and exploiting already collected evidence. 
+
+C.2 Zoom and segmentation as unified aperture actions 
+
+Although TikArt must operate across diverse vi-sual regimes (icons and panels in high-resolution benchmarks, cluttered objects in natural images, and pixel-level masks in reasoning segmentation), it uses a compact set of aperture actions . The zoom 
+
+action corresponds to directing foveal vision to-ward a bounded RoI, such as a diagram panel, a ta-ble cell, or a small object. The segmentation action corresponds to delineating irregular or overlapping foreground regions, akin to mentally tracing the outline of an object or a group of objects; in prac-tice this is instantiated by a segmentation backbone (e.g., SAM2). 13 From the agent’s perspective, both actions are instances of the same underlying decision: where to attend next and at what granularity . This unifi-cation is important for training, as it allows a single policy to coordinate structured and free-form RoIs. Empirically, we find that zoom is often used to lo-calize coarse spatial structure (e.g., selecting a rele-vant panel or region), while segmentation refines the focus around thin structures or small, densely packed objects that are difficult to isolate by rect-angular crops alone. The learned policy typically uses only a few apertures per trajectory, suggest-ing that the agent discovers efficient strategies for combining these actions. 
+
+C.3 The role of explicit observation 
+
+A central design choice in TikArt is the manda-tory Observation phase after every aperture action. Rather than treating visual operations as latent, the agent must explicitly verbalize what appears in the selected RoI before continuing to reason. This has two key effects. First, observations act as persistent memory: once a local detail is described in language, it be-comes available to all subsequent steps, even if the corresponding aperture is no longer active. This is particularly beneficial on benchmarks such as V ∗
+
+and HR-Bench, where the answer often depends on aggregating cues from multiple small regions. Second, the observation requirement regularizes the policy space. The agent cannot silently apply arbitrary visual transforms; each aperture must be justified by a linguistic description that is consis-tent with the question and previous context. Our ablations show that removing explicit observations leads to unstable reinforcement learning and no-table drops in fine-grained perception, indicating that observation is not just an explanatory layer but an essential part of the decision-making loop. 
+
+C.4 Empirical behavior and interpretability 
+
+Across benchmarks, we observe qualitatively mean-ingful aperture trajectories. On high-resolution vi-sual reasoning tasks, TikArt often first zooms into coarse structural regions (e.g., the relevant panel in a multi-panel figure), then iteratively refines its focus via smaller zooms or segmentation actions to isolate critical details. On reasoning segmentation tasks such as ReasonSeg, aperture decisions corre-late with “stepwise grounding”: the agent first iden-tifies the logical subscene referenced by the text, then segments the object or region that matches the current reasoning hypothesis. These trajectories are inherently interpretable: each action is anchored to a visible RoI, and each RoI is accompanied by an observation that explains what the model believes it sees. This stands in con-trast to purely latent or text-only chains of thought, where intermediate visual decisions are inaccessi-ble. The interpretability of aperture-guided obser-vation is useful both for diagnosing model failures (e.g., mis-localization vs. mis-reasoning) and for understanding emergent behavior such as when and why the agent chooses not to use apertures at all. 
+
+C.5 Relation to concurrent paradigms 
+
+Recent work has explored interleaved multimodal chains-of-thought and latent visual reasoning. Some methods acquire auxiliary images or crops via coordinate prediction and external tools, while others reason directly in a latent visual space with-out explicit RoIs. TikArt lies between these ex-tremes: it maintains a concrete, image-space no-tion of RoIs through apertures, but learns when 
+
+and how to invoke them via reinforcement learning rather than hard-coded workflows. Compared to pipeline-style approaches, this yields more flexi-ble and task-dependent aperture usage; compared to latent-only approaches, it offers stronger inter-pretability and a direct connection to pixel-level grounding (e.g., segmentation masks). 
+
+D Future Work 
+
+Toward more integrated visual front-ends. An important direction is to reduce the reliance on ex-ternal segmentation modules by integrating more of the visual front-end into the MLLM itself. Pos-sible approaches include distilling the segmenta-tion backbone into the vision encoder, jointly train-ing the aperture policy and segmentation layers, or moving toward latent segmentation where RoIs are represented implicitly in the model’s hidden space. Such integration could improve robustness, sim-plify deployment, and avoid discrepancies between open- and closed-source pipelines. 
+
+More expressive aperture actions. Extending the action space beyond simple crops is another promising direction. For example, future work could explore hierarchical apertures (coarse-to-fine RoIs), multi-object apertures, or actions that ma-nipulate viewpoint and geometry. In video and 3D settings, temporal or volumetric apertures may allow the agent to decide not only where to look, 14 but when and from which perspective . Designing such actions while keeping reinforcement learning tractable is an open challenge. 
+
+Improved RL algorithms and credit assignment. 
+
+TikArt currently relies on GRPO with relatively simple reward shaping. More advanced RL tech-niques tailored to multimodal reasoning—such as better credit assignment across aperture and lan-guage tokens, off-policy or offline RL with re-play, or multi-objective optimization balancing ac-curacy and computation—could further improve sample efficiency and stability. Exploring the interaction between supervised pre-training, self-imitation, and RL for aperture policies is another promising avenue. 
+
+Adaptive computation and distillation. To mit-igate inference-time overhead, future work could incorporate adaptive aperture budgets, early-exit criteria based on confidence, or dynamic policies that fall back to single-pass reasoning when aper-tures are unlikely to help. Another complementary direction is to distill TikArt’s aperture-guided be-havior into a cheaper student model that imitates successful trajectories without executing all aper-ture actions at test time. 
+
+Bridging explicit apertures and latent visual rea-soning. Finally, it would be interesting to connect explicit aperture-guided observation with latent vi-sual reasoning paradigms that operate directly in embedding space. One possibility is to let the agent choose between concrete image-space apertures and latent “visual thoughts” depending on the task, treating both as actions in a unified policy. Such a hybrid design could combine the interpretability and grounding benefits of explicit RoIs with the flexibility of latent visual computation, potentially leading to even stronger fine-grained and abstract visual reasoning. 
+
+E Prompts 
+
+E.1 TikArt 
+
+TikArt – System Prompt 
+
+You are a helpful assistant # Tools You may call the segmentation or zoom function to extract specific regions from images . Function signature provided within <tools > </ tools > XML tags : < tools > 
+
+{" type ": " function ", " function ": {" name ": " image_segment_tool ", " description ": " Generate asegmentation mask for specified region , mask non - target areas as Gaussian noise , and crop using bounding box ", " parameters ": {" type ": " object ", "properties ": {" bbox ": {" type ": " array ", " items ": {" type ": " number "} , " minItems ": 4, "maxItems ": 4, " description ": " Bounding box as [x1 , y1 , x2 , y2 ]"} , " points ": {" type ": " array ", " items ": {" type ": " array ", " items ": {" type ": " number "} , " minItems ": 2, "maxItems ": 2} , " description ": " List of point coordinates "} , " labels ": {" type ": " array ", " items ": {" type ": " integer "} , " description ": " Labels for each point (1= foreground , 0= background ) "} , " obj_label ": {" type ": " string ", "description ": " Optional object name "}} , " required ": [" bbox ", " points ", " labels "]}}} </ tools > < tools > {" type ":" function " ," function ":{" name ":" image_zoom_in_tool ", " description ":" Zoom in on a specific region of an image by cropping it based on a bounding box ", " parameters ":{" type ":" object " ," properties ":{ " bbox ":{" type ":" array " ," items ":{" type ":" number "} ," minItems ":4 ," maxItems ":4 , " description ":" Bounding box [x1 , y1 , x2 , y2 ]"} , " obj_label ":{" type ":" string " ," description ":" Optional object name "}} , " required ":[" bbox "]}}} </ tools > # How to call a tool Return a json object with function name and arguments inside <tool_call > </ tool_call >: < tool_call > {" name ": < function - name >, " arguments ": <args - json - object >} </ tool_call > Examples : < tool_call > {" name ": " image_segment_tool ", " arguments ": {" bbox ": [100 , 80 , 450 , 400] , " points ": [[300 , 180] , [280 , 200]] , "labels ": [1 , 0] , " obj_label ": " Cat "}} </ tool_call > 
+
+15 < tool_call > {" name ": " image_zoom_in_tool ", " arguments ": {" bbox ": [10 , 20 , 100 , 200] , " obj_label ": " the apple on the desk "}} </ tool_call > # Tool Rules - Only one tool can be called per turn .- You must print your thinking process step by step before calling atool . Think first , call ** image_segment_tool ** or ** image_zoom_in_tool ** if needed , then answer . 
+
+TikArt – User Prompt 
+
+Describe what you observe in this response first , then think step by step . Call ** image_segment_tool ** or ** image_zoom_in_tool ** if needed , then answer . Format as : Image Description here ... Thinking Process here ... < tool_call >... </ tool_call > ( if tools needed ) < answer >( If no tools needed , Answer here ...) </ answer > 
+
+E.2 w/o observation 
+
+w/o observation – User Prompt 
+
+Think step by step first , call ** image_segment_tool ** or ** image_zoom_in_tool ** if needed , then answer . Format as : ( Thinking Process ) < tool_call >... </ tool_call > ( if tools needed ) < answer >( If no tools needed , Answer here ...) </ answer > 
+
+TikArt w/o Segment Action 
+
+Zoom – System Prompt 
+
+You are a helpful assistant # Tools You may call the zoom function to extract specific regions from images . Function signature provided within <tools > </ tools >: < tools > 
+
+{" type ":" function " ," function ":{" name ":" image_zoom_in_tool ", " description ":" Zoom in on a region by cropping with a bounding box ", " parameters ":{" type ":" object " ," properties ":{ " bbox ":{" type ":" array " ," items ":{" type ":" number "} ," minItems ":4 ," maxItems ":4 , " description ":" Bounding box [x1 , y1 , x2 , y2 ]"} , " obj_label ":{" type ":" string " ," description ":" Optional object name "}} , " required ":[" bbox "]}}} </ tools > # Tool Rules - Only one tool can be called per turn .- You must print your thinking process step by step before calling atool . Think first , call ** image_zoom_in_tool ** if needed , then answer . 
+
+Zoom – User Prompt 
+
+Think step by step first , call ** image_zoom_in_tool ** if needed , then answer . Format as : ( Thinking Process ) < tool_call >... </ tool_call > < answer >( If no tools needed , Answer here ...) </ answer > 
+
+E.3 TikArt w/o Zoom Action 
+
+Segment – System Prompt 
+
+You are a helpful assistant # Tools You may call the segmentation function to extract specific regions from images . Function signature provided within <tools > </ tools >: < tools > {" type ": " function ", " function ": {" name ": " image_segment_tool ", " description ": " Generate asegmentation mask for specified region ", " parameters ": {" type ": " object ", "properties ": {" bbox ": {" type ": " array ", " items ": {" type ": " number "} , " minItems ": 4, "maxItems ": 4} , " points ": {" type ": " array "} , " labels ": {" type ": " array "} , " obj_label ": {" type ": " string "}} , 
+
+16 " required ":[" bbox " ," points " ," labels "]}}} </ tools > # Tool Rules - Only one tool can be called per turn .- You must print your thinking process step by step before calling atool . Think first , call ** image_segment_tool ** if needed , then answer . 
+
+Segment – User Prompt 
+
+Think step by step first , call ** image_segment_tool ** if needed , then answer . Format as : ( Thinking Process ) < tool_call >... </ tool_call > < answer >( If no tools needed , Answer here ...) </ answer > 
+
+E.4 TikArt w/o GRPO 
+
+This is a training-free (prompt-only) variant: we directly run Qwen3-VL-8B-Instruct with the same TikArt prompts as in Appendix E.1, without any AGRPO fine-tuning. 17

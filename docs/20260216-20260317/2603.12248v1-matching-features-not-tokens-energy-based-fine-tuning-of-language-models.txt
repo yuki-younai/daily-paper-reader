@@ -1,0 +1,3316 @@
+Title: Matching Features, Not Tokens: Energy-Based Fine-Tuning of Language Models
+
+URL Source: https://arxiv.org/pdf/2603.12248v1
+
+Published Time: Fri, 13 Mar 2026 01:21:56 GMT
+
+Number of Pages: 39
+
+Markdown Content:
+# Matching Features, Not Tokens: Energy-Based Fine-Tuning of Language Models 
+
+Samy Jelassi * 1 Mujin Kwun * 1 Rosie Zhao * 1 Yuanzhi Li 2 Nicolo Fusi 3 Yilun Du 1 Sham M. Kakade 1
+
+Carles Domingo-Enrich * 3
+
+## Abstract 
+
+Cross-entropy (CE) training provides dense and scalable supervision for language models, but it optimizes next-token prediction under teacher forcing rather than sequence-level behavior under model rollouts. We introduce a feature-matching objective for language-model fine-tuning that tar-gets sequence-level statistics of the completion distribution, providing dense semantic feedback without requiring a task-specific verifier or pref-erence model. To optimize this objective ef-ficiently, we propose energy-based fine-tuning 
+
+(EBFT), which uses strided block-parallel sam-pling to generate multiple rollouts from nested prefixes concurrently, batches feature extraction over these rollouts, and uses the resulting embed-dings to perform an on-policy policy-gradient up-date. We present a theoretical perspective connect-ing EBFT to KL-regularized feature-matching and energy-based modeling. Empirically, across Q&A coding, unstructured coding, and transla-tion, EBFT matches RLVR and outperforms SFT on downstream accuracy while achieving a lower validation cross-entropy than both methods. 
+
+## 1. Introduction 
+
+Cross-entropy (CE) training under teacher forcing is the standard approach for pre-training, continued/mid-training, and supervised fine-tuning (SFT) of large language mod-els. Its next-token objective provides an extremely dense 
+
+learning signal, is stable under massively parallel optimiza-tion, and admits efficient implementations at scale (Kaplan et al., 2020; Brown et al., 2020). However, the same teacher-forcing setup introduces a distribution shift: during training, the model conditions on ground-truth prefixes, while at de-
+
+> *
+
+Equal contribution 1Harvard University, Kempner In-stitute 2MBZUAI 3Microsoft Research New England. Cor-respondence to: Samy Jelassi <jelassisamy@gmail.com >,Mujin Kwun <mujin kwun@harvard.edu >, Rosie Zhao 
+
+<rosiezhao@g.harvard.edu >, Carles Domingo-Enrich <car-lesd@microsoft.com >.
+
+Preprint. March 13, 2026. 
+
+ployment time, it must condition on its own generations. Errors early in a generated sequence alter the conditioning context for subsequent predictions, causing later tokens to be sampled from distributions the model was rarely trained on (Bengio et al., 2015; Lamb et al., 2016). Braverman et al. (2019) quantify this distribution shift by measuring the expected conditional entropy of the k-th generated token as a function of k. For a perfect model, this quantity should remain stable as k grows, since the generated prefixes would be distributionally identical to ground-truth text. In practice, however, the expected en-tropy increases with k, even for models that achieve low training perplexity. This reveals a fundamental limitation of token-level supervision: low perplexity measures one-step prediction accuracy on ground-truth prefixes but does not guarantee well-calibrated behavior over longer generations. The model may match the data distribution locally while diverging from it at the sequence level. 1 2 4 8 16 32 64 
+
+> Completion length
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> Feature-matching loss (cond.)
+> SFT
+
+Figure 1. Feature-matching loss grows with completion length. 
+
+Conditional feature-matching loss (lower is better) as a function of completion length for Qwen2.5-1.5B fine-tuned with SFT on OpenCodeInstruct (Ahmad et al., 2025). Although this increase is expected even under a perfect model due to growing feature variance, part of the degradation reflects SFT’s inability to calibrate the model’s rollout distribution over long horizons. 
+
+A natural way to measure this sequence-level divergence is to compare statistics of model-generated completions against those of ground-truth completions in a feature space. We formalize this through a conditional feature-matching 
+
+1
+
+> arXiv:2603.12248v1 [cs.LG] 12 Mar 2026 Energy-Based Fine-Tuning
+
+loss that, for each context, measures the squared error be-tween the mean feature embedding of model rollouts and that of the ground-truth completion (formal definition in Section 2.1). We say a model is (feature-) calibrated when this loss is zero, meaning its expected feature embeddings match those of the data for all contexts. Figure 1 plots this loss as a function of completion length for a Qwen2.5-1.5B model fine-tuned with SFT. The loss increases with com-pletion length, which is partly expected even for a perfect model due to growing feature variance over longer gener-ations. However, part of this degradation reflects SFT’s failure to calibrate the model’s rollout distribution. A fine-tuning method that directly targets this feature-matching loss could reduce this gap. RL fine-tuning (Ouyang et al., 2022; Schulman et al., 2017) addresses this mismatch by optimizing sequence-level re-wards under the model’s own rollouts, enabling direct behav-ioral control. However, its effectiveness depends on access to a reliable reward function or verifier, as in reinforcement learning with verifiable rewards (RLVR; (Lightman et al., 2023; Shao et al., 2024)). These reward signals may be unavailable, noisy, or misaligned with desired behavior in many open-ended tasks. Even when a reliable reward exists, RL optimizes a scalar signal and does not directly target distributional calibration of the rollout distribution. In our experiments, we observe this tradeoff concretely: RLVR improves downstream performance at the cost of worsening both the validation cross-entropy and the feature-matching loss introduced above. Beyond RLVR, a related class of methods incorporates 
+
+partial rollouts at training time (Zelikman et al., 2024; Hatamizadeh et al., 2025; Dong et al., 2025). Since these rollouts are typically too short or incomplete to be scored by a verifier, these methods introduce surrogate rewards – commonly the model’s own log-probabilities or token-overlap similarity between a sampled continuation and a reference. While useful in practice, neither type of surrogate provides calibration guarantees: self-likelihood rewards re-inforce already high-probability samples without necessarily improving coverage, and similarity-based measures can im-prove the chosen metric without improving likelihood or calibration. We propose an alternative that replaces these heuristic sur-rogate rewards with a principled objective: we directly op-timize the feature-matching loss, using it not just as a di-agnostic but as the training signal itself. A frozen feature network ϕ, initialized from the pre-trained model, embeds concatenated prompt–completion sequences, and the gener-ator pθ is fine-tuned to match the resulting feature moments using a REINFORCE-style gradient estimator on partial roll-outs (see Figure 4). The resulting training signal is dense, operates at the sequence level, requires no task-specific re-1 2 4 8 16 32 64      
+
+> Completion length
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> 0.8
+> Feature-matching loss (cond.)
+> Qwen2.5-1.5B EBFT SFT RLVR
+> Figure 2. EBFT achieves the lowest feature-matching loss across all completion lengths. Despite training with a rollout horizon of only 8 tokens, EBFT’s gains persist and grow at longer completions. RLVR worsens this loss relative to the base model.
+
+ward or verifier, and — unlike the surrogate-reward methods above — optimizes a proper scoring rule under sufficiently rich features. We call this approach Energy-Based Fine-Tuning (EBFT): under a KL-regularized view, the feature-matching objective implicitly defines an energy function over sequences, with the optimal policy taking the form of an exponential tilt of the base model (Section D). 
+
+Contributions. We introduce a feature-matching loss for language model fine-tuning that targets sequence-level statis-tics of the rollout distribution, and propose Energy-Based Fine-Tuning (EBFT) as a practical method to optimize it. We provide a theoretical perspective connecting EBFT to KL-regularized energy-based models (Section D). Empir-ically, we observe the following across Q&A coding, un-structured coding, and translation datasets: 1. EBFT achieves the lowest feature-matching loss across all completion lengths (Figure 2). Despite training with a rollout horizon of only 8 tokens, its gains persist and grow at longer generations, indicating genuine distribu-tional calibration. In contrast, RLVR worsens this loss relative to the base model. 2. On downstream performance, EBFT consistently out-performs SFT and is competitive with RLVR, despite requiring no task-specific reward or verifier. 3. On validation cross-entropy, EBFT improves over SFT across all tasks, even though SFT explicitly optimizes this objective (Figure 3). RLVR, by contrast, substan-tially degrades validation perplexity. 4. EBFT can be applied in non-verifiable settings where RLVR is inapplicable. For instance, when training on raw code scraped from GitHub, EBFT yields substantial gains over SFT. 2Energy-Based Fine-Tuning 0.02 0.05 0.1 0.2 0.5 1 2               
+
+> Epoch (log)
+> 0.36
+> 0.38
+> 0.40
+> 0.42
+> 0.44
+> 0.46
+> 0.48
+> HumanEval (greedy)
+> 0.02 0.05 0.1 0.2 0.5 12
+> Epoch (log)
+> 0.60
+> 0.62
+> 0.64
+> 0.66
+> 0.68
+> 0.70
+> 0.72
+> 0.74
+> HumanEval (pass@16)
+> 0.02 0.05 0.1 0.2 0.5 12
+> Epoch (log)
+> 0.20
+> 0.25
+> 0.30
+> 0.35
+> 0.40
+> 0.45
+> 0.50
+> 0.55
+> 0.60
+> CE loss (answers)
+> 0.02 0.05 0.1 0.2 0.5 12
+> Epoch (log)
+> 0.28
+> 0.30
+> 0.32
+> 0.34
+> 0.36
+> 0.38
+> 0.40
+> 0.42
+> 0.44
+> CFM loss
+
+EBFT SFT RLVR Qwen2.5-1.5B 
+
+Figure 3. EBFT improves downstream performance without sacrificing distributional calibration. From left to right, we plot HumanEval accuracy (greedy and pass@16), validation cross-entropy (CE), and conditional feature-matching (CFM) loss over training for Qwen2.5-1.5B fine-tuned on OpenCodeInstruct (Ahmad et al., 2025). SFT improves cross-entropy and CFM loss but lags on downstream accuracy. RLVR improves downstream accuracy but substantially degrades both calibration metrics relative to the base model (dashed line). EBFT achieves the best results across all four metrics, avoiding this tradeoff. CE and CFM losses are computed on a 1k-samples held-out subset of OpenCodeInstruct. 
+
+## 2. Language Modeling with Feature Matching 
+
+2.1. The feature-matching loss 
+
+Given vocabulary V and ground truth distribution p over contexts c ∈ V ∗ and completions y ∈ V G of length G, and a language model pθ , the feature-matching loss function is: 
+
+LFM (θ):= Ec∼p
+
+h
+
+Eˆy∼pθ (·| c)[ϕ(c : ˆ y)] −Ey∼p(·| c)[ϕ(c : y)] 2i
+
+, (1) where c : y denotes concatenation and ϕ : V∗ → Rd
+
+is the feature map. We use the short-hand ϕc(y) := 
+
+ϕ(c : y). Since LFM depends on the unknown data mo-ment Ey∼p(·| c)[ϕc(y)] , it cannot be directly estimated from ground-truth pairs (c, y ). A bias-variance decomposition lets us write the feature-matching loss in terms of the condi-tional feature-matching loss :
+
+LFM (θ) = LCFM (θ) − Ec∼p
+
+h
+
+Var[ ϕc(y)|c]
+
+i
+
+, (2) where LCFM (θ) := Ec∼p
+
+h
+
+Eˆy∼pθ (·| c)[ϕc(ˆ y)] − ϕc(y) 2i
+
+,
+
+Var[ ϕc(y)|c] = Ey∼p(·| c)
+
+h
+
+ϕc(y) − Ey′∼p(·| c)[ϕc(y′)] 
+
+i
+
+.
+
+The offset Ec∼p[Var[ ϕc(y)|c]] is independent of θ and cap-tures the per-context variability of the ground-truth features. Since LFM has optimal value zero, LCFM equals this offset at optimality. LCFM admits an unbiased estimator from ground-truth pairs (c, y ); we plot these estimates in Fig-ures 1 and 2. Note that LFM and LCFM mirror the (condi-tional) flow-matching loss functions for continuous genera-tive modeling (Lipman et al., 2023). 
+
+Why minimize LFM ? We say that pθ is (feature-) cali-brated if LFM (θ) = 0 , meaning its expected feature em-beddings match those of the data for all contexts c. If the feature map ϕ is rich enough that matching feature moments implies matching distributions, then feature-calibration is equivalent to pθ = p and LFM is a strictly proper scoring rule (Gneiting & Raftery, 2007). In other words, under a sufficiently expressive feature map, minimizing LFM is guaranteed to recover the true conditional distribution: it cannot be fooled by a model that matches some statistics while diverging elsewhere. 
+
+Relationship between feature-matching and cross-entropy. In practice, we optimize a mixed objective that combines feature matching with standard next-token cross-entropy (CE): 
+
+L(θ) = LFM (θ) + γ LCE (θ), γ ≥ 0.
+
+To build intuition, consider the special case of completions of length G = 1 with one-hot features ϕc(y) = ey ∈{0, 1}|V| . Feature matching then reduces to an ℓ2 moment-matching loss on the next-token distribution: 
+
+LFM (θ) = Ec∼p
+
+h X 
+
+> y∈V
+
+ pθ (y|c) − p(y|c)2i
+
+, (3) while CE is 
+
+LCE (θ) = −Ec∼p
+
+h X 
+
+> y∈V
+
+p(y|c) log pθ (y|c)
+
+i
+
+. (4) Both losses share the same unique minimizer— the ground-truth distribution pθ = p— and so does their combination L.However, their landscapes differ: LFM penalizes deviations from p(y|c) symmetrically, while LCE penalizes underesti-mation more heavily than overestimation. More importantly, using longer completions (e.g., G ∈ { 4, 8, 16 }) with richer features lets LFM target sequence-level statistics that the token-level CE loss is blind to. 3Energy-Based Fine-Tuning Context The kids were excited because Ground-truth completion it was the last day of school Generator (trainable) summer break was starting the circus was in town the weather was nice Feature network (frozen) Estimate Feature-Matching loss: Policy Gradient Update Unbiased reward estimates :
+
+Figure 4. Overview of Energy-Based Fine-Tuning (EBFT). For each context c, the generator pθ samples n completions. A frozen feature network ϕ embeds each prompt–completion pair, producing features ϕ(c : ˆ yj ) for the sampled completions and ϕ(c : y) for the ground truth. Each completion receives a feature-matching reward measuring alignment with the ground-truth feature moment, and the generator is updated via REINFORCE with an RLOO baseline. 
+
+Constructing the feature map. We instantiate ϕ as a frozen feature network obtained by copying pθ at initial-ization. Given a concatenated sequence c : y, we take the concatenation of intermediate activations at different depths of the feature network, normalize each block to unit L2
+
+norm, and concatenate them to form ϕ(c : y). In all exper-iments, we use layers at depths 25%, 50%, and 75%; the intuition is that earlier layers capture low-level information, final layers are biased toward next-token prediction, and middle layers carry semantic and structural information. We hypothesize that such high-dimensional feature maps are close to satisfying the richness condition above. 
+
+2.2. Feature-matching rewards and on-policy training 
+
+This subsection derives an unbiased REINFORCE estimator for ∇θ LFM (θ) and describes the practical training recipe summarized in Algorithm 1. 
+
+Gradient estimation via REINFORCE. Since LFM and 
+
+LCFM differ by a constant independent of θ per (2) , their gradients coincide: ∇θ LFM (θ) = ∇θ LCFM (θ). Hence, it suffices to estimate the gradient of the per-example loss 
+
+LCFM (θ; c, y ) = Eˆy∼pθ (·| c)[ϕc(ˆ y)] −ϕc(y) 2, (5) which satisfies ∇θ LCFM (θ) = E(c,y )∼p[∇θ LCFM (θ; c, y )] .Using the product rule of differentiation and the widely used identity ∇θ Eˆy∼pθ [g(ˆ y)] = Eˆy∼pθ [g(ˆ y) ∇θ log pθ (ˆ y | c)] 
+
+yields a REINFORCE gradient 
+
+∇θ LCFM (θ; c, y ) = −Eˆy∼pθ (·| c)
+
+∇θ log pθ (ˆ y|c) r(ˆ y, c ),
+
+where the reward is 
+
+r(ˆ y, c ) = 2 ϕc(ˆ y)⊤ϕc(y)
+
+| {z }
+
+> alignment term
+
+− 2ϕc(ˆ y)⊤E˜y∼pθ (·| c)
+
+ϕc(˜ y)| {z }
+
+> diversity term
+
+. (6) 
+
+Algorithm 1 One EBFT training iteration. 
+
+1: Input: input prompt c; ground-truth completion y; n:samples per prompt; generation length G; generator pθ ;
+
+feature network ϕ
+
+2: Generation: sample n rollouts of length G from the actor: (ˆ yj )nj=1 ∼ pθ (· | c)
+
+3: Feature network embeddings: compute the ground truth feature vector ϕc(y) and the rollout feature vectors  ϕc(ˆ yj )nj=1 . Whiten the features as in (8) if needed. 
+
+4: Feature-matching reward: For j = 1 : n, compute 
+
+rj = 2 ϕc(ˆ yj )⊤ϕc(y)− 2
+
+n−1
+
+> n
+
+X 
+
+> j′=1 ,j ′̸=j
+
+ϕc(ˆ yj )⊤ϕc(ˆ yj′ ),
+
+and the RLOO baseline bj as in (94) in Section E. 
+
+5: Actor update: update pθ with an RLOO update across 
+
+j = 1 , . . . , n .We obtain an unbiased estimator of this gradient by sampling 
+
+n > 1 completions (ˆ yj )nj=1 from pθ (·| c) and computing 
+
+1
+
+n
+
+> n
+
+X
+
+> j=1
+
+∇θ log pθ (ˆ yj |c)rj , where 
+
+rj = 2 ϕc(ˆ yj )⊤ϕc(y) − 2
+
+n − 1
+
+X 
+
+> j′̸=j
+
+ϕc(ˆ yj )⊤ϕc(ˆ yj′ ).
+
+(7) As in REINFORCE, it is possible to reduce the variance of this gradient by subtracting from rj a baseline which is independent from ˆyj . We use REINFORCE leave-one-out (RLOO), but must account for the fact that rj already depends on the other completions; see Section E for the derivation of the REINFORCE gradient and RLOO baseline. 4Energy-Based Fine-Tuning 
+
+Energy-Based Fine-Tuning (EBFT) training recipe. Al-gorithm 1 summarizes one EBFT iteration. EBFT uses two models: a generator pθ , which is the model that we want to fine-tune, and a feature network ϕ. In what follows, we only train the generator; we keep the feature network frozen .Given a pair (c, y ) of ground truth context and completion of length G, we generate n completions (ˆ yj )nj=1 of the same length, and we feed the concatenated sequences c : y and 
+
+(c : ˆ yj )nj=1 through the feature network to obtain the fea-ture vectors ϕc(y) and (ϕc(ˆ yj )) nj=1 , which we use to get the rewards (rj )nj=1 and the RL gradient following equation (7). In practice, we introduce additional implementation details which affect how the method is instantiated: an optional 
+
+alignment-biased reward that adjusts the fidelity–diversity trade-off, an efficient strided block-parallel rollout scheme 
+
+for collecting many on-policy samples, and feature whiten-ing to improve the conditioning of the feature space. We describe the first two below, and discuss whitening in the following subsection. 
+
+Adding an alignment bias. In some settings, one may prefer higher-fidelity samples at the cost of reduced diver-sity. This can be achieved by scaling the diversity term of the reward in (6) by a factor α ∈ (0 , 1) , which biases the objective toward closer alignment with the ground-truth features. We describe this variant in Section C and include experiments in Section H.1. 
+
+Strided block-parallel rollouts. To obtain many on-policy rollouts per training sequence efficiently, we use a strided block-parallel decoding scheme implemented with a custom attention mask (introduced by Quiet-STaR (Ze-likman et al., 2024)). At a high level, this amortizes prefix computation and enables batched feature-network evalua-tion across many anchored prompts extracted from the same sequence. We give details and an example in Section F. 
+
+2.3. Feature matching with whitening 
+
+When the feature map ϕ has correlated or anisotropic direc-tions, some dimensions can dominate the feature-matching loss. We address this with a whitened variant. For each context c and sampled completions (ˆ yj )nj=1 , we estimate the second-moment matrix ˆΣc = 1
+
+> n
+
+Pnj=1 ϕc(ˆ yj )ϕc(ˆ yj )⊤
+
+and define whitened features 
+
+˜ϕc(z) = ( ˆΣ†
+
+> c
+
+)1/2ϕc(z), (8) where † denotes the Moore–Penrose pseudoinverse. The whitened feature-matching loss corresponds to a relaxation of the local χ2 divergence between p(· | c) and pθ (· | c).Since DKL (P ∥Q) ≈ 12 Dχ2 (P ∥Q) when P and Q are close, whitened feature matching approximates a sequence-level cross-entropy in the fine-tuning regime pθ ≈ p (see Sec-tion B). However, whitening with the low-rank estimate ˆΣc
+
+instead of the true second-moment matrix Σc systematically reduces the norm of the whitened ground-truth feature ˜ϕc(y),weakening the alignment signal. We find that normalizing the whitened features only in the alignment term corrects this, yielding the reward used in all whitening experiments in this paper: 
+
+rj = 2 ˜ϕc(ˆ yj )⊤ ˜ϕc(y)
+
+∥ ˜ϕc(ˆ yj )∥ ∥ ˜ϕc(y)∥
+
+| {z }
+
+> normalized alignment term
+
+− 2
+
+n − 1
+
+X 
+
+> j′̸=j
+
+˜ϕc(ˆ yj )⊤ ˜ϕc(ˆ yj′ )
+
+| {z }
+
+> whitened diversity term
+
+.
+
+(9) The diversity term is left unnormalized to retain the full whitened geometry. Additional variants are studied in Sec-tion B. 
+
+2.4. Connections with energy-based models and calibration 
+
+To conclude this section, we further motivate EBFT by show-ing that, under KL regularization, feature matching admits both a calibration view and an energy-based interpretation. 
+
+Energy-based view (via KL regularization). As in stan-dard reinforcement learning, one may add a Kullback– Leibler (KL) regularization term to prevent the learned dis-tribution from deviating too far from a reference distribution 
+
+q(·| c). Consider the KL-regularized objective 
+
+min  
+
+> ρ
+
+Ec∼p
+
+h
+
+Eρ(·| c)[ϕc(y)] − Ep(·| c)[ϕc(y)] 2
+
++ 1 
+
+> β
+
+DKL (ρ(·| c) ∥ q(·| c)) 
+
+i
+
+,
+
+(10) where β > 0 controls the strength of the regularization. Although we do not include this KL term in our experiments, it provides a useful interpretation of EBFT. In particular, the solution to (10) has the form of an exponential tilt of the base distribution, 
+
+ρ⋆(y|c) ∝ q(y|c) exp   − χ⊤ 
+
+> c
+
+ϕc(y),
+
+for a context-dependent vector χc ∈ Rd. Intuitively, χc
+
+is the tilt direction that assigns the most probability to completions actually observed in the data, subject to a size constraint on ∥χc∥; see Theorem D.3 for the pre-cise statement. This is precisely the maximum-likelihood problem for an energy-based model with energy function 
+
+E(y, c ) = χ⊤ 
+
+> c
+
+ϕc(y), motivating the term energy-based fine-tuning . Importantly, EBFT does not explicitly parameterize or learn χ; instead, it directly optimizes the generator param-eters via feature-matching gradients. We provide a detailed derivation of this connection in Section D. 5Energy-Based Fine-Tuning 
+
+Q&A Coding Unstructured Coding Method CE FM greedy pass@1 pass@4 pass@16 CE FM greedy pass@1 pass@4 pass@16 
+
+Base 0.338 0.361 0.484 0.424 0.606 0.715 0.631 0.369 0.473 0.419 0.596 0.702 Warm start 0.301 0.344 0.483 0.440 0.611 0.723 0.499 0.317 0.508 0.458 0.638 0.743 SFT 0.289 0.315 0.483 0.455 0.617 0.728 0.501 0.321 0.504 0.467 0.644 0.747 EBFT 0.207 0.258 0.548 0.510 0.659 0.771 0.499 0.320 0.548 0.524 0.664 0.769 
+
+EBFT (ws.) 0.190 0.255 0.534 0.508 0.658 0.756 0.481 0.312 0.536 0.514 0.659 0.769 
+
+RLVR 0.774 0.442 0.535 0.510 0.660 0.752 – – – – – –RLVR (ws.) 0.389 0.402 0.524 0.529 0.662 0.749 – – – – – –
+
+Translation (COMET) Translation (BLEU) Method CE FM greedy best-of-1 best-of-4 best-of-16 greedy best-of-1 best-of-4 best-of-16 
+
+Base 1.870 0.637 0.644 0.611 0.701 0.745 0.074 0.124 0.186 0.231 Warm start 2.647 0.695 0.711 0.691 0.759 0.793 0.158 0.169 0.233 0.279 SFT 1.782 0.690 0.717 0.696 0.761 0.795 0.160 0.172 0.235 0.280 EBFT 1.670 0.578 0.725 0.713 0.765 0.795 0.182 0.194 0.244 0.283 EBFT (ws.) 1.671 0.580 0.734 0.724 0.772 0.800 0.185 0.197 0.247 0.286 
+
+RLVR 2.454 0.641 0.697 0.691 0.735 0.761 0.176 0.194 0.226 0.248 RLVR (ws.) 2.311 0.718 0.724 0.718 0.759 0.781 0.195 0.210 0.245 0.269   
+
+> Table 1. EBFT outperforms SFT and matches or exceeds RLVR on downstream metrics, while achieving the best distributional calibration across all tasks. Best results per method on Q&A coding, unstructured coding, and translation. CE: validation cross-entropy; FM: feature-matching loss (both lower is better). “ws.”: warm-started from an SFT checkpoint. RLVR is inapplicable to unstructured coding where no verifier exists; EBFT still yields substantial gains over SFT in this setting. See Table 6 for per-benchmark results and Section 3 for full experimental details.
+
+Calibration view: KL projection onto moment con-straints. The KL-regularized objective also has a cali-bration interpretation. Suppose we want a distribution that matches a target statistic Ep(·| c)[f (y, c )] = m while staying close to a base distribution q(· | c). The solution to this constrained KL minimization is an exponential tilt, 
+
+pχ(y | c) ∝ exp  χ⊤ 
+
+> c
+
+f (y, c ) q(y | c), (11) where χc is chosen so that the moment constraint is satis-fied. Braverman et al. (2019) use this principle to correct entropy-rate drift in language model generations, applying a scalar tilt with f (y, c ) = − log pθ (y | c) (the negative log-probability of the model). EBFT performs the same type of correction, but with f (y, c ) = −ϕc(y), enforcing 
+
+high-dimensional moment constraints in a semantically rich feature space rather than a single scalar statistic. 
+
+## 3. Experimental protocol 
+
+3.1. Tasks and metrics 
+
+We evaluate EBFT on tasks spanning both verifiable settings, where a correctness signal exists and RLVR can be applied, and non-verifiable settings, where no such signal is available and SFT is typically the only option. For all tasks, we train on subsets of the full datasets to enable controlled comparisons across methods under a fixed compute budget. 
+
+Coding tasks. We consider two complementary train-ing regimes: (a) Q&A coding uses a 100k-sample subset of OpenCodeInstruct (Ahmad et al., 2025), consisting of natural-language programming prompts paired with refer-ence solutions, and (b) Unstructured coding uses a 40k-sample subset of SwallowCode (Fujii et al., 2025), contain-ing raw Python code without explicit instructions. The for-mer is a verifiable setting (solutions can be checked against unit tests); the latter is not, as there is no correctness signal for raw code continuation, making RLVR inapplicable. We evaluate on HumanEval (Austin et al., 2021), MBPP (Chen et al., 2021), and MultiPL-E (Cassano et al., 2023), reporting greedy accuracy (temperature 0) as well as pass@1 , pass@4 , and pass@16 accuracy at temper-ature 0.6. For models trained on Q&A coding data, Hu-manEval and MBPP can be considered in-distribution bench-marks, since OpenCodeInstruct contains similar instruction-6Energy-Based Fine-Tuning 0.02 0.05 0.1 0.2 0.5 1 2               
+
+> Epoch (log)
+> 0.66
+> 0.68
+> 0.70
+> 0.72
+> 0.74
+> WMT22 (greedy)
+> 0.02 0.05 0.1 0.2 0.5 12
+> Epoch (log)
+> 0.64
+> 0.66
+> 0.68
+> 0.70
+> 0.72
+> MTNT (greedy)
+> 0.02 0.05 0.1 0.2 0.5 12
+> Epoch (log)
+> 1.7
+> 1.8
+> 1.9
+> 2.0
+> 2.1
+> 2.2
+> 2.3
+> 2.4
+> CE loss (answers)
+> 0.02 0.05 0.1 0.2 0.5 12
+> Epoch (log)
+> 0.58
+> 0.60
+> 0.62
+> 0.64
+> 0.66
+> 0.68
+> CFM loss
+
+EBFT SFT RLVR Llama-3.2-1B 
+
+Figure 5. On translation, EBFT outperforms both SFT and RLVR on downstream accuracy, cross-entropy, and feature-matching loss. From left to right, we plot COMET scores on WMT22 and MTNT, validation cross-entropy, and CFM loss over training for Llama-3.2-1B fine-tuned on ALMA (Xu et al., 2023). EBFT achieves the lowest CE and CFM losses and matches SFT on WMT22 while clearly outperforming it on MTNT. RLVR underperforms SFT on all four metrics, with cross-entropy rising well above the base model (dashed line). 0.02 0.05 0.1 0.2 0.5 1 2               
+
+> Epoch (log)
+> 0.36
+> 0.38
+> 0.40
+> 0.42
+> 0.44
+> 0.46
+> 0.48
+> 0.50
+> HumanEval (greedy)
+> 0.02 0.05 0.1 0.2 0.5 12
+> Epoch (log)
+> 0.60
+> 0.62
+> 0.64
+> 0.66
+> 0.68
+> 0.70
+> 0.72
+> 0.74
+> HumanEval (pass@16)
+> 0.02 0.05 0.1 0.2 0.5 12
+> Epoch (log)
+> 0.22
+> 0.24
+> 0.26
+> 0.28
+> 0.30
+> 0.32
+> 0.34
+> CE loss (answers)
+> 0.02 0.05 0.1 0.2 0.5 12
+> Epoch (log)
+> 0.26
+> 0.28
+> 0.30
+> 0.32
+> 0.34
+> 0.36
+> CFM loss
+
+EBFT = 0 
+
+EBFT = 0.03 
+
+EBFT = 0.1 
+
+Qwen2.5-1.5B 
+
+Qwen2.5-1.5B + 2 ep. SFT 
+
+Figure 6. The CE regularization weight γ controls cross-entropy reduction without affecting downstream performance or feature-matching loss. We ablate EBFT with γ ∈ { 0, 0.03 , 0.1} on Qwen2.5-1.5B. Dashed and dotted lines indicate the base model and 2-epoch SFT, respectively. Larger γ accelerates CE reduction while downstream accuracy and CFM loss remain nearly identical across settings. Even pure feature matching ( γ = 0 ) surpasses SFT on cross-entropy, confirming that the two objectives are aligned rather than in tension. 
+
+solution pairs. For models trained on unstructured code, both benchmarks are out-of-distribution, as SwallowCode contains raw Python without explicit prompts or test cases. MultiPL-E translates HumanEval problems into many pro-gramming languages; we evaluate on eight of them (C++, JavaScript, TypeScript, Rust, C#, Go, PHP, and Java). Since all training data is Python-only, MultiPL-E is out-of-distribution for both training regimes and serves primarily as a test of cross-lingual transfer. 
+
+Translation. We train on a 100k subset of ALMA-Human-Parallel (Xu et al., 2023; 2024a), consisting of human-curated parallel sentence pairs. Following Xu et al. (2023), we use WMT’22 as our primary evaluation benchmark, which covers news and general-domain translation. To test out-of-distribution robustness, we additionally evaluate on two challenging benchmarks. MTNT (Michel & Neubig, 2018) consists of noisy Reddit comments featuring typos, slang, and code-switching, while OpenSubtitles (Lison & Tiedemann, 2016) contains short, informal movie and TV dialogue. Both are stylistically far from the clean, formal parallel sentences in ALMA, making them challenging out-of-distribution benchmarks. We report COMET scores in the main text and BLEU in the appendix. For best-of-k
+
+evaluation ( k ∈ { 1, 4, 16 }, temperature 0.6), we report the per-instance maximum aggregated over the test set. In addition to downstream task metrics, we track valida-tion cross-entropy and feature-matching loss throughout training on 1k-sample held-out subsets of the respective training datasets (OpenCodeInstruct for coding, ALMA for translation), as these quantities are central to our analysis. 
+
+3.2. Baselines and methods 
+
+We evaluate three methods: (a) standard CE fine-tuning (SFT); (b) RLVR, where the reward is whether the generated code passes all unit tests for Q&A coding, and BLEU score for translation; and (c) EBFT with a frozen feature network. RLVR is only applicable to Q&A coding and translation, where verifiable rewards exist. All methods are initialized from the base pre-trained model (Qwen2.5-1.5B (Qwen et al., 2025) for coding and Llama3.2-1B (Grattafiori et al., 2024) for translation). All EBFT runs use whitening as de-scribed in Equation (8). We run all methods for 2 epochs. 7Energy-Based Fine-Tuning 
+
+As an additional variant, we report results for EBFT and RLVR initialized from a warm-start checkpoint obtained after one epoch of SFT, followed by one epoch of EBFT or RLVR. We include this setting because, as we show in Section 4, RLVR requires a warm-start to achieve competi-tive downstream performance. Hyperparameter details are provided in Section G. 
+
+## 4. Experimental results 
+
+We evaluate EBFT against SFT and RLVR on Q&A coding, unstructured coding, and translation. The main finding is that EBFT consistently matches or exceeds RLVR on down-stream accuracy while achieving the best cross-entropy and feature-matching losses across all tasks — avoiding the tradeoff between task performance and distributional qual-ity that characterizes RLVR. Table 1 summarizes the best results per method; Figures 3 and 5 show training dynam-ics for representative runs; Figures 6–8 report ablations. Full results across hyperparameter sweeps are provided in Section H. 
+
+4.1. Main results EBFT matches RLVR and outperforms SFT on down-stream accuracy. On Q&A coding (Table 1 and Figure 3), EBFT outperforms SFT by a wide margin across all decod-ing strategies (e.g., greedy: 0.548 vs 0.483, pass@16: 0.771 vs 0.728) and matches or exceeds RLVR (greedy: 0.548 vs 0.535, pass@16: 0.771 vs 0.752), despite not using any correctness signal. On unstructured code (Table 1), where RLVR is inapplicable, EBFT similarly outperforms SFT across all metrics (pass@1: 0.524 vs 0.467, pass@16: 0.769 vs 0.747). On translation (Table 1), EBFT outperforms both SFT and RLVR on COMET scores across all decoding strategies (e.g., greedy: 0.725 vs 0.717 for SFT and 0.697 for RLVR). 
+
+EBFT achieves lower cross-entropy than SFT, while RLVR degrades it. A striking finding is that EBFT re-duces the validation cross-entropy more than SFT, even though SFT explicitly optimizes this objective. On Q&A coding, EBFT achieves a validation CE of 0.207 compared to 0.289 for SFT (Table 1) and Figure 3 shows that this gap widens steadily over training. On translation, EBFT similarly outperforms SFT on CE (1.670 vs 1.782). On unstructured code, the two methods are comparable (0.499 vs 0.501). We attribute this counterintuitive result to EBFT with whitening approximately optimizing a relaxation of the χ2 divergence, which is locally equivalent to the KL divergence when the model is close to the data distribution (see Section 2.3). RLVR exhibits the opposite behavior: its validation CE increases throughout training (Figure 3), reaching 0.774 on Q&A coding and 2.454 on translation — both substantially worse than the base model (0.338 and 1.870, respectively). This confirms that reward-driven opti-mization can improve downstream accuracy at the cost of severely degrading the model’s language modeling quality, a tradeoff that EBFT avoids entirely. 
+
+EBFT achieves the lowest feature-matching loss. While it is natural to expect improvements on the feature-matching metric that EBFT directly optimizes, the margins are infor-mative. On Q&A coding, EBFT achieves a feature-matching loss of 0.258, compared to 0.315 for SFT and 0.442 for RLVR (Table 1). RLVR not only fails to improve this metric but actively worsens it relative to the base model (0.361), and Figure 3 shows that this degradation accelerates over training. On translation, EBFT achieves the largest im-provement (0.578 vs 0.690 for SFT and 0.641 for RLVR), while on unstructured code EBFT and SFT are comparable (0.320 vs 0.321). As shown in Figure 2, this improvement holds across all completion lengths and extends well beyond the 8-token rollout horizon used during training, suggest-ing that EBFT improves calibration of the rollout distribu-tion broadly rather than overfitting to the training sequence length. 
+
+The CE loss coefficient γ improves CE loss without sac-rificing downstream performance or feature matching. 
+
+Figure 6 compares EBFT with γ ∈ { 0, 0.03 , 0.1} on Q&A coding. The three settings achieve nearly identical feature-matching loss trajectories and comparable downstream per-formance on HumanEval, but differ markedly in how fast the validation cross-entropy decreases: larger γ drives it down faster, with γ = 0 .1 reaching a CE of approximately 0.21 compared to 0.25 for γ = 0 . All three settings sur-pass the 2-epoch SFT baseline on cross-entropy, confirming that even pure feature matching ( γ = 0 ) reduces CE more effectively than directly optimizing it. The absence of any tension between these objectives is expected from a theoret-ical standpoint: as mentioned in Section 2.1, LFM and LCE 
+
+share the same minimizer (the ground-truth distribution p), so optimizing feature matching naturally drives the cross-entropy down as well. The role of γ is simply to control how aggressively the CE loss is minimized, at no cost to calibration or downstream accuracy. 
+
+EBFT generalizes better than SFT to out-of-distribution benchmarks. On out-of-distribution coding languages (MultiPL-E benchmark performance in Table 6), SFT de-grades performance relative to the base model (greedy: 0.465 vs 0.506), while EBFT yields improvements (0.524). On translation, EBFT outperforms both SFT and RLVR on the noisy MTNT benchmark (greedy COMET: 0.737 vs 0.703 and 0.705), while performing comparably on Open-Subtitles. 8Energy-Based Fine-Tuning 0.02 0.05 0.1 0.2 0.5 1 2               
+
+> Epoch (log)
+> 0.36
+> 0.38
+> 0.40
+> 0.42
+> 0.44
+> 0.46
+> 0.48
+> 0.50
+> HumanEval (greedy)
+> 0.02 0.05 0.1 0.2 0.5 12
+> Epoch (log)
+> 0.60
+> 0.62
+> 0.64
+> 0.66
+> 0.68
+> 0.70
+> 0.72
+> HumanEval (pass@16)
+> 0.02 0.05 0.1 0.2 0.5 12
+> Epoch (log)
+> 0.26
+> 0.28
+> 0.30
+> 0.32
+> 0.34
+> CE loss (answers)
+> 0.02 0.05 0.1 0.2 0.5 12
+> Epoch (log)
+> 0.24
+> 0.26
+> 0.28
+> 0.30
+> 0.32
+> 0.34
+> 0.36
+> 0.38
+> CFM loss
+
+EBFT 
+
+EBFT, no whiten. 
+
+EBFT, mean pooling feat. 
+
+EBFT, random weights 
+
+EBFT, Qwen2.5-7B feat. 
+
+Qwen2.5-1.5B 
+
+Figure 7. Feature network ablations: whitening and last-token pooling matter most; scaling the feature network does not help. 
+
+HumanEval accuracy, validation cross-entropy, and CFM loss over training for EBFT ( γ = 0 ) on Qwen2.5-1.5B with different feature network configurations. The default (last-token features with whitening from a frozen 1.5B copy) achieves the best downstream accuracy and CFM loss. Removing whitening and mean pooling cause the largest degradations. Random weights hurt only modestly, and replacing the 1.5B feature network with a frozen Qwen2.5-7B yields similar results, suggesting that pre-trained representations help but that naively scaling the feature network does not. 0.02 0.05 0.1 0.2 0.5 1 2               
+
+> Epoch (log)
+> 0.35
+> 0.40
+> 0.45
+> 0.50
+> 0.55
+> 0.60
+> 0.65
+> 0.70
+> HumanEval (greedy)
+> 0.02 0.05 0.1 0.2 0.5 12
+> Epoch (log)
+> 0.65
+> 0.70
+> 0.75
+> 0.80
+> 0.85
+> HumanEval (pass@16)
+> 0.02 0.05 0.1 0.2 0.5 12
+> Epoch (log)
+> 0.24
+> 0.26
+> 0.28
+> 0.30
+> 0.32
+> 0.34
+> CE loss (answers)
+> 0.02 0.05 0.1 0.2 0.5 12
+> Epoch (log)
+> 0.26
+> 0.28
+> 0.30
+> 0.32
+> 0.34
+> 0.36
+> CFM loss
+
+EBFT = 0 Qwen2.5-1.5B 
+
+EBFT = 0 , Qwen2.5-3B 
+
+EBFT = 0 , Qwen2.5-7B 
+
+Qwen2.5-1.5B 
+
+Qwen2.5-3B 
+
+Qwen2.5-7B 
+
+Figure 8. EBFT improvements are consistent across model scales. HumanEval accuracy, validation cross-entropy, and CFM loss over training for EBFT ( γ = 0 ) applied to Qwen2.5-1.5B, 3B, and 7B. Each model uses a frozen copy of itself as the feature network. Dashed lines indicate base model performance. All three scales show substantial and qualitatively similar improvements across all four metrics, with no sign of diminishing returns. 
+
+4.2. Ablations Feature network ablations: mean pooling and remov-ing whitening hurt most; random weights hurt slightly; a larger feature network has little effect. Figure 7 ab-lates key feature network design choices on Q&A coding at γ = 0 . The default configuration (last-token features with whitening from a frozen copy of the 1.5B genera-tor) achieves the best downstream performance and low-est feature-matching loss. Mean pooling and removing whitening cause the largest degradations, while random fea-ture network weights hurt only modestly, indicating that pre-trained representations are helpful but not essential. Per-haps surprisingly, replacing the 1.5B feature network with a frozen Qwen2.5-7B produces similar results, suggesting that naively scaling the feature network does not yield additional gains. 
+
+EBFT improvements scale consistently across model sizes. To assess whether EBFT’s benefits persist at larger scales, we run EBFT with γ = 0 using Qwen2.5-1.5B, 3B, and 7B as both actor and feature networks, each ini-tialized from the respective base checkpoint. As shown in Figure 8, downstream improvements are consistent across model sizes: greedy HumanEval scores increase from ap-proximately 0.49 (1.5B) to 0.60 (3B) to 0.69 (7B), with each model improving substantially over its respective base per-formance (0.35, 0.37, and 0.55). The same figure shows that both validation cross-entropy and feature-matching losses decrease faster and reach lower absolute values at larger scales, while preserving the same monotonic ordering across runs. These results suggest that EBFT’s mechanism, which matches rollout feature statistics to ground-truth statistics, transfers predictably across model scales. 9Energy-Based Fine-Tuning 
+
+4.3. Qualitative analysis 
+
+Across both code and translation, EBFT outputs are more 
+
+semantically faithful to the prompt and more cleanly format-ted . We provide representative generations from HumanEval and MTNT translation in Sections H.2 and H.3; here we summarize the main patterns. Each method exhibits a characteristic failure mode. SFT typ-ically produces structurally reasonable outputs but misses subtle prompt requirements. For instance, when asked to count overlapping substring occurrences, SFT advances by the full substring length and misses overlaps; when asked to return the greatest integer satisfying a condition, SFT returns the first one it finds instead. RLVR often generates plausible logic but fails at the execution level: the generated code calls helper functions like is prime without defining them, or includes prose explanations interleaved with code, preventing execution; translations begin with a reasonable output but then drift into multilingual tag lists (e.g., append-ing ”Portugu ˆes: ...”, ”Spanish: ...”) and truncate mid-word. EBFT avoids both failure modes, producing self-contained executable code and clean single-sentence translations that preserve the source meaning. These patterns suggest that the feature-matching objective encourages outputs that are both semantically faithful and cleanly formatted. 
+
+## 5. Related Work 
+
+Most language model training pipelines remain centered on next-token maximum likelihood (MLE), with reinforce-ment learning (RL) typically applied as a post-training step. RLHF-style methods optimize sequence-level rewards while regularizing toward a reference policy, often via a KL con-straint (Christiano et al., 2017; Ouyang et al., 2022), and preference-optimization approaches such as DPO can be interpreted as reward maximization under a similar regu-larization (Rafailov et al., 2023). Earlier sequence-level training methods likewise augment cross-entropy training with REINFORCE-style updates, but continue to rely on token-level supervision (Ranzato et al., 2016; Edunov et al., 2018). Recent work has explored using RL earlier in training or framing pretraining objectives in RL terms. RLP (Hatamizadeh et al., 2025), Reinforcement Pre-Training (RPT) (Dong et al., 2025), and RLPT (Li et al., 2025) intro-duce rewards tied to reasoning traces, information gain, or next-segment prediction. However, in all cases the reward signal is ultimately derived from next-token likelihood or correctness on the pretraining stream, rather than from a distinct semantic objective. Similarly, FlowRL proposes matching the full reward distribution to encourage diversity, but still defines rewards through likelihood-based or task-specific signals (Zhu et al., 2025). Closely related are adver-sarial approaches that learn scalar rewards via discrimina-tors. Generative Adversarial Post-Training (GAPT) employs a co-evolving discriminator to mitigate reward hacking in in-teractive generation (Wu et al., 2025). Similarly, RARO (Cai & Provilkov, 2025) uses a relativistic discriminator within an inverse reinforcement learning framework to recover im-plicit rewards from expert reasoning demonstrations when verifiers are unavailable. While motivated by different appli-cations, both methods define learned, non-stationary scalar rewards through adversarial training. In contrast, our ap-proach avoids learned reward models entirely, instead op-timizing a fixed, vector-valued feature-matching objective that directly aligns rollout and data distributions. Alternative generative frameworks aim to move beyond left-to-right likelihood training. Energy-Based Diffusion Language Models (EDLM) and related energy-based ap-proaches operate at the sequence level (Xu et al., 2024b), but focus on modeling the data distribution itself rather than defining a feature-space alignment objective for an au-toregressive policy. Embedding-based similarity has been widely used for evaluation (e.g., BERTScore (Zhang et al., 2019)) and occasionally optimized via RL for metric-driven fine-tuning (Rennie et al., 2017), but not as a general re-placement for teacher-forced token prediction. In contrast, our approach decouples training from surface-form tokens entirely. We define rewards via a learned feature network and optimize an autoregressive policy using RE-INFORCE to match generated and ground-truth text in em-bedding space. This provides dense, semantic feedback that does not depend on next-token log loss, enabling sequence-level optimization that directly targets meaning rather than token reconstruction. 
+
+## 6. Conclusion 
+
+We introduced Energy-Based Fine-Tuning (EBFT), amethod that fine-tunes language models by matching fea-ture statistics of on-policy rollouts to those of ground-truth completions. Across Q&A coding, unstructured coding, and translation, EBFT consistently outperforms SFT and matches RLVR on downstream accuracy, while achieving the best cross-entropy and feature-matching losses. No-tably, EBFT reduces cross-entropy more than SFT despite not directly optimizing it. Unlike RLVR, EBFT requires no task-specific reward or verifier, making it applicable in non-verifiable settings where RLVR cannot be used. EBFT connects classical ideas from moment matching and distribution alignment with modern language model training. By operating in a feature space rather than over tokens or scalar rewards, it provides a flexible mechanism for shaping sequence-level behavior. However, EBFT is rollout-based and therefore slower per update than standard SFT, making 10 Energy-Based Fine-Tuning 
+
+it most suitable as a fine-tuning stage applied after cross-entropy training. It also requires a frozen feature network and has so far been evaluated on models up to 7B param-eters with short rollout horizons. Scaling both axes, and exploring learned or adaptive feature networks, are promis-ing directions for future work. More broadly, we view feature matching as a complementary training signal that may help bridge likelihood-based training and rollout-based optimization. 
+
+## References 
+
+Ahmad, W. U., Ficek, A., Samadi, M., Huang, J., Noroozi, V., Majumdar, S., and Ginsburg, B. Opencodeinstruct: A large-scale instruction tuning dataset for code llms. arXiv preprint arXiv:2504.04030 , 2025. Austin, J., Odena, A., Nye, M., Bosma, M., Michalewski, H., Dohan, D., Jiang, E., Cai, C., Terry, M., Le, Q., et al. Program synthesis with large language models. arXiv preprint arXiv:2108.07732 , 2021. Bengio, S., Vinyals, O., Jaitly, N., and Shazeer, N. Sched-uled sampling for sequence prediction with recurrent neu-ral networks. In Advances in Neural Information Process-ing Systems , 2015. Braverman, M., Chen, X., Kakade, S. M., Narasimhan, K., Zhang, C., and Zhang, Y. Calibration, entropy rates, and memory in language models. arXiv preprint arXiv:1906.05664 , 2019. Brown, T., Mann, B., Ryder, N., Subbiah, M., Kaplan, J. D., Dhariwal, P., Neelakantan, A., Shyam, P., Sastry, G., Askell, A., et al. Language models are few-shot learners. 
+
+Advances in neural information processing systems , 33: 1877–1901, 2020. Cai, L. and Provilkov, I. Escaping the verifier: Learn-ing to reason via demonstrations. arXiv preprint arXiv:2511.21667 , 2025. URL https://arxiv. org/abs/2511.21667 .Cassano, F., Gouwar, J., Nguyen, D., Nguyen, S., Phipps-Costin, L., Pinckney, D., Yee, M.-H., Zi, Y., Anderson, C. J., Feldman, M. Q., et al. Multipl-e: A scalable and polyglot approach to benchmarking neural code genera-tion. IEEE Transactions on Software Engineering , 49(7): 3675–3691, 2023. Chen, M., Tworek, J., Jun, H., Yuan, Q., de Oliveira Pinto, H. P., Kaplan, J., Edwards, H., Burda, Y., Joseph, N., Brockman, G., Ray, A., Puri, R., Krueger, G., Petrov, M., Khlaaf, H., Sastry, G., Mishkin, P., Chan, B., Gray, S., Ryder, N., Pavlov, M., Power, A., Kaiser, L., Bavar-ian, M., Winter, C., Tillet, P., Such, F. P., Cummings, D., Plappert, M., Chantzis, F., Barnes, E., Herbert-Voss, A., Guss, W. H., Nichol, A., Paino, A., Tezak, N., Tang, J., Babuschkin, I., Balaji, S., Jain, S., Saunders, W., Hesse, C., Carr, A. N., Leike, J., Achiam, J., Misra, V., Morikawa, E., Radford, A., Knight, M., Brundage, M., Murati, M., Mayer, K., Welinder, P., McGrew, B., Amodei, D., McCandlish, S., Sutskever, I., and Zaremba, W. Evaluating large language models trained on code. 
+
+arXiv preprint arXiv:2107.03374 , 2021. Christiano, P. F., Leike, J., Brown, T. B., Martic, M., Legg, S., and Amodei, D. Deep reinforcement learning from human preferences. arXiv preprint arXiv:1706.03741 ,2017. Domingo-Enrich, C., Bietti, A., Gabri ´e, M., Bruna, J., and Vanden-Eijnden, E. Dual training of energy-based models with overparametrized shallow neural networks. arXiv preprint arXiv:2107.05134 , 2022. Dong, Q., Li, D., Tang, Y., Ye, T., Sun, Y., Sui, Z., and Wei, F. Reinforcement pre-training. arXiv preprint arXiv:2506.08007 , 2025. Edunov, S., Ott, M., Auli, M., and Grangier, D. Classical structured prediction losses for sequence to sequence learning. In ACL 2018 , 2018. Fujii, K., Tajima, Y., Mizuki, S., Shimada, H., Shiotani, T., Saito, K., Ohi, M., Kawamura, M., Nakamura, T., Okamoto, T., Ishida, S., Hattori, K., Ma, Y., Takamura, H., Yokota, R., and Okazaki, N. Rewriting pre-training data boosts llm performance in math and code, 2025. URL https://arxiv.org/abs/2505.02881 .Gneiting, T. and Raftery, A. E. Strictly proper scoring rules, prediction, and estimation. Journal of the American Statistical Association , 102(477):359–378, 2007. Grattafiori, A., Dubey, A., Jauhri, A., Pandey, A., Kadian, A., Al-Dahle, A., Letman, A., Mathur, A., Schelten, A., Vaughan, A., et al. The llama 3 herd of models. arXiv preprint arXiv:2407.21783 , 2024. Hatamizadeh, A., Akter, S. N., Prabhumoye, S., Kautz, J., Patwary, M., Shoeybi, M., Catanzaro, B., and Choi, Y. Rlp: Reinforcement as a pretraining objective. arXiv preprint arXiv:2510.01265 , 2025. Hu, J., Wu, X., Zhu, Z., Xianyu, Wang, W., Zhang, D., and Cao, Y. Openrlhf: An easy-to-use, scalable and high-performance rlhf framework. arXiv preprint arXiv:2405.11143 , 2024. Kaplan, J., McCandlish, S., Henighan, T., Brown, T. B., Chess, B., Child, R., Gray, S., Radford, A., Wu, J., and Amodei, D. Scaling laws for neural language models. 
+
+arXiv preprint arXiv:2001.08361 , 2020. 11 Energy-Based Fine-Tuning 
+
+Lamb, A. M., Goyal, A., Zhang, Y., Zhang, S., Courville, A., and Bengio, Y. Professor forcing: A new algo-rithm for training recurrent networks. arXiv preprint arXiv:1610.09038 , 2016. Li, S., Li, K., Xu, Z., Huang, G., Yang, E., Li, K., Wu, H., Wu, J., Zheng, Z., Zhang, C., Shi, K., Deng, K., Yi, Q., Xiong, R., Xu, T., Jiang, Y., Yan, J., Zeng, Y., Xu, G., Xue, J., Xu, Z., Fang, Z., Wang, B. C., Liu, Q., Li, X., and Tao, Y. Reinforcement learning on pre-training data. 
+
+arXiv preprint arXiv:2509.19249 , 2025. Lightman, H., Kosaraju, V., Burda, Y., Edwards, H., Baker, B., Lee, T., Leike, J., Schulman, J., Sutskever, I., and Cobbe, K. Let’s verify step by step. arXiv preprint arXiv:2305.20050 , 2023. Lipman, Y., Chen, R. T., Ben-Hamu, H., Nickel, M., and Le, M. Flow matching for generative modeling. In 11th International Conference on Learning Representations, ICLR 2023 , 2023. Lison, P. and Tiedemann, J. Opensubtitles2016: Extracting large parallel corpora from movie and tv subtitles. In 
+
+Proceedings of the Tenth International Conference on Language Resources and Evaluation (LREC’16) , pp. 923– 929, 2016. Michel, P. and Neubig, G. Mtnt: A testbed for machine trans-lation of noisy text. arXiv preprint arXiv:1809.00388 ,2018. Ouyang, L., Wu, J., Jiang, X., Almeida, D., Wainwright, C. L., Mishkin, P., Zhang, C., Agarwal, S., Slama, K., Ray, A., et al. Training language models to fol-low instructions with human feedback. arXiv preprint arXiv:2203.02155 , 2022. Qwen, :, Yang, A., Yang, B., Zhang, B., Hui, B., Zheng, B., Yu, B., Li, C., Liu, D., Huang, F., Wei, H., Lin, H., Yang, J., Tu, J., Zhang, J., Yang, J., Yang, J., Zhou, J., Lin, J., Dang, K., Lu, K., Bao, K., Yang, K., Yu, L., Li, M., Xue, M., Zhang, P., Zhu, Q., Men, R., Lin, R., Li, T., Tang, T., Xia, T., Ren, X., Ren, X., Fan, Y., Su, Y., Zhang, Y., Wan, Y., Liu, Y., Cui, Z., Zhang, Z., and Qiu, Z. Qwen2.5 technical report, 2025. URL https: //arxiv.org/abs/2412.15115 .Rafailov, R., Sharma, A., Mitchell, E., Ermon, S., and Man-ning, C. D. Direct preference optimization: Your lan-guage model is secretly a reward model. arXiv preprint arXiv:2305.18290 , 2023. Ranzato, M., Chopra, S., Auli, M., and Zaremba, W. Se-quence level training with recurrent neural networks. 
+
+arXiv preprint arXiv:1511.06732 , 2016. Rennie, S. J., Marcheret, E., Mroueh, Y., Ross, J., and Goel, V. Self-critical sequence training for image captioning. In 
+
+Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR) , 2017. Schulman, J., Wolski, F., Dhariwal, P., Radford, A., and Klimov, O. Proximal policy optimization algorithms. 
+
+arXiv preprint arXiv:1707.06347 , 2017. Shao, Z., Wang, P., Zhu, Q., Xu, R., Song, J., Bi, X., Zhang, H., Zhang, M., Li, Y. K., Wu, Y., and Guo, D. Deepseek-math: Pushing the limits of mathematical reasoning in open language models. arXiv preprint arXiv:2402.03300 ,2024. Wu, Y., Brade, S., Ma, T., Fowler, T.-J., Yang, E., Banar, B., Courville, A., Jaques, N., and Huang, C.-Z. A. Gen-erative adversarial post-training mitigates reward hack-ing in live human-ai music interaction. arXiv preprint arXiv:2511.17879 , 2025. doi: 10.48550/arXiv.2511. 17879. URL https://arxiv.org/abs/2511. 17879 .Xu, H., Kim, Y. J., Sharaf, A., and Awadalla, H. H. Aparadigm shift in machine translation: Boosting transla-tion performance of large language models, 2023. Xu, H., Sharaf, A., Chen, Y., Tan, W., Shen, L., Durme, B. V., Murray, K., and Kim, Y. J. Contrastive preference optimization: Pushing the boundaries of llm performance in machine translation, 2024a. Xu, M., Geffner, T., Kreis, K., Nie, W., Xu, Y., Leskovec, J., Ermon, S., and Vahdat, A. Energy-based diffusion lan-guage models for text generation. In ICLR 2025 , 2024b. arXiv:2410.21357. Zelikman, E., Harik, G., Shao, Y., Jayasiri, V., Haber, N., and Goodman, N. D. Quiet-star: Language models can teach themselves to think before speaking. arXiv preprint arXiv:2403.09629 , 2024. Zhang, T., Kishore, V., Wu, F., Weinberger, K. Q., and Artzi, Y. Bertscore: Evaluating text generation with bert. arXiv preprint arXiv:1904.09675 , 2019. Zhao, R., Meterez, A., Kakade, S., Pehlevan, C., Jelassi, S., and Malach, E. Echo chamber: Rl post-training am-plifies behaviors learned in pretraining. arXiv preprint arXiv:2504.07912 , 2025. Zhu, X., Cheng, D., Zhang, D., Li, H., Zhang, K., Jiang, C., Sun, Y., Hua, E., Zuo, Y., Lv, X., Zhang, Q., Chen, L., Shao, F., Xue, B., Song, Y., Yang, Z., Cui, G., Ding, N., Gao, J., Liu, X., Zhou, H., and Mei, Z. Flowrl: Matching reward distributions for llm reasoning. arXiv preprint arXiv:2509.15207 , 2025. 12 Energy-Based Fine-Tuning 
+
+## Appendix Contents A. The feature-matching loss profile and its optimal behavior 
+
+Figures 1 and 2 show the conditional feature-matching loss defined in (2) , plotted against the completion length G. We refer to the function that maps G to the corresponding (conditional) feature-matching loss value as the (conditional) feature-matching loss profile . To compute conditional feature-matching loss values, we extract ground-truth pairs (c, y )
+
+from long ground-truth token sequences by selecting a strided set of prefixes of the sequence as the contexts c, and the ensuing windows of length G as the completions y. The bias-variance decomposition (2) directly implies that the minimum value of LCFM is Ec∼p
+
+Var[ ϕc(y)|c]. The following lemma shows that Ec∼p
+
+Var[ ϕc(y)|c] is non-decreasing with the completion length G.
+
+Lemma A.1 (The optimal conditional feature-matching profile) . Consider the assumptions (a) ϕc(y) := ϕ(c : y) depends on c and y only through their concatenation c : y, which follows the construction in Section 2.1. (b) Context-completion pairs (c, y ) are selected/sampled from long ground-truth sequences as described above, such that for a fixed completion length G, concatenations c : y are equally distributed to contexts c. Neglecting edge effects that stem from the long ground-truth sequences being finite, this holds for example if contexts are sampled as random prefixes of the ground-truth sequence. Then, the optimal conditional feature-matching loss profile Ec∼p
+
+Var[ ϕc(y)|c] is non-decreasing with G and admits the bound 
+
+Ec∼p
+
+Var[ ϕc(y)|c] ≤ Var c∼p[ϕ(c)] . (12) 
+
+Proof. Consider completion lengths 1 ≤ G′ ≤ G. Let y, ˆy denote sequences of length G, y′, ˆy′ completions of length G′,and y′′ , ˆy′′ completions of length G′′ = G − G′, which means that we write the optimal conditional feature-matching loss at completion lengths G′ and G as Ec∼p
+
+Var y′∼p(·| c)[ϕ(c : y′)|c] and Ec∼p
+
+Var y∼p(·| c)[ϕ(c : y)|c], respectively. Observe that 
+
+Ec∼p
+
+Var y∼p(·| c)[ϕc(y)|c] = E(c,y )∼p
+
+h
+
+ϕc(y) 2i
+
+− Ec∼p
+
+h
+
+Ey∼p(·| c)[ϕc(y)] 2i
+
+= Ec∼p
+
+h
+
+ϕ(c) 2i
+
+− Ec∼p
+
+h
+
+Ey′′ ∼p(·| c)
+
+Ey′∼p(·| c:y′′ )[ϕ(c : y′′ : y′)]  2i (13) Here, the second equality holds because c : y is equally distributed to c by Assumption (b) , and using the tower property of expectation together with the decomposition y = y′′ : y′. By Jensen’s inequality, we have that 
+
+Ec∼p
+
+h
+
+Ey′′ ∼p(·| c)
+
+Ey′∼p(·| c:y′′ )[ϕ(c : y′′ : y′)]  2i
+
+≤ Ec∼p
+
+h
+
+Ey′′ ∼p(·| c)
+
+h
+
+Ey′∼p(·| c:y′′ )[ϕ(c : y′′ : y′)] 2ii 
+
+= E(c,y ′′ )∼p
+
+h
+
+Ey′∼p(·| c:y′′ )[ϕ(c : y′′ : y′)] 2i
+
+= Ec∼p
+
+h
+
+Ey′∼p(·| c)[ϕ(c : y′)] 2i (14) Plugging this back into the right-hand side of (13) yields 
+
+Ec∼p
+
+Var y∼p(·| c)[ϕc(y)|c] ≥ Ec∼p
+
+h
+
+ϕ(c) 2i
+
+− Ec∼p
+
+h
+
+Ey′∼p(·| c)[ϕ(c : y′)] 2i
+
+= E(c,y )∼p
+
+h
+
+ϕc(y) 2i
+
+− Ec∼p
+
+h
+
+Ey′∼p(·| c)[ϕ(c : y′)] 2i
+
+= Ec∼p
+
+Var y′∼p(·| c)[ϕc(y′)|c],
+
+(15) which concludes the proof that the optimal conditional feature-matching loss is non-decreasing with the completion length 
+
+G. To prove the bound (12), we apply Jensen’s inequality in the opposite direction: 
+
+Ec∼p
+
+h
+
+Ey∼p(·| c)[ϕc(y)] 2i
+
+≥ E(c,y )∼p[ϕc(y)] 2, (16) 13 Energy-Based Fine-Tuning 
+
+and plugging this into (13) yields 
+
+Ec∼p
+
+Var y∼p(·| c)[ϕc(y)|c] ≤ E(c,y )∼p
+
+h
+
+ϕc(y) 2i
+
+− E(c,y )∼p[ϕc(y)] 2
+
+= Var (c,y )∼p[ϕ(c : y)] = Var c∼p[ϕ(c)] 
+
+(17) 
+
+## B. Feature matching with whitening 
+
+This section motivates a whitened variant of feature matching by connecting standard cross-entropy training to a local χ2
+
+objective. Then, we relax a variational formulation of the χ2 divergence by restricting the function space to a generalized linear model space corresponding to a chosen feature map. The resulting optimization problem admits a closed form and corresponds to the feature-matching loss with whitening, which amounts to premultiplying the feature vectors by the inverse of the matrix of second moments. However, in practice we only have access to a low-rank approximation of this matrix, which means that we can only compute a pseudo-inverse. We describe different empirical loss variants that we tried, including the one that we used to obtain the results in the main paper. 
+
+B.1. Relating cross-entropy training to a χ2 divergence objective 
+
+Fix a context c and consider completions y ∈ V G (for some completion length G). Let p(· | c) denote the ground-truth conditional distribution over completions and pθ (· | c) the model distribution. Cross-entropy training minimizes the conditional KL divergence 
+
+DKL 
+
+ p(· | c) ∥ pθ (· | c) = X
+
+> y∈V G
+
+p(y | c) log p(y | c)
+
+pθ (y | c) . (18) Rewriting (18) as an expectation under pθ gives 
+
+DKL 
+
+ p(· | c) ∥ pθ (· | c) = X
+
+> y∈V G
+
+pθ (y | c) p(y | c)
+
+pθ (y | c) log p(y | c)
+
+pθ (y | c) . (19) The first-order Taylor expansion of x 7 → x log x around x = 1 is 
+
+x log x = ( x − 1) + 12 (x − 1) 2 + O (x − 1) 3. (20) Plugging (20) into (19) yields 
+
+DKL 
+
+ p(· | c) ∥ pθ (· | c) = 12
+
+X
+
+> y∈V G
+
+pθ (y | c)
+
+ p(y|c)  
+
+> pθ(y|c)
+
+− 1
+
+2
+
++ X
+
+> y∈V G
+
+pθ (y | c) O
+
+ p(y|c)  
+
+> pθ(y|c)
+
+− 1
+
+3
+
+= 12 Dχ2
+
+ p(· | c) ∥ pθ (· | c) + X
+
+> y∈V G
+
+pθ (y | c) O
+
+ p(y|c)  
+
+> pθ(y|c)
+
+− 1
+
+3
+
+,
+
+(21) where the χ2 divergence is 
+
+Dχ2
+
+ p(· | c) ∥ pθ (· | c) := X
+
+> y∈V G
+
+ p(y | c) − pθ (y | c)2
+
+pθ (y | c) = EY ∼pθ (·| c)
+
+h p(Y |c)   
+
+> pθ(Y|c)
+
+− 1
+
+2i
+
+. (22) When p(· | c) ≈ pθ (· | c) (so the ratio p/p θ is close to 1), the remainder term in (21) can be neglected, and we obtain the local approximation 
+
+DKL 
+
+ p(· | c) ∥ pθ (· | c) ≈ 12 Dχ2
+
+ p(· | c) ∥ pθ (· | c). (23) 14 Energy-Based Fine-Tuning 
+
+B.2. Relaxing a variational formulation of the χ2 divergence to a linear feature class 
+
+The representation (22) makes explicit that Dχ2 corresponds to an L2 discrepancy in the space of one-hot features. Next, we want to express the χ2 divergence, or rather a relaxation of it, in terms of generic feature maps. For that, we consider a variational representation of the χ2 divergence. 
+
+Lemma B.1 (Variational representation of the chi-squared divergence) . Let P and Q be probability measures on a measurable space Y such that P ≪ Q, and write their Radon–Nikodym derivative as r(y) = dP dQ (y). Then 
+
+Dχ2 (P ∥Q) = sup      
+
+> f∈L2(Q),EY∼Q[f(Y)]=0
+
+n
+
+2 ( EY ∼P [f (Y )] − EY ∼Q[f (Y )]) − EY ∼Q[f (Y )2]
+
+o
+
+, (24) 
+
+Moreover, the supremum is attained at f ⋆(y) = r(y) − 1.Proof. Define g(y) = dP dQ (y). Note that EQ[r(Y )] = 1 and χ2(P ∥Q) = EQ
+
+(g(Y ) − 1) 2. For any f ∈ L2(Q),
+
+2 ( EP [f (Y )] − EQ[f (Y )]) − EQ[f (Y )2] = 2 EQ[( g(Y ) − 1) f (Y )] − EQ[f (Y )2] = EQ
+
+2( g(Y ) − 1) f (Y ) − f (Y )2.
+
+(25) Completing the square pointwise gives 2( g − 1) f − f 2 = −(f − g + 1) 2 + ( r − 1) 2, hence 
+
+2 ( EP [f (Y )] − EQ[f (Y )]) − EQ[f (Y )2] = EQ[( g(Y ) − 1) 2] − EQ[( f (Y ) − g(Y ) + 1) 2] ≤ EQ[( g(Y ) − 1) 2], (26) with equality iff f = g − 1. Therefore, 
+
+sup  
+
+> f∈L2(Q)
+
+n
+
+2 ( EP [f (Y )] − EQ[f (Y )]) − EQ[f (Y )2]
+
+o
+
+= EQ[( g(Y ) − 1) 2] = Dχ2 (P ∥Q). (27) where the optimum is achieved at f (x) = g(x) − 1.We particularize Lemma B.1 in the language model setting. Let φ : VG → Rd be a feature map over completions (in our setting, the natural choice is φ(y) = ϕc(y), the feature-network embedding of the concatenated sequence). Restricting the supremum in (24) to generalized linear model fw(y) = w⊤φ(y) yields the relaxation 
+
+Dχ2 (P ∥Q) ≥ sup 
+
+> w∈Rd
+
+n
+
+2  EY ∼P
+
+w⊤φ(Y ) − EY ∼Q
+
+w⊤φ(Y ) − EY ∼Q
+
+(w⊤φ(Y )) 2 o
+
+. (28) We can rewrite the expression in the supremum as follows: 
+
+2  EY ∼P
+
+w⊤φ(Y ) − EY ∼Q
+
+w⊤φ(Y ) − EY ∼Q
+
+  w⊤φ(Y )2 = 2 w⊤(μP − μQ) − w⊤ΣQw, (29) where μP = EY ∼P [φ(Y )] , μQ = EY ∼Q[φ(Y )] and ΣQ = EY ∼Q
+
+φ(Y )φ(Y )⊤. When ΣQ is invertible, the supremum in (28) is attained at 
+
+ˆw = Σ −1 
+
+> Q
+
+(μP − μQ), (30) and the optimal value is 
+
+sup 
+
+> w
+
+{2w⊤(μP − μQ) − w⊤ΣQw} = ( μP − μQ) Σ −1 
+
+> Q
+
+(μP − μQ). (31) Thus, assuming that Σpθ (·| c) = Eˆy∼pθ (·| c)
+
+ϕc(ˆ y)ϕc(ˆ y)⊤ is invertible, we define the whitened feature matching loss as 
+
+LWFM (θ) = Ec∼p
+
+  Eˆy∼pθ (·| c)[ϕc(ˆ y)] −Ey∼p(·| c)[ϕc(y)] ⊤
+
+× Eˆy∼pθ (·| c)
+
+ϕc(ˆ y)ϕc(ˆ y)⊤−1 Eˆy∼pθ (·| c)[ϕc(ˆ y)] −Ey∼p(·| c)[ϕc(y)]  ,
+
+(32) Observe that the dependence of LWFM (θ) on θ is through Eˆy∼pθ (·| c)[ϕc(ˆ y)] as in LFM (θ), but also through 
+
+Eˆy∼pθ (·| c)
+
+ϕc(ˆ y)ϕc(ˆ y)⊤−1. While applying the REINFORCE argument to estimate the gradient for the former can be done as in Section 2, the approach breaks down for the latter. We decide to disregard the gradient with respect to 
+
+Eˆy∼pθ (·| c)
+
+ϕc(ˆ y)ϕc(ˆ y)⊤−1, which amounts to the following loss: 
+
+LWFM (θ) = Ec∼p
+
+  Eˆy∼pθ (·| c)[ϕc(ˆ y)] −Ey∼p(·| c)[ϕc(y)] ⊤
+
+× stopgrad  Eˆy∼pθ (·| c)
+
+ϕc(ˆ y)ϕc(ˆ y)⊤ −1 Eˆy∼pθ (·| c)[ϕc(ˆ y)] −Ey∼p(·| c)[ϕc(y)]  ,
+
+(33) 15 Energy-Based Fine-Tuning 
+
+B.3. Dealing with non-invertible second moment matrices Σpθ (·| c): a first approach 
+
+The matrix Σpθ (·| c) = Eˆy∼pθ (·| c)
+
+ϕc(ˆ y)ϕc(ˆ y)⊤ and especially its empirical version ˆΣpθ (·| c) = 1
+
+> n
+
+Pnj=1 ϕc(ˆ yj )ϕc(ˆ yj )⊤ are often not invertible, in particular when the feature dimension d is high and/or the number of samples per prompt n is low. In particular, the rank of the empirical matrix is upper-bounded by the number of samples per prompt, meaning that it is never invertible when n < d , which is usually the case. Thus, we need to solve sup w{2w⊤(μP − μQ) − w⊤ΣQw} for general positive semidefinite ΣQ. More generally, consider maximizing a functional of the form f (w) = 2 ⟨w, b ⟩ − ⟨ w, Σw⟩. Let 
+
+Σ = Pri=1 λiuiu⊤ 
+
+> i
+
+be an eigendecomposition, and write w = P 
+
+> i
+
+αiui and b = P 
+
+> i
+
+βiui. Then 
+
+f (w) = 2 X
+
+> i
+
+αiβi − X
+
+> i
+
+λiα2 
+
+> i
+
+. (34) Splitting into nonzero and zero eigenvalues yields the dichotomy: (i) If b has any component in ker(Σ) (i.e., there exists i with λi = 0 and βi̸ = 0 ), then sup w f (w) = + ∞ and there is no maximizer in Rd.(ii) If b ⊥ ker(Σ) , i.e. b ∈ Im(Σ) , then the supremum is finite and equals 
+
+sup 
+
+> w
+
+f (w) = X
+
+> λi>0
+
+β2
+
+> i
+
+λi
+
+= b⊤ Σ†b, (35) where Σ† = P  
+
+> λi>01
+> λi
+
+uiu⊤ 
+
+> i
+
+is the Moore–Penrose pseudoinverse. In our case, b = μP −μQ and Σ = Σ Q. While μQ ⊥ ker(Σ Q) by construction, in general μP will have non-zero components in ker(Σ) , and in that case sup w{2w⊤(μP − μQ) − w⊤ΣQw} = + ∞. This is not surprising given that when the inequality (28) holds with equality, which is the case for one-hot feature maps, sup w{2w⊤(μP − μQ) − w⊤ΣQw} = χ2(P ∥Q), and it is easy to see that χ2(P ∥Q) = + ∞ when the support of P is larger than the support of Q. To obtain a finite value, it is convenient to replace μP by the projection Pr Im(Σ Q)μP . Then, by equation (35) we obtain 
+
+sup 
+
+> w
+
+{2w⊤(Pr Im(Σ Q)μP − μQ) − w⊤ΣQw} = (Pr Im(Σ Q)μP − μQ)⊤Σ†
+
+> Q
+
+(Pr Im(Σ Q)μP − μQ) (36) 
+
+= ( μP − μQ)⊤Σ†
+
+> Q
+
+(μP − μQ), (37) where the last equality holds because ker(Σ †
+
+> Q
+
+) = ker(Σ Q), and that μP = Pr Im(Σ) μP + Pr ker(Σ) μP . Hence, the following loss function is numerically robust: 
+
+LWFM (θ) = Ec∼p
+
+  Eˆy∼pθ (·| c)[ϕc(ˆ y)] −Ey∼p(·| c)[ϕc(y)] ⊤
+
+× stopgrad  Eˆy∼pθ (·| c)
+
+ϕc(ˆ y)ϕc(ˆ y)⊤ † Eˆy∼pθ (·| c)[ϕc(ˆ y)] −Ey∼p(·| c)[ϕc(y)]  ,
+
+(38) It is easy to compute the gradient of this loss through the framework of Section 2; in the computation of the population reward r(ˆ y, c ) in (6) we simply replace the features ϕc(y) by the whitened features: 
+
+˜ϕc(y) = (Σ † 
+
+> pθ(·| c)
+
+)1/2ϕc(y), Σpθ (·| c) = Eˆy∼pθ (·| c)
+
+ϕc(ˆ y)ϕc(ˆ y)⊤, (39) and in practice, we compute the reward rj in (7) using ˆΣpθ (·| c) instead of Σpθ (·| c):
+
+˜ϕc(y) = ( ˆΣ† 
+
+> pθ(·| c)
+
+)1/2ϕc(y), ˆΣpθ (·| c) = 1
+
+n
+
+> n
+
+X
+
+> j=1
+
+ϕc(ˆ yj )ϕc(ˆ yj )⊤. (40) Above, (Σ †)1/2 denotes the square root of the pseudo-inverse of Σ, i.e. if Σ admits the eigenvalue decomposition 
+
+Σ = Pdi=1 λiuiu⊤ 
+
+> i
+
+, then (Σ †)1/2 = Pdi=1 ,λ i>0 λ−1/2 
+
+> i
+
+uiu⊤ 
+
+> i
+
+. In practice, using a function to compute the singular value decomposition of is more numerically stable that using a function to compute the eigenvalue decomposition. 16 Energy-Based Fine-Tuning 
+
+B.4. Variants of the whitened feature-matching loss with better empirical performance 
+
+Let us write the reward rj explicitly under whitening: 
+
+rj = 2 ϕc(ˆ yj )⊤ ˆΣ† 
+
+> pθ(·| c)
+
+ϕc(y)
+
+| {z } 
+
+> alignment term AT j
+
+− 2
+
+n − 1
+
+X 
+
+> j′̸=j
+
+ϕc(ˆ yj )⊤ ˆΣ† 
+
+> pθ(·| c)
+
+ϕc(ˆ yj′ )
+
+| {z } 
+
+> diversity term DT j
+
+. (41) Suppose that the features  ϕc(ˆ yj )nj=1 of the generated completions are ordered such that repeated completions are arranged consecutively, and that there are exactly K different feature vectors among  ϕc(ˆ yj )nj=1 , with multiplicities (nk)Kk=1 , such that PKk=1 nk = n. In this section, we make the following assumptions, which hold in practice: (i) The feature dimension d is larger or equal than the number of generated completions n. This holds in our experiments, because d is on the order of thousands, while we take n = 4 .(ii) The K different feature vectors within (ϕc(ˆ yj )) nj=1 are linearly independent. This happens with very high probability in our experiments, also as a consequence of d ≫ n.For 1 ≤ k ≤ K, let jk = Pk−1 
+
+> k′=1
+
+nk′ + 1 . Hence, the list of feature vectors  ϕc(ˆ yjk )Kk=1 contains each instance in 
+
+ ϕc(ˆ yj )nj=1 with multiplicity one. We define the matrices • Φ ∈ Rd×n as the matrix whose columns are (ϕc(ˆ yj )) nj=1 , i.e. Φ·j = ϕc(ˆ yj ),• ˆΦ ∈ Rd×K as the matrix whose columns are  ϕc(ˆ yjk )Kk=1 ,• ¯Φ ∈ Rd×K as the matrix whose columns are  √nkϕc(ˆ yjk )Kk=1 ,• ˜Φ = ((ΦΦ ⊤)†)1/2Φ ∈ Rd×n,And the vectors • ψ = ϕc(y) ∈ Rd,• ˜ψ = ((ΦΦ ⊤)†)1/2ψ ∈ Rd,• x(ψ) = ˆΦ†ψ ∈ RK , which is the vector of coefficients of the orthogonal projection of ψ onto span    ϕc(ˆ yjk )Kk=1 
+
+⊥
+
+with respect to the basis  ϕc(ˆ yjk )Kk=1 ,We can reexpress the alignment and diversity terms in (41) with respect to ˜Φ and ˜ψ:
+
+AT j = 2 nϕ c(ˆ yj )⊤(ΦΦ ⊤)†ϕc(y) = 2 n ˜Φ⊤·j ˜ψ, (42) 
+
+DT j = 2nn − 1
+
+X 
+
+> j′̸=j
+
+ϕc(ˆ yj )⊤(ΦΦ ⊤)†ϕc(ˆ yj′ ) = 2nn − 1
+
+X 
+
+> j′̸=j
+
+˜Φ⊤·j ˜Φ·j′ . (43) The following lemma, proven in Section B.4.1, characterizes the inner products ˜Φ⊤·j ˜Φ·j′ and ˜Φ⊤·j′ ˜ψ, and the norm of ˜ψ.
+
+Lemma B.2. Recall that nkj is the multiplicity of the completion ˆyj within  ϕc(ˆ yj )nj=1 . The inner products between the columns ( ˜Φ·j )nj=1 are given by 
+
+˜Φ⊤·j ˜Φ·j′ = 1 /n kj for all j′ such that ϕc(ˆ yj ) = ϕc(ˆ yj′ ) (in particular ∥ ˜Φ·j ∥ = 1 /√nkj ), (44) 
+
+˜Φ⊤·j ˜Φ·j′ = 0 for all j′ such that ˆyj̸ = ˆ yj′ . (45) 
+
+And we have that 
+
+˜Φ⊤·j ˜ψ = x(ψ)
+
+> j
+
+nkj
+
+, for all 1 ≤ j ≤ n, and , ∥ ˜ψ∥2 =
+
+> K
+
+X
+
+> k=1
+
+(x(ψ) 
+
+> k
+
+)2
+
+nk
+
+. (46) 17 Energy-Based Fine-Tuning 
+
+Thus, under the conditions of Lemma B.2, 
+
+AT j = 2nx (ψ)
+
+> j
+
+nkj
+
+, (47) 
+
+DT j = 2nn − 1
+
+X 
+
+> j′̸=j
+
+1[ϕc(ˆ yj ) = ϕc(ˆ yj′ )] 1
+
+nkj
+
+= 2n(nkj − 1) (n − 1) nkj
+
+= 2(1 − 1/n kj )1 − 1/n . (48) where x(ψ) 
+
+> j
+
+is the j-th component of x(ψ).Observe that when ϕc(y) is equal to ϕc(ˆ yjk ) for some 1 ≤ k ≤ K, x(ψ) is the k-th vector of the canonical basis of RK ,which means that AT j = 2nnkj
+
+for all j such that ϕc(y) is equal to ϕc(ˆ yj ), and zero otherwise. When ϕc(y) is different from all the vectors in  ϕc(ˆ yjk )Kk=1 , the norm of the projection of ϕc(y) onto span    ϕc(ˆ yjk )Kk=1 
+
+
+
+is usually significantly smaller than the norm of ϕc(y), because this subspace is smaller than the ambient dimension as 
+
+K ≤ n ≤ d, and this is accentuated the smaller n is. Observe that in optimizing the empirical rewards rj = AT j − DT j ,the model balances increasing the alignment term AT j and decreasing the diversity term DT j , and the specific trade-off is determined by the relative sizes of both terms. Since for small n the alignment terms (AT j )nj=1 are small because x(ψ)
+
+is abnormally small, the model focuses on decreasing DT j as opposed to strongly improving AT j . Experimentally, this translates to moderate improvements in downstream performance. To achieve more solid boosts in downstream performance, we tested the following alternative approaches: • Variant (i) : Normalizing the whitened features of the generations and the ground truth in the alignment term . As a result, even when x(ψ) is small, the alignment term is not. Namely, we set the diversity term DT j as in (48) , and the alignment term AT j as follows: 
+
+AT j = 2ϕc(ˆ yj )⊤ ˆΣ† 
+
+> pθ(·| c)
+
+ϕc(y)
+
+( ˆΣ† 
+
+> pθ(·| c)
+
+)1/2ϕc(ˆ yj ) ( ˆΣ† 
+
+> pθ(·| c)
+
+)1/2ϕc(y) = 2 ˜Φ⊤·j ˜ψ
+
+˜Φ·j ˜ψ = 2x(ψ)
+
+> j
+
+r
+
+nkj
+
+PKk=1 (x(ψ) 
+
+> k)2
+> nk
+
+. (49) Observe that we can write the vector of alignment terms (AT j )nj=1 as 
+
+(AT j )nj=1 = 2( x(ψ) 
+
+> j
+
+/√njk )nj=1 
+
+∥(x(ψ) 
+
+> j
+
+/√njk )nj=1 ∥ . (50) • Variant (ii) : Normalizing the whitened features of the generations and the ground truth in the alignment and diversity terms . We set AT j as in (49), and DT j as follows: 
+
+DT j = 2
+
+n − 1
+
+X 
+
+> j′̸=j
+
+ϕc(ˆ yj )⊤ ˆΣ† 
+
+> pθ(·| c)
+
+ϕc(ˆ yj′ )
+
+( ˆΣ† 
+
+> pθ(·| c)
+
+)1/2ϕc(ˆ yj ) ( ˆΣ† 
+
+> pθ(·| c)
+
+)1/2ϕc(ˆ yj′ ) = 2
+
+n − 1
+
+X 
+
+> j′̸=j
+
+˜Φ⊤·j ˜Φ·j′
+
+˜Φ·j ˜Φ·j′
+
+= 2
+
+n − 1
+
+X 
+
+> j′̸=j
+
+1[ϕc(ˆ yj ) = ϕc(ˆ yj′ )] 
+
+√nkj nkj′
+
+nkj
+
+= 2( nkj − 1) 
+
+n − 1 .
+
+(51) • Variant (iii) : Normalizing the whitened features of the ground truth in the alignment term . We set DT j as in (48) and AT j as follows: 
+
+AT j = 2ϕc(ˆ yj )⊤ ˆΣ† 
+
+> pθ(·| c)
+
+ϕc(y)
+
+( ˆΣ† 
+
+> pθ(·| c)
+
+)1/2ϕc(y) = 2 ˜Φ⊤·j′ ˜ψ
+
+˜ψ = 2x(ψ)
+
+> j
+
+nkj · 1√nkj
+
+·
+
+rPKk=1 (x(ψ) 
+
+> k)2
+> nk
+
+= 2x(ψ)
+
+> j
+
+nkj
+
+rPKk=1 (x(ψ) 
+
+> k)2
+> nk
+
+, (52) Experimentally, variant (i) offers the best performance, and is the one that we use in all the whitening experiments we report in this paper. 
+
+18 Energy-Based Fine-Tuning 
+
+Observe that when we use whitening (with or without any of these variants), we are not explicitly minimizing a particular loss function on θ, as our REINFORCE-style reward does not take into account that the second-moment matrix ˆΦpθ (·| c) and the normalization factors depend on θ. In the figures of Section H, apart from the non-whitened feature matching loss, we report the proxy quantity: 
+
+1
+
+n
+
+> n
+
+X
+
+> j=1
+
+ AT j − 12 DT j
+
+ (53) We refer to this quantity as the ”feature-matching loss with whitening”. Ignoring the dependence of the second-moment matrix and the normalization constants on θ, we view whitened feature matching as trying to decrease this loss. B.4.1. P ROOF OF LEMMA B.2 And we define the matrix B ∈ RK×n as the matrix whose k-th row has value 1/√nk on all positions from jk =
+
+Pk−1 
+
+> k′=1
+
+nk′ + 1 to jk+1 − 1 = Pkk′=1 nk′ (both included), and value zero on all remaining positions. Observe that the rows of B constitute an orthonormal set, i.e. BB ⊤ = Id ∈ RK×K , and that by construction, 
+
+Φ = ¯ΦB. (54) Thus, 
+
+˜Φ = (( ¯ΦBB ⊤ ¯Φ⊤)†)1/2 ¯ΦB = (( ¯Φ ¯Φ⊤)†)1/2 ¯ΦB. (55) Next, we inspect (( ¯Φ ¯Φ⊤)†)1/2 ¯Φ. Observe that by assumptions (i) and (ii) above, the rank of ¯Φ is K. Let ¯Φ = U ΣV ⊤
+
+be the thin singular value decomposition of ¯Φ, i.e. U ∈ Rd×K has orthonormal columns, V ∈ RK×K is an orthogonal matrix, and Σ ∈ RK×K is a diagonal matrix with strictly positive numbers on the diagonal (in general the singular values are non-negative, but since ¯Φ has rank K, all of them must be positive). Then, by the definitions of the square root and the pseudo-inverse 
+
+(( ¯Φ ¯Φ⊤)†)1/2 ¯Φ = (( U Σ2U ⊤)†)1/2U ΣV ⊤ = U Σ−1U ⊤U ΣV ⊤ = U V ⊤ (56) Plugging this into the right-hand side of (55) yields 
+
+˜Φ = U V ⊤B. (57) And 
+
+˜Φ⊤ ˜Φ = B⊤V U ⊤U V ⊤B = B⊤B, (58) which means that for j, j ′ ∈ [n], ˜Φ⊤·j ˜Φ·j′ , which is the (j, j ′)-th component of ˜Φ⊤ ˜Φ, is equal to the (j, j ′)-th component of B⊤B, which is B⊤·j B·j′ . Since B·j , (resp. B·j′ ) has a single non-zero entry 1/√nkj in position kj (resp. 1/√nkj′ in position kj′ ), equalities (44) and (45) follow. Let us define the diagonal matrix ¯B ∈ RK×K with diagonal values  1/√nk
+
+Kk=1 , such that we can express the matrix ˆΦ
+
+with columns  ϕc(ˆ yjk )Kk=1 as ¯Φ ¯B. By construction of x(ψ), we have the following: 
+
+ψ = ˆΦx(ψ) + ψ′ = ¯Φ ¯Bx (ψ) + ψ′, (59) where ψ′ is the orthogonal projection of ψ onto span    ϕc(ˆ yjk )Kk=1 
+
+⊥. Hence, using equation (56) , and the fact that 
+
+span(( U·k)Kk=1 ) = span    ϕc(ˆ yjk )Kk=1 
+
+,
+
+((ΦΦ ⊤)†)1/2ψ = (( ¯Φ ¯Φ⊤)†)1/2  ¯Φ ¯Bx (ψ) + ψ′ = U V ⊤ ¯Bx (ψ) + U Σ−1U ⊤ψ′ = U V ⊤ ¯Bx (ψ). (60) Hence, using (57) and (60) yields 
+
+Φ⊤((ΦΦ ⊤)†)1/2((ΦΦ ⊤)†)1/2ψ = BV U ⊤U V ⊤ ¯Bx (ψ) = B⊤ ¯Bx (ψ) = ˜Bx (ψ) (61) where we define ˜B ∈ RK×n as the matrix whose k-th row has value 1/n k on all positions from jk = Pk−1 
+
+> k′=1
+
+nk′ + 1 to 
+
+jk+1 − 1 = Pkk′=1 nk′ (both included), and value zero on all remaining positions. And 
+
+ψ⊤((ΦΦ ⊤)†)1/2((ΦΦ ⊤)†)1/2ψ = ( x(ψ))⊤ ¯B⊤V U ⊤U V ⊤ ¯Bx (ψ) = ∥ ¯Bx (ψ)∥2 =
+
+> K
+
+X
+
+> k=1
+
+(x(ψ) 
+
+> k
+
+)2
+
+nk
+
+. (62) 19 Energy-Based Fine-Tuning 
+
+## C. Feature matching with alignment bias 
+
+In some applications we prefer more reference-aligned samples, even at the cost of reduced diversity. We capture this tradeoff by scaling the target moment: for α ∈ (0 , 1] , define the loss with alignment bias as 
+
+Lα
+
+> FM
+
+(θ) = αEc∼p
+
+∥Eˆy∼pθ (·| c)[ϕc(ˆ y)] − 1 
+
+> α
+
+Ey∼p(·| c)[ϕc(y)] ∥2
+
+= αLFM (θ)−2(1 − α)Ec∼p
+
+Eˆy∼pθ (·| c)[ϕc(ˆ y)] ⊤Ey∼p(·| c)[ϕc(y)] .
+
+| {z }
+
+> alignment bias
+
+(63) The additional term explicitly encourages alignment between model and data features, making the objective mode-seeking 
+
+as α decreases (typically improving accuracy and faithfulness but reducing diversity). Operationally, this corresponds to multiplying the diversity terms in (6) and (7) by α, since the analogs of equations (2) and (5), (6), and (7) are 
+
+Lα
+
+> CFM
+
+(θ) = αEc∼p
+
+∥Eˆy∼pθ (·| c)[ϕc(ˆ y)] − 1 
+
+> α
+
+ϕc(y)∥2, (64) 
+
+Lα
+
+> CFM
+
+(θ; c, y ) = α∥Eˆy∼pθ (·| c)[ϕc(ˆ y)] − 1 
+
+> α
+
+ϕc(y)∥2, (65) 
+
+r(ˆ y, c ) = 2 ϕc(ˆ y)⊤ϕc(y) − 2αϕ c(ˆ y)⊤E˜y∼pθ (·| c)
+
+ϕc(˜ y), (66) 
+
+rj = 2 ϕc(ˆ yj )⊤ϕc(y) − 2αn − 1
+
+X 
+
+> j′̸=j
+
+ϕc(ˆ yj )⊤ϕc(ˆ yj′ ). (67) Note that when α̸ = 1 , Lα 
+
+> FM
+
+is not a proper scoring rule, meaning that that it is not minimized by the ground truth distribution 
+
+p, and this can be seen in practice. In Section H.1 we present experiments in which we sweep over α and γ on all the tasks we consider: we consider the values α ∈ { 0, 0.5, 1}. We conclude that taking α smaller helps in reducing the (unbiased) feature-matching loss faster, at the cost of a slower decrease of the CE loss, with stark differences in behavior depending on the value of γ. In particular, when γ = 0 .1, the CE loss decreases similarly fast for α ∈ { 0, 0.5, 1}, but when γ = 0 , taking 
+
+α ∈ { 0, 0.5} causes the CE loss to diverge, while for α = 1 the CE loss still decreases monotonically, albeit at a slower rate than with higher α. Hence, the CE term can help in stabilizing feature matching with alignment bias. 
+
+## D. Feature matching with KL regularization 
+
+The feature matching loss with KL regularization with respect to a model π reads 
+
+LFMKL (θ) = Ec∼p
+
+∥Eˆy∼pθ (·| c)[ϕc(ˆ y)] − 1 
+
+> α
+
+Ey∼p(·| c)[ϕc(y)] ∥2 + 1 
+
+> β
+
+DKL 
+
+ pθ (·| c)∥π(·| c) 
+
+= Ec∼p
+
+∥Eˆy∼pθ (·| c)[ϕc(ˆ y)] − 1 
+
+> α
+
+Ey∼p(·| c)[ϕc(y)] ∥2 + 1 
+
+> β
+
+Eˆy∼pθ (·| c)
+
+ log pθ (ˆ y|c) − log π(ˆ y|c) (68) Observe that since this loss function decouples across different contexts c, the optimal pθ satisfies the following for all c:
+
+pθ (·| c) = arg min 
+
+> ρ∈V G
+
+ 1 
+
+> β
+
+DKL 
+
+ ρ∥π(·| c) + ∥Ey∼ρ[ϕc(y)] − 1 
+
+> α
+
+Ey∼p(·| c)[ϕc(y)] ∥22 . (69) Next, we will characterize the distribution pθ that minimizes this loss function. The following section contains some preliminary results. 
+
+D.1. Energy-based models with RKHS function classes 
+
+The following duality theorem relates two optimization problems which underlie energy-based models for which the energy class is a ball of the RKHS induced by a feature map ϕ.
+
+Theorem D.1 (Thm. 2, Domingo-Enrich et al. (2022)) . Let π be a base measure over a measurable space Y, and ˜β > 0.Let φ : Y → Rd for some d ≥ 1 be a feature map, and v ∈ Rd. Consider the two problems 
+
+min  
+
+> ρ∈P (Y)1˜β
+
+DKL (ρ∥π) + ∥EY ∼ρ[φ(Y )] − v∥2, (70) 
+
+and 
+
+max 
+
+> h∈Rd
+> ∥h∥2≤1
+
+−v⊤h − 1˜β log EY ∼π
+
+ exp   − ˜βφ (Y )⊤h . (71) 20 Energy-Based Fine-Tuning 
+
+The problems (70) and (71) are convex. The problem (71) is the Fenchel dual of problem (70) , and strong duality holds. Moreover, the solution ρ⋆ of (70) is unique and satisfies 
+
+dρ ⋆
+
+dπ (y) = 1
+
+Z ˜β
+
+exp   − ˜βφ (y)⊤h⋆, (72) 
+
+where h⋆ is a solution of (71) and Zβ is a normalization constant. 
+
+And the following equivalence between minimization problems holds: 
+
+Theorem D.2 (Prop. 3, Domingo-Enrich et al. (2022)) . Consider the problem 
+
+min  
+
+> ρ∈P (Y)
+
+β−1DKL (ρ∥π) + ∥EY ∼ρ[φ(Y )] − v∥22, (73) 
+
+Problems (70) and (73) are equivalent in the following sense: if ρ⋆ 
+
+> 1
+
+is a solution of (70) for ˜β, then it is also a solution of 
+
+(73) for 
+
+β =  2∥EY ∼ρ⋆ 
+
+> 1
+
+[φ(Y )] − v∥2
+
+−1 ˜β, (74) 
+
+provided that ∥EY ∼ρ⋆ 
+
+> 1
+
+[φ(Y )] − v∥2 is non-zero. Conversely, if ρ⋆ 
+
+> 2
+
+is a solution of (73) for β, then it is also a solution of 
+
+(70) for 
+
+˜β = 2 ∥EY ∼ρ⋆ 
+
+> 2
+
+[φ(Y )] − v∥2β. (75) 
+
+D.2. Feature matching with KL regularization as an implicit energy-based model Theorem D.3. Consider the KL-regularized objective 
+
+min  
+
+> ρ
+
+Ec∼p
+
+h
+
+Eρ(·| c)[ϕc(y)] − Ep(·| c)[ϕc(y)] 2 + 1 
+
+> β
+
+DKL (ρ(·| c) ∥ q(·| c)) 
+
+i
+
+, (76) 
+
+where β > 0 controls the strength of the regularization. the solution to (76) has the form of an exponential tilt of the base distribution, 
+
+ρ⋆(y|c) ∝ q(y|c) exp   − χ⊤ 
+
+> c
+
+ϕc(y),
+
+for a context-dependent vector χc ∈ Rd chosen to optimize: 
+
+max  
+
+> ∥χ∥2≤˜β
+
+ −   1 
+
+> α
+
+− 1Ey∼p(·| c)[ϕc(y)] ⊤χ + Ey∼p(·| c)
+
+ log ρχ(y|c) , (77) 
+
+where ρχ(y|c) ∝ q(y|c) exp   − χ⊤ϕc(y), for a ˜β > 0 that depends on β. Two values of α admit specific interpretations: 
+
+• For pure EBFT ( α = 1 ), the optimal χ is the maximum likelihood estimate : When α = 1 , the problem (77) simplifies to: 
+
+max  
+
+> ∥χ∥2≤˜β
+
+Ey∼p(·| c)
+
+ log ρχ(y|c), (78) 
+
+This corresponds to the maximum likelihood loss function for an energy-based model with energy function E(y, c ) = 
+
+χ⊤ϕc(y).
+
+• For α+ = 0 , the optimal χ has the same direction as the ground-truth mean feature Ey∼p(·| c)[ϕc(y)] : When α = 0 +,the problem (77) is equivalent to 
+
+max  
+
+> χ∈Rd
+> ∥χ∥2≤˜β
+
+−Ey∼p(·| c)[ϕc(y)] ⊤χ, (79) 
+
+which has optimal solution 
+
+χ⋆ = − ˜β Ey∼p(·| c)[ϕc(y)] 
+
+Ey∼p(·| c)[ϕc(y)] 2
+
+. (80) 21 Energy-Based Fine-Tuning 
+
+Thus, for α ∈ (0 , 1) , the solution χ⋆ of (77) interpolates between the maximum likelihood estimate and the rescaled ground-truth mean feature. Proof. Given a context c, and a completion length G, let us apply Theorem D.1 and Theorem D.2 by setting Y = VG,
+
+φ(y) = ϕc(y), π = π(·| c), and v = 1 
+
+> α
+
+Ey∼p(·| c)[ϕc(y)] ∥2. Then, the problems (70), (73) and (71) take the form 
+
+min  
+
+> ρ∈P (Y)1˜β
+
+DKL 
+
+ ρ∥π(·| c) + ∥Ey∼ρ[ϕc(y)] − 1 
+
+> α
+
+Ey∼p(·| c)[ϕc(y)] ∥2, (81) 
+
+min  
+
+> ρ∈P (Y)1
+> β
+
+DKL 
+
+ ρ∥π(·| c) + ∥Ey∼ρ[ϕc(y)] − 1 
+
+> α
+
+Ey∼p(·| c)[ϕc(y)] ∥22, (82) 
+
+max 
+
+> h∈Rd
+> ∥h∥2≤1
+
+− 1 
+
+> α
+
+Ey∼p(·| c)[ϕc(y)] ⊤h − 1˜β log Ey∼π(·| c)
+
+ exp   − ˜βϕ c(y)⊤h , (83) Problem (82) is the KL-regularized feature-matching objective with alignment bias, if we absorb the constant α accompany-ing ∥Ey∼ρ[ϕc(y)] − 1 
+
+> α
+
+Ey∼p(·| c)[ϕc(y)] ∥22 into the constants β. The (unique) solution (81) of ρ⋆ and the solution h⋆ of (83) are related by the equation 
+
+ρ⋆(y) = π(y|c) exp   − ˜βϕ c(y)⊤h⋆P 
+
+> y′
+
+π(y′|c) exp   − ˜βϕ c(y′)⊤h⋆ , (84) and ρ⋆ is also the (unique) solution of (82) provided that 
+
+˜β = 2 ∥EY ∼ρ⋆ [φ(Y )] − 1 
+
+> α
+
+Ey∼p(·| c)[ϕc(y)] ∥2β. (85) Observe that the problem (82) is equal to the problem (69) , which means that (81) - (83) characterize the optimal pθ (·| c)
+
+when ˜β is chosen according to (85). Next, we focus on the problem (83). We define E ˜β as the following class of energy functions: 
+
+E ˜β = {E : VG → R | ∃ χ ∈ Rd, s.t.∥χ∥2 ≤ ˜β, and ∀x ∈ V G, E (x) = χ⊤ϕc(x)}
+
+= {E : VG → R | ∃ h ∈ Rd, s.t.∥h∥2 ≤ 1, and ∀x ∈ V G, E (x) = ˜βh ⊤ϕc(x)}, (86) and given χ ∈ Rd, we define ρχ, ρ ( ˜β) 
+
+> h
+
+∈ P (VG) as 
+
+ρχ(y) = π(y|c) exp   − χ⊤ϕc(y)
+
+Ey′∼π(·| c)
+
+ exp   − χ⊤ϕc(y′) , ρ( ˜β) 
+
+> h
+
+(y) = π(y|c) exp   − ˜βχ ⊤ϕc(y)
+
+Ey′∼π(·| c)
+
+ exp   − ˜βχ ⊤ϕc(y′) . (87) We rewrite the problem (83) as 
+
+max 
+
+> h∈Rd
+> ∥h∥2≤1
+
+−  1 
+
+> α
+
+− 1Ey∼p(·| c)[ϕc(y)] ⊤h − Ey∼p(·| c)[ϕc(y)] ⊤h − 1˜β log Ey∼π(·| c)
+
+ exp   − ˜βϕ c(y)⊤h 
+
+= max 
+
+> h∈Rd
+> ∥h∥2≤1
+
+−  1 
+
+> α
+
+− 1Ey∼p(·| c)[ϕc(y)] ⊤h + 1˜β Ey∼p(·| c)
+
+h
+
+log ρ( ˜β) 
+
+> h
+
+(y)
+
+π(y|c)
+
+i
+
+= max 
+
+> h∈Rd
+> ∥h∥2≤1
+
+−  1 
+
+> α
+
+− 1Ey∼p(·| c)[ϕc(y)] ⊤h + 1˜β Ey∼p(·| c)
+
+h
+
+log ρ( ˜β) 
+
+> h
+
+(y)
+
+i
+
++ const .
+
+(88) Writing the right-hand side problem in terms of χ instead of h, and multiplying the objective by ˜β, yields the problem in (77). 22 Energy-Based Fine-Tuning 
+
+## E. Computing the REINFORCE gradient and the RLOO baseline for EBFT 
+
+We derive the REINFORCE gradient first. Rewriting ˜LFM (θ; c, y ) explicitly in terms of pθ , and using that ˆy, ˜y play a symmetric role, we have the following: 
+
+∇θ ˜LFM (θ; c, y )= ∇θ
+
+ X 
+
+> ˆy, ˜y
+
+pθ (ˆ y|c)pθ (˜ y|c)ϕc(ˆ y)⊤ϕc(˜ y) − 2 X
+
+> ˆy
+
+pθ (ˆ y|c)ϕc(ˆ y)⊤ϕc(y)
+
+
+
+= X
+
+> ˆy, ˜y
+
+
+
+∇θ log pθ (ˆ y|c) + ∇θ log pθ (˜ y|c)
+
+
+
+pθ (ˆ y|c)pθ (˜ y|c)ϕc(ˆ y)⊤ϕc(˜ y) − 2 X
+
+> ˆy
+
+∇θ log pθ (ˆ y|c)pθ (ˆ y|c)ϕc(ˆ y)⊤ϕc(y)= 2 Eˆy, ˜y∼pθ (·| c)
+
+h
+
+∇ log pθ (ˆ y|c)ϕc(ˆ y)⊤ϕc(˜ y)
+
+i
+
+− 2Eˆy∼pθ (·| c)
+
+h
+
+∇ log pθ (ˆ y|c)ϕc(ˆ y)⊤ϕc(y)
+
+i
+
+.
+
+(89) Next, we derive the RLOO baseline. Define 
+
+T (j)1 = 2 ϕc(ˆ yj )⊤ϕc(y), T (j)2 = 2
+
+n−1
+
+> n
+
+X 
+
+> j′=1 ,j ′̸=j
+
+ϕc(ˆ yj )⊤ϕc(ˆ yj′ ), (90) which means that we can rewrite the REINFORCE gradient (7) as 
+
+− 1
+
+n
+
+> n
+
+X
+
+> j=1
+
+∇ log pθ (Y (j)|c) T (j)1 − T (j)2
+
+. (91) We want to use a baseline b(j) to reduce the variance of the gradient estimate (91) . That is, the estimate with baseline b(j)
+
+reads 
+
+− 1
+
+n
+
+> n
+
+X
+
+> j=1
+
+∇ log pθ (Y (j)|c) T (j)1 − T (j)2 − b(j). (92) For the baselined gradient estimate to be unbiased, we need that b(j) is independent of Y (j).A naive RLOO baseline would be b(j) = 1 
+
+> N−1
+
+PNj′=1 ,j ′̸ =j
+
+ T (j′)1 − T (j′)2
+
+, i.e. simply averaging the rewards for all rollouts except the j-th one. However, the terms T (j′)2 are not independent of Y (j), which means that this baseline is not independent of Y (j). To obtain an independent baseline, we need to replace T (j′)2 by T (j′,j )2 , defined as 
+
+T (j′,j )2 = 2
+
+n − 2
+
+> n
+
+X 
+
+> j′′ =1 , j ′′ ̸=j′,j
+
+ϕc(ˆ yj′′ )⊤ϕc(ˆ yj′ ) = 2
+
+n − 2
+
+ nX 
+
+> j′′ =1 ,j ′′ ̸=j′
+
+φ(c : ˆ yj′′ )⊤φ(c : ˆ yj′ ) − φ(c : ˆ yj )⊤φ(c : ˆ yj′ )
+
+
+
+= n − 1
+
+n − 2 T (j′)2 − 2
+
+n − 2 φ(c : ˆ yj )⊤φ(c : ˆ yj′ ).
+
+(93) Thus, the baseline that we end up with is: 
+
+b(j) = 1
+
+n − 1
+
+> n
+
+X 
+
+> j′=1 ,j ′̸=j
+
+ T (j′)1 − T (j′)2
+
+
+
+= 1
+
+n − 1
+
+> n
+
+X 
+
+> j′=1 ,j ′̸=j
+
+
+
+T (j′)1 −
+
+ n − 1
+
+n − 2 T (j′)2 − 2
+
+n − 2 ϕ(Y (j))⊤ϕ(Y (j′))
+
+ 
+
+= 1
+
+n − 1
+
+> n
+
+X 
+
+> j′=1 ,j ′̸=j
+
+T (j′)1 − 1
+
+n − 2
+
+> n
+
+X 
+
+> j′=1 ,j ′̸=j
+
+T (j′)2 + 1
+
+n − 2 T (j)2 .
+
+(94) 23 Energy-Based Fine-Tuning 
+
+## F. Details on the strided parallel rollout procedure 
+
+Sampling from a single, unstructured sequence provides only one supervision point and is a major bottleneck for EBFT, particularly because each sample must be embedded via forward passes through a separate feature network. Instead, we treat a single training sequence as a source of multiple nested prompts by identifying many anchor points along the text. Sampling from these points sequentially is prohibitively expensive, so we implement a novel parallel generation pipeline that simultaneously samples from different anchor points in one forward pass, similar to the custom attention mask approach introduced by Quiet-STaR (Zelikman et al., 2024). Given a starting sequence x0: T −1 of length T , a stride s, and a generation length G, we construct a set of nested prompts by segmenting x0: T −1 every s tokens. This yields B = ⌊ T −Gs ⌋ nested prompts. For each prompt cb = x0: bs (b = 1 , . . . , B ), we take the next G tokens in the original sequence x as the ground-truth continuation yb, yielding {(cb, y b)}Bb=1 ground truth context and completion pairs. Additionally, from each prompt, we sample a continuation ˆyb of length G. Using our custom mask, we can sample one token from each prefix in just one forward pass. We can then obtain {ˆyb}Bb=1 length G model completions in G forward passes. The resulting BG 
+
+generated tokens are appended in generation order; for example, with B = 3 and G = 2 :
+
+[ˆ y1,0, ˆy2,0, ˆy3,0, ˆy1,1, ˆy2,1, ˆy3,1].
+
+This interleaving supports an efficient reshape into per-block windows for downstream scoring and feature extraction. In particular, we exploit the same strided structure to compute features for all generated blocks (and their ground-truth counterparts) with a single batched call to the feature network, followed by a reshape/indexing step to recover per-block embeddings. Figure 9 shows a sketch of the strided parallel rollout procedure for a sequence of length L = 12 , stride S = 4 and completion length G = 4 , which means that B = ⌊(12 − 4) /4⌋ = 2 context-completion pairs are used: c1 = ( ti)3
+
+> i=0
+
+,
+
+y1 = ( ti)7
+
+> i=4
+
+; and c2 = ( ti)7
+
+> i=0
+
+, y2 = ( ti)11 
+
+> i=8
+
+. The ground truth sequence is in blue, and the generated completions are in red and green: ˆy1 = ( ti a )7
+
+> i=4
+
+, ˆy2 = ( ti b )11 
+
+> i=8
+
+.        
+
+> Figure 9. Strided parallel rollouts for a sequence of length L= 12 , stride S= 4 and completion length G= 4 .
+
+The algorithm to obtain the generated completions ˆy1 and ˆy2 involves four model calls to pθ . Figure 9 shows a sketch of the generated tokens using the strided parallel rollout procedure, and Section F shows the custom attention matrix for the fourth call (the horizontal and vertical lines show the three top left custom matrices used for the first three calls). 24 Energy-Based Fine-Tuning 
+
+−
+
+
+
+0 ∞ ∞ ∞ ∞ ∞ ∞ ∞ ∞ ∞ ∞ ∞ ∞ ∞
+
+0 0 ∞ ∞ ∞ ∞ ∞ ∞ ∞ ∞ ∞ ∞ ∞ ∞
+
+0 0 0 ∞ ∞ ∞ ∞ ∞ ∞ ∞ ∞ ∞ ∞ ∞
+
+0 0 0 0 ∞ ∞ ∞ ∞ ∞ ∞ ∞ ∞ ∞ ∞
+
+0 0 0 0 0 ∞ ∞ ∞ ∞ ∞ ∞ ∞ ∞ ∞
+
+0 0 0 0 0 0 ∞ ∞ ∞ ∞ ∞ ∞ ∞ ∞
+
+0 0 0 0 0 0 0 ∞ ∞ ∞ ∞ ∞ ∞ ∞
+
+0 0 0 0 0 0 0 0 ∞ ∞ ∞ ∞ ∞ ∞
+
+0 0 0 0 ∞ ∞ ∞ ∞ 0 ∞ ∞ ∞ ∞ ∞
+
+0 0 0 0 0 0 0 0 ∞ 0 ∞ ∞ ∞ ∞
+
+0 0 0 0 ∞ ∞ ∞ ∞ 0 ∞ 0 ∞ ∞ ∞
+
+0 0 0 0 0 0 0 0 ∞ 0 ∞ 0 ∞ ∞
+
+0 0 0 0 ∞ ∞ ∞ ∞ 0 ∞ 0 ∞ 0 ∞
+
+0 0 0 0 0 0 0 0 ∞ 0 ∞ 0 ∞ 0
+
+                
+
+> Figure 10. Custom attention matrix Ain for a sequence of length L= 12 , stride S= 4 and completion length G= 4 . When the entry
+> Aij is 0, the token in position iattends to the token in position j, and when it is −∞ it does not.
+
+## G. Additional Experimental Details 
+
+We build our EBFT method on top of the OpenRLHF (Hu et al., 2024) framework, as well as use the OpenRLHF implementation of SFT and GRPO for our baselines. We use an internal cluster of 80GB H100 GPUs to conduct SFT, RLVR, and EBFT training runs. For Q&A code, a single epoch of SFT training takes 0.5 hours to run on a single 80GB H100, whereas a single epoch of RLVR using vllm training takes roughly 28 hours to run on two 80GB H100s, and a single epoch of EBFT training with our under-optimized implementation (without vllm ) takes roughly 36 hours. 
+
+Parameter Value Q&A Code Unstructured Code Translation 
+
+Rollout Batch Size 16 Sequence Length 1024 Completion Length 8 8 4Stride 8 8 2Actor Learning Rate 1 × 10 −6
+
+Temperature 0.6 KL Coefficient 0Samples per Prompt 4Training Batch Size rollout batch size × samples per prompt = 64 Warmup 0.03 Adam Betas (0.9, 0.95) Num Epochs 1 
+
+> Table 2. Hyperparameter Configuration for EBFT runs.
+
+Hyperparameter details for the SFT training runs are provided in Table 3 for the warmstarted models (initialization for EBFT/RLVR) and in Table 4 for the five-epoch SFT baseline runs. We sweep over learning rate scheduler as well as training batch size for each task. Hyperparameters for RLVR training runs are provided in Table 5. For RLVR, we fix training to be online and determine rollout batch size by roughly equating number of examples seen per step across both RLVR and EBFT for each task, sweeping over two values. 25 Energy-Based Fine-Tuning 
+
+Parameter Value 
+
+Training Batch Size 64 Epochs 1Max Length 2048 Learning Rate 1 × 10 −5
+
+Scheduler Warmup + Cosine Decay to 0.1 × lr 
+
+Warmup 0.03  
+
+> Table 3. Hyperparameter Configuration for SFT warmstart runs.
+
+Parameter Value Q&A Code Unstructured Code Translation 
+
+Training Batch Size {64, 128 }
+
+Max Length 2048 (Learning Rate, Scheduler) {(5 × 10 −6, Warmup + Constant), ( 1 × 10 −5, Warmup + Cosine Decay) }
+
+Warmup 0.03 Adam Betas (0.9, 0.95) Num Epochs 5 
+
+> Table 4. Hyperparameter Configuration for SFT baseline runs.
+
+Parameter Value Q&A Code Translation 
+
+Rollout Batch Size {32, 64 } {128, 256 }
+
+Prompt Max Length 1024 Generate Max Length 1024 Actor Learning Rate 1 × 10 −6
+
+Temperature 1.0 KL Coefficient 0Samples per Prompt 8Training Batch Size rollout batch size × samples per prompt 
+
+Warmup 0.03 Adam Betas (0.9, 0.95) Num Epochs 1 
+
+> Table 5. Hyperparameter Configuration for RLVR baseline runs.
+
+26 Energy-Based Fine-Tuning 
+
+Q&A Coding 
+
+CE Q&A HumanEval MBPP Multipl-E Method greedy pass@1 pass@4 pass@16 greedy pass@1 pass@4 pass@16 greedy pass@1 pass@4 pass@16 
+
+Base 0.524 0.348 0.324 0.490 0.622 0.599 0.514 0.703 0.782 0.506 0.433 0.626 0.742 Warm start 0.571 0.415 0.385 0.540 0.665 0.595 0.527 0.691 0.774 0.440 0.408 0.602 0.731 SFT 0.408 0.457 0.427 0.578 0.713 0.576 0.558 0.701 0.790 0.465 0.406 0.596 0.723 EBFT 0.326 0.494 0.448 0.616 0.750 0.650 0.603 0.728 0.813 0.524 0.488 0.645 0.753 EBFT (ws.) 0.337 0.512 0.500 0.642 0.756 0.638 0.584 0.727 0.817 0.476 0.452 0.621 0.734 RLVR 0.806 0.451 0.443 0.602 0.695 0.623 0.583 0.722 0.794 0.531 0.502 0.658 0.767 
+
+RLVR (ws.) 0.713 0.482 0.516 0.640 0.738 0.607 0.596 0.712 0.782 0.484 0.475 0.632 0.729 
+
+Unstructured Coding 
+
+HumanEval MBPP Method greedy pass@1 pass@4 pass@16 greedy pass@1 pass@4 pass@16 
+
+Base 0.348 0.324 0.490 0.622 0.599 0.514 0.703 0.782 Warm start 0.463 0.419 0.586 0.707 0.553 0.497 0.690 0.778 SFT 0.451 0.417 0.596 0.707 0.556 0.516 0.691 0.786 EBFT 0.500 0.465 0.610 0.726 0.611 0.583 0.718 0.813 
+
+EBFT (ws.) 0.512 0.478 0.629 0.726 0.572 0.550 0.704 0.813 
+
+Translation 
+
+CE Q&A WMT’22 - COMET MTNT - COMET OpenSubtitles - COMET Method greedy best-of-1 best-of-4 best-of-16 greedy best-of-1 best-of-4 best-of-16 greedy best-of-1 best-of-4 best-of-16 
+
+Base 2.567 0.649 0.611 0.711 0.757 0.627 0.590 0.679 0.724 0.658 0.630 0.712 0.753 Warm start 2.648 0.733 0.712 0.776 0.807 0.705 0.683 0.759 0.796 0.696 0.677 0.742 0.776 SFT 2.692 0.747 0.722 0.784 0.815 0.703 0.683 0.755 0.792 0.701 0.682 0.745 0.777 EBFT 2.399 0.740 0.725 0.777 0.804 0.737 0.728 0.778 0.808 0.700 0.691 0.742 0.775 EBFT (ws.) 2.451 0.753 0.741 0.788 0.812 0.742 0.732 0.782 0.810 0.708 0.699 0.749 0.779 
+
+RLVR 3.225 0.704 0.698 0.743 0.769 0.705 0.698 0.745 0.772 0.684 0.679 0.718 0.741 RLVR (ws.) 3.148 0.738 0.730 0.771 0.794 0.727 0.721 0.765 0.789 0.708 0.703 0.740 0.762 
+
+WMT’22 - BLEU MTNT - BLEU OpenSubtitles - BLEU Method greedy best-of-1 best-of-4 best-of-16 greedy best-of-1 best-of-4 best-of-16 greedy best-of-1 best-of-4 best-of-16 
+
+Base 0.069 0.103 0.166 0.215 0.073 0.098 0.154 0.197 0.081 0.171 0.238 0.281 Warm start 0.185 0.165 0.235 0.286 0.159 0.139 0.200 0.244 0.129 0.204 0.264 0.307 SFT 0.198 0.172 0.242 0.294 0.152 0.139 0.198 0.242 0.130 0.205 0.264 0.305 EBFT 0.204 0.187 0.247 0.289 0.212 0.175 0.221 0.258 0.136 0.219 0.266 0.305 EBFT (ws.) 0.217 0.200 0.253 0.297 0.202 0.174 0.219 0.256 0.142 0.221 0.270 0.309 
+
+RLVR 0.192 0.185 0.223 0.250 0.202 0.173 0.206 0.228 0.135 0.223 0.249 0.267 RLVR (ws.) 0.215 0.206 0.246 0.275 0.217 0.186 0.220 0.243 0.152 0.240 0.269 0.289 
+
+Table 6. Across all tasks, EBFT matches or outperforms both SFT and RLVR on downstream metrics while maintaining substantially lower cross-entropy, and warm starting improves performance for both EBFT and RLVR. On Q&A coding, EBFT achieves the best scores on HumanEval and MBPP, while RLVR is competitive on MultiPL-E. On unstructured coding, EBFT dominates across all benchmarks. On translation, EBFT (ws.) achieves the highest COMET scores on nearly every benchmark and leads on WMT’22 BLEU. RLVR (ws.) is competitive on MTNT and OpenSubtitles BLEU. Warm starting benefits both methods across all tasks. Notably, RLVR consistently degrades cross-entropy relative to the base model (e.g. 3.225 vs. 2.567 on translation), whereas EBFT improves it, suggesting that EBFT better preserves the model’s language modeling capabilities while improving task performance. 
+
+27 Energy-Based Fine-Tuning 
+
+## H. Additional Experimental Results 
+
+H.1. Sweeping across γ, α and warm-starting 
+
+Figures 11, 12, 13 and 14 show 9 EBFT runs with α ∈ { 0, 0.5, 1} and γ ∈ { 0, 0.03 , 0.1} on the Q&A Coding, Unstructured Coding and Translation tasks, in which the models are initialized from the base Qwen2.5-1.5B and Llama3.2-1B, respectively. The observations below apply generally across tasks. We include additional observations about the behavior in particular settings in the captions of each figure. 
+
+Takeaways from the α, γ sweeps: α < 1 is prone to instability when γ = 0 , and increasing γ reduces the CE loss The choice (α, γ ) = (1 , 0) amounts to optimizing the pure feature-matching loss function LFM ; in this case the validation CE loss at a similar rate as for SFT, while the feature-matching loss decreases clearly faster, and the downstream performance is equal or better. The fact that pure FM beats SFT at reducing the CE loss may be attributed to FM with whitening optimizing a relaxation of the χ2 divergence (see Section 2.3 and Section B). When γ = 0 , and α ∈ { 0, 0.5}, the CE loss increases during training, which is not unexpected because the corresponding loss function is not a proper scoring rule: its minimizer is not the ground truth distribution p. In these settings, the FM loss decreases faster than when α is 1, even though we are optimizing a biased quantity, perhaps due to a bias-variance tradeoff of the gradient, and the downstream performance is slightly worse. Lastly, the CE loss gets reduced substantially with larger γ values both when α is 0.5 or 1.0, while the FM loss increases slightly with larger γ. The downstream performance is not affected substantially in either of the two cases. 
+
+Warm-starting: EBFT is more robust to weak initializations than RLVR Looking at Table 1, we can compare performance with and without warm-starting (running SFT for one epoch before initializing) for both EBFT and RLVR. Since both methods require sampling rollouts from the model, starting from a stronger model can in principle yield higher quality rollouts and improve RL gradients. However, the effect of warm-starting differs substantially between EBFT and RLVR. EBFT performs similarly with and without warm-starting, indicating that it is more robust to the quality of the initial model. In contrast, RLVR benefits heavily from warm-starting, and downstream performance and validation cross-entropy degrade significantly when initialized from weaker models. In summary, RLVR depends much more heavily on the capabilities of the initial model checkpoint. We hypothesize that this difference arises for two reasons. First, RLVR needs sufficiently accurate initial rollouts to produce a meaningful reward signal: poor initializations lead to sparse reward feedback. Second, RLVR introduces tension between reward maximization and maintaining low cross-entropy. In contrast, EBFT does not exhibit this conflict: it can simultaneously reduce the validation cross-entropy as much as SFT and improve downstream performance. 
+
+H.2. Qualitative Analysis and Examples - Code 
+
+We present representative HumanEval generations produced by the final checkpoint of the 2-epoch runs for EBFT, SFT, and RLVR, along with the base Qwen-2.5-1.5B model. Across examples, EBFT generations more often accurately follow the prompt and are more reliably executable (complete, syntactically valid Python without extraneous scaffolding). By contrast, the base model frequently defaults to underspecified heuristics or incomplete solutions (e.g., using non-overlapping primitives such as string.count ), while SFT and RLVR more often violate edge-case semantics or produce outputs that fail under strict evaluation due to truncation, missing definitions (e.g., referencing is prime without defining it), or non-code formatting/exposition that breaks executability. The figures below highlight these patterns across multiple HumanEval prompts. 
+
+H.3. Qualitative Analysis and Examples - Translation 
+
+We provide MTNT EN →FR examples from downstream evaluation using generations from the final checkpoint of the 2-epoch runs for EBFT, SFT, and RLVR, along with the base Llama-3.2-1B model. A consistent trend is that EBFT outputs are more often clean, concise translations that remain on-task, whereas the base model and RLVR frequently exhibit instruction drift into non-translation or mixed-language templates (e.g., repeating the English source, emitting “Spanish:”/“Portugu ˆes:” tag lists), suggesting instability with respect to the intended output format. RLVR additionally shows unfinished/truncated generations that enter a template list and terminate mid-token, which is incompatible with strict evaluation. Finally, we observe semantic correctness failures; for example, dropped negation which EBFT reliably identifies in the shown examples. 28 Energy-Based Fine-Tuning 0.02 0.05 0.1 0.2 0.5 1 2
+
+> 0.36
+> 0.38
+> 0.40
+> 0.42
+> 0.44
+> 0.46
+> 0.48
+> 0.50
+> Accuracy
+> HumanEval
+
+Greedy (temp. 0)       
+
+> 0.02 0.05 0.1 0.2 0.5 12
+> 0.32
+> 0.34
+> 0.36
+> 0.38
+> 0.40
+> 0.42
+> 0.44
+
+pass@1 (temp. 0.6)        
+
+> 0.02 0.05 0.1 0.2 0.5 12
+> 0.46
+> 0.48
+> 0.50
+> 0.52
+> 0.54
+> 0.56
+> 0.58
+> 0.60
+> 0.62
+
+pass@4 (temp. 0.6)       
+
+> 0.02 0.05 0.1 0.2 0.5 12
+> 0.60
+> 0.62
+> 0.64
+> 0.66
+> 0.68
+> 0.70
+> 0.72
+> 0.74
+
+pass@16 (temp. 0.6)                               
+
+> 0.02 0.05 0.1 0.2 0.5 12
+> 0.525
+> 0.550
+> 0.575
+> 0.600
+> 0.625
+> 0.650
+> Accuracy
+> MBPP
+> 0.02 0.05 0.1 0.2 0.5 12
+> 0.46
+> 0.48
+> 0.50
+> 0.52
+> 0.54
+> 0.56
+> 0.58
+> 0.60
+> 0.02 0.05 0.1 0.2 0.5 12
+> 0.66
+> 0.68
+> 0.70
+> 0.72
+> 0.02 0.05 0.1 0.2 0.5 12
+> 0.76
+> 0.78
+> 0.80
+> 0.82
+> 0.02 0.05 0.1 0.2 0.5 12
+
+Epoch (log)       
+
+> 0.40
+> 0.42
+> 0.44
+> 0.46
+> 0.48
+> 0.50
+> 0.52
+> 0.54
+> Accuracy
+> Multipl-e
+> 0.02 0.05 0.1 0.2 0.5 12
+
+Epoch (log)       
+
+> 0.36
+> 0.38
+> 0.40
+> 0.42
+> 0.44
+> 0.46
+> 0.48
+> 0.50
+> 0.02 0.05 0.1 0.2 0.5 12
+
+Epoch (log)       
+
+> 0.56
+> 0.58
+> 0.60
+> 0.62
+> 0.64
+> 0.66
+> 0.02 0.05 0.1 0.2 0.5 12
+
+Epoch (log)       
+
+> 0.68
+> 0.70
+> 0.72
+> 0.74
+> 0.76
+> 0.78 0.02 0.05 0.1 0.2 0.5 12
+
+Epoch (log)       
+
+> 0.20
+> 0.25
+> 0.30
+> 0.35
+> 0.40
+> 0.45
+> 0.50
+> 0.55
+> CE loss (answers)
+> 0.02 0.05 0.1 0.2 0.5 12
+
+Epoch (log)       
+
+> 0.30
+> 0.35
+> 0.40
+> 0.45
+> 0.50
+> 0.55
+> 0.60
+> 0.65
+> 0.70
+> 0.75
+> 0.80
+> CE loss (full)
+> 0.02 0.05 0.1 0.2 0.5 12
+
+Epoch (log)       
+
+> 0.26
+> 0.28
+> 0.30
+> 0.32
+> 0.34
+> 0.36
+> 0.38
+> 0.40
+> 0.42
+> 0.44
+> CFM loss
+> 0.02 0.05 0.1 0.2 0.5 12
+
+Epoch (log) 
+
+> 1.32
+> 1.30
+> 1.28
+> 1.26
+> 1.24
+> 1.22
+> 1.20
+> 1.18
+> 1.16
+> 1.14
+> 1.12
+> 1.10
+> 1.08
+> 1.06
+> FM loss with whitening
+
+EBFT = 0, = 0 
+
+EBFT = 0, = 0.5 
+
+EBFT = 0, = 1.0 
+
+EBFT = 0.03, = 0.0 
+
+EBFT = 0.03, = 0.5 
+
+EBFT = 0.03, = 1.0 
+
+EBFT = 0.1, = 0.0 
+
+EBFT = 0.1, = 0.5 
+
+EBFT = 0.1, = 1.0 
+
+SFT 2 ep. 
+
+SFT 2 ep. pretrain mode 
+
+RLVR bs=64, 2 ep. 
+
+Qwen2.5-1.5B 
+
+Figure 11. On Q&A Coding, increasing the cross-entropy weight α consistently lowers both validation cross-entropy and feature-matching losses, while SFT on full sequences yields faster initial downstream gains that quickly degrade. We sweep 
+
+α ∈ { 0, 0.5, 1.0} and γ ∈ { 0, 0.03 , 0.1} for EBFT initialized from base Qwen2.5-1.5B. As a baseline, we compare against SFT trained on full sequences (solid red), whereas the main text reports SFT trained only on the answer. SFT on full sequences improves downstream performance faster early on but quickly deteriorates, and answer-level cross-entropy rises. Setting α = 0 and γ = 0 (blue dotted) causes both cross-entropy and moment-matching losses to increase and leads to degraded pass@1 and pass@ k scores, indicating that both terms are necessary for stable training. We also report feature-matching loss with and without whitening; the non-whitened variant tracks more closely with cross-entropy, which is why we use it for comparison. Overall, increasing α has limited effect on downstream metrics but helps decrease both the cross-entropy and moment-matching objectives. The validation set is a 1k-sample held-out subset of OpenCodeInstruct. 
+
+29 Energy-Based Fine-Tuning 0.02 0.05 0.1 0.2 0.5 1 2
+
+> 0.30
+> 0.35
+> 0.40
+> 0.45
+> 0.50
+> Accuracy
+> HumanEval
+
+Greedy (temp. 0)       
+
+> 0.02 0.05 0.1 0.2 0.5 12
+> 0.28
+> 0.30
+> 0.32
+> 0.34
+> 0.36
+> 0.38
+> 0.40
+> 0.42
+> 0.44
+> 0.46
+
+pass@1 (temp. 0.6)        
+
+> 0.02 0.05 0.1 0.2 0.5 12
+> 0.44
+> 0.46
+> 0.48
+> 0.50
+> 0.52
+> 0.54
+> 0.56
+> 0.58
+> 0.60
+> 0.62
+
+pass@4 (temp. 0.6)        
+
+> 0.02 0.05 0.1 0.2 0.5 12
+> 0.54
+> 0.56
+> 0.58
+> 0.60
+> 0.62
+> 0.64
+> 0.66
+> 0.68
+> 0.70
+> 0.72
+> 0.74
+> 0.76
+
+pass@16 (temp. 0.6)       
+
+> 0.02 0.05 0.1 0.2 0.5 12
+
+Epoch (log)       
+
+> 0.54
+> 0.56
+> 0.58
+> 0.60
+> 0.62
+> Accuracy
+> MBPP
+> 0.02 0.05 0.1 0.2 0.5 12
+
+Epoch (log)       
+
+> 0.50
+> 0.51
+> 0.52
+> 0.53
+> 0.54
+> 0.55
+> 0.56
+> 0.57
+> 0.58
+> 0.02 0.05 0.1 0.2 0.5 12
+
+Epoch (log)       
+
+> 0.69
+> 0.70
+> 0.71
+> 0.72
+> 0.02 0.05 0.1 0.2 0.5 12
+
+Epoch (log)       
+
+> 0.76
+> 0.78
+> 0.80
+> 0.82 0.02 0.05 0.1 0.2 0.5 12
+
+Epoch (log)       
+
+> 0.50
+> 0.55
+> 0.60
+> 0.65
+> 0.70
+> 0.75
+> 0.80
+> CE loss (full)
+> 0.02 0.05 0.1 0.2 0.5 12
+
+Epoch (log)       
+
+> 0.32
+> 0.34
+> 0.36
+> 0.38
+> 0.40
+> 0.42
+> 0.44
+> CFM loss
+> 0.02 0.05 0.1 0.2 0.5 12
+
+Epoch (log) 
+
+> 1.22
+> 1.20
+> 1.18
+> 1.16
+> 1.14
+> 1.12
+> 1.10
+> 1.08
+> 1.06
+> 1.04
+> 1.02
+> FM loss with whitening
+
+EBFT = 0, = 0 
+
+EBFT = 0, = 0.5 
+
+EBFT = 0, = 1.0 
+
+EBFT = 0.03, = 0.0 
+
+EBFT = 0.03, = 0.5 
+
+EBFT = 0.03, = 1.0 
+
+EBFT = 0.1, = 0.0 
+
+EBFT = 0.1, = 0.5 
+
+EBFT = 0.1, = 1.0 
+
+SFT 
+
+Qwen2.5-1.5B 
+
+Figure 12. On unstructured coding, EBFT achieves better downstream performance than SFT while reaching comparable levels on cross-entropy and feature-matching losses, even as downstream accuracy plateaus before these losses converge. We sweep 
+
+α ∈ { 0, 0.5, 1.0} and γ ∈ { 0, 0.03 , 0.1} for EBFT initialized from base Qwen2.5-1.5B. Cross-entropy and feature-matching losses continue to decrease throughout training even after downstream accuracy has plateaued, which we attribute to distribution shift between the training data and the downstream evaluation benchmarks. Setting α = 0 (blue dotted) again leads to diverging cross-entropy, confirming the importance of the cross-entropy term. SFT (solid red) achieves the lowest cross-entropy and feature-matching losses but at the cost of weaker downstream performance compared to EBFT configurations with γ > 0. The validation set is a 1k-sample held-out subset of the unstructured coding data. 
+
+30 Energy-Based Fine-Tuning 0.02 0.05 0.1 0.2 0.5 1 2
+
+> 0.66
+> 0.68
+> 0.70
+> 0.72
+> 0.74
+> COMET score
+> WMT'22
+
+Greedy (temp. 0)       
+
+> 0.02 0.05 0.1 0.2 0.5 12
+> 0.62
+> 0.64
+> 0.66
+> 0.68
+> 0.70
+> 0.72
+
+Best-of-1 (temp. 0.6)       
+
+> 0.02 0.05 0.1 0.2 0.5 12
+> 0.72
+> 0.74
+> 0.76
+> 0.78
+
+Best-of-4 (temp. 0.6)       
+
+> 0.02 0.05 0.1 0.2 0.5 12
+> 0.75
+> 0.76
+> 0.77
+> 0.78
+> 0.79
+> 0.80
+> 0.81
+
+Best-of-16 (temp. 0.6)                               
+
+> 0.02 0.05 0.1 0.2 0.5 12
+> 0.64
+> 0.66
+> 0.68
+> 0.70
+> 0.72
+> 0.74
+> COMET score
+> MTNT
+> 0.02 0.05 0.1 0.2 0.5 12
+> 0.60
+> 0.62
+> 0.64
+> 0.66
+> 0.68
+> 0.70
+> 0.72
+> 0.02 0.05 0.1 0.2 0.5 12
+> 0.68
+> 0.70
+> 0.72
+> 0.74
+> 0.76
+> 0.78
+> 0.02 0.05 0.1 0.2 0.5 12
+> 0.72
+> 0.74
+> 0.76
+> 0.78
+> 0.80
+> 0.02 0.05 0.1 0.2 0.5 12
+
+Epoch (log)       
+
+> 0.66
+> 0.67
+> 0.68
+> 0.69
+> 0.70
+> COMET score
+> OpenSubtitles
+> 0.02 0.05 0.1 0.2 0.5 12
+
+Epoch (log)       
+
+> 0.63
+> 0.64
+> 0.65
+> 0.66
+> 0.67
+> 0.68
+> 0.69
+> 0.02 0.05 0.1 0.2 0.5 12
+
+Epoch (log)       
+
+> 0.70
+> 0.71
+> 0.72
+> 0.73
+> 0.74
+> 0.02 0.05 0.1 0.2 0.5 12
+
+Epoch (log)       
+
+> 0.72
+> 0.73
+> 0.74
+> 0.75
+> 0.76
+> 0.77
+> 0.78 0.02 0.05 0.1 0.2 0.5 12
+
+Epoch (log)       
+
+> 1.60
+> 1.65
+> 1.70
+> 1.75
+> 1.80
+> 1.85
+> 1.90
+> 1.95
+> 2.00
+> 2.05
+> 2.10
+> 2.15
+> 2.20
+> 2.25
+> CE loss (answers)
+> 0.02 0.05 0.1 0.2 0.5 12
+
+Epoch (log)       
+
+> 2.35
+> 2.40
+> 2.45
+> 2.50
+> 2.55
+> 2.60
+> 2.65
+> 2.70
+> 2.75
+> 2.80
+> 2.85
+> 2.90
+> 2.95
+> 3.00
+> CE loss (full)
+> 0.02 0.05 0.1 0.2 0.5 12
+
+Epoch (log)       
+
+> 0.58
+> 0.60
+> 0.62
+> 0.64
+> 0.66
+> 0.68
+> CFM loss
+> 0.02 0.05 0.1 0.2 0.5 12
+
+Epoch (log) 
+
+> 1.18
+> 1.16
+> 1.14
+> 1.12
+> 1.10
+> 1.08
+> 1.06
+> 1.04
+> 1.02
+> 1.00
+> 0.98
+> 0.96
+> 0.94
+> 0.92
+> 0.90
+> FM loss with whitening
+
+EBFT = 0, = 0 
+
+EBFT = 0, = 0.5 
+
+EBFT = 0, = 1.0 
+
+EBFT = 0.03, = 0.0 
+
+EBFT = 0.03, = 0.5 
+
+EBFT = 0.03, = 1.0 
+
+EBFT = 0.1, = 0.0 
+
+EBFT = 0.1, = 0.5 
+
+EBFT = 0.1, = 1.0 
+
+SFT 2 ep. 
+
+RLVR bs=128, 2 ep. 
+
+Llama-3.2-1B 
+
+Figure 13. On translation, EBFT matches or exceeds RLVR on downstream COMET scores—outperforming it on MTNT—while consistently surpassing SFT across all benchmarks and evaluation settings. We sweep α ∈ { 0, 0.5, 1.0} and γ ∈ { 0, 0.03 , 0.1} for EBFT initialized from base Llama-3.2-1B. On WMT’22, EBFT performs comparably to or slightly below RLVR, while on MTNT it clearly outperforms RLVR, and on OpenSubtitles the two are similar. EBFT surpasses SFT across all benchmarks and decoding strategies (greedy, best-of-1/4/16). Unlike in the coding setting, using α = 0 and γ = 0 (blue dotted) leads to degraded downstream performance, indicating that both terms are important for translation. SFT is trained only on answers, as training on full sequences led to worse downstream results. On cross-entropy and feature-matching losses, EBFT achieves lower values than SFT, with larger γ configurations (green) reaching the best feature-matching levels. The legend is shared with the previous figures. The validation set is a 1k-sample held-out subset of ALMA. 
+
+31 Energy-Based Fine-Tuning 0.02 0.05 0.1 0.2 0.5 1 2
+
+> 0.08
+> 0.10
+> 0.12
+> 0.14
+> 0.16
+> 0.18
+> 0.20
+> BLEU score
+> WMT'22
+
+Greedy (temp. 0)       
+
+> 0.02 0.05 0.1 0.2 0.5 12
+> 0.10
+> 0.12
+> 0.14
+> 0.16
+> 0.18
+
+Best-of-1 (temp. 0.6)       
+
+> 0.02 0.05 0.1 0.2 0.5 12
+> 0.16
+> 0.18
+> 0.20
+> 0.22
+> 0.24
+
+Best-of-4 (temp. 0.6)       
+
+> 0.02 0.05 0.1 0.2 0.5 12
+> 0.22
+> 0.24
+> 0.26
+> 0.28
+
+Best-of-16 (temp. 0.6)                               
+
+> 0.02 0.05 0.1 0.2 0.5 12
+> 0.08
+> 0.10
+> 0.12
+> 0.14
+> 0.16
+> 0.18
+> 0.20
+> BLEU score
+> MTNT
+> 0.02 0.05 0.1 0.2 0.5 12
+> 0.10
+> 0.12
+> 0.14
+> 0.16
+> 0.02 0.05 0.1 0.2 0.5 12
+> 0.16
+> 0.18
+> 0.20
+> 0.22
+> 0.02 0.05 0.1 0.2 0.5 12
+> 0.20
+> 0.22
+> 0.24
+> 0.26
+> 0.02 0.05 0.1 0.2 0.5 12
+
+Epoch (log)       
+
+> 0.07
+> 0.08
+> 0.09
+> 0.10
+> 0.11
+> 0.12
+> 0.13
+> 0.14
+> BLEU score
+> OpenSubtitles
+> 0.02 0.05 0.1 0.2 0.5 12
+
+Epoch (log)       
+
+> 0.17
+> 0.18
+> 0.19
+> 0.20
+> 0.21
+> 0.22
+> 0.02 0.05 0.1 0.2 0.5 12
+
+Epoch (log)       
+
+> 0.23
+> 0.24
+> 0.25
+> 0.26
+> 0.02 0.05 0.1 0.2 0.5 12
+
+Epoch (log) 
+
+> 0.25
+> 0.26
+> 0.27
+> 0.28
+> 0.29
+> 0.30
+
+EBFT = 0, = 0 
+
+EBFT = 0, = 0.5 
+
+EBFT = 0, = 1.0 
+
+EBFT = 0.03, = 0.0 
+
+EBFT = 0.03, = 0.5 
+
+EBFT = 0.03, = 1.0 
+
+EBFT = 0.1, = 0.0 
+
+EBFT = 0.1, = 0.5 
+
+EBFT = 0.1, = 1.0 
+
+SFT 2 ep. 
+
+RLVR bs=128, 2 ep. 
+
+Llama-3.2-1B 
+
+Figure 14. On translation BLEU scores, EBFT consistently outperforms both SFT and RLVR, while RLVR degrades at best-of-16 later in training—consistent with the distribution sharpening induced by RLVR. We report BLEU scores for the same α and γ sweep as the previous figure, initialized from base Llama-3.2-1B. Although RLVR is more competitive on BLEU than on COMET, EBFT still achieves higher scores across most benchmarks and decoding strategies. Notably, at best-of-16 (temp. 0.6), RLVR performance drops in the second half of training, suggesting that at large k the model suffers from reduced sample diversity, consistent with the distribution sharpening induced by RLVR (Zhao et al., 2025). EBFT configurations with γ > 0 do not exhibit this degradation and maintain stable or improving BLEU throughout training. The legend is shared with the previous figures. 
+
+32 Energy-Based Fine-Tuning 
+
+HumanEval/18: Count overlapping substring occurrences. 
+
+EBFT (correct):                    
+
+> count =0start =0
+> while start <len (string): pos =string.find(substring, start)
+> if pos != -1: count += 1start =pos +1
+> else :
+> break return count
+
+BASE (incorrect; test failure):  
+
+> return string.count(substring)
+
+(completion continued with extra helper variants / doctests; omitted) 
+
+SFT (incorrect; test failure):                   
+
+> count =0start =0
+> while start <len (string): start =string.find(substring, start)
+> if start == -1:
+> break
+> count += 1start += len (substring)
+> return count
+
+(completion continued with additional helper functions; omitted) 
+
+RLVR (incorrect; test failure):                  
+
+> count =0i=0
+> while i<len (string):
+> if string[i:i+ len (substring)] == substring: count += 1i+= len (substring)
+> else :i+= 1
+> return count
+
+(completion continued with example-usage code; omitted) 
+
+Failure mode: Base uses non-overlapping count ; SFT/RLVR advance by len(substring) (non-overlapping), missing overlaps. 
+
+Figure 15. HumanEval/18: counting overlapping substring occurrences. EBFT correctly advances by one character after each match and therefore counts overlapping occurrences. By contrast, the base model uses Python’s non-overlapping string.count , while both SFT and RLVR advance by len(substring) , which misses overlap-sensitive cases and causes test failures. 
+
+33 Energy-Based Fine-Tuning 
+
+HumanEval/94: Largest prime in list; return sum of its digits. 
+
+EBFT (correct):                                       
+
+> def is_prime(n):
+> if n<= 1:
+> return False
+> for iin range (2, int (n**0.5) +1):
+> if n%i== 0:
+> return False
+> return True largest_prime =None
+> for num in lst:
+> if is_prime(num):
+> if largest_prime is None or num >largest_prime: largest_prime =num
+> return sum (int (d) for din str (largest_prime))
+
+BASE (incorrect; test failure):            
+
+> return sum (int (digit) for digit in str (max ([num for num in lst if is_prime(num)])))
+
+(completion continued with example usage / extra text; omitted) 
+
+SFT (syntax failure):                     
+
+> def is_prime(n):
+> if n<= 1:
+> return False
+> if n<= 3:
+> return True
+> if n%2== 0or n%3== 0: r
+
+(completion truncated mid-token / non-executable; remainder omitted) 
+
+RLVR (incorrect; test failure):                        
+
+> largest_prime = None
+> for num in lst:
+> if is_prime(num):
+> if largest_prime is None or num >largest_prime: largest_prime =num
+> if largest_prime is None:
+> return 0
+> return sum (int (d) for din str (largest_prime))
+
+(completion continued with surrounding scaffolding; omitted) 
+
+Failure mode: Base/RLVR reference is prime without defining it; SFT emits invalid Python (syntax). 
+
+Figure 16. HumanEval/94: largest prime digit sum. EBFT produces a self-contained executable solution by defining is prime and then computing the digit sum of the largest prime in the list. The base model and RLVR instead rely on an undefined helper function, while SFT truncates mid-function and yields syntactically invalid Python, illustrating a recurring executability gap between EBFT and the competing methods. 
+
+34 Energy-Based Fine-Tuning 
+
+HumanEval/105: Filter digits 1–9; sort, reverse; map digits to names. 
+
+EBFT (correct):                                         
+
+> if not arr:
+> return [] filtered_arr =[num for num in arr if 1<= num <= 9] sorted_arr =sorted (filtered_arr) reversed_arr =sorted_arr[::-1] digit_names ={1: "One", 2: "Two", 3: "Three", 4: "Four", 5: "Five", 6: "Six", 7: "Seven", 8: "Eight", 9: "Nine" }
+> return [digit_names[num] for num in reversed_arr]
+
+BASE (incorrect; test failure):  
+
+> return arr
+
+(completion included commented examples / extra text; omitted) 
+
+SFT (incorrect; test failure):                        
+
+> if not arr:
+> return []
+> if not all (1 <= x<= 9for xin arr):
+> return arr sorted_arr =sorted (arr)[::-1] digit_names =["One","Two","Three","Four","Five","Six","Seven","Eight","Nine"]
+> return [digit_names[x-1] for xin sorted_arr]
+
+(completion continued with auxiliary text; omitted) 
+
+RLVR (incorrect; test failure):                     
+
+> filtered_arr =[num for num in arr if 1<= num <= 9] reversed_arr =sorted (filtered_arr)[::-1] name_arr =[]
+> for num in reversed_arr: name_arr.append( str (num))
+> return name_arr
+
+(completion continued with example usage / prints; omitted) 
+
+Failure mode: Base returns input unchanged; SFT returns original array if any element is out of range (should filter); RLVR returns digit strings rather than names. 
+
+Figure 17. HumanEval/105: filtering, ordering, and lexical mapping. EBFT correctly implements the full prompt: it filters to digits 1 to 9, sorts the valid entries, reverses the order, and maps each digit to its English name. The other outputs each satisfy only part of the specification: the base model returns the input unchanged, SFT incorrectly returns the original array whenever any element is out of range instead of filtering, and RLVR outputs numeric strings rather than digit names. 
+
+35 Energy-Based Fine-Tuning 
+
+HumanEval/69: Return greatest positive integer with frequency ≥ its value. 
+
+EBFT (correct):                   
+
+> max_value =-1
+> for num in lst:
+> if num >0and lst.count(num) >= num:
+> if num >max_value: max_value =num
+> return max_value
+
+BASE (incorrect; test failure):       
+
+> #(no valid return produced; incomplete solution)
+
+(completion was essentially comments / placeholder; omitted) 
+
+SFT (incorrect; test failure):              
+
+> from collections import Counter count =Counter(lst)
+> for num in count:
+> if count[num] >= num:
+> return num
+> return -1
+
+(completion continued with ad-hoc test prints; omitted) 
+
+RLVR (syntax failure):               
+
+> #core logic resembles EBFT, but output contained extra non-code/formatting #-> non-executable under strict evaluation
+
+Failure mode: Base is incomplete; SFT returns the first qualifying key rather than the greatest ; RLVR marked non-executable (syntax/formatting). 
+
+Figure 18. HumanEval/69: selecting the greatest frequency-qualified integer. EBFT returns the maximum positive integer whose frequency is at least its value, matching the full prompt semantics. The base model fails to provide a usable implementation, SFT returns the first qualifying key rather than the greatest one, and RLVR follows the right high-level logic but is not executable under strict evaluation because the output includes formatting artifacts outside valid code. 
+
+36 Energy-Based Fine-Tuning 
+
+MTNT: Non-translation (model repeats source language) 
+
+(EN →FR). Source: TIL Tigers will take revenge on those who have done wrong to them. 
+
+Ref: Aujourd’hui j’ai appris Les tigres prendront leur revanche sur ceux qui leur ont caus´ e du tort. 
+
+EBFT (clean/on-task): 
+
+TIL:Les tigres vont prendre vengeance sur ceux qui ont fait du mal `aeux. 
+
+BASE (failure): 
+
+TIL Tigers will take revenge on those who have done wrong to them. Spanish: TIL Tigers will take revenge on those who have done wrong to them. Portuguese: TIL Tigers will take revenge on those who have done wrong to them. TIL Tigers will take revenge on those who have done wrong to them. 
+
+(continuation omitted) 
+
+SFT (failure; stays in English): 
+
+TIL that the Tigers will take revenge on those who have done wrong to them. 
+
+RLVR (failure): 
+
+TIL Les tigres vont se venger de ceux qui ont fait du mal `a eux. Portuguˆ es: TIL Os tigres v˜ ao se vingar dos que tˆ em feito mal a eles. Portuguˆ es-Celta: TIL Os tigres v˜ ao se vingar dos que tˆ em feito mal a eles. ... 
+
+(continuation omitted)    
+
+> Failure mode: Output is partially or entirely non-translation (keeps English), often followed by multilingual tag repetition.
+> Figure 19. MTNT EN →FR: non-translation and multilingual runaway. EBFT remains on task and produces a direct French translation, whereas the base model and RLVR drift into multilingual template continuations that repeat the source sentence and append language-tagged variants. SFT avoids the runaway list structure but still fails to translate, remaining almost entirely in English.
+
+37 Energy-Based Fine-Tuning 
+
+MTNT: Truncation / unfinished generation (ends mid-template) 
+
+(EN →FR). Source: What a way for spring training to end. 
+
+Ref: Quelle mani` ere de finir les entraˆ ınements de printemps. 
+
+EBFT (clean/on-task): 
+
+Quel bonheur de fin de campagne de pr´ e-saison. 
+
+BASE (failure): 
+
+Le match de la saison r´ eguli` ere a ´ et´ e termin´ e. Spanish: El partido de la temporada regular se termin´ o. What a way for spring training to end. The 2019 season is over. The 2019 season is over. 
+
+(continuation omitted) 
+
+SFT (failure; drift): 
+
+C’est une fin de saison de baseball incroyable. 
+
+RLVR (failure; truncates mid-template): 
+
+Ce fut une fin de printemps merveilleuse. Portuguˆ es: Esta foi uma final de ver˜ ao maravilhosa. Portuguˆ es-Corrigido por-em-tudo-como-que-
+
+(continuation omitted)    
+
+> Failure mode: Generation enters a template list and then stops mid-token.
+> Figure 20. MTNT EN →FR: truncation after template drift. EBFT produces a complete on-task translation, while the base model drifts into unrelated multilingual continuation and SFT paraphrases too loosely away from the original meaning. RLVR begins a language-tagged template expansion and terminates mid-token, yielding an unfinished output that is incompatible with strict evaluation.
+
+38 Energy-Based Fine-Tuning 
+
+MTNT: Meaning flip via dropped negation (“no more” → “more”) 
+
+(EN →FR). Source: Then there are no more available rooms. 
+
+Ref: Il n’y a plus de chambres disponibles. 
+
+EBFT (clean/on-task): 
+
+Puis il n’y a plus d’espaces disponibles. 
+
+BASE (failure; runaway): 
+
+Il n’y a plus d’espaces disponibles. Spanish: No hay mas habitaciones disponibles. Italian: Non ci sono pi` u stanze disponibili. ... 
+
+(continuation omitted) 
+
+SFT (failure; weaker paraphrase): 
+
+Puis il n’y a plus d’offres de chambres. 
+
+RLVR (failure; meaning flip): 
+
+Puis il y a plus de chambres. Portuguˆ es: Portanto, existem mais quartos. Portuguˆ es-Cogitado: Portanto, existem mais quartos. ... 
+
+(continuation omitted)    
+
+> Failure mode: Dropped negation.
+> Figure 21. MTNT EN →FR: semantic failure from dropped negation. Not all errors are formatting failures: this example shows that negation can be overlooked by the fine-tuned models. EBFT preserves the negative meaning of the source sentence, whereas RLVR drops the negation and changes “no more available rooms” into “more rooms.” The base model again exhibits multilingual repetition after an initially plausible translation, and SFT produces a weaker paraphrase that underspecifies the original statement.
+
+39
