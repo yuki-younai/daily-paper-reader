@@ -1,0 +1,1401 @@
+Title: Overcoming Valid Action Suppression in Unmasked Policy Gradient Algorithms
+
+URL Source: https://arxiv.org/pdf/2603.09090v1
+
+Published Time: Wed, 11 Mar 2026 00:24:21 GMT
+
+Number of Pages: 28
+
+Markdown Content:
+Cover Page 
+
+# Overcoming Valid Action Suppression in Unmasked Policy Gradient Algorithms 
+
+Renos Zabounidis 1, Roy Siegelmann 2, Mohamad Qadri 1, Woojun Kim 1,Simon Stepputtis 3, Katia P. Sycara 1
+
+Keywords: Action masking, policy gradient, valid action suppression, feasibility classification 
+
+# Summary 
+
+Action masking constrains policies to valid actions in discrete-action reinforcement learning. Existing theory proves that masking preserves gradient correctness, but does not explain why unmasked training fails. We identify valid action suppression as the mechanism: gradients at visited states propagate through shared parameters to suppress valid actions at unvisited states. We analyze this under linear parameterization, proving exponential suppression bounds when features remain correlated between visited and unvisited states. We validate empirically that deep networks exhibit this correlation through shared prefinal layer representations. We propose feasibility classification to resolve the deployment dilemma: training the encoder to predict validity enables deployment without oracle masks. We validate on Craftax and MiniHack with multiple architectures. 
+
+# Contribution(s) 
+
+1. We identify valid action suppression through shared parameters as a mechanism causing unmasked training to fail. 
+
+Context: When actions are invalid at visited states, policy gradients decrease their proba-bilities; shared parameters propagate this decrease to unvisited states where those actions are valid, causing exponential suppression before the agent reaches them. Rarely-valid actions such as descending staircases or opening doors suffer most severely. Prior theory only showed that masking preserves gradient correctness; we provide the first analysis of why unmasked training degrades performance through this mechanism. 2. We propose feasibility classification to learn validity-discriminating representations, enabling deployment without oracle masks. 
+
+Context: While masking prevents policy-level suppression, it maintains correlated repre-sentations because the encoder receives no gradient signal to distinguish valid from invalid states. Feasibility classification induces separate representations for valid and invalid states by training the encoder to predict action validity from observations. This enables a practical deployment strategy: train with masking for stability, then substitute the learned predictor when oracle masks are unavailable at test time. 3. We introduce KL-balanced classification that weights examples by their impact on policy behavior through KL divergence between oracle-masked and predicted-masked policies. 
+
+Context: Unlike uniform focal loss, KL-balanced prioritizes actions where misclassification would most change the policy. The weight for each action is the KL divergence between the policy using ground-truth masks and the policy using predicted masks. This improves deployment performance without oracle masks. 4. We demonstrate empirically that feasibility classification enables reliable deployment without oracle masks across multiple architectures and environments. 
+
+Context: On challenging domains with large action spaces, our approach maintains strong performance when deploying with learned predictors instead of ground-truth masks, while baseline masking collapses without oracle access. Feasibility classification reduces feature correlation between valid and invalid states, validating that it induces validity-discriminating representations. 
+
+> arXiv:2603.09090v1 [cs.LG] 10 Mar 2026
+
+# Overcoming Valid Action Suppression in Unmasked Policy Gradient Algorithms 
+
+Renos Zabounidis 1, Roy Siegelmann 2, Mohamad Qadri 1, Woojun Kim 1, Simon Stepputtis 3, Katia P. Sycara 1
+
+renosz@andrew.cmu.edu 
+
+> 1
+
+Carnegie Mellon University 2Massachusetts Institute of Technology 3Virginia Tech, De-partment of Mechanical Engineering 
+
+Abstract 
+
+In reinforcement learning environments with state-dependent action validity, action masking consistently outperforms penalty-based handling of invalid actions, yet existing theory only shows that masking preserves the policy gradient theorem. We identify a distinct failure mode of unmasked training: it systematically suppresses valid actions at states the agent has not yet visited. This occurs because gradients pushing down invalid actions at visited states propagate through shared network parameters to unvisited states where those actions are valid. We prove that for softmax policies with shared features, when an action is invalid at visited states but valid at an unvisited state s∗, the probability π(a | s∗) is bounded by exponential decay due to parameter sharing and the zero-sum identity of softmax logits. This bound reveals that entropy regularization trades off between protecting valid actions and sample efficiency, a tradeoff that masking eliminates. We validate empirically that deep networks exhibit the feature alignment condition required for suppression, and experiments on Craftax, Craftax-Classic, and MiniHack confirm the predicted exponential suppression and demonstrate that feasibility classification enables deployment without oracle masks. 
+
+1 Introduction 
+
+In discrete-action reinforcement learning, agents often face state-dependent constraints where the set of valid actions varies by state. Action masking, which constrains the policy to valid actions by zeroing invalid action probabilities, is standard in robotic assembly, combinatorial optimization, and strategy games (Huang & Ontañón, 2020; Tang et al., 2020; Stappert et al., 2025; Liu et al., 2025). Masking outperforms penalty-based approaches by margins exceeding 50% (Hou et al., 2023). Existing theory only proves that masking preserves gradient correctness (Huang & Ontañón, 2020). Why unmasked training fails remains unexplained. This gap leaves practitioners without guidance on which actions matter most for masking. Furthermore, masking requires a validity oracle at every timestep, yet many deployment settings lack ground-truth validity functions. Training with masks and deploying without them fails because the policy learns no mechanism to infer validity. Unmasked training fails through valid action suppression. When an action is invalid at visited states, gradients decrease its probability, and shared parameters propagate this decrease to unvisited states where the action is valid. Suppression is exponential and most significant for rarely-valid actions. These are applicable at few states yet critical for task completion, such as descending staircases or opening doors. These actions become exponentially suppressed before the agent reaches the states where they are needed (Figure 1). 1Masking prevents suppression by excluding invalid actions from the policy entirely. However, when invalid actions are never considered, the encoder learns no features for distinguishing valid from invalid states. We propose feasibility classification to restore this learning signal. Training the encoder to predict validity from observations induces validity-discriminating features. Classification enables deployment without oracle masks: train with masking for stability, then substitute the learned predictor at test time. Practitioners should prioritize classification accuracy on rarely-valid actions. Because suppression grows exponentially with training steps (Theorem 1), actions that remain invalid throughout most of training accumulate the strongest suppression. Yet these same actions—descending staircases, opening doors, using special abilities—are often the only path to task completion. A classifier that errs on common actions such as movement directions has minimal impact; one that errs on rare critical actions reintroduces the suppression problem at deployment. Our contributions are: (i) a theoretical characterization of valid action suppression, proving expo-nential decay under invalid-action dominance and feature alignment (Theorem 1); (ii) empirical evidence that oracle masking maintains high feature correlation near 0.8 while classification reduces it to approximately 0.4, restoring the gradient signal for learning validity-discriminating representa-tions (Section 6.2); (iii) a KL-balanced classification loss that outperforms focal loss by 2× when deploying without oracle masks (Section 6.4); and (iv) feasibility classification enabling deployment without oracle masks at 2% performance cost (43.2 vs. 43.9) by substituting the learned predictor for ground-truth masks (Section 6.4). 
+
+2 Related Work 
+
+Action Masking. Huang & Ontañón (2020) proved that masking invalid actions before the softmax preserves unbiased policy gradients. They demonstrated gains over penalty-based handling. Tang et al. (2020) implemented masking into PPO. Hou et al. (2023) systematically compared masked on-policy and off-policy algorithms in large discrete action spaces. Large action spaces themselves pose significant optimization and exploration challenges (Dulac-Arnold et al., 2015), motivating action-space pruning strategies such as masking. Stappert et al. (2025) integrated domain knowledge via masking in operations research. Liu et al. (2025) derived physics-based masks for robotic assembly without additional environment interaction. Across domains including RTS games, combinatorial optimization, and robotics, masking is now standard practice. However, existing theory focuses on gradient correctness or empirical performance. None explains why unmasked training degrades the policy at unvisited states. We provide the first analysis of the dynamics underlying this degradation. 
+
+Action Elimination and Learned Masks. Zahavy et al. (2019) introduced action elimination networks that learn to suppress suboptimal actions in DQN. Zhong et al. (2023) remove redundant actions via KL-based similarity. Wang et al. (2024) learn state-specific masks using bisimulation metrics (Ferns et al., 2011). Similarly, Zabounidis et al. (2025) use LLM planning to compose and select skills, effectively pruning the action space for RL. These approaches treat masking as a learned compression of the action space. We analyze the dynamics when masking is absent or imperfect. Existing elimination methods do not quantify the cost of mask errors or characterize how invalid-action gradients propagate through shared representations. Our suppression theorem formalizes this cost and provides a framework for evaluating approximate or learned masks. 
+
+Softmax Policy Gradient Theory. Prior work analyzes softmax convergence assuming all actions are admissible (Mei et al., 2020; Li et al., 2022; Cen et al., 2021). We show that when some actions are invalid at visited states, their gradients propagate through shared features to suppress valid actions elsewhere. 
+
+Representation Interference in RL. Liu et al. (2023) measured gradient interference across state-action pairs and proposed mitigation strategies. Lan et al. (2022) analyzed representation generaliza-tion in RL. Zabounidis et al. (2026) study disentangled representations for improving generalization. Nikishin et al. (2022) documented a primacy bias in which early experience dominates later learning. Related work on loss of plasticity (Abbas et al., 2023) and dormant neurons (Sokar et al., 2023) highlight gradient flow and cross-task interference. Research on temporal credit assignment, such 2as RUDDER (Arjona-Medina et al., 2019), shows how gradients propagate backward across states and time. These works document interference empirically. We identify a structurally induced and analytically tractable form of interference. Invalid-action gradients at visited states propagate through shared features and exponentially suppress valid actions at unvisited states. Our theorem makes this cross-state coupling explicit. 
+
+Constrained and Structured Action Spaces. Constrained policy optimization (Achiam et al., 2017) formulates safety and feasibility as cMDPs solved via trust-region methods. Stolz et al. (2024) extend masking ideas to continuous actions, and Dai et al. (2026) ground language models in structured robot motion primitives. Theile et al. (2024) show that with a perfect feasibility model, a CMDP reduces to an unconstrained MDP. Keane et al. (2025) analyze masking in value-based RL and prove convergence under contraction assumptions. Structured action-value architectures such as TreeQN and ATreeC (Farquhar et al., 2018) incorporate inductive bias over action structure to improve generalization. These approaches assume accurate feasibility information or constraint models. We complement this literature by analyzing the opposite regime: where invalid actions are not excluded. We show that in this case, shared function approximation can induce systematic policy degradation even before constraint violations occur. 
+
+3 Preliminaries 
+
+Consider a Markov Decision Process (MDP) (S, A, P, R, γ ) with state space S, action space A,transition kernel P (s′ | s, a ), reward function R : S × A → R, and discount γ ∈ (0 , 1) .
+
+Abstraction for reward and validity. For many complex tasks, reward functions are defined over high-level symbolic properties rather than raw observations. Achievement criteria such as “craft an iron pickaxe” are naturally expressed over symbolic properties like inventory contents rather than pixels. This implicitly assumes an abstraction function χ : S → Z mapping environment states to 
+
+abstract states z ∈ Z , e.g., 
+
+χ(s) = {has (wood , 5) , placed (table ), on (staircase ), . . . }
+
+where predicates like has , placed , and on capture task-relevant properties. The same abstraction enables symbolic specification of action validity. Consider what makes an action valid: to descend stairs, the agent must be on(staircase) ; to open_door , it must be 
+
+adjacent(closed_door) . An action is valid at state s when executing it is both applicable 
+
+(preconditions satisfied in χ(s)) and safe (no catastrophic outcomes such as entering lava or violating hard constraints). Otherwise it is invalid . We define the validity indicator ν : Z × A → { 0, 1} where 
+
+ν(z, a ) = 1 iff action a is valid at abstract state z. For state s, we write ν(s, a ) ≡ ν(χ(s), a ).This abstraction is crucial because it means validity—like reward—can be computed exactly from the symbolic state without learning from pixels. The agent need not discover through trial and error that 
+
+descend requires stairs. Validity is distinct from optimality. Many valid actions are suboptimal—the agent must discover which through experience. Invalid actions are different: from the symbolic structure of the environment, we can determine they cannot accomplish anything useful. Crafting without materials, opening a door when none is adjacent, descending stairs that do not exist—these are dominated by at least one valid alternative. The environment may handle them as no-ops, penalties, or blocked transitions (Khetarpal et al., 2020), but in every case the action is strictly worse than acting on a satisfied precondition. This 
+
+dominance gap , the margin by which invalid actions are worse than valid alternatives, is precisely Condition (i) of Theorem 1. 
+
+Visited and unvisited states. Under policy π with visitation distribution dπ (s) = (1 −
+
+γ) P∞ 
+
+> t=0
+
+γt Pr( st = s | π), we partition the state space: 
+
+Svis = {s : dπ (s) > 0}, Sunvis = S \ S vis . (1) 3Figure 1: Suppression mechanism illustrated on a staircase corridor. (a) The agent must traverse a corridor to reach a staircase at s∗, where descend is the only valid goal-reaching action. At 
+
+T = 0 , all actions are equally likely ( 1/n ). After N training steps, gradient updates at visited states reinforce right and suppress all other actions, including descend . Because parameters are shared, this suppression propagates to s∗ before the agent arrives. The descend action is suppressed at the one state where it is needed. (b) Upper bound on π(descend | s∗) from Theorem 1. Without entropy regularization ( β = 0 ), the probability decays exponentially. With entropy regularization ( β > 0), a floor emerges but cannot eliminate suppression (Eq. 7). Policy gradient updates carry no direct signal for s′ ∈ S unvis ; all changes to π(· | s′) arise indirectly through parameter coupling with Svis . This coupling creates the suppression mechanism we analyze in Section 4. 
+
+Softmax policies with shared parameters. Policies are parameterized by logits za(s; θ) with 
+
+πθ (a | s) ∝ exp( za(s; θ)) . Our analysis applies to policies where logits are linear in a state feature representation: za(s) = ϕ(s)⊤wa where ϕ : S → Rd is the feature map and wa ∈ Rd are per-action parameters. For neural network policies, ϕ(s) corresponds to prefinal layer activations—the representation shared across action heads. Section 6.2 validates this empirically by measuring feature correlation in this layer. The action space size is n = |A| . At initialization, za(s; θ0) ≈ c for all a, s ,giving πθ0 (a | s) ≈ 1/n .
+
+Action masking. Given the validity function ν(s, a ), action masking restricts the policy to valid actions by excluding invalid actions from the softmax: 
+
+πoracle  
+
+> θ
+
+(a | s) = exp( za(s; θ)) · ν(s, a )
+
+P 
+
+> j∈A
+
+exp( zj (s; θ)) · ν(s, j ) . (2) Invalid actions receive zero probability and contribute zero gradient, decoupling Svis from Sunvis for actions that are invalid in the former but valid in the latter (Huang & Ontañón, 2020; Chandak et al., 2019). 
+
+4 Gradient Dynamics of the Unmasked Policy 
+
+Without masking, parameter coupling between Svis and Sunvis causes gradient propagation that suppresses valid actions. When action a is invalid at visited states but valid at unvisited s∗, repeated negative updates at visited states propagate through shared parameters. This suppresses π(a | s∗)
+
+before the agent reaches s∗ (Figure 1). We quantify this suppression and show it occurs exponentially under two conditions. 
+
+Conditions for suppression. Appendix A contains supporting lemmas. 4(i) Invalid-action dominance gap. At every visited state, invalid actions are strictly suboptimal whenever they appear in the policy support. At each step τ and state s ∈ S vis :
+
+Qπτ (s, a ) ≤ max  
+
+> b:ν(s,b )=1
+
+Qπτ (s, b ) − δτ (s) (3) where a is an invalid action and δτ (s) > 0 is some margin. Invalid actions cannot advance toward the goal and are dominated by at least one valid alternative. Under this condition, the policy gradient applies a strictly negative update to the logit of a at every visited state by Lemma 4. 
+
+(ii) Feature alignment. The logit decrease at visited states propagates to unvisited state s∗ through the shared features ϕ(·) whenever: 
+
+ϕ(s∗)⊤Es∼dπτ [ cτ (s) ϕ(s) ] > 0, (4) where cτ (s) = πτ (a | s) |Aπτ (s, a )| > 0 as shown in Proposition 6. Condition (ii) holds when ϕ(s∗)
+
+is not orthogonal to the advantage-weighted mean of visited features. For neural networks, ϕ(s) is the prefinal layer activation. Condition (ii) is satisfied when this representation does not perfectly isolate s∗ from visited states. Section 6.2 measures this correlation directly. 
+
+Theorem 1 (Probability suppression at first valid occurrence) . Fix action a and let s∗ be a state where a is valid but s∗ /∈ S vis . This is a first valid occurrence . Assume uniform initialization 
+
+π0(j | s∗) = 1 /n . Suppose Conditions (i) and (ii) hold throughout training prior to visiting s∗. Let 
+
+β ≥ 0 be the entropy regularization coefficient. Define the per-step suppression rate: 
+
+κτ = η ϕ (s∗)⊤Es∼dπτ [ cτ (s) ϕ(s) ] > 0 (5) 
+
+and the cumulative suppression KT = PT −1  
+
+> τ=0
+
+κτ . Then after T gradient steps before s∗ is first visited: 
+
+πT (a | s∗) ≤ e−KT
+
+n . (6) 
+
+If β > 0, the cumulative suppression converges with K∞ < ∞ and: 
+
+exp 
+
+
+
+− rmax 
+
+β(1 − γ)
+
+
+
+≤ π∞(a | s∗) ≤ e−K∞
+
+n . (7) The bound connects to neural networks through Condition (ii): when the prefinal layer representation 
+
+ϕ(s) remains correlated between visited and unvisited states, gradient updates propagate through shared weights. Section 6.2 validates empirically that deep networks exhibit correlation of 0.4–0.8 throughout training, confirming the bound is tight in practice. Proof appears in Appendix A, with the sandwich bound (7) proven in Appendix A.7. Action masking sidesteps suppression by zeroing out invalid actions at the policy level. This decouples updates at visited states from probability mass at unvisited states. However, masking leaves the encoder’s internal representation unchanged. The features ϕ(s) remain correlated between valid and invalid states because the encoder receives no gradient signal to distinguish them. This creates a deployment limitation: without oracle masks at test time, the policy has no mechanism to determine which actions are valid. To enable deployment without oracle masks, we must break Condition (ii) at its source: train the encoder to predict validity from observations, reducing feature correlation between states where an action is valid versus invalid. This feasibility classification approach provides validity-aware representations while maintaining the training stability of oracle masking. 
+
+5 Mitigating Suppression via Representation Learning 
+
+Condition (ii) states that suppression occurs when the representation ϕ(s∗) aligns with visited states. To break this alignment, we need features that distinguish states where an action is valid from states where it is invalid. The key insight is that predicting validity provides self-supervision. Learning to 5Figure 2: Architecture overview. A shared encoder ϕ(s) feeds three heads: a classification head (blue) predicting action validity ˆν(s, a ) via sigmoid, a policy head (green) producing oracle-masked actions πoracle  
+
+> θ
+
+(a | s), and a value head (orange) estimating V (s). The predicted validity constructs a predicted policy πpred  
+
+> θ
+
+(a | s). The KL divergence between πoracle and πpred yields per-action weights 
+
+wa for the classification loss (Eq. 12). The total loss combines PPO and weighted classification objectives (Eq. 9). Dashed arrows indicate loss aggregation. At deployment, there are two modes: (i) with oracle masks available, classification heads can be discarded; (ii) without oracle masks, the learned predictor provides validity estimates for deployment. recognize when descend is valid at a staircase requires developing features that detect staircases, which naturally differ from corridor features where descend is invalid. This auxiliary task reshapes the representation to reduce correlation between valid and invalid states without requiring visitation of s∗ during training. 
+
+Feasibility Classification. Figure 2 shows the architecture. We augment the policy network with lightweight classification heads that predict, for each action, whether that action is valid in the current state. For each action a ∈ A , a binary classification head ha sits on top of the shared encoder ϕ:
+
+ˆν(s, a ) = σ ha(ϕ(s))  ≈ ν(s, a ), (8) where σ denotes the sigmoid. The encoder ϕ is shared with the policy and value networks, so gradients from the classification loss directly shape the representation. The heads {ha}a∈A are independent linear layers. During training, we use ground-truth validity labels ν(s, a ) from the same validity function used for masking (Section 3), evaluated on states drawn from the replay buffer D. The classification loss augments the standard PPO objective: 
+
+Ltotal = LPPO + λ · L cls , (9) where λ > 0 controls the auxiliary strength. This setup enables two deployment modes. When oracle masks are available at test time, the classification heads can be discarded and the policy uses ground-truth masking as usual. When oracle masks are unavailable, the learned predictor substitutes for them. The classification heads output ˆν(s, a ), which thresholded at τ (we use τ = 0 .5) provides predicted masks for deployment (Section 6.4). 6Classification Objectives. Valid actions are rare: at any given state, only a small fraction of the action space is typically valid. Standard cross-entropy loss wastes gradient on the easy negatives (clearly invalid actions) and struggles with the hard negatives (edge cases where the classifier is uncertain). We develop two objectives that progressively focus learning on what matters for the policy. 
+
+Focal loss (Lin et al., 2018) addresses class imbalance by downweighting well-classified examples: 
+
+Lfocal = −Es∼D 
+
+"
+
+1
+
+n
+
+X
+
+> a∈A
+
+(1 − pa(s)) γ log pa(s)
+
+#
+
+, (10) where pa(s) is the predicted probability of the true label and γ ≥ 0 is the focal parameter. For γ > 0,easy examples (where pa(s) ≈ 1) receive near-zero weight, concentrating gradient on hard negatives. However, focal loss treats all actions equally. An error on an action the policy would never choose has no downstream effect, while an error on a high-probability action can severely distort the policy. This motivates our KL-balanced objective. 
+
+KL-balanced loss weights each action by its policy sensitivity: how much the policy would change if that action’s validity were misclassified. Consider the policy using predicted versus oracle masks: 
+
+πpred  
+
+> θ
+
+(a | s) = exp( za(s)) · 1[ˆ ν(s, a ) > τ ]
+
+P 
+
+> j
+
+exp( zj (s)) · 1[ˆ ν(s, j ) > τ ] . (11) The KL divergence between πoracle and πpred measures the policy’s sensitivity to the validity prediction of action a:
+
+wa(s) = πθ (a | s) log πoracle  
+
+> θ
+
+(a | s) − log πpred  
+
+> θ
+
+(a | s) . (12) To prevent infinite weights when invalid actions would have zero probability under either policy, we use a soft mask of −20 instead of −∞ for invalid actions, yielding probabilities near zero but strictly positive. This ensures the KL divergence remains finite while preserving the weighting behavior. The KL-balanced loss replaces uniform 1/n weighting with normalized KL weights: 
+
+LKL = −Es∼D 
+
+" X
+
+> a∈A
+
+˜wa(s) (1 − pa(s)) γ log pa(s)
+
+#
+
+, (13) where ˜wa(s) = wa(s)/ P 
+
+> b∈A
+
+wb(s). The focal parameter γ is retained to downweight easy examples within the reweighted distribution. The weighting mechanism is intuitive. If action a carries high policy mass and the classifier predicts it invalid, the predicted policy will incorrectly zero it out, causing large KL divergence from the oracle. The KL-balanced loss assigns high classification weight to this state-action pair, inducing features that correctly distinguish validity. Conversely, actions that the policy would ignore regardless of validity contribute little to the KL and receive low weight. This focuses representation learning on validity predictions that actually affect behavior. 
+
+6 Experiments 
+
+We structure evaluation around four questions that progressively build from identifying the problem to validating the solution: (i) Does unmasked training induce exponential suppression of valid actions at unvisited states? (ii) Does oracle masking increase representational entanglement, and can classification mitigate this? (iii) Does classification improve performance even when oracle masks are available? (iv) Can classification enable deployment without oracle masks? 
+
+Setup. We evaluate on Craftax and Craftax-Classic (43 actions) and MiniHack Corridor-5 (11 actions). These environments contain critical but rare actions: descend (valid only at staircases) and 70 100 200         
+
+> 10 −4
+> 10 −2
+> 10 0
+> Avg Probability
+> P(Descend | Valid)
+> 100%
+> Valid Selection Rate
+> 0100 200
+> 0%
+> 15%
+> 30%
+> 0100 200
+> 10 −3
+> 10 −1
+> P(Open Door | Valid)
+> 100%
+> Valid Selection Rate
+> 0100 200
+> 0%
+> 15%
+> 30%
+> Craftax Minihack Corridor5
+> Frames (M)
+> Masked Unmasked
+
+Figure 3: Action suppression in Craftax and MiniHack Corridor-5 (PPO-Hybrid). Left: proba-bility of rare critical actions at valid states (log scale). Right: fraction of timesteps with valid actions selected. Unmasked training (C2, red) exhibits exponential suppression, while oracle masking (C1, blue) prevents collapse. Dashed line: uniform initialization. 
+
+open_door (valid only adjacent to closed doors). Such actions are necessary for task completion, yet applicable at only a small fraction of states—exactly the regime where Theorem 1 predicts suppression. All environments expose ground-truth validity functions, which we use both for oracle masking and for supervision of the feasibility classifier during training. We compare four conditions: C1 Masked (oracle ν(s, a )), C2 Unmasked (full action space), C3 
+
+Masked + Focal ( λ = 10 ), and C4 Masked + KL-Balanced ( λ = 10 ). We evaluate PPO-Hybrid (S5 + Transformer-XL), PPO-RNN (GRU), and PPO-MLP architectures. MiniHack experiments additionally use RND for exploration. Evaluation uses the stochastic policy without exploration bonuses. See Appendix D for hyperparameters and Appendix E for sensitivity to λ and γ.
+
+6.1 Exponential Suppression at Unvisited States (RQ1) 
+
+Figure 3 examines two actions that are rarely valid and necessary for task completion: descend 
+
+in Craftax (valid only at staircases) and open_door in MiniHack Corridor-5 (valid only adjacent to closed doors). In Craftax, π(descend | valid ) drops from uniform initialization ( 1/43 ≈ 0.023 )to below 10 −4 within 50M frames—nearly two orders of magnitude, consistent with Theorem 1’s exponential decay bound. The valid-action selection rate mirrors this collapse: unmasked agents select valid actions at fewer than 15% of timesteps during early training. In Corridor-5, π(open_door |
+
+valid ) drops from 1/11 ≈ 0.09 to below 10 −3, with similarly suppressed valid selection rates. Oracle masking (C1, blue) consistently maintains high probability for both actions at valid states, approximately 0.5 to 1.0, with 100% valid-action selection throughout. Masking decouples visited-state updates from unvisited-state probabilities. 
+
+Recovery dynamics. Suppression creates a sample efficiency bottleneck. In Craftax, π(descend )
+
+remains below a likelihood of 10 −2 for over 100M frames, preventing the agent from reaching deeper dungeon floors regardless of value function quality. Recovery only begins when the agent finally visits staircases frequently enough to relearn the action’s value. This delay between initial suppression and eventual recovery consumes the majority of training budget in sparse-reward environments. Theorem 1 characterizes the suppression phase; recovery depends on exploration, value accuracy, and valid-state density. These results demonstrate that suppression is a systematic failure mode across architectures and environments (Table 1), not an artifact of model capacity or hyperparameter tuning. The effect appears consistently across PPO-MLP, PPO-RNN, and PPO-Hybrid architectures. For example, reaching a return of 1.0 requires 84% of training frames for unmasked PPO-Hybrid versus only 63% for oracle masking—a 21 percentage point gap in sample efficiency. While masking eliminates suppression at the policy level, it leaves the encoder’s internal representation of validity unchanged, motivating our next question: what happens to representations? 80 100 200            
+
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> Pearson r
+> Feature Corr (Descend)
+> 0100 200
+> 0.4
+> 0.6
+> 0.8
+> 1.0 Avg Feature Correlation
+> 0100 200
+> 0.25
+> 0.50
+> 0.75
+> 1.00 Feature Corr (Open Door)
+> 0100 200
+> 0.4
+> 0.6
+> 0.8
+> 1.0 Avg Feature Correlation
+> Craftax Corridor5
+> Frames (M)
+> Masked Unmasked Masked+KL
+
+Figure 4: Representational correlation between valid and invalid states (PPO-Hybrid). Ora-cle masking preserves highly entangled representations, while KL-balanced classification induces validity-aware features without reintroducing policy-level suppression. 
+
+6.2 Feature Correlation Validates Condition (ii) (RQ2) 
+
+Theorem 1 predicts suppression depends on feature correlation between valid and invalid states (Condition (ii)). We measure this directly via Pearson correlation between encoder activations ϕ(s)
+
+from states where the target action is valid versus invalid. 
+
+Oracle masking maintains entanglement. Masked training (C1) preserves high correlation ( ≈0.8– 1.0) throughout training (Figure 4). Because masking resolves validity at the policy level, the encoder receives no signal to distinguish valid from invalid states. Representations stay correlated, precisely the regime where suppression would occur were masks removed. 
+
+Unmasked training separates accidentally. Without masking, correlation drops for individual actions; descend falls to approximately 0.3, for example. But this separation is a byproduct of policy collapse , not learned validity structure. The encoder separates states because the policy has already suppressed the action, not because it learned to predict validity. 
+
+Classification induces intentional separation. Adding KL-balanced classification to masked training reduces correlation to ≈0.4 while masking prevents policy-level suppression. The classification loss provides explicit supervision for validity prediction, reshaping representations independently of the masking mechanism. This reduction in correlation is what enables deployment without oracle masks (Section 6.4). Or-acle masking alone maintains high correlation ( ≈0.8) and fails catastrophically when masks are removed. Classification reduces correlation to ≈0.4, yielding learned predictors with 99% accuracy (Appendix F.1). 
+
+6.3 Beyond Oracle Masking (RQ3) 
+
+Even with oracle masks at training time, classification improves performance. On Craftax-Hybrid, Masked + KL achieves 48.8 return versus 45.6 for masked only—a 7% gain. This reflects the representational difference shown in Figure 4: masking prevents behavioral suppression but maintains correlated features, while classification induces validity-discriminating features that benefit policy learning. The pattern holds across all tested architectures (Table 1). KL-balanced matches or exceeds oracle masking not only in final returns but in training efficiency: Masked + KL requires nearly the same fraction of frames to reach return 1.0 as oracle masking (65% versus 63% for PPO-Hybrid), while unmasked training lags substantially (84%). Episode lengths reveal further differences in learned policy quality. In Craftax, oracle masking produces more efficient policies (80.7 steps per episode versus 94.6 for unmasked), suggesting that valid action selection enables more direct trajectories to rewards. In MiniHack Corridor-5, where the task is simpler and all methods achieve near-optimal returns (0.9–1.0), these differences become negligible (all around 52 steps), indicating that suppression effects are most pronounced in complex environments with sparse critical actions. 9Craftax Classic Corridor5 GT Pred GT Pred GT Pred Frames →1.0 (%) Ep. Len                                                                                                                                                                                             
+
+> PPO-MLP
+> C2: Unmasked 26.9 ±0.5 26.9 ±0.5 19.2 ±0.0 19.2 ±0.0 0.9 ±0.0 0.9 ±0.0 —161.3 ±20.2 C1: Masked 30.4 ±0.2 -0.9 ±0.0 19.3 ±0.0 -0.8 ±0.0 0.9 ±0.0 0.1 ±0.0 —118.3 ±8.6
+> C3: Masked + Focal 24.6 ±2.9 13.7 ±1.5 19.4 ±0.0 15.3 ±0.6 0.9 ±0.0 0.9 ±0.0 —113.6 ±8.1
+> C4: Masked + KL 28.7 ±3.2 28.6 ±3.2 19.5 ±0.0 19.3 ±0.1 0.9 ±0.0 0.9 ±0.0 —123.6 ±6.6 PPO-RNN
+> C2: Unmasked 36.7 ±0.1 36.7 ±0.1 19.8 ±0.0 19.8 ±0.0 1.0 ±0.0 1.0 ±0.0 29 ±252.0 ±0.9 C1: Masked 38.3 ±0.2 -0.9 ±0.0 20.4 ±0.0 -0.9 ±0.0 1.0 ±0.0 0.2 ±0.1 16 ±252.1 ±1.1
+> C3: Masked + Focal 39.2 ±0.1 27.5 ±1.2 20.3 ±0.0 14.8 ±0.2 1.0 ±0.0 1.0 ±0.0 21 ±252.0 ±0.7
+> C4: Masked + KL 38.1 ±0.1 36.4 ±0.2 20.5 ±0.1 20.4 ±0.1 1.0 ±0.0 1.0 ±0.0 21 ±353.8 ±2.7 PPO-Hybrid
+> C2: Unmasked 43.9 ±0.4 43.9 ±0.4 19.2 ±0.1 19.2 ±0.1 1.0 ±0.0 1.0 ±0.0 84 ±11 94.6 ±7.9 C1: Masked 45.6 ±1.3 -0.9 ±0.0 18.9 ±0.0 -0.9 ±0.0 1.0 ±0.0 0.3 ±0.0 63 ±12 80.7 ±4.3
+> C3: Masked + Focal 45.0 ±2.3 21.2 ±1.7 19.0 ±0.1 17.6 ±0.5 1.0 ±0.0 1.0 ±0.0 76 ±892.0 ±10.9
+> C4: Masked + KL 48.8 ±0.7 43.2 ±1.1 19.0 ±0.1 18.4 ±0.1 1.0 ±0.0 1.0 ±0.0 65 ±588.0 ±7.8
+
+Table 1: Evaluation with ground-truth (GT) versus predicted (Pred) masks. Masked-only agents fail when oracle masks are removed. KL-balanced classification enables near-oracle performance under predicted masks across architectures. Results report mean ± std over 4 seeds (10,240 episodes per seed); bold indicates best non-baseline per column. Focal loss alone exhibits higher variance and did not consistently improve over masking, highlighting the importance of policy-aware weighting. The gains from KL-balanced classification are functionally meaningful: on Craftax-Classic (max return ≈21), the gap between 19.8 (unmasked) and 20.5 (Masked + KL) represents the difference between occasional diamond collection ( ∼20% of episodes) and consistent collection ( ∼60%). 
+
+6.4 Deployment Without Oracle Masks (RQ4) 
+
+When oracle masks are unavailable at test time, masked-only agents collapse to −0.9 return (Table 1, Pred columns). RQ2 showed why: masking prevents the encoder from learning validity-discriminating features. The policy has never encountered a validity prediction task. KL-balanced classification solves this issue. In Craftax-Hybrid, Masked + KL achieves 43.2 return under predicted masks versus 43.9 for unmasked training with ground-truth masks. The key difference is training dynamics: unmasked training suffers suppression for 100M+ frames before recovery, while Masked + KL maintains stable valid-action probabilities throughout training and deploys immediately without oracle masks. The pattern is consistent across architectures: PPO-MLP with Masked + KL achieves 28.6 under predicted masks versus −0.9 for masked only, and PPO-RNN achieves 36.4 versus −0.9.The MiniHack Corridor-5 results reveal a striking phenomenon: even in an environment where all methods achieve near-optimal returns under ground-truth evaluation (0.9–1.0), oracle masking fails catastrophically when masks are removed (dropping to 0.1–0.3). This reveals that masking’s success hides a fundamental representational deficiency. The policy appears to work only because the oracle intervenes at every step. Without this intervention, the agent has no notion of when open_door is appropriate. KL-balanced classification enables robust deployment because it learns validity structure rather than relying on external guidance. 
+
+Practical benefit. Predicted-mask deployment provides an explicit validity model that practitioners can inspect, audit, and selectively correct. Where the classifier errs, targeted human intervention can patch specific failure modes—an impossibility with oracle masking, which offers no learned validity representation. 10 7 Conclusion and Limitations 
+
+Action masking prevents valid action suppression, but it introduces a practical deployment dilemma. Practitioners must either maintain costly validity oracles at deployment or accept policy degradation. We proved that suppression grows exponentially through shared parameters, with rarely-valid ac-tions affected most severely. Feasibility classification addresses this failure by restoring a gradient signal that enables the learning of validity-discriminating features. This yields a practical training-deployment strategy: train with oracle masking for stability, then substitute the learned predictor at test time. Our KL-balanced loss outperforms uniform weighting and enables deployment without oracle masks at minimal performance cost. In practice, classification accuracy on rarely-valid actions should be prioritized, as these actions are most vulnerable to suppression. Several limitations remain. Our theoretical analysis assumes fixed state features ϕ(s). Although Section 6.2 empirically validates that deep networks exhibit the feature alignment Condition (ii), we do not analyze how joint optimization of the representation ϕ and the policy weights alters suppression dynamics. Deployment with predicted masks recovers unmasked performance but does not exceed it, as the policy is trained under oracle masking and experiences a distribution shift when evaluated on predicted masks. Nonetheless, matching unmasked performance while providing an explicit validity model offers meaningful interpretability benefits. Practitioners can inspect disagreements between the learned predictor and the oracle, identifying potential failures prior to deployment. They can also intervene to correct mispredictions during deployment. This mirrors concept-bottleneck interventions in multi-agent settings (Zabounidis et al., 2023). One natural extension is to train a separate policy head via behavioral cloning that relies exclusively on predicted masks throughout training, thereby reducing the train-deploy distribution shift. When validity oracles are inexpensive at test time, the primary benefit of feasibility classification is repre-sentational. KL-balanced classification improves performance even when oracle masks are available (Section 6.3). The deployment advantage is most pronounced in sim-to-real transfer, where validity information is readily available in simulation but costly or unavailable on physical hardware. Our analysis assumes access to ground-truth validity labels during training. Noisy or partially specified validity functions would likely degrade the learned predictor. Our evaluation is limited to discrete action spaces with symbolic state representations. Continuous action spaces or pixel-based observations may exhibit different feature-alignment dynamics. The suppression mechanism may also interact with other known failure modes in deep reinforcement learning, including representation collapse, loss of plasticity, and primacy bias. 
+
+Acknowledgments 
+
+This material is based upon work supported by the National Science Foundation Graduate Research Fellowship Program under Grant No. DGE-2140739, the Defense Advanced Research Projects Agency (DARPA) under Contract No. FA8750-23-2-1015 (ANSR), and the Office of Naval Research under Grant No. N00014-23-1-2840. Any opinions, findings, and conclusions or recommendations expressed in this material are those of the author(s) and do not necessarily reflect the views of the National Science Foundation, DARPA, the Office of Naval Research, or the U.S. Government. 
+
+References 
+
+Zaheer Abbas, Rosie Zhao, Joseph Modayil, Adam White, and Marlos C. Machado. Loss of plasticity in continual deep reinforcement learning. ArXiv , abs/2303.07507, 2023. Joshua Achiam, David Held, Aviv Tamar, and Pieter Abbeel. Constrained policy optimization. In 
+
+International Conference on Machine Learning , pp. 22–31. PMLR, 2017. Jose A. Arjona-Medina, Michael Gillhofer, Michael Widrich, Thomas Unterthiner, and Sepp Hochre-iter. Rudder: Return decomposition for delayed rewards. In NeurIPS , 2019. 11 Shicong Cen, Chen Cheng, Yuxin Chen, Yuting Wei, and Yuejie Chi. Fast global convergence of natural policy gradient methods with entropy regularization, 2021. URL https://arxiv. org/abs/2007.06558 .Yash Chandak, Georgios Theocharous, Blossom Metevier, and P. Thomas. Reinforcement learning when all actions are not always available. pp. 3381–3388, 2019. Yinlong Dai, Benjamin A. Christie, Daniel J. Evans, Dylan P. Losey, and Simon Stepputtis. Language movement primitives: Grounding language models in robot motion, 2026. URL https:// arxiv.org/abs/2602.02839 .Gabriel Dulac-Arnold, Richard Evans, Hado van Hasselt, Peter Sunehag, Timothy Lillicrap, Jonathan Hunt, Timothy Mann, Theophane Weber, Thomas Degris, and Ben Coppin. Deep reinforcement learning in large discrete action spaces. In NeurIPS , 2015. Gregory Farquhar, Tim Rocktäschel, Maximilian Igl, and Shimon Whiteson. Treeqn and atreec: Differentiable tree-structured models for deep reinforcement learning. In ICLR , 2018. Norm Ferns, Prakash Panangaden, and Doina Precup. Bisimulation metrics for continuous Markov decision processes. SIAM Journal on Computing , 40(6):1662–1714, 2011. Yueqi Hou, Xiaolong Liang, Jiaqiang Zhang, Qisong Yang, Aiwu Yang, and Ning Wang. Exploring the use of invalid action masking in reinforcement learning: A comparative study of on-policy and off-policy algorithms in real-time strategy games. Applied Sciences , 13(14):8283, 2023. Shengyi Huang and Santiago Ontañón. A closer look at invalid action masking in policy gradient algorithms. arXiv preprint arXiv:2006.14171 , 2020. Jonathan Keane, Sam Keyser, and Jeremy Kedziora. Strategy masking: A method for guardrails in value-based reinforcement learning agents. ArXiv , abs/2501.05501, 2025. Khimya Khetarpal, Zafarali Ahmed, Gheorghe Comanici, David Abel, and Doina Precup. What can i do here? a theory of affordances in reinforcement learning. ArXiv , abs/2006.15085, 2020. Charline Le Lan, Stephen Tu, Adam M. Oberman, Rishabh Agarwal, and Marc G. Bellemare. On the generalization of representations in reinforcement learning. ArXiv , abs/2203.00543, 2022. Gen Li, Yuting Wei, Yuejie Chi, and Yuxin Chen. Softmax policy gradient methods can take exponential time to converge, 2022. URL https://arxiv.org/abs/2102.11270 .Tsung-Yi Lin, Priya Goyal, Ross Girshick, Kaiming He, and Piotr Dollár. Focal loss for dense object detection, 2018. URL https://arxiv.org/abs/1708.02002 .Ruixuan Liu, Alan Chen, Weiye Zhao, and Changliu Liu. Physics-aware combinatorial assembly sequence planning using data-free action masking, 2025. URL https://arxiv.org/abs/ 2408.10162 .Vincent Liu, Han Wang, Ruo Yu Tao, Khurram Javed, Adam White, and Martha White. Measuring and mitigating interference in reinforcement learning. In CoLLAs , pp. 781–795, 2023. Michael Matthews, Michael Beukman, Benjamin Ellis, Mikayel Samvelyan, Matthew Jackson, Samuel Coward, and Jakob Foerster. Craftax: A lightning-fast benchmark for open-ended rein-forcement learning, 2024. URL https://arxiv.org/abs/2402.16801 .Jincheng Mei, Chenjun Xiao, Csaba Szepesvari, and D. Schuurmans. On the global convergence rates of softmax policy gradient methods. ArXiv , abs/2005.06392, 2020. Evgenii Nikishin, Max Schwarzer, Pierluca D’Oro, Pierre-Luc Bacon, and Aaron Courville. The primacy bias in deep reinforcement learning, 2022. URL https://arxiv.org/abs/2205. 07802 .12 Mikayel Samvelyan, Robert Kirk, Vitaly Kurin, Jack Parker-Holder, Minqi Jiang, Eric Hambro, Fabio Petroni, Heinrich Küttler, Edward Grefenstette, and Tim Rocktäschel. Minihack the planet: A sandbox for open-ended reinforcement learning research, 2021. URL https://arxiv.org/ abs/2109.13202 .Ghada Sokar, Rishabh Agarwal, P. S. Castro, and Utku Evci. The dormant neuron phenomenon in deep reinforcement learning. In International Conference on Machine Learning , pp. 32145–32168, 2023. Mirko Stappert, Bernhard Lutz, Niklas Goby, and Dirk Neumann. Integrating human knowledge through action masking in reinforcement learning for operations research. ArXiv , abs/2504.02662, 2025. Roland Stolz, Hanna Krasowski, Jakob Thumm, Michael Eichelbeck, Philipp Gassert, and Matthias Althoff. Excluding the irrelevant: Focusing reinforcement learning through continuous action masking. Advances in Neural Information Processing Systems , 37:95067–95094, 2024. Cheng-Yen Tang, Chien-Hung Liu, Woei-Kae Chen, and S. D. You. Implementing action mask in proximal policy optimization (PPO) algorithm. ICT Express , 6:200–203, 2020. Mirco Theile, Lukas Dirnberger, Raphael Trumpp, Marco Caccamo, and Alberto L Sangiovanni-Vincentelli. Action mapping for reinforcement learning in continuous environments with con-straints. arXiv preprint arXiv:2412.04327 , 2024. Ziyi Wang, Xinran Li, Luoyang Sun, Haifeng Zhang, Hualin Liu, and Jun Wang. Learning state-specific action masks for reinforcement learning. Algorithms , 17:60, 2024. Renos Zabounidis, Joseph Campbell, Simon Stepputtis, Dana Hughes, and Katia P Sycara. Concept learning for interpretable multi-agent reinforcement learning. In Conference on robot learning , pp. 1828–1837. PMLR, 2023. Renos Zabounidis, Yue Wu, Simon Stepputtis, Tom Mitchell, Yuanzhi Li, and Katia P. Sycara. SCALAR: Self-supervised composition and learning of skills with LLM planning and RL. In 
+
+NeurIPS 2025 Workshop on Bridging Language, Agent, and World Models for Reasoning and Planning , 2025. URL https://openreview.net/forum?id=eDcGexzTQW .Renos Zabounidis, Ini Oguntola, Konghao Zhao, Joseph Campbell, Woojun Kim, Simon Step-puttis, and Katia P. Sycara. Disentangled concept-residual models: Bridging the interpretabil-ity–performance gap for incomplete concept sets. Transactions on Machine Learning Research ,2026. ISSN 2835-8856. URL https://openreview.net/forum?id=NKgNizwDa6 .Tom Zahavy, Matan Haroush, Nadav Merlis, Daniel J. Mankowitz, and Shie Mannor. Learn what not to learn: Action elimination with deep reinforcement learning, 2019. URL https://arxiv. org/abs/1809.02121 .Dianyu Zhong, Yiqin Yang, and Qianchuan Zhao. No prior mask: Eliminate redundant action for deep reinforcement learning. ArXiv , abs/2312.06258, 2023. 13 Supplementary Materials 
+
+The following content was not necessarily subject to peer review. 
+
+A Supporting Lemmas and Proofs 
+
+A.1 Logit Gradient Identity Lemma 2 (Expected logit update) . Under softmax parameterization, the policy gradient induces the following expected update to the logit of action a at state s:
+
+Ea′∼π(·| s)
+
+
+
+Aπ (s, a ′) · ∂ log π(a′ | s)
+
+∂z a(s)
+
+
+
+= π(a | s) · Aπ (s, a ). (14) 
+
+Marginalizing over the state visitation gives the full update direction: 
+
+Es∼dπ [ π(a | s) Aπ (s, a ) ] . (15) 
+
+Proof. The derivative of the softmax log-probability is 
+
+∂ log π(a′ | s)
+
+∂z a(s) = 1{a′ = a} − π(a | s). (16) Taking the expectation over a′ ∼ π(· | s):
+
+Ea′ [Aπ (s, a ′) ( 1{a′ = a} − π(a | s))] = π(a | s) · Aπ (s, a ) − π(a | s) X
+
+> a′∈A
+
+π(a′ | s) Aπ (s, a ′)= π(a | s) · Aπ (s, a ) (17) since P 
+
+> a′
+
+π(a′ | s) Aπ (s, a ′) = 0 . Equation (15) follows by taking the outer expectation over 
+
+s ∼ dπ .
+
+A.2 Zero-Sum Logit Updates Lemma 3 (Zero-sum identity) . Under the linear parameterization zj (s) = ϕ(s)⊤wj with per-action parameters wj , the sum of logit updates across all actions is zero at every state and every step: 
+
+> n
+
+X
+
+> j=1
+
+∆z(τ ) 
+
+> j
+
+(s) = 0 for all s, τ. (18) 
+
+Consequently, P 
+
+> j
+
+eσ(T ) 
+
+> j
+
+≥ n for all T , where σ(T ) 
+
+> j
+
+= PT −1  
+
+> τ=0
+
+∆z(τ ) 
+
+> j
+
+(s) is the cumulative logit change from uniform initialization. Proof. By Lemma 2, the expected parameter update is ∆wj = η Es∼dπ [π(j | s) Aπ (s, j ) ϕ(s)] .Summing over actions: 
+
+X
+
+> j
+
+∆wj = η Es∼dπ
+
+X
+
+> j
+
+π(j | s) Aπ (s, j ) ϕ(s)
+
+ = 0 (19) since P 
+
+> j
+
+π(j | s) Aπ (s, j ) = 0 for every s. Therefore P 
+
+> j
+
+∆z(τ ) 
+
+> j
+
+(s) = ϕ(s)⊤ P 
+
+> j
+
+∆w(τ ) 
+
+> j
+
+= 0 .The same identity holds for stochastic gradient estimates. For a single sample (s, a ′), the per-sample update direction for wj is proportional to (1{a′ = j} − π(j | s)) ϕ(s). Summing: P 
+
+> j
+
+(1{a′ =
+
+j} − π(j | s)) = 1 − 1 = 0 .14 For the partition function bound: since P 
+
+> j
+
+σ(T ) 
+
+> j
+
+= 0 , Jensen’s inequality convexity of the exponential with the uniform distribution over n actions gives 
+
+1
+
+n
+
+X
+
+> j
+
+eσ(T ) 
+
+> j
+
+≥ e 1   
+
+> n
+> P
+> jσ(T)
+> j
+
+= e0 = 1 , (20) Thus P 
+
+> j
+
+eσ(T ) 
+
+> j
+
+≥ n.
+
+A.3 Invalid-Action Dominance Gap Lemma 4 (Invalid-action dominance gap) . Suppose that for all states s ∈ S vis and all invalid actions 
+
+a where ν(s, a ) = 0 ,
+
+Qπ (s, a ) ≤ max  
+
+> b:ν(s,b )=1
+
+Qπ (s, b ) − δ(s) (21) 
+
+for some δ(s) > 0. Then 
+
+Aπ (s, a ) ≤ − δ(s)  1 − π(a | s). (22) 
+
+Proof. Let b∗ = arg max b:ν(s,b )=1 Qπ (s, b ). Since Qπ (s, b ∗) ≥ Qπ (s, a ′) for all a′,
+
+Aπ (s, a ) = Qπ (s, a ) − X
+
+> a′
+
+π(a′ | s) Qπ (s, a ′)
+
+≤ Qπ (s, a ) − π(a | s) Qπ (s, a ) − (1 − π(a | s)) Qπ (s, b ∗)= (1 − π(a | s))  Qπ (s, a ) − Qπ (s, b ∗) ≤ − (1 − π(a | s)) δ(s).
+
+A.4 Parameter Updates Under Linear Logits Lemma 5 (Expected parameter update) . Under the linear parameterization za(s) = ϕ(s)⊤wa with gradient ascent at learning rate η, the expected update to wa is 
+
+∆wa = η Es∼dπ [ π(a | s) Aπ (s, a ) ϕ(s) ] . (23) 
+
+If action a is invalid at every state in Svis and condition in Equation (3) holds, then 
+
+∆wa = −η Es∼dπ [ c(s) ϕ(s) ] (24) 
+
+where c(s) = π(a | s) |Aπ (s, a )| > 0 for all s ∈ S vis .Proof. The gradient of J with respect to wa is 
+
+∇wa J = Es∼dπ , a ′∼π
+
+
+
+Aπ (s, a ′) ∂ log π(a′ | s)
+
+∂z a(s) ϕ(s)
+
+
+
+. (25) By Lemma 2, the inner expectation over a′ at each s yields π(a | s) Aπ (s, a ), giving Equation (23) .When a is invalid at all states in Svis , Lemma 4 gives Aπ (s, a ) < 0, so π(a | s) Aπ (s, a ) = −c(s)
+
+with c(s) > 0.
+
+A.5 Generalization of Logit Suppression Proposition 6 (Generalization of logit suppression) . Consider a policy with linear logits za(s) = 
+
+ϕ(s)⊤wa. Suppose action a is invalid at every state in Svis and condition (3) holds on Svis .Then for any s′ ∈ S unvis , the logit change after one gradient step is 
+
+∆za(s′) = −η ϕ (s′)⊤Es∼dπ [ c(s) ϕ(s) ] (26) 
+
+which is strictly negative whenever 
+
+ϕ(s′)⊤Es∼dπ [ c(s) ϕ(s) ] > 0, (27) 
+
+that is, whenever ϕ(s′) is not orthogonal to the advantage-weighted mean of visited state features. 
+
+15 Proof. From Lemma 5, ∆wa = −η Es∼dπ [c(s) ϕ(s)] . The logit change at s′ is 
+
+∆za(s′) = ϕ(s′)⊤∆wa = −η ϕ (s′)⊤Es∼dπ [c(s) ϕ(s)] . (28) Since c(s) > 0 for all s ∈ S vis , the vector Es∼dπ [c(s) ϕ(s)] is a positive combination of visited feature vectors, and the result follows. 
+
+A.6 Proof of Theorem 1 
+
+Proof. We first derive the per-step suppression rate κτ and then bound the probability. 
+
+Per-step suppression. By Proposition 6, the logit change of action a at the unvisited state s∗ after one gradient step at time τ is 
+
+∆z(τ ) 
+
+> a
+
+(s∗) = −η ϕ (s∗)⊤Es∼dπτ [ cτ (s) ϕ(s) ] (29) where cτ (s) = πτ (a | s) |Aπτ (s, a )| > 0 for all s ∈ S vis . Since a is invalid at every visited state, Lemma 4 gives Aπτ (s, a ) < 0. The per-step suppression rate defined in the theorem, 
+
+κτ = η ϕ (s∗)⊤Es∼dπτ [ cτ (s) ϕ(s) ] , (30) equals the magnitude of this logit decrease: ∆z(τ ) 
+
+> a
+
+(s∗) = −κτ . Condition ii ensures κτ > 0 at every step. 
+
+Partition function bound. Write σ(T ) 
+
+> j
+
+= PT −1  
+
+> τ=0
+
+∆z(τ ) 
+
+> j
+
+(s∗) for the cumulative logit change of action j at s∗. By Lemma 3 on the zero-sum identity, P 
+
+> j
+
+σ(T ) 
+
+> j
+
+= 0 . Jensen’s inequality (convexity of exp , uniform distribution over n actions) then gives 
+
+X
+
+> j
+
+eσ(T ) 
+
+> j
+
+≥ n e 1   
+
+> n
+> P
+> jσ(T)
+> j
+
+= n. (31) 
+
+Probability bound. Since the common initial logit c cancels in πT (a | s∗) = eσ(T ) 
+
+> a
+
+/ P 
+
+> j
+
+eσ(T ) 
+
+> j
+
+:
+
+πT (a | s∗) ≤ eσ(T )
+
+> a
+
+n . (32) From the per-step suppression, σ(T ) 
+
+> a
+
+= PT −1  
+
+> τ=0
+
+∆z(τ ) 
+
+> a
+
+(s∗) = − PT −1  
+
+> τ=0
+
+κτ = −KT , giving πT (a |
+
+s∗) ≤ e−KT /n .
+
+A.7 Entropy Regularization 
+
+Proof that the zero-sum identity and suppression bound hold under entropy regularization. With entropy coefficient β > 0, the per-step objective becomes Jβ = J + β Es∼dπ [H(π(· | s))] .
+
+Zero-sum identity under entropy regularization. By Lemma 2, the entropy-regularized expected logit update for action a at state s is 
+
+∆zent  
+
+> a
+
+(s) = π(a | s)  Aπ (s, a ) − β log π(a | s) − β H (π(· | s)) . (33) Summing over all actions a = 1 , . . . , n :
+
+> n
+
+X
+
+> a=1
+
+∆zent  
+
+> a
+
+(s) = X
+
+> a
+
+π(a | s) Aπ (s, a ) − β X
+
+> a
+
+π(a | s) log π(a | s) − β H (π(· | s)) X
+
+> a
+
+π(a | s)= 0 + β H (π(· | s)) − β H (π(· | s)) = 0 , (34) where we used P 
+
+> a
+
+π(a | s) Aπ (s, a ) = 0 and H(π(· | s)) = − P 
+
+> a
+
+π(a | s) log π(a | s). The zero-sum identity therefore holds at every state and every step, exactly as in the unregularized case. Under the linear parameterization zj (s) = ϕ(s)⊤wj , this implies P 
+
+> j
+
+∆z(τ ) 
+
+> j
+
+(s′) = 0 for all s′, so Jensen’s inequality continues to give P 
+
+> j
+
+eσ(T ) 
+
+> j
+
+≥ n and Equation (6) holds. 16 Vanishing correction at uniform initialization. At initialization, π0(a | s) = 1 /n for all a, s . The entropy correction terms in Equation (33) evaluate to 
+
+−β log π0(a | s) − β H (π0(· | s)) = −β log(1 /n ) − β log n = β log n − β log n = 0 . (35) Therefore ∆zent  
+
+> a
+
+(s) = π0(a | s) Aπ (s, a ) at the first step, identical to the unregularized update. 
+
+Convergence and sandwich bound. Recall from the proof of Theorem 1 that the unregularized per-step suppression rate is κτ = η ϕ (s∗)⊤Es∼dπτ [cτ (s) ϕ(s)] , where cτ (s) = πτ (a | s) |Aπτ (s, a )|.Under entropy regularization, the logit update (33) adds correction terms that modify the suppression rate. Using the same propagation via parameter sharing as in Proposition 6, the entropy-regularized suppression at step τ becomes 
+
+κent  
+
+> τ
+
+= κτ − β ϕ (s∗)⊤Es∼dπτ 
+
+ πτ (a | s)  log πτ (a | s) + H(πτ (· | s))  ϕ(s)  . (36) As πτ (a | s) → 0 at visited states where a is invalid, the correction term πτ (a | s) log πτ (a |
+
+s) → 0, so the entropy correction at visited states vanishes. The key effect operates at s∗ itself: as 
+
+πτ (a | s∗) decreases, the entropy bonus −β log πτ (a | s∗) grows without bound, while the advantage 
+
+|Aπ (s, a )| ≤ rmax /(1 − γ) remains bounded for all s and π.
+
+Lower bound. The entropy-regularized logit update for action a at any state includes the term 
+
+−β log π(a | s), which exceeds the maximum advantage magnitude rmax /(1 − γ) whenever π(a |
+
+s) < exp( −rmax /(β(1 − γ))) . Below this threshold the entropy bonus dominates, preventing further suppression. Therefore 
+
+π∞(a | s∗) ≥ exp 
+
+
+
+− rmax 
+
+β(1 − γ)
+
+
+
+. (37) 
+
+Upper bound and convergence. Since suppression halts at a finite logit displacement, the cumulative suppression converges: K∞ = P∞  
+
+> τ=0
+
+κent  
+
+> τ
+
+< ∞. Applying the same Jensen bound as in the proof of Equation (6): 
+
+π∞(a | s∗) ≤ e−K∞
+
+n > 0. (38) Combining yields the sandwich (7). 
+
+B Environment Details 
+
+B.1 Craftax 
+
+Craftax (Matthews et al., 2024) is a JAX-based survival environment. We evaluate on two variants: Craftax-Classic (17 actions, single floor) and Craftax-Full (43 actions, 9 floors). 
+
+Observation space. Observations are symbolic vectors constructed by the environment renderer: 
+
+Craftax-Classic: 1345 dimensions. The 7 ×9 local view (21 channels per tile) is flattened in C-order (row-major) to 1323 dimensions. Channels include: 17-channel one-hot block type, 4 binary mob channels. Inventory (12 dims): wood, stone, coal, iron, diamond, sapling, and tool counts, each divided by 10. Intrinsics (4 dims): health, food, drink, energy, each divided by 10. Direction (4 dims): one-hot encoding. Special (2 dims): light level and is_sleeping flag. 
+
+Craftax-Full: 8268 dimensions. The 9 ×11 local view (83 channels per tile) is flattened to 8217 dimensions. Channels include: 37-channel one-hot block type, 5-channel one-hot item type, 40 mob channels, and 1 light map channel. Darkness masking zeros all channels where light ≤ 0.05. Inventory (16 dims), potions (6 dims), intrinsics (9 dims), direction (4 dims), armour (8 dims), and special flags (8 dims) follow the normalization scheme in Table 2. 17 Craftax-Classic (64×64) Craftax (48×48) (a) Craftax Classic (left) and Craftax (right).  (b) MazeWalk Easy (left) and MazeWalk Hard (right). 
+
+(c) MiniHack Corridors with 2, 3, and 5 rooms. 
+
+Figure 5: Environments used in our experiments. 
+
+Action space. Craftax-Classic has 17 actions: movement (4), interaction (2), placement (5), and crafting up to iron-tier (6). Craftax-Full has 43 actions including additional crafting (diamond tools, armour), combat (shoot arrow, cast spells), consumables (6 potions), progression (descend, ascend, rest), and character development (read book, enchant, level up attributes). 18 Table 2: Craftax-Full observation components.                  
+
+> Component Dims Normalization
+> Map 8217 Flattened 9 ×11 ×83, darkness masked Inventory 16 √count /10 for materials; level/4 for tools Potions 6√count /10
+> Intrinsics 9value/10 Direction 4One-hot Armour 8level/2 for pieces; raw int for enchantments Special 8Raw values or scaled
+
+Validity function. The ground-truth validity function is self-implemented in 
+
+praxis/action_masking/craftax/masks.py . It extracts symbolic state from the environment (inventory counts, nearby blocks, player status) and applies hand-coded precondition rules that mirror the game logic in craftax/game_logic.py . For example, descend requires standing on a down-ladder and having killed ≥ 8 monsters on the current floor; crafting requires nearby crafting tables/furnaces and sufficient materials. Invalid actions result in silent no-ops with zero reward (no penalty). The reward function computes achievement deltas; invalid actions produce no achievements and no health change, yielding reward = 0. 
+
+Procedural generation. Generation is deterministic given a JAX PRNG key. Each floor is 48 ×48, generated via fractal Perlin noise (1 octave, persistence 0.5, lacunarity 2). Terrain thresholds vary by level. Dungeons use 8 rooms (5–10 tiles each dimension) connected by L-shaped corridors. Ore spawn probabilities per stone block: Table 3: Ore spawn probabilities by floor.                               
+
+> Ore Overworld Gnomish Troll Fire Ice
+> Coal 0.03 0.04 0.04 0.05 0.0 Iron 0.02 0.02 0.03 0.0 0.0 Diamond 0.001 0.005 0.01 0.0 0.005 Sapphire 0.0 0.0025 0.01 0.0 0.02 Ruby 0.0 0.0025 0.01 0.025 0.0
+
+Mobs spawn probabilistically each timestep (base chances: 0.10 passive, 0.02–0.06 melee, 0.05 ranged). Maximum 3 melee, 3 passive, 2 ranged per level. The down-ladder is blocked until 8 monsters are killed on that floor. 
+
+Reward function. Rewards are immediate (per-step), not at episode end. Craftax-Classic has 22 achievements worth 1.0 each (max 22). Craftax-Full has 67 achievements with tiered rewards (1/3/5/8) for a maximum of 226. Health changes contribute ±0.1 per HP. 
+
+Episode termination. Craftax-Classic: 10,000 steps, health ≤ 0, or lava contact. Craftax-Full: 100,000 steps, health ≤ 0, or boss defeated (8 hits on necromancer). 
+
+B.2 MiniHack Corridors 
+
+The MiniHack Corridor environments (Samvelyan et al., 2021) are procedurally generated navigation tasks. We use a JAX reimplementation (Nethax) that faithfully reproduces NetHack 3.7 mechanics. 
+
+Observation space. Observations use SymbolicGlyphNet, adapted from the Chaotic Dwarf NLE baseline. The encoder processes a 9 ×9 crop of a compact 50-ID glyph space (tile types, monsters, 19 items) through embedding (32 dims) and two conv layers (64 and 128 channels, 3 ×3 kernels, stride 2), producing 128-dim features. These are concatenated with message encoding (128 dims), BLStats encoding (155 dims), and previous action (16 dims), then projected to 256 dimensions. 
+
+Action space. 11 discrete actions: 8 movement directions, open_door , kick , and search_wait .Typically 3–5 actions are valid depending on surrounding terrain. 
+
+Validity function. Implemented in praxis/action_masking/minihax_corridor/masks.py .
+
+open_door requires adjacency to a closed (unlocked) door. Movement is invalid when blocked by walls or closed doors. kick is always valid but only necessary for locked doors. Invalid actions that do not consume a game turn incur a configurable frozen_penalty (default 
+
+−0.01). Setting this to 0 yields pure no-op behavior. 
+
+Reward and termination. +1.0 for reaching the down staircase, 0 otherwise. Episodes terminate on reaching the stair, death, or timeout (1000 steps). 
+
+B.3 Summary 
+
+Table 4 summarizes key environment properties. Table 4: Environment summary.                       
+
+> Environment |A| Valid/state Validity ratio Observation Steps
+> Craftax-Full 43 5–8 12–19% Symbolic (8268-d) 10 9
+> Craftax-Classic 17 5–8 29–47% Symbolic (1345-d) 10 9
+> Corridor-2/3/5 11 3–5 27–45% GlyphNet (256-d) 2×10 8
+
+C Validity Functions 
+
+We implement ground-truth action validity functions for each environment by extracting symbolic state features from the simulator and evaluating preconditions that mirror the environment’s internal game logic. These functions are used both for oracle masking during training and for supervising the feasibility classification head. All implementations use JAX for vectorized evaluation across parallel environments. 
+
+C.1 Craftax (43 Actions) 
+
+Craftax exposes a rich symbolic state including inventory counts, nearby block types, player intrinsics (health, mana, energy), floor progression, and cardinal block adjacency. Each action’s validity depends on specific preconditions: • Movement (4 actions): blocked by solid blocks, water, or lava in the target direction. • Crafting (13 actions): requires specific inventory items and proximity to crafting stations (table, furnace). Higher-tier items require multiple stations. Crafting is blocked if the player already has that tier or higher. • Floor transitions (2 actions): descend requires standing on a down ladder and having killed ≥ 8
+
+monsters on the current floor; ascend requires standing on an up ladder and floor > 0.• Spells (2 actions): require the spell to be learned and sufficient mana ( ≥ 2). • Consumables (7 actions): potions require ≥ 1 of that potion type; books require ≥ 1 book. • Enchanting (3 actions): requires an enchantment table, sufficient mana ( ≥ 9), a gem (ruby or sapphire), and the item to enchant. • Level-up (3 actions): requires ≥ 1 XP and the attribute below maximum (5). • Placement (5 actions): requires the item in inventory; torches additionally require a dark floor. 20 • Sleep : only valid when energy ≤ 5.• Sleep/rest lock : while sleeping or resting, only noop is valid. Listing 1 shows the implementation. A separate symbolic state extractor reads the raw environment state into a structured NamedTuple containing all fields needed for mask evaluation. 
+
+C.2 Craftax-Classic (17 Actions) 
+
+Craftax-Classic uses a reduced action space without floor transitions, ranged combat, spells, enchant-ing, or potions. The validity function follows the same structure but is simpler: crafting requires a crafting table (and furnace for iron-tier items), placement requires the item in inventory, and movement is blocked only by lava tiles. The do action (interact with facing block) is valid only when the facing tile is interactable (tree, ore, water, ripe plant, grass, or mob). Sleep locks all actions to 
+
+noop .
+
+C.3 MiniHack Corridor-5 (11 Actions) 
+
+MiniHack Corridor-5 uses a tile-based grid with 8-directional movement, doors, and search/wait. The symbolic state consists of the 8 adjacent tile types. Movement is valid only if the target tile is walkable (floor, stairs, corridor, or open door). open_door is valid only when adjacent to a closed door. kick is valid only when adjacent to a locked door. search_wait is always valid. 
+
+D Training Details 
+
+D.1 Architectural Details PPO-Hybrid (Transformer-XL + S5). Observations are projected to 256 dimensions via a linear layer (Craftax) or GlyphNet encoder (MiniHack). The backbone uses one Transformer-XL layer followed by five S5 layers (pattern: TSSSSS), each with model dimension 256 and SSM state dimension 256. The Transformer layer uses 8 attention heads with QKV dimension 256, gated residuals, and memory window of 128 tokens. Actor and critic heads are 2-layer MLPs with 256 hidden units and ReLU activations. 
+
+PPO-RNN (GRU). Observations are embedded to 512 dimensions, then passed through a single-layer GRU with 512 hidden units. Actor and critic heads are 2-layer MLPs with 512 hidden units and ReLU activations. 
+
+PPO-MLP. Separate actor and critic trunks, each with three dense layers (512 hidden units, tanh activations). Used on Craftax only; symbolic observations provide sufficient information without memory. 
+
+D.2 Hyperparameters 
+
+Table 5 reports PPO hyperparameters. Parameters that differ across architectures are marked with ∗.Batch size equals parallel environments × steps per rollout. Minibatch size equals batch size /
+
+number of minibatches. 
+
+D.3 Training Infrastructure 
+
+All experiments use 1024 parallel environments on a single accelerator. Craftax: 10 9 steps. MiniHack: 
+
+2 × 10 8 steps. Results report mean and standard deviation over 4 seeds. 21 Table 5: PPO hyperparameters. ∗ indicates architecture-specific values. 
+
+Hyperparameter PPO-Hybrid PPO-RNN PPO-MLP 
+
+Parallel environments 1024 1024 1024 Steps per rollout 128 ∗ 64 ∗ 64 ∗
+
+Batch size 131,072 65,536 65,536 Number of minibatches 8 8 8Minibatch size 16,384 8,192 8,192 Update epochs 4 4 4Learning rate 2 × 10 −4 2 × 10 −4 2 × 10 −4
+
+LR annealing Linear Linear Linear Discount γ 0.999 ∗ 0.99 ∗ 0.99 ∗
+
+GAE λ 0.8 0.8 0.8 Clip ratio ϵ 0.2 0.2 0.2 Entropy coefficient 0.002 ∗ 0.01 ∗ 0.01 ∗
+
+Value function coefficient 0.5 0.5 0.5 Max gradient norm 1.0 1.0 1.0 Activation ReLU Tanh Tanh 
+
+Auxiliary losses (C3 and C4 only) 
+
+Classification coefficient λ 10 10 10 Focal parameter γfocal 2.0 2.0 2.0 
+
+RND (MiniHack only) 
+
+RND reward coefficient 1.0 1.0 1.0 RND loss coefficient 0.01 0.01 0.01 RND intrinsic GAE coefficient 0.01 0.01 0.01 RND network hidden / output 256 / 512 256 / 512 256 / 512 
+
+D.4 Measurement of Suppression 
+
+We instrument the environment to log π(a | s∗) the first time each state-action pair (s∗, a ) becomes valid during training: 1. First-occurrence log-probability : log πT (a | s∗) at the step when s∗ first enters the training batch. 2. Time-to-valid : steps between when a first becomes valid and when π(a | s∗) > 0.5.3. Suppression ratio : first-occurrence probability divided by uniform initialization 1/|A| .Metrics are computed online during training by caching state-action validity transitions. 
+
+E Ablation Studies F Additional Experiments 
+
+F.1 Classification with Oracle Masking 
+
+The classification loss is designed for settings where oracle masks are unavailable, but it may also benefit masked agents by improving feature quality. We compare three conditions on Craftax with PPO-Hybrid. Condition (a), Unmasked + Predictor, uses KL-balanced classification with λ = 20 
+
+without oracle masking. Condition (b), Masked Only, uses oracle masking with no classification head. Condition (c), Masked + Predictor, combines oracle masking with KL-balanced classification. Figure 6 shows the results. All three conditions converge to similar episode return, though masked training learns faster early and the unmasked + predictor condition catches up by 400M frames. Both conditions with classification heads achieve 99% validity prediction accuracy, so the encoder learns to 22 distinguish valid and invalid states regardless of masking. When evaluated with oracle masks at test time, masked + predictor achieves higher return than masked only, indicating that explicitly training the encoder to separate valid and invalid states improves feature quality and policy performance even when masking handles the policy-level constraint. Evaluation with predicted masks is most practically relevant: masked only collapses to near-zero return because it lacks a classification head. Masked + predictor degrades to the performance of unmasked + predictor. Having oracle masks during training does not produce a better validity predictor than training with the classification loss alone. Masking eliminates suppression at the policy level; classification improves representations at the feature level. Combining both yields the strongest performance under oracle evaluation, while the classification head alone provides robustness when oracle masks are unavailable. 
+
+F.2 Classification Coefficient Sweep (Masked + KL) 
+
+We sweep the classification coefficient λ ∈ { 0.1, 1, 5, 10 , 20 } for the KL-balanced loss applied on top of oracle masking on Craftax (PPO-Hybrid). This identifies how much classification signal is needed to improve masked training. Figure 7 shows the results. Episode return is remarkably stable across the sweep. All coefficients converge to similar final return near 43–46, indicating that the KL-balanced classification loss does not interfere with policy optimization even at high coefficients. Higher classification coefficients ( λ ≥ 5) drive accuracy above 98% and classification loss below 0.2, while λ = 0 .1 achieves only approximately 97% accuracy with higher residual loss. Sufficient classification signal is needed for the encoder to reliably separate valid and invalid states. Under ground-truth mask evaluation, higher coefficients ( λ ∈ { 5, 10 , 20 }) produce small but statisti-cally significant improvements over lower coefficients, consistent with Section F.1: the classification loss improves feature quality even when oracle masks are available. Under predicted mask evaluation, the effect is more pronounced. Coefficients λ ∈ { 5, 10 , 20 } achieve predicted-mask return within 5% of ground-truth-mask return, while λ = 0 .1 and λ = 1 show a larger gap. The classification head must be sufficiently accurate for the predicted masks to serve as a viable substitute for oracle masks at deployment time. We use λ = 10 by default because it achieves near-ceiling classification accuracy without destabilizing policy learning and produces predicted masks accurate enough to replace oracle masks at negligible performance cost. 
+
+F.3 Suppression and Recovery of the Descend Action 
+
+The descend action in Craftax is valid only when the agent stands on a staircase (rare early in training) but is critical for dungeon progression. Figure 8 tracks probability and feature correlation for descend across the first 200M frames. Without masking, π(descend | s∗) drops from uniform initialization 1/43 ≈ 0.023 to below 10 −3
+
+within 100M frames. This drop exceeds an order of magnitude, matching Theorem 1. The agent has not visited staircase states frequently enough for the classification loss to build separation. Around 125–150M frames, unmasked + predictor recovers sharply. Probability jumps back above 10 −1 as feature correlation drops from approximately 0.75 to approximately 0.3. Once features separate, suppression breaks and the policy rapidly reallocates probability. This delay corresponds to the time needed to accumulate gradient signal on rare valid states. The masked conditions never experience suppression. π(descend | s∗) stays above 10 −1 throughout. But they differ in feature quality. Masked only maintains high feature correlation near 0.75–0.85 and high probability at invalid states near 0.3–0.5, relying entirely on masking for correct behavior. Masked + predictor achieves lower correlation near 0.65–0.7 and lower invalid-state probability, 23 which indicates classification improves representations even when masking prevents suppression at the policy level. 24 Listing 1: Craftax validity function (43 actions). Each rule mirrors preconditions from 
+
+craftax/game_logic.py . The function operates on batched symbolic states and returns a boolean mask. 
+
+1 def craftax_action_mask(sym, num_actions=43): 
+
+2 num_envs = sym.wood.shape[0] 
+
+3 mask = jnp .ones((num_envs, num_actions), dtype= jnp .bool_) 
+
+45 # Sleep only when low energy 
+
+6 mask = mask.at[:, SLEEP]. set (sym.player_energy <= 5) 
+
+78 ct = sym.has_crafting_table 
+
+9 fn = sym.has_furnace 
+
+10 ct_fn = ct & fn 
+
+11 12 # Placement actions 
+
+13 mask = mask.at[:, PLACE_STONE]. set (sym.stone >= 1) 
+
+14 mask = mask.at[:, PLACE_TABLE]. set (sym.wood >= 2) 
+
+15 mask = mask.at[:, PLACE_FURNACE]. set (sym.stone >= 1) 
+
+16 mask = mask.at[:, PLACE_PLANT]. set (sym.sapling >= 1) 
+
+17 dark_floor = (sym.player_level == 2) | (sym.player_level == 5) 
+
+18 | (sym.player_level == 7) | (sym.player_level == 8) 
+
+19 mask = mask.at[:, PLACE_TORCH]. set ((sym.torches >= 1) & dark_floor) 
+
+20 21 # Pickaxes (require crafting table; iron/diamond need furnace) 
+
+22 mask = mask.at[:, MAKE_WOOD_PICKAXE]. set (
+
+23 ct & (sym.wood >= 1) & (sym.pickaxe < 1)) 
+
+24 mask = mask.at[:, MAKE_STONE_PICKAXE]. set (
+
+25 ct & (sym.wood >= 1) & (sym.stone >= 1) & (sym.pickaxe < 2)) 
+
+26 mask = mask.at[:, MAKE_IRON_PICKAXE]. set (
+
+27 ct_fn & (sym.wood >= 1) & (sym.stone >= 1) & (sym.iron >= 1) 
+
+28 & (sym.coal >= 1) & (sym.pickaxe < 3)) 
+
+29 mask = mask.at[:, MAKE_DIAMOND_PICKAXE]. set (
+
+30 ct & (sym.wood >= 1) & (sym.diamond >= 3) & (sym.pickaxe < 4)) 
+
+31 32 # Swords 
+
+33 mask = mask.at[:, MAKE_WOOD_SWORD]. set (
+
+34 ct & (sym.wood >= 1) & (sym.sword < 1)) 
+
+35 mask = mask.at[:, MAKE_STONE_SWORD]. set (
+
+36 ct & (sym.wood >= 1) & (sym.stone >= 1) & (sym.sword < 2)) 
+
+37 mask = mask.at[:, MAKE_IRON_SWORD]. set (
+
+38 ct_fn & (sym.wood >= 1) & (sym.stone >= 1) & (sym.iron >= 1) 
+
+39 & (sym.coal >= 1) & (sym.sword < 3)) 
+
+40 mask = mask.at[:, MAKE_DIAMOND_SWORD]. set (
+
+41 ct & (sym.wood >= 1) & (sym.diamond >= 2) & (sym.sword < 4)) 
+
+42 43 # Armour 
+
+44 mask = mask.at[:, MAKE_IRON_ARMOUR]. set (
+
+45 ct_fn & (sym.iron >= 3) & (sym.coal >= 3) 
+
+46 & ((sym.armour < 1). sum (axis=-1) > 0)) 
+
+47 mask = mask.at[:, MAKE_DIAMOND_ARMOUR]. set (
+
+48 ct & (sym.diamond >= 3) & ((sym.armour < 2). sum (axis=-1) > 0)) 
+
+49 50 # Ranged / consumables 
+
+51 mask = mask.at[:, SHOOT_ARROW]. set ((sym.arrows >= 1) & (sym.bow >= 1)) 
+
+52 mask = mask.at[:, MAKE_ARROW]. set (
+
+53 ct & (sym.wood >= 1) & (sym.stone >= 1) & (sym.arrows < 99)) 
+
+54 mask = mask.at[:, MAKE_TORCH]. set (
+
+55 ct & (sym.wood >= 1) & (sym.coal >= 1) & (sym.torches < 99)) 
+
+56 57 # Spells 
+
+58 mask = mask.at[:, CAST_FIREBALL]. set (
+
+59 sym.learned_spells[:, 0] & (sym.player_mana >= 2)) 
+
+60 mask = mask.at[:, CAST_ICEBALL]. set (
+
+61 sym.learned_spells[:, 1] & (sym.player_mana >= 2)) 
+
+62 63 # Potions 
+
+64 for i in range (6): 
+
+65 mask = mask.at[:, DRINK_POTION_RED + i]. set (sym.potions[:, i] >= 1) 
+
+66 67 # Books, enchanting 
+
+68 mask = mask.at[:, READ_BOOK]. set (sym.books >= 1) 
+
+69 has_gem = (sym.ruby >= 1) | (sym.sapphire >= 1) 
+
+70 can_enchant = (sym.has_enchant_fire | sym.has_enchant_ice) \
+
+71 & (sym.player_mana >= 9) & has_gem 
+
+72 mask = mask.at[:, ENCHANT_SWORD]. set (can_enchant & (sym.sword >= 1)) 
+
+73 mask = mask.at[:, ENCHANT_ARMOUR]. set (
+
+74 can_enchant & (sym.armour. sum (axis=-1) > 0)) 
+
+75 mask = mask.at[:, ENCHANT_BOW]. set (can_enchant & (sym.bow >= 1)) 
+
+76 77 # Floor transitions 
+
+78 current_kills = sym.monsters_killed[ jnp .arange(num_envs), sym.player_level] 
+
+79 mask = mask.at[:, DESCEND]. set (
+
+80 sym.on_down_ladder & (current_kills >= 8)) 
+
+81 mask = mask.at[:, ASCEND]. set (
+
+82 sym.on_up_ladder & (sym.player_level > 0)) 
+
+83 84 # Level up (xp >= 1, attribute < max) 
+
+85 can_level = sym.player_xp >= 1 
+
+86 mask = mask.at[:, LEVEL_UP_DEXTERITY]. set (
+
+87 can_level & (sym.player_dexterity < 5)) 
+
+88 mask = mask.at[:, LEVEL_UP_STRENGTH]. set (
+
+89 can_level & (sym.player_strength < 5)) 
+
+90 mask = mask.at[:, LEVEL_UP_INTELLIGENCE]. set (
+
+91 can_level & (sym.player_intelligence < 5)) 
+
+92 93 # Movement: mask walking into solid blocks, water, or lava 
+
+94 mask = mask.at[:, LEFT]. set (~is_blocked(sym.block_left)) 
+
+95 mask = mask.at[:, RIGHT]. set (~is_blocked(sym.block_right)) 
+
+96 mask = mask.at[:, UP]. set (~is_blocked(sym.block_up)) 
+
+97 mask = mask.at[:, DOWN]. set (~is_blocked(sym.block_down)) 
+
+98 99 # Sleep/rest lock: only NOOP while sleeping or resting 
+
+100 locked = (sym.is_sleeping | sym.is_resting)[:, None ]
+
+101 noop_only = jnp .zeros((num_envs, num_actions), dtype= jnp .bool_) 
+
+102 noop_only = noop_only.at[:, NOOP]. set (True )
+
+103 mask = jnp .where(locked, noop_only, mask) 
+
+104 return mask 
+
+25 Listing 2: Craftax-Classic validity function (17 actions). 
+
+1 def craftax_classic_action_mask(sym): 
+
+2 num_envs = sym.wood.shape[0] 
+
+3 mask = jnp .ones((num_envs, 17), dtype= jnp .bool_) 
+
+45 ct = sym.has_crafting_table 
+
+6 fn = sym.has_furnace 
+
+7 ct_fn = ct & fn 
+
+89 # Placement 
+
+10 mask = mask.at[:, PLACE_STONE]. set (sym.stone >= 1) 
+
+11 mask = mask.at[:, PLACE_TABLE]. set (sym.wood >= 2) 
+
+12 mask = mask.at[:, PLACE_FURNACE]. set (sym.stone >= 1) 
+
+13 mask = mask.at[:, PLACE_PLANT]. set (sym.sapling >= 1) 
+
+14 15 # Pickaxes 
+
+16 mask = mask.at[:, MAKE_WOOD_PICKAXE]. set (
+
+17 ct & (sym.wood >= 1) & ~sym.wood_pickaxe) 
+
+18 mask = mask.at[:, MAKE_STONE_PICKAXE]. set (
+
+19 ct & (sym.wood >= 1) & (sym.stone >= 1) & ~sym.stone_pickaxe) 
+
+20 mask = mask.at[:, MAKE_IRON_PICKAXE]. set (
+
+21 ct_fn & (sym.wood >= 1) & (sym.stone >= 1) 
+
+22 & (sym.iron >= 1) & (sym.coal >= 1) & ~sym.iron_pickaxe) 
+
+23 24 # Swords 
+
+25 mask = mask.at[:, MAKE_WOOD_SWORD]. set (
+
+26 ct & (sym.wood >= 1) & ~sym.wood_sword) 
+
+27 mask = mask.at[:, MAKE_STONE_SWORD]. set (
+
+28 ct & (sym.wood >= 1) & (sym.stone >= 1) & ~sym.stone_sword) 
+
+29 mask = mask.at[:, MAKE_IRON_SWORD]. set (
+
+30 ct_fn & (sym.wood >= 1) & (sym.stone >= 1) 
+
+31 & (sym.iron >= 1) & (sym.coal >= 1) & ~sym.iron_sword) 
+
+32 33 # Movement: block walking into lava 
+
+34 mask = mask.at[:, LEFT]. set (sym.block_left != LAVA) 
+
+35 mask = mask.at[:, RIGHT]. set (sym.block_right != LAVA) 
+
+36 mask = mask.at[:, UP]. set (sym.block_up != LAVA) 
+
+37 mask = mask.at[:, DOWN]. set (sym.block_down != LAVA) 
+
+38 39 # Do: only when facing something interactable 
+
+40 fb = sym.facing_block 
+
+41 can_do = (sym.facing_has_mob | (fb == TREE) | (fb == WATER) 
+
+42 | ((fb == STONE) & sym.wood_pickaxe) 
+
+43 | ((fb == COAL) & sym.wood_pickaxe) 
+
+44 | ((fb == IRON) & sym.stone_pickaxe) 
+
+45 | ((fb == DIAMOND) & sym.iron_pickaxe) 
+
+46 | (fb == RIPE_PLANT) | (fb == GRASS)) 
+
+47 mask = mask.at[:, DO]. set (can_do) 
+
+48 49 # Sleep lock 
+
+50 locked = sym.is_sleeping[:, None ]
+
+51 noop_only = jnp .zeros((num_envs, 17), dtype= jnp .bool_) 
+
+52 noop_only = noop_only.at[:, NOOP]. set (True )
+
+53 mask = jnp .where(locked, noop_only, mask) 
+
+54 return mask 
+
+Listing 3: MiniHack Corridor-5 validity function (11 actions). 
+
+1 WALKABLE = [FLOOR, UPSTAIR, DOWNSTAIR, CORRIDOR, DOOR_OPEN] 
+
+23 def corridor_action_mask(sym, num_actions=11): 
+
+4 num_envs = sym.adjacent_tiles.shape[0] 
+
+5 mask = jnp .ones((num_envs, num_actions), dtype= jnp .bool_) 
+
+67 # Movement (0-7): allow if target tile is walkable 
+
+8 walkable = jnp .isin(sym.adjacent_tiles, jnp .array(WALKABLE)) 
+
+9 mask = mask.at[:, :8]. set (walkable) 
+
+10 11 # OPEN_DOOR (8): adjacent to a closed door 
+
+12 has_closed_door = jnp .any (
+
+13 sym.adjacent_tiles == DOOR_CLOSED, axis=-1) 
+
+14 mask = mask.at[:, OPEN_DOOR]. set (has_closed_door) 
+
+15 16 # KICK (9): adjacent to a locked door 
+
+17 has_locked_door = jnp .any (
+
+18 sym.adjacent_tiles == DOOR_LOCKED, axis=-1) 
+
+19 mask = mask.at[:, KICK]. set (has_locked_door) 
+
+20 21 # SEARCH_WAIT (10) always allowed 
+
+22 return mask 
+
+26 0 200 400 600 800 1000 
+
+Frames (M) 
+
+> 0
+> 20
+> 40
+> Return
+
+Episode Return      
+
+> 0200 400 600 800 1000
+
+Frames (M) 
+
+> 0.97
+> 0.98
+> 0.99
+> Accuracy
+
+Classification Accuracy 
+
+> 44
+> 46
+> 48
+> Return
+
+GT Mask Return 
+
+> 0
+> 20
+> 40
+> Return
+
+Predicted Mask Return 
+
+Mask Predictor Ablation   
+
+> Unmasked + Predictor Masked Only Masked + Predictor
+
+Figure 6: Mask predictor ablation on Craftax (PPO-Hybrid, λ = 20 ). Left: Episode return during training. Center-left: Classification accuracy. Center-right: Return with ground-truth masks. Right: Return with predicted masks. 0 200 400 600 800 1000 
+
+> 20
+> 40
+> Return
+
+Episode Return      
+
+> 0200 400 600 800 1000
+> 0.85
+> 0.90
+> 0.95
+> 1.00
+> Accuracy
+
+Classification Accuracy      
+
+> 0200 400 600 800 1000
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> Loss
+
+Classification Loss 
+
+> 44
+> 46
+> 48
+> Return
+
+GT Mask Return 
+
+> 20
+> 30
+> 40
+> Return
+
+Predicted Mask Return 
+
+Coefficient Sweep — Masked (KL Loss)   
+
+> Frames (M)
+> coef=0.1
+> coef=1
+> coef=5 coef=10 coef=20
+
+Figure 7: Classification coefficient sweep with oracle masking and KL-balanced loss on Craftax (PPO-Hybrid). Left: Episode return. Center-left: Classification accuracy. Center-right: Classification loss. Right: Final return evaluated with ground-truth masks (dark) and predicted masks (light). 0 50 100 150 200 
+
+10 −3 
+
+10 −2 
+
+10 −1 
+
+10 0
+
+> Avg Probability
+
+Prob (Valid) 
+
+0 50 100 150 200 
+
+10 −3 
+
+10 −2 
+
+10 −1 
+
+10 0
+
+> Avg Probability
+
+Prob (Invalid) 
+
+0 50 100 150 200 
+
+0.00 
+
+0.25 
+
+0.50 
+
+0.75 
+
+1.00 
+
+> Pearson r
+
+Feature Correlation 
+
+Mask Predictor Ablation (Early Training) — Descend 
+
+Frames (M) 
+
+Unmasked + Predictor Masked Only Masked + Predictor 
+
+Figure 8: Suppression profile of the descend action during early training (PPO-Hybrid, λ = 20 ). Left: probability at valid states (log scale). Center: probability at invalid states (log scale). Right: Pearson correlation between feature representations of valid and invalid states. 27

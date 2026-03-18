@@ -1,0 +1,883 @@
+Title: Learning When to Sample: Confidence-Aware Self-Consistency for Efficient LLM Chain-of-Thought Reasoning
+
+URL Source: https://arxiv.org/pdf/2603.08999v1
+
+Published Time: Wed, 11 Mar 2026 00:18:04 GMT
+
+Number of Pages: 15
+
+Markdown Content:
+## Learning When to Sample: Confidence-Aware Self-Consistency for Efficient LLM Chain-of-Thought Reasoning 
+
+Juming Xiong 1, Kevin Guo 1, Congning Ni 2, Chao Yan 2,Katherine Brown 2, Avinash Baidya 3, Xiang Gao 3, Bradley Marlin 1,2 , Zhijun Yin 1,2 ,
+
+> 1
+
+Vanderbilt University, 2Vanderbilt University Medical Center, 3Intuit AI Research 
+
+Abstract 
+
+Large language models (LLMs) achieve strong reasoning performance through chain-of-thought (CoT) reasoning, yet often generate unnecessarily long reasoning paths that incur high inference cost. Recent self-consistency-based approaches further improve accuracy but require sampling and aggregating multi-ple reasoning trajectories, leading to substan-tial additional computational overhead. This paper introduces a confidence-aware decision framework that analyzes a single completed reasoning trajectory to adaptively select be-tween single-path and multi-path reasoning. The framework is trained using sentence-level numeric and linguistic features extracted from intermediate reasoning states in the MedQA dataset and generalizes effectively to MathQA, MedMCQA, and MMLU without additional fine-tuning. Experimental results show that the proposed method maintains accuracy compa-rable to multi-path baselines while using up to 80% fewer tokens. These findings demonstrate that reasoning trajectories contain rich signals for uncertainty estimation, enabling a simple, transferable mechanism to balance accuracy and efficiency in LLM reasoning. 
+
+1 Introduction 
+
+Large language models (LLMs) have recently demonstrated strong intrinsic reasoning capabili-ties, enabling effective performance in a wide range of tasks, including mathematical problem solving, commonsense reasoning, and scientific question answering (Sprague et al., 2025; Wei et al., 2022b; Kojima et al., 2022b). This emerging reasoning ability represents an important step toward general-purpose problem-solving systems, as LLMs can au-tonomously decompose complex problems and pro-duce coherent logical solutions (Wei et al., 2022a; Yao et al., 2023a). Despite these intrinsic capabili-ties, the reasoning process remains highly unstable, exhibiting a pronounced sensitivity to localized errors that rapidly propagate through the sequen-tial generation trajectory (Peng et al., 2025). This phenomenon of error accumulation limits the reli-ability of single-pass decoding, suggesting that a unitary generation approach is insufficient to en-sure the required fidelity and robustness in complex problem-solving scenarios (Song et al., 2025). To further improve reasoning quality, prior work has introduced sampling-based aggregation meth-ods such as self-consistency (Wang et al., 2023), which leverage multiple stochastic rollouts to com-bine diverse reasoning trajectories. By sampling multiple Chain-of-Thought (CoT) paths and aggre-gating them via majority voting or probabilistic consensus, these approaches substantially enhance robustness and accuracy compared to single-path reasoning. However, such gains come at a sig-nificantly high computational cost. Reasoning-oriented inference typically involves generating longer outputs, performing deeper model compu-tations, and consuming considerably more compu-tational and energy resources (Samsi et al., 2023; Fernandez et al., 2025). Consequently, balancing reasoning performance and inference efficiency re-mains a fundamental challenge. Motivated by this concern, recent work on ef-ficient reasoning has explored adaptive computa-tion and early-exit strategies that aim to reduce token usage by dynamically terminating genera-tion once sufficient evidence is observed. A rep-resentative example is dynamic voting (Xue et al., 2023), which reduces inference cost by terminating multi-sampled reasoning once sufficient agreement is reached across sampled chains. It achieves ac-curacy comparable to self-consistency while using fewer reasoning paths. Related approaches simi-larly exploit agreement or consensus signals across multiple generations to balance accuracy and effi-ciency (Zhou et al., 2023). Despite these efficiency gains, such methods still fundamentally rely on sampling and aggregating multiple reasoning tra-
+
+> arXiv:2603.08999v1 [cs.CL] 9 Mar 2026
+
+jectories, incurring nontrivial computational over-head. Moreover, their termination decisions are im-plicitly driven by majority patterns across sampled chains rather than explicit confidence estimation within a single reasoning process (Kadavath et al., 2022). As a result, these approaches remain sensi-tive to sampling variance and struggle to provide fine-grained, instance-level control over computa-tion, limiting both their reliability and scalability (Liu et al., 2023). In this work, we propose a reasoning frame-work that monitors and controls the reasoning pro-cess of LLMs using a single CoT reasoning tra-jectory. Instead of relying on multi-path sampling, our method dynamically decides whether to con-tinue or terminate generation based on sentence-level numeric and linguistic features that capture confidence, uncertainty, and temporal reasoning dynamics. By estimating the model’s confidence and analyzing linguistic patterns in the reasoning path, the framework adaptively determines whether to accept paths deemed likely correct, while re-quiring multiple runs for those assessed as likely wrong. This design yields substantial token savings while maintaining answer accuracy comparable to multi-sampling-based approaches. We evaluate the proposed framework on five LLMs, GPT-OSS 20B (OpenAI et al., 2025), LLaMA 3.1 8B (Dubey et al., 2024), Qwen2.5 7B (Yang et al., 2025b), (Qwen3 14B, Qwen3 32B) (Yang et al., 2025a), across four different datasets, MedQA (Jin et al., 2021), MathQA(Amini et al., 2019), MedMCQA (Pal et al., 2022), and MMLU (Hendrycks et al., 2020). Experimental results demonstrate that confidence-aware can substan-tially improve inference efficiency while preserving strong performance. In summary, our contributions are threefold: • We propose a confidence-aware reasoning framework that analyzes a single completed CoT trajectory to determine whether ad-ditional multi-path reasoning is necessary, avoiding unnecessary sampling and compu-tation. • We introduce an attention-based recurrent neu-ral network (RNN) decision model that lever-ages sentence-wise numeric and linguistic fea-tures to capture temporal reasoning dynamics and assess the reliability of the reasoning pro-cess. • We demonstrate the generality and robust-ness of the proposed approach through ex-tensive evaluation across multiple LLMs and benchmarks, and provide analysis showing that the employed features are interpretable and closely aligned with reasoning behavior. 
+
+2 Related Work 
+
+2.1 Reasoning in Large Language Models 
+
+LLMs have demonstrated substantial improve-ments in reasoning through methods that encour-age structured intermediate steps. CoT prompting enables models to generate interpretable step-by-step reasoning traces, significantly improving ac-curacy across different complex tasks (Wei et al., 2022b; Kojima et al., 2022a). To enhance reliabil-ity and mitigate stochastic failures, self-consistency samples multiple reasoning paths and selects the answer that is most frequently generated (Wang et al., 2023). Other prominent techniques include question decomposition and planning-based frame-works, such as Least-to-Most prompting (Zhou et al., 2022), which break complex queries into subtasks or explore alternative reasoning trajecto-ries to strengthen coherence and coverage. Recent advances have further expanded these capabilities through test-time compute scaling, where models allocate additional computational resources dur-ing inference to improve reasoning performance (Snell et al., 2024; Bi et al., 2024). Self-refinement methods enable models to iteratively critique and improve their own outputs without additional train-ing (Madaan et al., 2023), while process reward models (PRMs) provide fine-grained step-level su-pervision to guide reasoning and correct intermedi-ate errors (Setlur et al., 2025; Zhang et al., 2025). Furthermore, tool-augmented approaches extend intrinsic reasoning capabilities by integrating exter-nal retrieval or code execution modules, facilitating grounded or verifiable computation, as exempli-fied by ReAct and Toolformer (Yao et al., 2023b; Schick et al., 2023; Chen et al., 2022). However, these structured reasoning methods universally re-quire generating longer sequences or processing multiple reasoning paths, leading directly to a sub-stantial increase in inference cost (Manglik et al., 2024; Snell et al., 2024). 
+
+2.2 Uncertainty Estimation in Reasoning 
+
+Uncertainty estimation has become an essential di-agnostic tool for assessing and guiding the quality of reasoning in LLMs. Recent studies have exam-ined how model confidence, often derived from token probabilities, correlates with reasoning cor-rectness, showing that probability trends can signal both the completeness of the reasoning and the likelihood of error (Kadavath et al., 2022). Other works prompt LLMs to express verbalized self-confidence during generation, revealing how inter-nal uncertainty manifests linguistically (Tian et al., 2023). Beyond single-path diagnostics, semantic-based approaches measure the variability across multiple semantically equivalent reasoning chains to estimate epistemic uncertainty, and are often used for hallucination detection (Kuhn et al., 2023; Farquhar et al., 2024; Baan et al., 2023). Building on these signals, confidence enhanced reasoning (Razghandi et al., 2025) assigns confidence scores to intermediate reasoning steps and uses them to weight and aggregate multiple CoT paths, improv-ing robustness over vanilla self-consistency by ex-plicitly leveraging uncertainty structure. 
+
+2.3 Adaptive and Early-Exit Reasoning 
+
+To mitigate the high computational burden associ-ated with extended reasoning traces, adaptive ter-mination strategies, or early-exit reasoning, aim to stop generation once a high-confidence solution has been formed. Initial approaches, such as dynamic voting (Xue et al., 2023), mitigate inconsistency by aggregating predictions from multiple reasoning trajectories to satisfy a fixed computational bud-get. Crucially, however, these multi-path strategies still necessitate sampling several complete reason-ing chains, which remains costly in terms of to-ken usage and computational overhead. More re-cent work focuses on training decision models to learn dynamic stopping policies. Confident adap-tive language modeling (Schuster et al., 2022) intro-duces token-level early exits inside the Transformer and calibrates their confidence so that the final se-quence quality remains within a user-specified tol-erance of the full computation, achieving substan-tial speedups while controlling worst-case degra-dation. A complementary line of research applies reinforcement learning to latent reasoning mod-els (Hao et al., 2025; Ning et al., 2025). In these approaches, a halting head, trained to adaptively determine when to terminate the latent reasoning process, is optimized over internal hidden states to shorten computation on easy instances while main-taining accuracy. However, this method has limited generalization capabilities. The learned stopping Question 1   
+
+> LLM
+> S1
+> S1 S2 Sn
+> S1
+
+…       
+
+> S2
+> S2
+> S1 S2
+> Sn
+> Sn
+> Sn
+> …
+> …
+> …
+> 𝑷 ≥𝝉
+> 𝑷 <𝝉
+> Question n
+> … S1 S2 Sn
+
+…
+
+Figure 1: Overview of the decision framework. For each question, the language model L generates a com-plete reasoning trajectory S1, S 2, . . . , S n. From this tra-jectory, sentence-wise numeric and linguistic features are extracted to form a temporal feature sequence. An attention-based recurrent decision model then analyzes this sequence and estimates the probability P that the greedy reasoning path leads to a correct final answer. A confidence threshold τ is used to determine whether additional multi-path reasoning is necessary: P > τ ⇒
+
+likely correct (accept greedy output) , while P < τ ⇒
+
+likely wrong (apply multi-path reasoning such as dy-namic voting for enhancement) .
+
+strategy is closely tied to the architecture and inter-nal state representation of the source model. Fur-thermore, its effectiveness is sensitive to the train-ing data distribution and reward settings. Therefore, without extensive retraining and recalibration, this strategy may not reliably transfer to different LLM backbones, different prompt formats, or different benchmark domains. Inspired by these studies, we develop a training-based decision model that employs a Gated Recur-rent Unit (GRU) (Cho et al., 2014) network to ex-plicitly capture and model sentence-level reasoning dynamics within a single CoT trajectory. Unlike token-level thresholding or computationally expen-sive multi-path aggregation methods, our model is explicitly trained to predict whether an ongoing reasoning process will ultimately lead to a correct or incorrect outcome. This learned mechanism en-ables adaptive, single-chain early termination of redundant reasoning, substantially reducing token usage while maintaining comparable accuracy. 
+
+3 Method 
+
+3.1 Sentence-Level Per-Choice Prediction from Logits 
+
+To monitor the reasoning dynamics during CoT generation, we first compute sentence-level per-choice probabilities from token-level logits. Given a question q with K answer candidates 
+
+{Ai}Ki=1 , a LLM produces a CoT reasoning r =(t1, t 2, . . . , t T ) composed of tokens tt. At each reasoning sentence, we extract the model’s output logits over the vocabulary V :
+
+zt = fθ(tt | q, r <t ), (1) where fθ(·) denotes the LLM parameterized by θ.To estimate the likelihood of each answer op-tion Ai given the reasoning prefix up to the s-th sentence, we concatenate the partial reasoning text 
+
+r1: s with each answer and compute its conditional probability: 
+
+P (Ai | q, r 1: s) = 
+
+> |Ai|
+
+Y
+
+> j=1
+
+p(aij | q, r 1: s, a i,<j ), (2) where aij is the j-th token of the i-th answer can-didates. For numerical stability, we use the log-probability form: 
+
+log P (Ai | q, r 1: s) = 
+
+> |Ai|
+
+X
+
+> j=1
+
+log p(aij | q, r 1: s, a i,<j ).
+
+(3) The above quantity measures how the model’s intermediate reasoning affects its belief in each choice. We normalize these scores across all op-tions to obtain a sentence-level categorical distribu-tion: 
+
+ps(Ai) = exp   log P (Ai | q, r 1: s)PKk=1 exp   log P (Ak | q, r 1: s) . (4) This yields a probability vector ps =[ps(A1), p s(A2), . . . , p s(AK )] for each reasoning sentence s, representing the model’s evolving be-liefs over answer choices. Sentence boundaries are detected using punctuation or end-of-sentence to-kens, and we record these per-sentence trajectories for later analysis and supervision in the early-exit training stage. 
+
+3.2 Decision Framework 
+
+We consider a setting where a complete greedy chain-of-thought (CoT) reasoning path is gener-ated for every example. Given a question, greedy decoding produces the full CoT and a greedy final answer. A lightweight policy model then estimates the probability that the greedy answer is correct based on signals extracted from the completed tra-jectory. The policy outputs a scalar score ˆp ∈ [0 , 1] 
+
+and applies a single confidence threshold τ to par-tition examples into two decision outcomes: likely-correct if ˆp ≥ τ, 
+
+likely-wrong otherwise . (5)                                   
+
+> Idx Feature Description 1ptProbability at sentence tfrom greedy decoding. 2HtPer-sentence entropy t.3pt/log(1 + Lt)Length-normalized probability. 4∆ptFirst difference of probability. 5∆HtFirst difference of entropy. 6σ(k)
+> tsd. of recent probabilities. 7r(k)
+> tRange of recent probabilities. 8LtPrefix length in word tokens. 9EMA (p)tExponential moving average of pt.10 ∆EMA (p)tFirst difference of EMA (p)t.11 z(pt)Standardized probability over the trajectory. 12 z(EMA (p)t)Standardized EMA probability.
+
+Table 1: Numeric trajectory features extracted at each sentence t.
+
+Predictions in the likely-correct group accept the greedy answer, while predictions in the likely-wrong group are routed to a stronger but more ex-pensive procedure. 
+
+3.2.1 Feature Extraction 
+
+We extract a sentence-level trajectory from the com-pleted greedy CoT. The CoT text is segmented into T sentences {st}Tt=1 using punctuation and newline boundaries. For each sentence st, the inference pipeline provides a probability signal 
+
+pt ∈ (0 , 1) (e.g., a per-sentence confidence proxy from greedy decoding) and an uncertainty signal 
+
+Ht (per-sentence entropy). We additionally com-pute a prefix length Lt, defined as the cumulative word-token count in the CoT prefix up to sentence 
+
+t. This yields a trajectory 
+
+Z = {(pt, H t, L t, s t)}Tt=1 . (6) From Z, we construct a per-sentence feature vector by concatenating numeric trajectory features and lightweight linguistic features. The resulting feature sequence is X ∈ RT ×D, where D = 32 in the full setting. 
+
+Numeric trajectory features. Table 1 sum-marizes the numeric features computed from 
+
+(pt, H t, L t). These features capture confidence magnitude, uncertainty, temporal trends, and short-term stability along the reasoning trajectory. 
+
+Linguistic features. In addition to numeric sig-nals, we extract lightweight linguistic features from the sentence text st and its relation to the prompt (question and answer options). These features capture text statistics, reasoning style, and topi-cal alignment, without using any text embeddings. Table 2 summarizes the linguistic features. Category Features Text statistics token count; character count; average token length Stop word stop word ratio Punctuation comma, period, question, and excla-mation counts; punctuation density Character patterns digit ratio; uppercase ratio Prompt overlap overlap counts with question and op-tions; normalized overlap ratios Reasoning markers hedge word count; certainty word count; logical connector count Position normalized sentence position within the CoT 
+
+Table 2: Linguistic features extracted from each sen-tence st.
+
+In our main experiments, we use both nu-meric and linguistic features, resulting in a 32-dimensional feature vector at each sentence. 
+
+3.2.2 Model Architecture 
+
+The offline detector is a compact sequence model that operates on the complete feature trajectory extracted from a fully generated greedy chain-of-thought (CoT). The input is a variable-length feature sequence X ∈ RT ×D together with a bi-nary mask m ∈ { 0, 1}T indicating valid sentences, where D depends on the selected feature configu-ration. The model consists of the following blocks: • Attention-based feature gating block. We employ an attention-based feature gating block to adaptively reweight the input feature sequence X ∈ RT ×D. Using the padding mask m ∈ { 0, 1}T , we first compute a mask-aware mean-pooled summary 
+
+s =
+
+PTt=1 mt Xt
+
+PTt=1 mt
+
+,
+
+which captures trajectory-level feature statistics while ignoring padded sentences. The summary vector is passed through a lightweight two-layer MLP with ReLU and sigmoid activations to produce channel-wise attention weights g ∈ (0 , 1) D. The gated feature sequence is then computed as 
+
+˜Xt = Xt ⊙ g for all valid sentences, enabling adaptive reweighting of feature dimensions based on the overall trajectory characteristics. • Multi-head self-attention block. The se-quence of contextual representations H ∈
+
+RT ×H is further processed by a lightweight multi-head self-attention block operating at model dimension H with four attention heads. The block follows a pre-normalization Trans-former structure consisting of LayerNorm, multi-head self-attention with residual con-nections, and a position-wise feed-forward sublayer. A key-padding mask derived from 
+
+m prevents attention to padded positions. In offline operation, the attention mechanism is non-causal, allowing each sentence to attend to all valid sentences in the trajectory. The output maintains the same dimensionality as 
+
+H while enhancing the modeling of dependen-cies across reasoning sentences. • GRU encoder block. The gated sequence 
+
+˜X is encoded by a single-layer unidirectional gated recurrent unit (GRU) with hidden size 
+
+H = 64 . The GRU produces contextual representations H = [ h1, . . . , hT ] ∈ RT ×H ,capturing temporal dependencies in the fea-ture dynamics across the reasoning trajectory. Variable-length sequences are handled using packed representations so that padded sen-tences do not influence the recurrent updates. • Position-wise projection head. Each contex-tual representation is mapped to a scalar logit by a position-wise multilayer perceptron. The head consists of LayerNorm followed by a two-layer MLP with hidden dimension 32 and ReLU activation, producing per-sentence log-its {ℓt}Tt=1 and probabilities qt = σ(ℓt). The final-sentence probability qT is used as the trajectory-level confidence score for offline correctness detection. 
+
+4 Experiments 
+
+Datasets We evaluated our method on four multiple-choice question answering datasets that cover both medical and general domains. • MedQA (Jin et al., 2021): A large-scale med-ical exam dataset derived from USMLE-style questions, containing expert-authored prob-lems across multiple clinical topics. Assesses medical reasoning and factual recall in long-context settings. • MedMCQA (Pal et al., 2022): A challenging corpus of multiple-choice medical questions collected from Indian medical entrance exams. It contains over 200,000 questions and tests domain comprehension and knowledge inte-gration. • MathQA (Amini et al., 2019): A dataset of arithmetic and commonsense mathematical problems requiring multi-sentence symbolic reasoning. We use the multiple-choice version standardized by prior reasoning benchmarks. • MMLU (Hendrycks et al., 2020): A broad evaluation benchmark spanning 57 subjects, ranging from STEM to humanities, designed to assess general knowledge and reasoning in large language models. 
+
+Models: We evaluate our approach on a diverse set of open-source large language models span-ning multiple architectures and parameter scales. Experiments are conducted using GPT-OSS 20B (OpenAI et al., 2025), Meta Llama 3.1 8B Instruct (Dubey et al., 2024), Qwen 2.5 7B (Yang et al., 2025b), Qwen 3 14B and Qwen 3 32B (Yang et al., 2025a). All models support autoregressive chain-of-thought generation with probability outputs, en-abling a unified offline detection pipeline across different reasoning engines. GPT-OSS 20B serves as our primary evaluation model, and the main re-sults presented in the paper are based on this model. Experimental results for other models are deferred to the Appendix A and Appendix B. 
+
+Baselines: We compare our approach against sev-eral baselines that include greedy sampling and self-consistency as baselines and also improved versions of self-consistency by incorporating confi-dence or uncertainty in their voting phase: • Self-Consistency: (Wang et al., 2023) Ag-gregates multiple response paths to enhance reasoning accuracy. • Confidence Enhanced Reasoning: 
+
+(Razghandi et al., 2025) Aggregates multiple reasoning paths by weighting them according to confidence estimated from intermediate reasoning steps. • Dynamic Voting: (Xue et al., 2023) Adap-tively samples reasoning paths and terminates early once a voting consensus is reached to reduce computation. 
+
+5 Results 
+
+5.1 Confidence Threshold Calibration Threshold Calibration. To determine dataset-specific optimal confidence thresholds for sub-sequent experiments, we perform validation-set profiling by sweeping the confidence threshold 
+
+τ ∈ [0 , 1] and measuring both accuracy and to-ken reduction. For each dataset, we first identify the highest observed validation accuracy. We then select the threshold that maximizes token reduc-tion while constraining the relative accuracy drop to within 0.5% of the maximum observed accuracy. This procedure ensures that efficiency gains are achieved without materially degrading predictive performance. Figure 2 illustrates the performance–efficiency trade-offs for MedQA, MathQA, MedMCQA, and MMLU for GPT-OSS 20B. Accuracy (blue) and token reduction (orange) are plotted against the confidence threshold, and the selected thresholds correspond to the maximum token reduction under the ≤ 0.5% accuracy-drop constraint. We choose an accuracy loss < 0.5% because it keeps perfor-mance essentially within normal evaluation vari-ance while still enabling substantial token savings. Based on this profiling, we select: τMedQA =0.65 , τMathQA = 0 .20 , τMedMCQA = 0 .60 , and 
+
+τMMLU = 0 .80 . The calibration results for other LLMs are shown in Appendix A. 
+
+5.2 Accuracy–Efficiency Trade-off 
+
+Figure 3 presents representative results using GPT-OSS 20B to illustrate the accuracy–efficiency trade-off across reasoning strategies. Statistical signifi-cance is assessed using paired bootstrap over exam-ple IDs with 2,000 resamples. The boxplots show variability across runs for SC, CER, DV, and our method. Across all four datasets, accuracy differences between our method and the multi-path baselines are not statistically significant ( n.s. ). On MedQA, MathQA, MedMCQA, and MMLU, our perfor-mance remains within a narrow margin of SC, CER, and DV, indicating that selective enhanced reason-ing preserves solution quality. In contrast, token usage reductions are large and statistically significant ( p < 0.05 ) when compar-ing our method against SC, CER, and DV on every dataset. Relative to SC and CER, our approach reduces token consumption by approximately 69– 79% across tasks. Compared to DV, the reduction ranges from about 27–48%. The token distributions show clear separation with limited overlap, demon-strating substantial efficiency gains. The trade-off results for other LLMs are shown in Appendix B. 0.0 0.2 0.4 0.6 0.8 1.0                  
+
+> 96.0
+> 96.5
+> 97.0
+> 97.5
+> 98.0
+> 98.5
+> 99.0
+> 99.5
+> 100.0
+> 100.5
+> Accuracy (% of DV)
+> MedQA
+> 0.65
+> = 0.65
+> Acc = -0.47
+> TR = 52.9%
+> 0.0 0.2 0.4 0.6 0.8 1.0
+> MathQA
+> 0.20
+> = 0.20
+> Acc = +0.00
+> TR = 72.2%
+> 0.0 0.2 0.4 0.6 0.8 1.0
+> MedMCQA
+> 0.60
+> = 0.60
+> Acc = -0.25
+> TR = 66.7%
+> 0.0 0.2 0.4 0.6 0.8 1.0
+> MMLU
+> 0.80
+> = 0.80
+> Acc = -0.47
+> TR = 13.8%
+> 0
+> 10
+> 20
+> 30
+> 40
+> 50
+> 60
+> 70
+> 80
+> Token reduction (% of DV)
+> Confidence Threshold ( )
+> Accuracy Token Reduction
+
+Figure 2: Confidence Threshold Calibration. Accuracy (blue, % of DV) and token reduction (orange, % vs. DV) versus confidence threshold τ on MedQA, MathQA, MedMCQA, and MMLU. τ = 1 .0 is the DV baseline (100% accuracy, 0% reduction). 
+
+5.3 Consistency Across Models and Datasets 
+
+All the decision models are trained on MedQA and applied zero-shot to MathQA, MedMCQA, and MMLU within the same LLM. Since differ-ent LLMs exhibit distinct reasoning dynamics, we train a separate model per LLM. Despite being trained on a single dataset, the policy general-izes across domains and preserves the favorable accuracy–efficiency trade-off. As shown with GPT-OSS 20B in Figure 3, our method retains most of the accuracy gains of multi-path reasoning while substantially reducing token usage. Adapting to new datasets only requires lightweight confidence threshold tuning, not re-training. These results suggest that LLMs main-tain consistent reasoning patterns across domains, which our approach effectively captures. 
+
+5.4 Ablation Study 
+
+We conduct two ablations on MedQA, MathQA, MedMCQA, and MMLU, reporting accuracy and token usage (Tables 3–4). For attention blocks, adding either FA or MHSA alone yields limited or inconsistent improvements, whereas enabling both modules consistently provides the best accuracy– efficiency trade-off. Averaged across datasets, the full model improves accuracy from 0.818 to 
+
+0.820 while reducing token usage from 947 to 794 
+
+(−16 .16% ). For input features, combining numeric and linguistic features outperforms using either feature type alone. On average, Numeric + Lin-guistic improves accuracy from 0.818 to 0.820 and reduces token usage from 884 to 805 (−8.94% )compared to numeric-only, indicating that the two feature types provide complementary signals. 
+
+Dataset Variant Accuracy ↑ Token Usage ↓
+
+MedQA FA ✗, MHSA ✗ 0.822 (↑0.000) 1230 (↓0.00%) 
+
+FA ✓, MHSA ✗ 0.825 (↑0.003) 1185 (↓3.66%) 
+
+FA ✗, MHSA ✓ 0.828 (↑0.006) 1206 (↓1.95%) 
+
+FA ✓, MHSA ✓ 0.830 (↑0.008) 1026 (↓16.59%) 
+
+MathQA FA ✗, MHSA ✗ 0.847 (↑0.000) 704 (↓0.00%) 
+
+FA ✓, MHSA ✗ 0.848 (↑0.001) 689 (↓2.13%) 
+
+FA ✗, MHSA ✓ 0.847 (↑0.000) 692 (↓1.70%) 
+
+FA ✓, MHSA ✓ 0.847 (↑0.000) 629 (↓10.65%) 
+
+MedMCQA FA ✗, MHSA ✗ 0.704 (↑0.000) 1164 (↓0.00%) 
+
+FA ✓, MHSA ✗ 0.701 (↓0.003) 1100 (↓5.50%) 
+
+FA ✗, MHSA ✓ 0.701 (↓0.003) 1133 (↓2.66%) 
+
+FA ✓, MHSA ✓ 0.704 (↑0.000) 983 (↓15.55%) 
+
+MMLU FA ✗, MHSA ✗ 0.900 (↑0.000) 691 (↓0.00%) 
+
+FA ✓, MHSA ✗ 0.900 (↑0.000) 576 (↓16.64%) 
+
+FA ✗, MHSA ✓ 0.898 (↓0.002) 570 (↓17.51%) 
+
+FA ✓, MHSA ✓ 0.900 (↑0.000) 536 (↓22.43%) 
+
+Average Performance Across All Datasets 
+
+FA ✗, MHSA ✗ 0.818 (↑0.000) 947 (↓0.00%) 
+
+FA ✓, MHSA ✗ 0.819 (↑0.001) 888 (↓6.23%) 
+
+FA ✗, MHSA ✓ 0.819 (↑0.001) 900 (↓4.96%) 
+
+FA ✓, MHSA ✓ 0.820 (↑0.002) 794 (↓16.16%) 
+
+Table 3: Attention Block Ablation. Ablation of Feature Attention (FA) block and Multi-Head Self-Attention (MHSA) block. ↑ means higher is better. ↓ means lower is better. 
+
+6 Experiment Setup 
+
+We trained all models on a single NVIDIA H100 80GB GPU. The dataset was split into train, valida-tion, and test sets with sizes 8500, 500, and 1000 respectively. For multi-path experiments we use 10 sampled paths. Sampling temperature was set to 1.0. We report accuracy and token usage as primary metrics. All training and evaluation use the same data splits across runs. 
+
+7 Discussion and Conclusion 
+
+In this paper, we introduced a lightweight frame-work for selective enhanced reasoning that im-proves the accuracy–efficiency trade-off of large language model reasoning without additional sam-0.65                                                  
+
+> 0.70
+> 0.75
+> 0.80
+> 0.85
+> 0.90
+> 0.95
+> Accuracy
+> sc cer dv ours sc cer dv ours sc cer dv ours sc cer dv ours
+> n.s.
+> n.s.
+> n.s. n.s.
+> n.s.
+> n.s.
+> n.s. n.s.
+> n.s.
+> n.s.
+> n.s. n.s.
+> n.s.
+> n.s.
+> n.s. n.s.
+> MedQA MathQA MedMCQA MMLU
+> 0
+> 1000
+> 2000
+> 3000
+> 4000
+> Average Token Usage
+> sc cer dv ours sc cer dv ours sc cer dv ours sc cer dv ours
+> n.s. ***
+> n.s. ***
+> n.s. ***
+> n.s. ***
+
+Figure 3: Distribution of accuracy and token usage across datasets. Boxplots show the performance of SC, CER, DV, and Ours on MedQA, MathQA, MedMCQA, and MMLU using GPT-OSS 20B. The top panel reports accuracy, while the bottom panel reports average token usage. Statistical significance is evaluated using paired bootstrap with 2,000 resamples; n.s. indicates not significant and ∗ indicates p < 0.05 . Higher accuracy is better, whereas lower token usage indicates greater efficiency. 
+
+Dataset Variant Accuracy ↑ Token Usage ↓
+
+MedQA Numeric only 0.825 (↑0.000) 1148 (↓0.00%) 
+
+Linguistic only 0.825 (↑0.000) 1222 (↑6.45%) 
+
+Numeric + Linguistic 0.830 (↑0.005) 1070 (↓6.79%) 
+
+MathQA Numeric only 0.845 (↑0.000) 736 (↓0.00%) 
+
+Linguistic only 0.847 (↑0.002) 681 (↓7.47%) 
+
+Numeric + Linguistic 0.847 (↑0.002) 630 (↓14.40%) 
+
+MedMCQA Numeric only 0.704 (↑0.000) 1069 (↓0.00%) 
+
+Linguistic only 0.702 (↓0.002) 1144 (↑7.02%) 
+
+Numeric + Linguistic 0.704 (↑0.000) 983 (↓8.04%) 
+
+MMLU Numeric only 0.898 (↑0.000) 583 (↓0.00%) 
+
+Linguistic only 0.899 (↑0.001) 595 (↑2.06%) 
+
+Numeric + Linguistic 0.900 (↑0.002) 536 (↓8.06%) 
+
+Average Performance Across All Datasets 
+
+Numeric only 0.818 (↑0.000) 884 (↓0.00%) 
+
+Linguistic only 0.818 (↑0.000) 911 (↑3.05%) 
+
+Numeric + Linguistic 0.820 (↑0.002) 805 (↓8.94%) 
+
+Table 4: Input Feature Ablation. We compare training with only numeric features, only linguistic features, and both feature types combined. ↑ means higher is better. 
+
+↓ means lower is better. 
+
+pling, fine-tuning, or task-specific prompting. The method analyzes a completed greedy reasoning tra-jectory and predicts whether that trajectory is suf-ficiently reliable, or whether enhanced multi-path reasoning should be applied. Through extensive empirical analysis, we observe several key find-ings. First, sentence-wise trajectory features are sufficient to estimate reasoning adequacy. Aggre-gated statistics at the sentence level, including prob-ability trends, entropy dynamics, and convergence patterns, provide strong indicators of whether a reasoning trajectory is stable and trustworthy, with-out requiring access to the textual semantics. Sec-ond, reasoning patterns generalize across datasets and knowledge domains. Although the classifier is trained only on MedQA greedy traces, it transfers zero-shot to MathQA, MedMCQA, and MMLU across different knowledge domains, suggesting that reasoning difficulty exhibits consistent struc-tural signals across tasks. Finally, larger LLMs ex-hibit more distinguishable trajectory patterns than smaller models. Empirically, token probability and entropy dynamics from larger backbones provide clearer separation between reliable and unreliable reasoning trajectories, which further improves the effectiveness of selective enhanced reasoning. 
+
+8 Limitations 
+
+Our work has several limitations that can serve as a basis for further investigation. First, the framework is evaluated primarily on multiple-choice scien-tific and medical question answering tasks, where reasoning trajectories exhibit relatively structured patterns. Its effectiveness for open-ended gener-ation, long-form reasoning, or dialogue settings can be explored in future research. Second, the method analyzes completed reasoning trajectories and therefore cannot be directly used for online early-exit decisions during generation. Adapting the framework to operate causally at intermediate sentences would require additional modeling and calibration in the next step. Third, monitoring nu-meric and linguistic features improves reliability prediction, but this currently depends on access to internal signals and is mainly validated on open source language models. 
+
+Acknowledgments 
+
+This work was partially supported by a grant from the Intuit University Collaboration Program. 
+
+References 
+
+Aida Amini, Saadia Gabriel, Shanchuan Lin, Rik Koncel-Kedziorski, Yejin Choi, and Hannaneh Ha-jishirzi. 2019. Mathqa: Towards interpretable math word problem solving with operation-based for-malisms. In Proceedings of the 2019 Conference of the North American Chapter of the Association for Computational Linguistics (NAACL-HLT) , pages 2357–2367. Joris Baan, Nico Daheim, Evgenia Ilia, Dennis Ulmer, Haau-Sing Li, Raquel Fernández, Barbara Plank, Rico Sennrich, Chrysoula Zerva, and Wilker Aziz. 2023. Uncertainty in natural language generation: From theory to applications. In Proceedings of EMNLP 2023 . ArXiv:2307.15703. Zhenni Bi, Kai Han, Chuanjian Liu, Yehui Tang, and Yunhe Wang. 2024. Forest-of-thought: Scaling test-time compute for enhancing llm reasoning. arXiv preprint arXiv:2412.09078 .Wenhu Chen, Xueguang Ma, Xinyi Wang, and William W. Cohen. 2022. Program of thoughts prompting: Disentangling computation from reason-ing for numerical reasoning tasks. arXiv preprint arXiv:2211.12588 .Kyunghyun Cho, Bart van Merrienboer, Dzmitry Bah-danau, and Yoshua Bengio. 2014. On the properties of neural machine translation: Encoder-decoder ap-proaches. Preprint , arXiv:1409.1259. Abhimanyu Dubey, Abhinav Jauhri, Abhinav Pandey, Abhishek Kadian, Ahmad Al-Dahle, Aiesha Letman, Akhil Mathur, Alan Schelten, Amy Yang, Angela Fan, and 1 others. 2024. The llama 3 herd of models. 
+
+arXiv preprint arXiv:2407.21783 .Sebastian Farquhar, Jannik Kossen, Lorenz Kuhn, and Yarin Gal. 2024. Detecting hallucinations in large language models using semantic entropy. Nature ,630(8017):625–630. Jared Fernandez, Clara Na, Vashisth Tiwari, Yonatan Bisk, Sasha Luccioni, and Emma Strubell. 2025. En-ergy considerations of large language model infer-ence and efficiency optimizations. In Proceedings of the 63rd Annual Meeting of the Association for Computational Linguistics . Association for Compu-tational Linguistics. Shibo Hao, Sainbayar Sukhbaatar, DiJia Su, Xian Li, Zhiting Hu, Jason Weston, and Yuandong Tian. 2025. Training large language models to reason in a contin-uous latent space. Preprint , arXiv:2412.06769. Dan Hendrycks, Collin Burns, Steven Basart, Andy Zou, Mantas Mazeika, Dawn Song, and Jacob Steinhardt. 2020. Measuring massive multitask language under-standing. arXiv preprint arXiv:2009.03300 .Qiao Jin, Bhuwan Dhingra, William W Cohen, and Xinghua Lu. 2021. What disease does this patient have? a large-scale open domain question answering dataset from medical exams. In Proceedings of the 2021 Conference on Empirical Methods in Natural Language Processing (EMNLP) , pages 2016–2027. Saurav Kadavath, Tom Conerly, Amanda Askell, Tom Henighan, Andy Jones, Jackson Kernion, Qinqing Chen, Todor Markov, Scott Gray, Catherine Olsson, and 1 others. 2022. Language models (mostly) know what they know. arXiv preprint arXiv:2207.05221 .Takeshi Kojima, Shixiang Gu, Machel Reid, Yutaka Matsuo, and Yusuke Iwasawa. 2022a. Large lan-guage models are zero-shot reasoners. arXiv preprint arXiv:2205.11916 .Takeshi Kojima and 1 others. 2022b. Large language models are zero-shot reasoners. arXiv preprint arXiv:2205.11916 .Lorenz Kuhn, Yarin Gal, and Sebastian Farquhar. 2023. Semantic uncertainty: Linguistic invariances for un-certainty estimation in natural language generation. In International Conference on Learning Representa-tions (ICLR) . ArXiv:2302.09664. Jiacheng Liu, Zheng Jiang, Zhenhailong Wang, Yu Liu, Kaixin Xu, Jinyang Li, and Denny Zhou. 2023. Can language models estimate their own uncertainty? 
+
+arXiv preprint arXiv:2306.02243 .Aman Madaan, Niket Tandon, Prakhar Gupta, Skyler Hallinan, Luyu Gao, Sarah Wiegreffe, Uri Alon, Nouha Dziri, Shrimai Prabhumoye, Yiming Yang, and 1 others. 2023. Self-refine: Iterative refinement with self-feedback. Advances in Neural Information Processing Systems , 36. Akshay Manglik and 1 others. 2024. Inference opti-mization for large language models at scale. In Pro-ceedings of the 2024 International Conference on Machine Learning Systems .Alex Ning, Yen-Ling Kuo, and Gabe Gomes. 2025. Learning when to stop: Adaptive latent reasoning via reinforcement learning. Preprint , arXiv:2511.21581. OpenAI, :, Sandhini Agarwal, Lama Ahmad, Jason Ai, Sam Altman, Andy Applebaum, Edwin Arbus, and et al. 2025. gpt-oss-120b & gpt-oss-20b model card. 
+
+Preprint , arXiv:2508.10925. Ankit Pal, Logesh Kumar Umapathi, and Malaikan-nan Sankarasubbu. 2022. Medmcqa: A large-scale multi-subject multi-choice dataset for medical do-main question answering. In Proceedings of the 2022 Conference on Empirical Methods in Natural Lan-guage Processing (EMNLP) , pages 4561–4571. Jingyu Peng, Maolin Wang, Xiangyu Zhao, Kai Zhang, Wanyu Wang, Pengyue Jia, Qidong Liu, Ruocheng Guo, and Qi Liu. 2025. Stepwise reasoning error dis-ruption attack of llms. Preprint , arXiv:2412.11934. Ali Razghandi, Seyed Mohammad Hadi Hosseini, and Mahdieh Soleymani Baghshah. 2025. Cer: Con-fidence enhanced reasoning in llms. Preprint ,arXiv:2502.14634. Siddharth Samsi, Dan Zhao, Joseph McDonald, Baolin Li, Adam Michaleas, Michael Jones, William Berg-eron, Jeremy Kepner, Devesh Tiwari, and Vijay Gade-pally. 2023. From words to watts: Benchmarking the energy costs of large language model inference. 
+
+arXiv preprint arXiv:2310.03003 .Timo Schick, Jane Dwivedi-Yu, Roberto Dessì, Roberta Raileanu, Maria Lomeli, Luke Zettlemoyer, Nicola Cancedda, and Thomas Scialom. 2023. Toolformer: Language models can teach themselves to use tools. 
+
+arXiv preprint arXiv:2302.04761 .Tal Schuster, Adam Fisch, Jai Gupta, Mostafa Dehghani, Dara Bahri, Vinh Q. Tran, Yi Tay, and Donald Met-zler. 2022. Confident adaptive language modeling. In Advances in Neural Information Processing Sys-tems (NeurIPS) . ArXiv:2207.07061. Amrith Setlur, Saurabh Garg, Xinyang Geng, Naman Garg, Virginia Smith, and Aviral Kumar. 2025. Re-warding progress: Scaling automated process veri-fiers for llm reasoning. In International Conference on Learning Representations (ICLR) .Charlie Snell, Jaehoon Lee, Kelvin Xu, and Aviral Ku-mar. 2024. Scaling llm test-time compute optimally can be more effective than scaling model parameters. 
+
+arXiv preprint arXiv:2408.03314 .Peiyang Song, Pengrui Han, and Noah Goodman. 2025. A survey on large language model reasoning failures. In 2nd AI for Math Workshop@ ICML 2025 .Zayne Sprague, Fangcong Yin, Juan Diego Rodriguez, Dongwei Jiang, Manya Wadhwa, Prasann Singhal, Xinyu Zhao, Xi Ye, Kyle Mahowald, and Greg Durrett. 2025. To cot or not to cot? chain-of-thought helps mainly on math and symbolic reason-ing. Preprint , arXiv:2409.12183. Yucheng Tian, Hao Sun, Mike Du, Miao Chen, and Zhou Yu. 2023. Identifying uncertainty in natural lan-guage generation. arXiv preprint arXiv:2310.12242 .Xuezhi Wang, Jason Wei, Dale Schuurmans, Quoc Le, Ed H. Chi, Sharan Narang, Aakanksha Chowdhery, and Denny Zhou. 2023. Self-consistency improves chain of thought reasoning in language models. arXiv preprint arXiv:2203.11171 .Jason Wei, Yi Tay, Rishi Bommasani, Colin Raffel, Barret Zoph, Sebastian Borgeaud, Dani Yogatama, Maarten Bosma, Denny Zhou, Donald Metzler, and 1 others. 2022a. Emergent abilities of large lan-guage models. Transactions on Machine Learning Research .Jason Wei and 1 others. 2022b. Chain-of-thought prompting elicits reasoning in large language models. 
+
+arXiv preprint arXiv:2201.11903 .Mingfeng Xue, Dayiheng Liu, Wenqiang Lei, Xingzhang Ren, Baosong Yang, Jun Xie, Yidan Zhang, Dezhong Peng, and Jiancheng Lv. 2023. Dy-namic voting for efficient reasoning in large language models. In Findings of the Association for Computa-tional Linguistics: EMNLP 2023 , pages 3085–3104. An Yang, Anfeng Li, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo Zheng, Bowen Yu, Chang Gao, Chengen Huang, Chenxu Lv, Chujie Zheng, Day-iheng Liu, Fan Zhou, Fei Huang, Feng Hu, Hao Ge, Haoran Wei, Huan Lin, Jialong Tang, and 41 others. 2025a. Qwen3 technical report. Preprint ,arXiv:2505.09388. An Yang, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo Zheng, Bowen Yu, Chengyuan Li, Dayiheng Liu, Fei Huang, Haoran Wei, Huan Lin, Jian Yang, Jian-hong Tu, Jianwei Zhang, Jianxin Yang, Jiaxi Yang, Jingren Zhou, Junyang Lin, Kai Dang, and 23 oth-ers. 2025b. Qwen2.5 technical report. Preprint ,arXiv:2412.15115. S. Yao, D. Yu, J. Zhao, I. Shafran, T. Griffiths, Y. Cao, and K. Narasimhan. 2023a. Tree of thoughts: Delib-erate problem solving with large language models. In 
+
+Advances in Neural Information Processing Systems .Shunyu Yao, Jeffrey Zhao, Dian Yu, Nan Du, Izhak Shafran, Karthik Narasimhan, and Yuan Cao. 2023b. ReAct: Synergizing reasoning and acting in language models. In International Conference on Learning Representations (ICLR) .Zhenru Zhang and 1 others. 2025. The lessons of de-veloping process reward models in mathematical rea-soning. arXiv preprint arXiv:2501.07301 .Denny Zhou, Nathanael Schärli, Le Hou, Jason Wei, Nathan Scales, Dale Schuurmans, Xuezhi Wang, and Quoc Le. 2022. Least-to-most prompting enables complex reasoning in large language models. arXiv preprint arXiv:2205.10625 .Denny Zhou, Dale Schuurmans, Xuezhi Wang, Sha-ran Narang, and Jason Wei. 2023. Inference scaling laws: An empirical analysis of compute–accuracy trade-offs in large language models. arXiv preprint arXiv:2309.00623 .
+
+A Confidence Threshold Calibration for Additional LLMs 
+
+The calibrated confidence threshold for each LLM on the validation set is shown in the following fig-ures. 0.0 0.2 0.4 0.6 0.8 1.0 
+
+91 
+
+92 
+
+93 
+
+94 
+
+95 
+
+96 
+
+97 
+
+98 
+
+99 
+
+100 
+
+101 
+
+> Accuracy (% of DV)
+
+MedQA 
+
+> 0.50
+> = 0.50
+> Acc = +1.32
+> TR = 30.8%
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+MathQA 
+
+> 0.70
+> = 0.70
+> Acc = +0.00
+> TR = 0.4%
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+MedMCQA 0.65 
+
+> = 0.65
+> Acc = -0.24
+> TR = 9.2%
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+MMLU 
+
+> 0.55
+> = 0.55
+> Acc = +0.25
+> TR = 37.4%
+
+0
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 
+
+60 
+
+70 
+
+80 
+
+> Token reduction (% of DV)
+
+Confidence Threshold ( )
+
+Accuracy Token Reduction Figure 4: Confidence Threshold Calibration for Llama 3.1 8B. Accuracy (blue, % of DV) and token reduction (orange, % vs. DV) versus confidence threshold τ on MedQA, MathQA, MedMCQA, and MMLU. τ = 1 .0 is the DV baseline (100% accuracy, 0% reduction). 0.0 0.2 0.4 0.6 0.8 1.0 
+
+91 
+
+92 
+
+93 
+
+94 
+
+95 
+
+96 
+
+97 
+
+98 
+
+99 
+
+100 
+
+101 
+
+102 
+
+> Accuracy (% of DV)
+
+MedQA 
+
+> 0.55
+> = 0.55
+> Acc = +2.21
+> TR = 25.4%
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+MathQA 
+
+> 0.60
+> = 0.60
+> Acc = -0.49
+> TR = 29.1%
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+MedMCQA 
+
+> 0.60
+> = 0.60
+> Acc = -0.29
+> TR = 36.1%
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+MMLU 
+
+> 0.70
+> = 0.70
+> Acc = +0.00
+> TR = 3.1%
+
+0
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 
+
+60 
+
+70 
+
+80 
+
+90 
+
+> Token reduction (% of DV)
+
+Confidence Threshold ( )
+
+Accuracy Token Reduction 
+
+Figure 5: Confidence Threshold Calibration for Qwen 2.5 7B. Accuracy (blue, % of DV) and token reduction (orange, % vs. DV) versus confidence threshold τ on MedQA, MathQA, MedMCQA, and MMLU. τ = 1 .0 is the DV baseline (100% accuracy, 0% reduction). 0.0 0.2 0.4 0.6 0.8 1.0 
+
+92 
+
+93 
+
+94 
+
+95 
+
+96 
+
+97 
+
+98 
+
+99 
+
+100 
+
+101 
+
+> Accuracy (% of DV)
+
+MedQA 
+
+> 0.50
+> = 0.50
+> Acc = -0.27
+> TR = 38.0%
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+MathQA 
+
+> 0.90
+> = 0.90
+> Acc = -0.25
+> TR = 13.5%
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+MedMCQA 
+
+> 0.55
+> = 0.55
+> Acc = +0.00
+> TR = 58.6%
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+MMLU 
+
+> 0.20
+> = 0.20
+> Acc = +0.45
+> TR = 71.6%
+
+0
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 
+
+60 
+
+70 
+
+80 
+
+> Token reduction (% of DV)
+
+Confidence Threshold ( )
+
+Accuracy Token Reduction 
+
+Figure 6: Confidence Threshold Calibration for Qwen 3 14B. Accuracy (blue, % of DV) and token reduction (orange, % vs. DV) versus confidence threshold τ on MedQA, MathQA, MedMCQA, and MMLU. τ = 1 .0 is the DV baseline (100% accuracy, 0% reduction). 0.0 0.2 0.4 0.6 0.8 1.0 
+
+95 
+
+96 
+
+97 
+
+98 
+
+99 
+
+100 
+
+101 
+
+102 
+
+> Accuracy (% of DV)
+
+MedQA 
+
+> 0.35
+> = 0.35
+> Acc = +1.24
+> TR = 55.7%
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+MathQA 
+
+> 0.75
+> = 0.75
+> Acc = -0.24
+> TR = 26.2%
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+MedMCQA 0.65 
+
+> = 0.65
+> Acc = -0.24
+> TR = 57.5%
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+MMLU 
+
+> 0.30
+> = 0.30
+> Acc = +0.44
+> TR = 73.1%
+
+0
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 
+
+60 
+
+70 
+
+80 
+
+> Token reduction (% of DV)
+
+Confidence Threshold ( )
+
+Accuracy Token Reduction 
+
+Figure 7: Confidence Threshold Calibration for Qwen 3 32B. Accuracy (blue, % of DV) and token reduction (orange, % vs. DV) versus confidence threshold τ on MedQA, MathQA, MedMCQA, and MMLU. τ = 1 .0 is the DV baseline (100% accuracy, 0% reduction). B Accuracy–Efficiency Trade-off Results for Additional LLMs 
+
+All LLMs are trained on the MedQA Dataset and directly applied to other datasets. The results are shown in the following tables 0.55                                                     
+
+> 0.60
+> 0.65
+> 0.70
+> 0.75
+> 0.80
+> 0.85
+> Accuracy
+> sc cer dv ours sc cer dv ours sc cer dv ours sc cer dv ours
+> n.s.
+> n.s. **
+> ***n.s.
+> n.s.
+> n.s.
+> n.s. n.s.
+> n.s.
+> n.s.
+> n.s. n.s.
+> MedQA MathQA MedMCQA MMLU
+> 0
+> 1000
+> 2000
+> 3000
+> 4000
+> Avg. Tokens
+> sc cer dv ours sc cer dv ours sc cer dv ours sc cer dv ours
+> n.s. ***
+> n.s. ***
+> n.s. ***
+> n.s. ***
+
+Figure 8: Distribution of accuracy and token usage across datasets. Boxplots show the performance of SC, CER, DV, and Ours on MedQA, MathQA, MedMCQA, and MMLU using Llama 3.1 8B. The top panel reports accuracy, while the bottom panel reports average token usage. Statistical significance is evaluated using paired bootstrap with 2,000 resamples; n.s. indicates not significant and ∗ indicates p < 0.05 . Higher accuracy is better, whereas lower token usage indicates greater efficiency.. 0.4                                                     
+
+> 0.5
+> 0.6
+> 0.7
+> 0.8
+> 0.9
+> Accuracy
+> sc cer dv ours sc cer dv ours sc cer dv ours sc cer dv ours
+> n.s.
+> n.s.
+> n.s. *
+> *n.s. **
+> n.s.
+> n.s.
+> n.s. n.s.
+> n.s.
+> n.s. **
+> MedQA MathQA MedMCQA MMLU
+> 500
+> 1000
+> 1500
+> 2000
+> 2500
+> 3000
+> Avg. Tokens
+> sc cer dv ours sc cer dv ours sc cer dv ours sc cer dv ours
+> n.s. ***
+> n.s. ***
+> n.s. ***
+> n.s. ***
+
+Figure 9: Distribution of accuracy and token usage across datasets. Boxplots show the performance of SC, CER, DV, and Ours on MedQA, MathQA, MedMCQA, and MMLU using Qwen 2.5 7B. The top panel reports accuracy, while the bottom panel reports average token usage. Statistical significance is evaluated using paired bootstrap with 2,000 resamples; n.s. indicates not significant and ∗ indicates p < 0.05 . Higher accuracy is better, whereas lower token usage indicates greater efficiency.. 0.60                                                   
+
+> 0.65
+> 0.70
+> 0.75
+> 0.80
+> 0.85
+> 0.90
+> 0.95
+> Accuracy
+> sc cer dv ours sc cer dv ours sc cer dv ours sc cer dv ours
+> *n.s.
+> n.s. n.s.
+> n.s.
+> n.s.
+> n.s. n.s.
+> n.s.
+> n.s.
+> n.s. n.s.
+> n.s.
+> n.s.
+> n.s. n.s.
+> MedQA MathQA MedMCQA MMLU
+> 0
+> 1000
+> 2000
+> 3000
+> 4000
+> 5000
+> 6000
+> Avg. Tokens
+> sc cer dv ours sc cer dv ours sc cer dv ours sc cer dv ours
+> n.s. ***
+> n.s. ***
+> n.s. ***
+> n.s. ***
+
+Figure 10: Distribution of accuracy and token usage across datasets. Boxplots show the performance of SC, CER, DV, and Ours on MedQA, MathQA, MedMCQA, and MMLU using Qwen 3 14B. The top panel reports accuracy, while the bottom panel reports average token usage. Statistical significance is evaluated using paired bootstrap with 2,000 resamples; n.s. indicates not significant and ∗ indicates p < 0.05 . Higher accuracy is better, whereas lower token usage indicates greater efficiency.. 0.65                                                    
+
+> 0.70
+> 0.75
+> 0.80
+> 0.85
+> 0.90
+> 0.95
+> Accuracy
+> sc cer dv ours sc cer dv ours sc cer dv ours sc cer dv ours
+> *n.s.
+> n.s. n.s.
+> n.s.
+> n.s.
+> n.s. n.s.
+> n.s.
+> n.s.
+> n.s. n.s.
+> n.s.
+> n.s. **
+> MedQA MathQA MedMCQA MMLU
+> 0
+> 1000
+> 2000
+> 3000
+> 4000
+> 5000
+> 6000
+> Avg. Tokens
+> sc cer dv ours sc cer dv ours sc cer dv ours sc cer dv ours
+> n.s. ***
+> n.s. ***
+> n.s. ***
+> n.s. ***
+
+Figure 11: Distribution of accuracy and token usage across datasets. Boxplots show the performance of SC, CER, DV, and Ours on MedQA, MathQA, MedMCQA, and MMLU using Qwen 3 32B. The top panel reports accuracy, while the bottom panel reports average token usage. Statistical significance is evaluated using paired bootstrap with 2,000 resamples; n.s. indicates not significant and ∗ indicates p < 0.05 . Higher accuracy is better, whereas lower token usage indicates greater efficiency..

@@ -1,0 +1,719 @@
+Title: Learning Adaptive LLM Decoding
+
+URL Source: https://arxiv.org/pdf/2603.09065v2
+
+Published Time: Tue, 17 Mar 2026 01:29:06 GMT
+
+Number of Pages: 21
+
+Markdown Content:
+# Learning Adaptive LLM Decoding 
+
+Chloe H. Su 1 2 † Zhe Ye 3 Samuel Tenka 4 Aidan Yang 4 Soonho Kong 4 Udaya Ghai 4
+
+## Abstract 
+
+Decoding from large language models (LLMs) typically relies on fixed sampling hyperparame-ters (e.g., temperature, top-p), despite substantial variation in task difficulty and uncertainty across prompts and individual decoding steps. We pro-pose to learn adaptive decoding policies that dy-namically select sampling strategies at inference time, conditioned on available compute resources. Rather than fine-tuning the language model it-self, we introduce lightweight decoding adapters trained with reinforcement learning and verifiable terminal rewards (e.g. correctness on math and coding tasks). At the sequence level, we frame decoding as a contextual bandit problem: a pol-icy selects a decoding strategy (e.g. greedy, top-
+
+k, min-p) for each prompt, conditioned on the prompt embedding and a parallel sampling bud-get. At the token level, we model decoding as a partially observable Markov decision process (POMDP), where a policy selects sampling ac-tions at each token step based on internal model features and the remaining token budget. Exper-iments on the MATH and CodeContests bench-marks show that the learned adapters improve the accuracy–budget tradeoff: on MATH, the token-level adapter improves Pass@1 accuracy by up to 10.2% over the best static baseline under a fixed token budget, while the sequence-level adapter yields 2–3% gains under fixed parallel sampling. Ablation analyses support the contribution of both sequence- and token-level adaptation. 
+
+## 1. Introduction 
+
+Large language models (LLMs) have achieved remarkable performance across domains ranging from mathematical 
+
+> †
+
+Work done during internship at Amazon. 1Department of Computer Science, Harvard University, Boston, USA 2Kempner Institute, Harvard University, Cambridge, MA, USA 3UC Berke-ley, CA, USA 4Amazon, Boston, MA 02210, USA. Corre-spondence to: Chloe Su <csu@g.harvard.edu >, Udaya Ghai 
+
+<ughai@amazon >.
+
+Preprint. March 17, 2026. 
+
+reasoning (Ren et al., 2025; Yang et al., 2024) to code gen-eration (Chen et al., 2021; Princis et al., 2025) and scientific discovery (Boiko et al., 2023). Despite this progress, infer-ence from LLMs remains a major computational bottleneck. A key source of inefficiency lies in decoding, the process by which a model samples output tokens from its predictive distribution. In current practice, decoding relies on fixed sampling hyperparameters such as temperature, top-k, and top-p, chosen statically for an entire model or dataset. This ignores the substantial heterogeneity across prompts, reason-ing styles, and even individual tokens. In many cases, the optimal decoding strategy depends on latent features such as token-level uncertainty or problem structure, with recent analyses showing that uncertainty during reasoning is often concentrated at a small number of high-entropy tokens (Lin et al., 2024; Wang et al., 2025a). Recent work has explored adaptive sampling and confidence-aware decoding, demonstrating that modulating stochastic-ity can substantially affect generation quality and reasoning performance (Nguyen et al., 2024; Zhang et al., 2024; Dhu-liawala et al., 2024; Lin et al., 2024; Wang et al., 2025a). However, these approaches typically rely on static heuristics or offline-tuned parameters, and do not incorporate decoding decisions directly into an end-to-end learning objective. In parallel, reinforcement learning with verifiable rewards (RLVR) has emerged as a powerful framework for improv-ing reasoning performance in large language models (Guo et al., 2025). However, in many RLVR pipelines, decoding strategy is treated as fixed during generation, even though the choice of sampling method directly influences the sup-port and diversity of generated outputs. One contributing factor is that commonly used decoding strategies such as top-k or nucleus sampling modify the support of the out-put distribution, which can complicate their integration into standard policy-gradient training. As a result, in widely used open-source RLVR frameworks, decoding hyperparameters such as temperature, top-k, and top-p are typically treated as fixed generation settings rather than learnable or adaptive components of the policy (von Werra et al., 2020). In practice, these hyperparameters are often adjusted post hoc at inference time to trade off accu-racy, diversity, and computational cost. This separation can induce a train–test mismatch, in which models are optimized 1
+
+> arXiv:2603.09065v2 [cs.LG] 14 Mar 2026 Learning Adaptive LLM Decoding
+
+under a fixed decoding distribution and budget, but evalu-ated or deployed under different inference-time constraints. In our experiments, explicitly conditioning the decoding policy on the available sampling budget—and training it across a range of budgets—consistently improves perfor-mance, even when evaluated at a fixed budget (Section 3.2). This suggests that exposing the policy to inference-time heterogeneity during training leads to more robust decoding behavior. Motivated by these gaps, we explore a different axis of in-ference control: learning decoding-time policies that adapt sampling strategy based on model state and available com-pute budget. Our intuition is informed by recent observa-tions on so-called “forking tokens” in reasoning tasks (Wang et al., 2025a), which suggest that a small number of high-entropy decisions can disproportionately influence the out-come of multi-step solutions. Rather than explicitly branch-ing or performing tree search, we view these observations as motivation for allowing different parts of a single reasoning trajectory to exhibit different degrees of stochasticity. In this view, encouraging exploration at uncertain decision points, while decoding more deterministically elsewhere, may im-prove accuracy under fixed compute constraints. Instead of hand-designing entropy thresholds or heuristics, we seek to learn such behavior directly from task reward. To this end, we introduce Learned Decoding Adapters , a family of reinforcement-learning–based policies that modu-late decoding during inference while leaving the underlying language model fixed. At the sequence level, we formu-late decoding strategy selection as a contextual bandit: the adapter selects a decoding configuration (e.g. greedy, top-k,top-p, or min-p) for each prompt, conditioned on prompt features and a parallel-sampling budget. The action space in this setting is constructed via a data-driven greedy selection procedure over candidate decoding strategies. At the token level, we treat decoding as a partially observable Markov decision process (POMDP): the adapter observes internal model representations and the remaining token budget, and selects a decoding action at each step. While the framework supports arbitrary decoding configurations, in our experi-ments we focus on temperature-based actions for token-level control, which provide a simple and interpretable axis for dy-namically allocating stochasticity within a single generation trajectory. We train both adapters using policy-gradient reinforcement learning (REINFORCE (Williams, 1992)) with verifiable terminal rewards, such as correctness checks on math and code problems. Experiments on the MATH and CodeCon-tests benchmarks show that the learned adapters improve the accuracy-budget tradeoff. The token-level adapter improves Pass@1 accuracy by up to 10.2% under fixed token budgets, while the sequence-level adapter outperforms strong fixed strategies under limited parallel sampling. Ablation analyses support the complementary contributions of sequence-level and token-level adaptation. 
+
+Contributions. We make the following contributions: • We formulate decoding-time inference as a policy learning problem, introducing a unified reinforcement learning framework for both prompt-level and token-level adaptation under explicit compute budgets. • We propose decoding adapters trained solely with on-line verifiable task rewards—without learned reward models, preference labels, or hand-designed decod-ing heuristics—while keeping the underlying language model fixed. • We demonstrate empirical gains on mathematical and coding reasoning benchmarks under constrained com-pute, and analyze how the learned adapters allocate stochasticity to improve solution accuracy. Figure 1 provides an overview of the proposed decoding adapter framework, illustrating both the sequence-level and token-level policies layered on top of a frozen language model under explicit compute budgets. 
+
+## 2. Methods 
+
+2.1. Preliminaries 
+
+We study inference-time control of decoding for a frozen large language model (LLM) f under explicit compute bud-gets. Our goal is to learn a lightweight decoding adapter 
+
+that modulates how tokens are sampled from f while leaving all LLM parameters fixed. 
+
+Budgets. For each problem instance, let B denote a par-allel sampling budget , quantified as the maximum number of full decoding trajectories that may be generated, and let b
+
+denote a token budget , quantified as the maximum number of decoding steps within a single trajectory. For token-level control, we also write bt = b − t for the remaining token budget at decoding step t.
+
+Base model distribution and decoding actions. Let q
+
+denote an input prompt and y<t a partial generation. The frozen LLM produces next-token logits zt = f (q, y <t ) ∈
+
+R|V| , inducing a base distribution pf (· | q, y <t ) =Softmax( zt). Decoding corresponds to sampling from this distribution, potentially after applying transformations such as temperature scaling or truncation. At each decision point (either once per sequence or once per token), the adapter selects an action from a discrete action 2Learning Adaptive LLM Decoding © 2025, Am azon W eb Services, Inc. or its affiliates. All rights reserved. Am azon Confidential and Tradem ark. 
+
+## Sequence -Level Decoding Adapter 
+
+## Contextual Bandits: commit to one 
+
+## action per sequence 
+
+# LM 
+
+## Token -Level Decoding Adapter 
+
+## “Real” Reinforcement Learning: choose an 
+
+## action for each token 
+
+DA 
+
+## x1 x2 x3 x4 x5 y1 y2 y3 … 
+
+> Greedy/Top -p/Top -
+> k/Min -pparameter
+> Temperature
+
+# LM 
+
+## x1 x2 x3 x4 x5 y1 y2 y3 …
+
+DA DA DA  
+
+> Greedy /Top -p/Top -
+> k/Min -pparameter
+> Temperature
+
+## Objective function of REINFORCE :
+
+(a) Sequence-level adapter : a single DA predicts one decoding configuration that is applied throughout generation. 6
+
+# nt Learning (from scratch!) 
+
+Token -Level Decoding Adapter 
+
+“Real” Reinforcement Learning: choose an 
+
+action for each token 
+
+# LM 
+
+x1 x2 x3 x4 x5 y1 y2 y3 …
+
+DA DA DA  
+
+> Greedy /Top -p/Top -
+> k/Min -pparameter
+> Temperature
+
+(b) Token-level adapter : the DA is invoked at each decoding step to select a (potentially different) decoding configuration per token. 
+
+Figure 1. Overview of the proposed decoding adapter (DA) for a frozen language model (LM). Blue blocks denote input tokens xi;green blocks denote generated tokens yi.
+
+space 
+
+S = {a1, a 2, . . . , a m},
+
+where each action corresponds to a decoding configuration specified by sampling parameters such as temperature ,
+
+top k , top p , and min p . We view each action a ∈ S as specifying a transformation Ta applied to the base distribu-tion, yielding an action-conditioned sampling distribution 
+
+pf,a (· | q, y <t ) ≜ Ta(pf (· | q, y <t )) ,
+
+from which the next token is sampled. Conceptually, the frozen language model together with a chosen decoding action induces a stochastic transition kernel over tokens and hidden states. The decoding adapter operates by selecting among these induced transition dynamics through its choice of decoding action. 
+
+Reward and policy. We assume access to a verifiable ter-minal reward function r, which indicates success or failure of the final generated output (e.g. correctness on math or coding problems). The adapter is parameterized by a policy 
+
+πθ (a | x), where the input x consists of features derived from the frozen LLM (e.g. prompt embeddings or hidden-state representations derived from the frozen LLM) . In the 
+
+budget-aware setting, we additionally include the relevant budget in the policy input: 
+
+x = [ e; B] or xt = [ et; bt],
+
+depending on whether decisions are made at the sequence or token level. This reflects that B governs prompt-level allocation across parallel rollouts, while bt governs within-trajectory allocation across decoding steps. 
+
+2.2. Sequence-Level: Contextual Bandits 
+
+In the sequence-level setting, the decoding adapter selects a single decoding configuration that is applied uniformly within each generation process. Because this decision is made once per prompt and determines the sampling dy-namics for the entire rollout before a terminal reward is observed, the problem naturally admits a contextual bandit formulation. Concretely, each problem instance defines a context con-sisting of a prompt representation and an inference budget. Given a prompt embedding e produced by the frozen lan-guage model and a parallel sampling budget B, the policy 
+
+πθ (a | x), x = [ e; B],
+
+selects a decoding action a ∈ S. This action specifies a sampling strategy that is held fixed for the entire generation. The language model then produces a complete output se-quence under the sampling dynamics induced by a, after which a terminal reward r(x, a ) is observed. The inclusion of B in the context reflects that sequence-level decisions govern how compute is allocated across parallel rollouts. For example, under a larger parallel sampling bud-get, more exploratory decoding strategies may be preferred, whereas smaller budgets favor conservative strategies. In contrast, sequence-level adapters do not observe token-level progress and therefore operate at the granularity of whole-sequence allocation. We train the decoding adapter to maximize expected termi-nal reward under the selected decoding policy, while encour-aging exploration across decoding strategies via entropy reg-ularization. Here, the terminal reward r(x, a ) corresponds to the evaluation metric induced by the inference procedure under budget B (e.g., Pass@ k or best-of-B), aggregating outcomes across the available parallel samples. Formally, the objective is 
+
+Jseq (θ) = Ex∼D, a ∼πθ (·| x)
+
+r(x, a )+β Ex∼D
+
+H(πθ (· | x)) ,
+
+(1) where H denotes the entropy of the policy distribution. 3Learning Adaptive LLM Decoding 
+
+In practice, we optimize this objective using a Monte Carlo policy-gradient estimator with a variance-reducing baseline. We defer implementation details to the experimental section. 
+
+2.3. Token-Level: Reinforcement Learning 
+
+In the token-level setting, the decoding adapter selects ac-tions at each decoding step, allowing the sampling strategy to vary within a single generation trajectory. Unlike the sequence-level case, decisions are made repeatedly over time and influence future states, making this setting natu-rally modeled as a partially observable Markov decision process (POMDP). Partial observability arises because the adapter does not observe the full environment state—only a compressed representation of the model’s internal activa-tions and the remaining budget. Let b denote the maximum token budget for a trajectory, and let 
+
+bt = b − t
+
+be the remaining token budget at decoding step t. At each step, the policy observes a compact state representation 
+
+xt = [ et; bt],
+
+where et is derived from the frozen language model’s hidden state embedding at step t. The policy then samples an action 
+
+at ∼ πθ (· | xt), which specifies the decoding configuration used to generate the next token. Including bt in the policy input reflects that token-level de-cisions govern how stochasticity is allocated within a single trajectory. A natural design intuition is that, when substan-tial budget remains, exploratory sampling may be beneficial, whereas near the end of a trajectory, more deterministic de-coding may help reduce variance and stabilize completion. This contrasts with the sequence-level setting, where the budget governs allocation across parallel rollouts rather than across time. Given a sequence of actions a = ( a1, . . . , a T ), the decoding process produces a complete output sequence, after which a terminal reward r(x, a) is observed. The objective is to maximize expected terminal reward: 
+
+Jtok (θ) = 1
+
+N
+
+> N
+
+X
+
+> i=1
+
+Ea∼πθ
+
+r(x(i), a). (2) We optimize this objective using standard policy-gradient methods with entropy regularization to encourage explo-ration over decoding actions. As in the sequence-level case, we use a variance-reducing baseline and defer implementa-tion details to the experimental section. 
+
+Training stability. In practice, naive application of token-level REINFORCE led to high-variance gradients and un-stable training. To mitigate this, we apply two simple but important stabilizations. First, we filter the training distri-bution to exclude prompts that produce extremely sparse or noisy reward signals. Second, we mask tokens whose next-token distribution is already highly concentrated (maximum probability exceeding 0.95), as these contribute little learn-ing signal while significantly increasing gradient variance. Without these adjustments, we were unable to obtain stable training for token-level policies. 
+
+2.4. Selection of Action Space 
+
+While our framework allows for arbitrary decoding actions, in practice we restrict the action space to a finite set of representative sampling strategies. This selection yields a compact set of decoding behaviors that are both diverse and competitive, providing sufficient expressive power to out-perform strong static baselines while keeping the individual decoding actions interpretable. 
+
+Sequence-level action selection. For the sequence-level adapter, which selects a single decoding strategy per prompt, we construct the action space using a principled, data-driven selection procedure inspired by the coverage-based strat-egy selection approach of AuPair (Mavalankar et al., 2025). Specifically, we begin with a large candidate pool of decod-ing configurations formed by combinations of temperature, top-k, top-p, and min-p values (see Section C). The candi-date pool is designed to span a range of commonly used decoding behaviors, from near-greedy to highly stochastic sampling. While these parameters can have overlapping effects, jointly varying them enables the selection procedure to identify qualitatively distinct strategies that perform well on different subsets of inputs. We then evaluate these con-figurations on held-out validation data and select a small subset of strategies that together provide strong coverage of high-performing behaviors. Concretely, the goal is to select a set of actions S ⊆ C such that, across inputs, the best-performing strategy within S
+
+achieves high reward. Intuitively, this encourages diver-sity among the selected actions while avoiding redundant configurations. This selection can be viewed as a greedy approximation to maximizing the expected performance of the induced “best-of-S” decoder, analogous to submodular maximization objectives used in prior work (Mavalankar et al., 2025). Formally, let C denote the candidate pool and define the set function 
+
+F (S) ≜ X
+
+> x∈D val
+
+max  
+
+> s∈S
+
+R(x, s ),
+
+where R(x, s ) is the reward obtained on instance x under strategy s. We choose S ⊆ C with |S| = k by approximately solving 
+
+max   
+
+> S⊆C :|S|=k
+
+F (S). (3) 4Learning Adaptive LLM Decoding 
+
+This objective is a standard instance of monotone submod-ular maximization, for which greedy selection provides a constant-factor approximation (Nemhauser et al., 1978). For completeness, we provide a full description of this proce-dure in Appendix C. 
+
+Token-level action space. For the token-level adapter, we adopt a more restricted action space and focus on temperature-based decoding actions, while holding other sampling parameters fixed. Although the framework sup-ports arbitrary decoding configurations at each step, we found temperature to be a particularly effective and inter-pretable axis for token-level control. In contrast, dynami-cally varying truncation-based parameters such as top-k or top-p at the token level introduces additional complexity in interpretability, without yielding qualitatively different behavior in our setting. Empirically, this restriction did not limit performance and enabled clearer insight into how the learned policy allocates stochasticity over time within a single trajectory. Impor-tantly, this choice reflects an experimental design decision rather than a limitation of the framework, which remains ag-nostic to the specific parameterization of decoding actions. 
+
+## 3. Sequence-Level Experiments 
+
+In this section, we evaluate the sequence-level decoding adapter, which selects a single decoding strategy per prompt under an explicit parallel sampling budget. We focus on two representative reasoning domains: mathematical problem solving and competitive programming. We set the max output length to 8092 for all sequence- and token-level experiments, except for AIME’25, where we extend this length to 38,912 as in (Team, 2025a). 
+
+3.1. Experimental Setup Datasets. We conduct experiments on MATH (Hendrycks et al., 2021) and CodeContests (Li et al., 2022). MATH consists of competition-style math problems requiring multi-step reasoning, while CodeContests contains algorithmic programming problems. Both benchmarks exhibit substan-tial heterogeneity in problem structure and uncertainty, mak-ing them well-suited for evaluating adaptive decoding. 
+
+Models. We primarily report results using Qwen3-4B (Team, 2025a), which offers a favorable trade-off be-tween model size and reasoning performance and supports both “thinking” and “non-thinking” generation modes. Ad-ditional results on Qwen2.5-Math-1.5B (Yang et al., 2024) and Qwen3-8B are provided in the appendix. 
+
+Decoding strategies and baselines. We first construct a candidate pool of decoding configurations and greedily select a small action set separately for MATH, CodeCon-tests, and a mixed math+code validation set. The selection procedure is described in Section C. We compare against two strong static baselines: (B EST ), the single fixed strat-egy that achieves the highest validation performance on the evaluation dataset, and (M IXED ), a uniform mixture over the selected action set. The latter uses the same action space as the adapter but without learning. 
+
+Prompt distributions and inference budgets. We eval-uate under both standard prompting and mixed Chain-of-Thought (CoT) prompting. We evaluate under both standard prompting and mixed Chain-of-Thought (CoT) prompting. Mixed CoT prompting is used to deliberately induce het-erogeneity in reasoning styles during training, ensuring that the adapter does not overfit to a single prompt format and remains robust to inference-time variation. For CoT-mixed training, a fixed fraction of prompts is randomly augmented with a CoT template, while the remainder use direct-answer prompting. We also evaluate multiple inference strategies, including Pass@ k with k ∈ { 1, 2, 4, 8}, which capture dif-ferent tradeoffs between compute and reliability. The paral-lel sampling budget is provided as part of the policy input when training budget-aware variants. We encode the bud-get value using a two-layer MLP, then concatenate it to the embedding of the context. 
+
+3.2. Main Results 
+
+We report mean accuracy with 95% confidence intervals, aggregated over k=3 independent runs. 
+
+Single-domain results. Tables 1 (MATH) and 2 (Code-Contests) summarize performance of the sequence-level adapter versus static baselines. Across all settings, the learned adapter outperforms both B EST and M IXED , with gains increasing under larger parallel sampling budgets, in-dicating improved use of additional rollouts. From Figure 4, we see improved performance is not due to extended length. 
+
+Effect of budget conditioning and mixed-strategy train-ing. Conditioning the policy on the parallel sampling bud-get consistently improves performance relative to budget-agnostic training. Training on a mixture of inference strate-gies further improves robustness to evaluation-time hetero-geneity, with the largest gains observed under mixed CoT prompting. Together, these results indicate that explicitly modeling inference-time constraints is a key driver of the improvements. 
+
+3.3. Mixed-Domain Training 
+
+Table 4 reports results when training a single sequence-level adapter jointly on math and coding data (with balanced sampling during training) and evaluating on each domain’s 5Learning Adaptive LLM Decoding                                                                                                                                                           
+
+> Table 1. MATH. Comparison of static sampling baselines and the sequence-level adapter under different settings. For CoT mix , we apply CoT prompting to 30% of prompts (ratio = 0 .3). Static sampling reports the best single strategy (B EST ) and a fixed mixture (M IXED ). The adapter is evaluated with a budget provided in feature set and without. Values are percentages (mean ±confidence interval).
+> Static sampling Sequence-level adapter Metric Setting Best Mixed w/o budget w/ budget Pass@1 TURN (Du et al., 2025) 72.72 w/o CoT 71.70 ±1.25 71.20 ±1.26 72.60 ±1.24 72.90 ±1.23
+> ∆Abs. (Rel.) ↑0.90 (+1.26%) ↑1.20 (+1.67%) mix CoT 72.10 ±1.24 71.93 ±1.25 73.60 ±1.22 74.20 ±1.21
+> ∆Abs. (Rel.) ↑1.50 (+2.08%) ↑2.10 (+2.91%) Pass@8 TURN (Du et al., 2025) 76.96 w/o CoT 76.70 ±1.17 76.23 ±1.18 78.30 ±1.14 78.46 ±1.14
+> ∆Abs. (Rel.) ↑1.60 (+2.09%) ↑1.76 (+2.29%) mix CoT 77.10 ±1.16 76.57 ±1.17 78.80 ±1.13 79.80 ±1.11
+> ∆Abs. (Rel.) ↑1.70 (+2.20%) ↑2.70 (+3.50%)
+> Table 2. CodeContests : comparison of static sampling strategies vs. the sequence -level sampling adapter under different settings.
+> Static sampling Sequence-level adapter Metric Setting Best Mixed w/o budget w/ budget Pass@1 w/o CoT 11.43 ±2.28 10.53 ±2.19 14.53 ±2.52 14.50 ±2.52
+> ∆Abs. (Rel.) ↑3.10 (+27.12%) ↑3.07 (+26.85%) mix CoT 13.97 ±2.48 14.80 ±2.54 17.06 ±2.69 19.70 ±2.85
+> ∆Abs. (Rel.) ↑2.26 (+15.27%) ↑4.90 (+33.11%) Pass@8 w/o CoT 22.80 ±3.00 22.23 ±2.97 26.08 ±3.14 23.10 ±3.02
+> ∆Abs. (Rel.) ↑3.28 (+14.39%) ↑0.30 (+1.32%) mix CoT 29.10 ±3.25 25.63 ±3.12 29.90 ±3.28 32.50 ±3.35
+> ∆Abs. (Rel.) ↑0.80 (+2.75%) ↑3.40 (+11.68%)
+
+original validation distribution. The adapter continues to improve over static baselines on both domains, though gains are smaller than in single-domain training. This reduction is consistent with the increased diversity of the joint task distri-bution, and highlights that the adapter can learn compromise decoding policies under heterogeneous workloads. 
+
+3.4. Policy Behavior and Qualitative Analysis Policy behavior. Figures 2 and 7 illustrate how the sequence-level adapter allocates probability mass over de-coding strategies during training. Rather than collapsing to a single strategy, the learned policy concentrates mass on a small subset of high-performing actions while main-taining non-zero probability on alternatives. This behavior is consistent with a learned trade-off between exploitation and robustness: the adapter favors reliable strategies under tight budgets, while preserving optionality when additional parallel samples are available. 
+
+Prompt-type and metric stability. At the sequence level, action distributions are broadly consistent between CoT and non-CoT prompts, suggesting that optimal strategy selec-tion is driven primarily by context and budget considerations rather than by the presence of CoT prompts. We also ob-serve only minor differences in preferred strategies across inference metrics (e.g., Pass@1 vs. Pass@8), indicating that the learned policy generalizes across evaluation criteria rather than overfitting to a single inference objective. In con-trast, prompt-dependent differences are more pronounced in token-level adaptation, where fine-grained uncertainty signals become salient. 
+
+3.5. Generalization 
+
+To assess out-of-domain generalization, we evaluate the adapter trained on MATH on (i) the CodeContests evalua-tion set and (ii) the harder mathematical reasoning dataset AIME 2025 (AIM, 2025). No additional tuning is performed on AIME. Since AIME’25 is small, we run 30 random seeds. Results in Table 3 and Table 9 show that the MATH-trained 6Learning Adaptive LLM Decoding 
+
+Table 3. AIME’25 performance comparison of a sequence -level adapter trained on MATH-train vs. numbers reported in the Qwen3-4B technical report (Team, 2025a). 
+
+Metric Setting Reported Adapter (w/ budget) Pass@1 non-thinking 19.1 20.1 ± 2.62 thinking 65.6 71.1 ± 2.96 
+
+sequence-level adapter remains competitive and can im-prove over reported baselines, supporting the view that the learned strategy-selection policy captures transferable sig-nals beyond the training distribution. 50 100 150 200 
+
+> Step
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> Action probability
+> action_0_prob
+> action_1_prob
+> action_2_prob
+> action_3_prob
+> action_4_prob
+> action_5_prob
+> 0.690
+> 0.695
+> 0.700
+> 0.705
+> 0.710
+> 0.715
+> 0.720
+> 0.725
+> 0.730
+> Validation reward
+> val reward
+
+Figure 2. Action distributions and validation reward on MATH 
+
+for sequence-level adapter strategies. Actions are defined in ta-ble 11. The x-axis denotes training progress; the left y-axis reports action probability; the right y-axis reports validation reward. 
+
+## 4. Token-Level Experiments 
+
+We evaluate the token-level decoding adapter, which se-lects a decoding action at each generation step, allowing stochasticity to vary within a single trajectory. This en-ables finer-grained inference-time control than the sequence-level adapter, which commits to a single decoding strategy per prompt. As in the sequence-level setting, we compare against strong static sampling baselines. To isolate the effect of token-level adaptation, we restrict the action space to four temperature-based decoding strategies (Table 14). 
+
+Setup. We train token-level adapters under a fixed per-sequence token budget and consider two variants: one that conditions only on the usual model context, and one that additionally conditions on the remaining token budget. Both variants are trained using the same reinforcement-learning objective described in Section 2.3. For static baselines, we evaluate greedy decoding and a fixed mixture over the same four temperature actions used by the adapter. The latter uses an identical action space but does not condition on context or budget. We note that the action space used here differs from the richer set of decoding strategies considered in the sequence-level experiments; within this restricted temperature-only space, greedy decoding achieves the strongest static performance on validation without chain of though and therefore serves as the primary static baseline. 
+
+Main results. Results on MATH are summarized in Ta-ble 5. The token-level adapter substantially outperforms all static decoding strategies. Conditioning on the remain-ing token budget yields the strongest performance, improv-ing Pass@1 by approximately 9–10% over the best static baseline. Even without explicit budget conditioning, the token-level adapter achieves consistent gains over static de-coding, indicating that per-token adaptation alone provides meaningful benefits. Notably, the magnitude of these improvements exceeds those observed for sequence-level adaptation under com-parable evaluation settings, highlighting the value of fine-grained, within-trajectory control. 
+
+Is entropy alone sufficient? To test whether token-level adaptation can be reduced to entropy-based heuristics, we train an ablation in which the adapter observes only token entropy rather than the full contextual representation. This entropy-only policy reaches a validation reward of 72.03 (averaged over 3 seeds), comparable to static decoding base-lines but far below the full token-level adapter, which ex-ceeds 80% Pass@1. This indicates that while entropy corre-lates with uncertainty, entropy alone is insufficient to recover the gains achieved by learned token-level adaptation. 
+
+Qualitative analysis. To better understand the behavior of the learned token-level policy, we conducted additional qualitative analyses examining token entropy statistics and token bucketing by entropy, position, and related summary measures (Appendix B.3). We observe that lower-entropy tokens are more frequently collapsed to near-deterministic behavior under the learned policy, while higher-entropy tokens tend to retain greater stochasticity. However, despite this trend, we did not identify simple qualitative rules or low-dimensional heuristics that fully explain the policy’s behavior. This suggests that the gains from token-level adaptation are not attributable to a small number of easily interpretable patterns. 
+
+Policy behavior. Figure 8 shows the evolution of action selection during training. Across settings, the learned policy concentrates most probability mass on the strongest static strategy while maintaining non-zero probability on alterna-tives. Validation reward increases as the policy converges toward this distribution. Because a fully collapsed policy would reduce to static decoding, these results indicate that improvements arise from selective, context-dependent devi-ations rather than wholesale changes in decoding behavior. 
+
+## 5. Related Work 
+
+Adaptive Decoding Strategies. Sampling hyperparam-eters such as temperature, top-p, and top-k are typically 7Learning Adaptive LLM Decoding                                                                                                                                                                                
+
+> Table 4. Mixed training of math and coding: comparison of static sampling strategies vs. the sequence -level sampling adapter. We use
+> Code to refer to CodeContests in this table.
+> Static sampling Sequence-level adapter Metric Setting Best Mixed w/o budget w/ budget
+> MATH Code MATH Code MATH Code MATH Code
+> Pass@1 w/o CoT 72.00 ±3.18 11.80 ±2.39 71.10 ±3.17 10.30 ±2.18 73.55 ±3.12 13.70 ±2.46 74.20 ±3.13 13.70 ±2.46
+> ∆Abs. (Rel.) ↑1.55 (2.15%) ↑1.90 (16.10%) ↑2.20 (3.06%) ↑1.90 (16.10%) mix CoT 73.80 ±3.15 17.10 ±2.69 73.30 ±3.17 14.50 ±2.52 74.80 ±3.11 18.50 ±2.89 74.70 ±3.11 18.20 ±2.76
+> ∆Abs. (Rel.) ↑1.00 (1.36%) ↑1.40 (8.19%) ↑0.90 (1.22%) ↑1.10 (6.43%) Pass@8 w/o CoT 76.30 ±3.04 14.50 ±2.52 75.70 ±3.07 14.50 ±2.52 77.70 ±2.97 17.90 ±2.74 78.00 ±2.96 19.70 ±2.85
+> ∆Abs. (Rel.) ↑0.70 (0.92%) ↑4.50 (31.03%) ↑1.70 (2.23%) ↑5.20 (35.86%) mix CoT 76.70 ±2.98 22.20 ±2.97 77.10 ±2.98 18.80 ±2.80 77.70 ±2.93 24.80 ±3.09 78.10 ±2.96 23.10 ±3.02
+> ∆Abs. (Rel.) ↑0.60 (0.78%) ↑2.60 (11.71%) ↑1.00 (1.30%) ↑0.90 (4.05%)
+> Table 5. Comparison of sampling strategies on Math : performance comparison of token -level sampling adapter versus static sampling strategies. Here budget is the remaining token budget within a sequence. Values are percentages.
+> Static sampling Adapter Metric Setting Greedy Mixed w/o budget ∆budget ∆
+> Pass@1 w/o CoT 71.33 ±1.25 71.60 ±1.25 78.28 ±1.14 +6.68 80.82 ±1.07 +9.49 mix CoT 72.10 ±1.24 72.67 ±1.24 78.52 ±1.14 +5.85 82.33 ±1.03 +10.23
+
+fixed across inputs and decoding steps, despite substantial variation in prompt difficulty and uncertainty. Several re-cent methods seek to adapt these parameters dynamically. AutoDeco (Wang et al., 2025b) trains lightweight controller heads to select decoding parameters per token. Similarly, Dhuliawala et al. (2024) propose a latent preference opti-mization framework to adjust generation behavior on the fly. These methods typically rely on learned preferences or reward models. In contrast, our decoding adapters are trained solely with task-level correctness signals and condi-tion explicitly on compute budgets. 
+
+Inference-Time Decision Making. Other work frames generation as a sequential decision process. Meta-RL ap-proaches (Qu et al., 2025) optimize token-level compute use over multi-step reasoning. Entropy-aware objectives (Cui et al., 2025) preserve exploration during fine-tuning. Un-like these approaches, our decoding policies are trained on frozen models and operate only at inference time. Closely related is (Yan et al., 2025), which adapts reasoning depth based on uncertainty dynamics, and D-LLM (Jiang et al., 2024), which adjusts computation per token. Our method differs by learning what decoding strategy to use , rather than how much compute to spend .
+
+Critical Tokens and Adaptive Sampling. Recent work identifies “forking” tokens—localized points of uncertainty with high downstream impact (Wang et al., 2025a)—and proposes to adapt generation around them. Our token-level adapter makes such adaptation learnable via reinforcement learning. While some methods (e.g., (Zhao et al., 2025; Fu et al., 2025)) post-process multiple samples to aggregate solutions or early-stop, we focus on decoding-time control without auxiliary reranking. For additional background on sampling techniques and compute-aware inference, see Appendix A. 
+
+## 6. Future Directions 
+
+Our work suggests several directions for extending adaptive decoding beyond the setting studied here. 
+
+Richer decoding policies. We restrict actions to a small discrete set of decoding operators, but decoding can more generally be viewed as a learnable mapping from the base model distribution to an induced sampling distribution. Moving to more expressive, continuously parameterized decoding transformations would fundamentally change the learning problem, introducing new challenges in optimiza-tion and sample efficiency. 
+
+Expanded action spaces. The framework naturally sup-ports decoding controls beyond sampling hyperparameters. For example, incorporating early stopping or adaptive termi-nation would allow joint control over stochasticity and gen-eration length under fixed compute budgets. More broadly, decoding adapters could allocate sampling effort within structured inference procedures, such as tree search or other multi-trajectory methods, where actions govern both branch-ing and budget allocation. 8Learning Adaptive LLM Decoding 
+
+Joint training with the base model. We treat the lan-guage model as a frozen environment and learn only a lightweight decoding policy. An important direction is to study joint or alternating training of the adapter and the underlying model, which may reduce the burden on the de-coding policy by shaping representations to better support adaptive inference. 
+
+## 7. Conclusion 
+
+We framed decoding as a control problem and showed that lightweight policies, trained from scratch with sparse veri-fiable rewards, can adapt inference behavior under explicit compute budgets. By learning to select among decoding op-erators at the sequence and token levels, without modifying the underlying language model,our adapters consistently im-prove reasoning performance on mathematical and coding tasks. These results suggest that inference-time control is a meaningful and underexplored axis for improving LLM rea-soning, complementary to model scaling and fine-tuning. 
+
+## Impact Statement 
+
+This paper presents work whose goal is to advance the field of Machine Learning. There are many potential societal consequences of our work, none which we feel must be specifically highlighted here. 
+
+## References 
+
+Aime problems and solutions, 2025. https: //artofproblemsolving.com/wiki/index. php/AIME_Problems_and_Solutions , 2025. Abdin, M., Aneja, J., Behl, H., Bubeck, S., Eldan, R., Gunasekar, S., Harrison, M., Hewett, R. J., Javaheripi, M., Kauffmann, P., et al. Phi-4 technical report. arXiv preprint arXiv:2412.08905 , 2024. Bai, Y., Kadavath, S., Kundu, S., and et al. Training a helpful and harmless assistant with reinforcement learning from human feedback. arXiv preprint arXiv:2204.05862 , 2022. Boiko, D. A., MacKnight, R., and Gomes, G. Au-tonomous chemical research with large language mod-els. Nature , 624(7992):570–578, 2023. doi: 10.1038/ s41586-023-06792-0. Borec, L., Sadler, P., and Schlangen, D. The unreasonable ineffectiveness of nucleus sampling on mitigating text memorization. arXiv preprint arXiv:2408.16345 , 2024. Chakraborty, S., Bhatt, S., Sehwag, U. M., Ghosal, S. S., Qiu, J., Wang, M., Manocha, D., Huang, F., Koppel, A., and Ganesh, S. Collab: Controlled decoding us-ing mixture of agents for llm alignment. arXiv preprint arXiv:2503.21720 , 2025. Chen, M., Tworek, J., Jun, H., Yuan, Q., Pinto, H. P. D. O., Kaplan, J., Edwards, H., Burda, Y., Joseph, N., Brockman, G., et al. Evaluating large language models trained on code. arXiv preprint arXiv:2107.03374 , 2021. Cui, G., Zhang, Y., Chen, J., Yuan, L., Wang, Z., Zuo, Y., Li, H., Fan, Y., Chen, H., Chen, W., et al. The entropy mech-anism of reinforcement learning for reasoning language models. arXiv preprint arXiv:2505.22617 , 2025. Dhuliawala, S., Kulikov, I., Yu, P., Celikyilmaz, A., Weston, J., Sukhbaatar, S., and Lanchantin, J. Adaptive decod-ing via latent preference optimization. arXiv preprint arXiv:2411.09661 , 2024. Du, W., Yang, Y., and Welleck, S. Optimizing temperature for language models with multi-sample inference. arXiv preprint arXiv:2502.05234 , 2025. Fu, Y., Wang, X., Tian, Y., and Zhao, J. Deep think with confidence. arXiv preprint arXiv:2508.15260 , 2025. Grubisic, D., Seeker, V., Synnaeve, G., Leather, H., Mellor-Crummey, J., and Cummins, C. Priority sampling of large language models for compilers. In Proceedings of the 4th Workshop on Machine Learning and Systems , pp. 91–97, 2024. Guo, D., Yang, D., Zhang, H., Song, J., Zhang, R., Xu, R., Zhu, Q., Ma, S., Wang, P., Bi, X., et al. Deepseek-r1: In-centivizing reasoning capability in llms via reinforcement learning. arXiv preprint arXiv:2501.12948 , 2025. He, K., Liu, M., Wang, C., Li, Z., Wang, Y., Peng, X., and Zheng, Z. Adadec: Uncertainty-guided adaptive decoding for llm-based code generation. arXiv preprint arXiv:2506.08980 , 2025. Hendrycks, D., Burns, C., Kadavath, S., Arora, A., Basart, S., Tang, E., Song, D., and Steinhardt, J. Measuring math-ematical problem solving with the math dataset. NeurIPS ,2021. Holtzman, A., Buys, J., Du, L., Forbes, M., and Choi, Y. The curious case of neural text degeneration. arXiv preprint arXiv:1904.09751 , 2019. Huang, J., Parthasarathi, P., Rezagholizadeh, M., and Chan-dar, S. Context-aware assistant selection for improved inference acceleration with large language models. arXiv preprint arXiv:2408.08470 , 2024. Jiang, Y., Wang, H., Xie, L., Zhao, H., Qian, H., Lui, J., et al. D-llm: A token adaptive computing resource allocation strategy for large language models. Advances in Neural Information Processing Systems , 37:1725–1749, 2024. 9Learning Adaptive LLM Decoding 
+
+Li, B., Wang, Y., Lochab, A., Grama, A., and Zhang, R. Cas-cade reward sampling for efficient decoding-time align-ment. arXiv preprint arXiv:2406.16306 , 2024. Li, Y., Choi, D., Chung, J., Kushman, N., Schrit-twieser, J., Leblond, R., Eccles, T., Keeling, J., Gi-meno, F., Lago, A. D., Hubert, T., Choy, P., de Mas-son d’Autume, C., Babuschkin, I., Chen, X., Huang, P.-S., Welbl, J., Gowal, S., Cherepanov, A., Mol-loy, J., Mankowitz, D. J., Robson, E. S., Kohli, P., de Freitas, N., Kavukcuoglu, K., and Vinyals, O. Competition-level code generation with alphacode. Sci-ence , 378(6624):1092–1097, 2022. doi: 10.1126/ science.abq1158. URL https://www.science. org/doi/abs/10.1126/science.abq1158 .Lin, Z., Liang, T., Xu, J., Wang, X., Luo, R., Shi, C., Li, S., Yang, Y., and Tu, Z. Critical tokens matter: Token-level contrastive estimation enhence llm’s reasoning capability. 
+
+arXiv preprint arXiv:2411.19943 , 2024. Liu, X., Lei, B., Zhang, R., and Xu, D. D. Adaptive draft-verification for efficient large language model decoding. In Proceedings of the AAAI Conference on Artificial In-telligence , volume 39, pp. 24668–24676, 2025. Liu, Z., Zhou, Z., Wang, Y., Yang, C., and Qiao, Y. Inference-time language model alignment via integrated value guidance. arXiv preprint arXiv:2409.17819 , 2024. Mavalankar, A., Mansoor, H., Marinho, Z., Samsikova, M., and Schaul, T. Aupair: Golden example pairs for code repair. arXiv preprint arXiv:2502.18487 , 2025. Mudgal, S., Lee, J., Ganapathy, H., Li, Y., Wang, T., Huang, Y., Chen, Z., Cheng, H.-T., Collins, M., Strohman, T., et al. Controlled decoding from language models. arXiv preprint arXiv:2310.17022 , 2023. Nemhauser, G. L., Wolsey, L. A., and Fisher, M. L. An analysis of approximations for maximizing submodular set functions. Mathematical Programming , 14(1):265– 294, 1978. Nguyen, M., Baker, A., Neo, C., Roush, A., Kirsch, A., and Shwartz-Ziv, R. Turning up the heat: Min-p sampling for creative and coherent llm outputs. arXiv preprint arXiv:2407.01082 , 2024. Ouyang, L., Wu, J., Jiang, X., and et al. Training language models to follow instructions with human feedback. arXiv preprint arXiv:2203.02155 , 2022. Princis, H., Sharma, A., and David, C. Treecoder: Sys-tematic exploration and optimisation of decoding and constraints for llm code generation. arXiv preprint arXiv:2511.22277 , 2025. Qu, Y., Yang, M. Y., Setlur, A., Tunstall, L., Beeching, E. E., Salakhutdinov, R., and Kumar, A. Optimizing test-time compute via meta reinforcement fine-tuning. arXiv preprint arXiv:2503.07572 , 2025. Ren, Z., Shao, Z., Song, J., Xin, H., Wang, H., Zhao, W., Zhang, L., Fu, Z., Zhu, Q., Yang, D., et al. Deepseek-prover-v2: Advancing formal mathematical reasoning via reinforcement learning for subgoal decomposition. arXiv preprint arXiv:2504.21801 , 2025. Schaeffer, R., Kazdan, J., and Denisov-Blanch, Y. Turning down the heat: A critical analysis of min-p sampling in language models. arXiv preprint arXiv:2506.13681 ,2025. Shao, Z., Wang, P., Zhu, Q., Xu, R., Song, J., Bi, X., Zhang, H., Zhang, M., Li, Y., Wu, Y., et al. Deepseekmath: Push-ing the limits of mathematical reasoning in open language models. arXiv preprint arXiv:2402.03300 , 2024. Team, Q. Qwen3 technical report, 2025a. URL https: //arxiv.org/abs/2505.09388 .Team, T. R. Ray train: Scalable model train-ing, 2025b. URL https://docs.ray.io/en/ latest/train/train.html .von Werra, L., Belkada, Y., Tunstall, L., Beeching, E., Thrush, T., Lambert, N., Huang, S., Rasul, K., and Gallou ´edec, Q. TRL: Transformers Reinforce-ment Learning, 2020. URL https://github.com/ huggingface/trl .Wang, S., Yu, L., Gao, C., Zheng, C., Liu, S., Lu, R., Dang, K., Chen, X., Yang, J., Zhang, Z., et al. Beyond the 80/20 rule: High-entropy minority tokens drive effective reinforcement learning for llm reasoning. arXiv preprint arXiv:2506.01939 , 2025a. Wang, Z., Ma, D., Huang, X., Cai, D., Lan, T., Xu, J., Mi, H., Tang, X., and Wang, Y. The end of manual decoding: Towards truly end-to-end language models. 
+
+arXiv preprint arXiv:2510.26697 , 2025b. Williams, R. J. Simple statistical gradient-following algo-rithms for connectionist reinforcement learning. Machine learning , 8(3):229–256, 1992. Yan, H., Xu, F., Xu, R., Li, Y., Zhang, J., Luo, H., Wu, X., Tuan, L. A., Zhao, H., Lin, Q., et al. Mur: Momentum uncertainty guided reasoning for large language models. 
+
+arXiv preprint arXiv:2507.14958 , 2025. Yang, A., Zhang, B., Hui, B., Gao, B., Yu, B., Li, C., Liu, D., Tu, J., Zhou, J., Lin, J., Lu, K., Xue, M., Lin, R., Liu, T., Ren, X., and Zhang, Z. Qwen2.5-math technical report: Toward mathematical expert model via self-improvement. 
+
+arXiv preprint arXiv:2409.12122 , 2024. 10 Learning Adaptive LLM Decoding 
+
+Zhang, S., Bao, Y., and Huang, S. Edt: Improving large language models’ generation by entropy-based dynamic temperature sampling. arXiv preprint arXiv:2403.14541 ,2024. Zhao, W., Aggarwal, P., Saha, S., Celikyilmaz, A., We-ston, J., and Kulikov, I. The majority is not always right: Rl training for solution aggregation. arXiv preprint arXiv:2509.06870 , 2025. 11 Learning Adaptive LLM Decoding 
+
+## A. Expanded Related Work 
+
+Large language models (LLMs) have made significant progress in reasoning, code generation, and open-ended tasks, but their decoding behavior at inference time remains a blunt instrument: hyperparameters like temperature or top-p are typically fixed per model or dataset. Recent work has begun to explore decoding-time adaptation, dynamic compute allocation, and reward-supervised control. We review these directions below, emphasizing where our approach of learning decoding strategies under budget constraints via verifiable rewards differs. 
+
+A.1. Sampling Strategies and Their Limitations 
+
+Sampling from the softmax distribution is commonly modified to balance diversity and precision. Top-k, top-p (nucleus), temperature scaling, and min-p sampling are widely used, but typically tuned offline and fixed across prompts. Nucleus sampling Holtzman et al. (2019) avoids low-probability tails, but subsequent work shows its effect on memorization is limited. Borec et al. (2024) find that increasing the nucleus reduces memorization modestly but does not eliminate it. Schaeffer et al. (2025) critique the empirical basis for min-p sampling, arguing that evaluation artifacts obscure its true behavior. Grubisic et al. (2024) propose Priority Sampling, a deterministic variant that avoids duplicate or incoherent outputs caused by stochastic sampling at high temperatures. These methods reflect the need to modulate decoding behavior, but treat decoding hyperparameters as static knobs. They provide no mechanism for input- or token-specific control, and do not incorporate performance feedback. 
+
+A.2. Adaptive Decoding Architectures 
+
+Several recent works propose models that adapt decoding behavior based on context. AutoDeco Wang et al. (2025b) adds lightweight controller heads to predict temperature and top-p at each generation step, trained end-to-end with preference modeling. Dhuliawala et al. (2024) introduce a latent preference optimization (LPO) framework where an LLM selects a discrete preference vector to modulate generation style based on prompt features or learned guidance. Du et al. (2025) improve decoding quality by sampling multiple outputs at different temperatures and selecting the best via reranking, optimizing temperature allocation at the example level. Learned inference-time controllers have also emerged as a flexible way to steer frozen LLMs without fine-tuning. Dhuliawala et al. (2024)’s AdaptiveDecoder head selects sampling temperature token-by-token using preference-trained RL, outper-forming fixed-temperature decoding across tasks. Our approach is similar in spirit, but differs by conditioning on compute budgets and using task-verifiable correctness as reward. Collab (Chakraborty et al., 2025) takes this further by learning a token-level Q-learning policy that selects among expert LLMs mid-generation, effectively creating a mixture-of-agents decoding strategy with substantial quality gains. Cascade Reward Sampling (CARDS) (Li et al., 2024) guides a frozen model using a learned reward model that scores and filters sampled segments, avoiding low-reward continuations. Controlled decoding methods further bias token choice using learned value functions: Mudgal et al. (2023) optimize a prefix-level scorer to guide greedy decoding toward high-reward outcomes, while Integrated Value Guidance (Liu et al., 2024) blends implicit and explicit value heads to align frozen models at inference time. While these controllers improve alignment or output quality, they typically rely on trained reward models, preference supervision, or post-hoc reranking. In contrast, we train decoding policies tabula rasa from correctness-based rewards, using no learned value models and keeping the LLM frozen. Our approach highlights decoding-time stochasticity as a learnable control surface, and shows that generalization to unseen compute budgets is possible with minimal assumptions. Moreover, we introduce budget-aware decoding: our policies explicitly condition on token or sampling budget and are trained across a range of compute regimes. This enables generalization to unseen inference-time constraints, a dimension not addressed by prior adaptive decoders. 
+
+A.3. Inference-Time Decision Making and Compute Allocation 
+
+Beyond decoding parameters, recent work explores when and where to allocate compute during generation. Qu et al. (2025) propose meta-RL to optimize token-level compute under regret-based objectives. Cui et al. (2025) design entropy-aware policy updates that avoid overconfident collapse in RL fine-tuning. Several systems use uncertainty signals to trigger additional reasoning. MUR (Yan et al. (2025)) monitors the momentum of token entropy to decide when to continue or halt reasoning. Jiang et al. (2024) learn to skip transformer layers per token, 12 Learning Adaptive LLM Decoding 
+
+reducing inference cost without quality degradation. These methods focus on when and how much to compute, but not how to sample . Our work is orthogonal and complementary: given a token or prompt, we learn how to sample the next generation step, trading off exploration and determinism under budget. 
+
+A.4. Critical Tokens and Token-Level Adaptation 
+
+Multiple studies suggest that reasoning failures often hinge on a small set of high-impact tokens. Wang et al. (2025a) identify ”forking” tokens with high entropy and high downstream influence. Abdin et al. (2024) define ”pivotal tokens” as those with strong local gradients with respect to outcome success. These findings motivate adaptive sampling that varies across a sequence. AdaDec (He et al., 2025) uses uncertainty spikes to trigger beam-style reranking at critical steps. Unlike such heuristics, our token-level adapter is trained via reinforcement learning to make sampling decisions per step. By observing internal model states and remaining token budget, the adapter learns to allocate stochasticity where it matters. 
+
+A.5. Aggregation and Speculative Decoding 
+
+Several methods post-process multiple samples to select better outputs. AggLM Zhao et al. (2025) learns a solution aggregator via RL, outperforming simple voting on complex reasoning. Fu et al. (2025) use token probabilities to filter low-quality reasoning paths mid-generation. Speculative decoding (Huang et al., 2024; Liu et al., 2025) accelerates generation via draft-verification, and some variants use contextual bandits to choose draft strategies. These methods improve sample efficiency or response quality, but require generating multiple candidates and selecting among them. Our approach is distinct: we aim to improve per-sample quality by learning how to generate, not just how to rerank. Our adapters operate during generation, not after it. 
+
+A.6. Fine tuning LLMs with Reinforcement Learning 
+
+Reinforcement learning has emerged as a powerful tool for aligning language models with task objectives or human preferences. In reinforcement learning from human feedback (RLHF), language models are fine-tuned to maximize a learned reward model derived from human preference comparisons, as in InstructGPT (Ouyang et al., 2022) and Anthropic’s helpful-harmless framework (Bai et al., 2022). Reinforcement learning from verifiable rewards (RLVR) replaces noisy preference models with automated correctness checks, enabling reward supervision from ground-truth signals in domains such as math and code. Group-Relative Policy Optimization (GRPO) (Shao et al., 2024; Guo et al., 2025) further improves efficiency by using group-normalized Monte Carlo advantages, and has shown strong performance on reasoning tasks. These approaches treat the language model itself as the policy, optimized via PPO-style methods. In contrast, our approach treats the language model as the environment and learns a lightweight decoding-time policy that interacts with its sampling behavior. This tabula rasa RL framing enables adaptive inference under compute budgets, without modifying the base model. 
+
+A.7. Positioning 
+
+Across these lines of work, few methods explicitly frame decoding as a policy learning problem, or incorporate budget constraints as part of the learning signal. Our formulation unifies these axes: we learn decoding-time policies at both the sequence and token level, trained under verifiable rewards and explicit compute budgets, without modifying the base model. We view this as a complementary direction to prior work: rather than designing or searching over decoding strategies, we make decoding strategy learnable , enabling flexible and efficient adaptation across tasks, budgets, and token-level uncertainties. 
+
+## B. Additional experiments 
+
+B.1. Additional Models 
+
+In the following, we provide additional experiment with two other models: Qwen3-8B and Qwen2.5-Math-1.5B. 13 Learning Adaptive LLM Decoding 
+
+Table 6. Comparison of sampling strategies on MATH. against the proposed sequence -level sampling adapter, using Qwen3-8B. For the ‘w/ CoT mix’ configuration, a CoT ratio of 0.3 is applied. All reported values are percentages. 
+
+Static sampling Sequence-level adapter Metric Setting Best Mixed w/o budget w/ budget Pass@1 w/o CoT 72.86 ± 1.23 72.38 ± 1.24 73.20 ± 1.23 73.67 ± 1.22 mix CoT 73.02 ± 1.23 72.92 ± 1.23 73.80 ± 1.22 74.07 ± 1.21 Pass@8 w/o CoT 78.38 ±1.14 77.10 ±1.16 78.20 ± 1.14 78.80 ± 1.13 mix CoT 78.98 ± 1.13 78.58 ± 1.14 79.00 ± 1.13 79.13 ± 1.13 
+
+Table 7. Comparison of sampling strategies on CodeContests. : vs. the sequence -level sampling adapter under two inference settings (without/with a mix of CoT prompts), using Qwen3-8B. For ‘w/ CoT mix’, we use a CoT ratio of 0.3. 
+
+Static sampling Sequence-level adapter Metric Setting Best Mixed w/o budget w/ budget Pass@1 w/o CoT 12.80 ± 2.39 12.00 ± 2.33 18.80 ± 2.80 17.90 ± 2.74 mix CoT 19.70 ± 2.85 14.50 ± 2.52 22.20 ± 2.97 23.10 ± 3.02 Pass@8 w/o CoT 23.10 ± 3.02 22.23 ±2.98 26.50 ± 3.16 27.40 ± 3.19 mix CoT 29.10 ± 3.25 23.90 ± 3.05 32.50 ± 3.35 34.20 ± 3.40 
+
+Table 8. Comparison of sampling strategies on MATH. the sequence -level sampling adapter under two inference settings (without/with a mix of CoT prompts). 0.3. 
+
+Static sampling Sequence-level adapter Metric Setting Best Mixed Just 4 actions w/ mix of inference strategy Pass@1 w/o CoT 61.52 ± 1.35 56.42 ± 1.37 61.52 ± 1.35 62.62 ± 1.34 mix CoT 62.10 ± 1.34 59.00 ± 1.36 62.76 ± 1.34 63.20 ± 1.34 Pass@8 w/o CoT 61.52 ± 1.35 66.74 ± 1.31 68.25 ± 1.29 69.66 ± 1.27 mix CoT 63.00 ± 1.34 67.10 ± 1.30 69.32 ± 1.28 70.88 ± 1.26 
+
+B.2. Generalization 
+
+In Table 9, we present the evaluation results on CodeContests of a sequence adapter trained on MATH to validate the out-of-domain generalization ability. 
+
+Table 9. Coding: performance comparison of sequence -level adapter trained on MATH train versus baseline numbers. 
+
+Static sampling Adapter Metric Setting Best Mixed w/o budget Pass@1 w/o CoT 11.43 ± 2.28 10.53 ± 2.20 12.80 ± 2.39 mix CoT 13.97 ± 2.48 14.80 ± 2.54 17.90 ± 2.74 
+
+B.3. Qualitative Results 
+
+This appendix provides qualitative evidence about how the learned adapter behaves at the token level. Our goal here is not to reverse-engineer a complete, human-interpretable rule for the policy, but to (1) sanity-check that the adapter meaningfully changes token-level stochasticity relative to static decoding, and (2) probe whether a small set of simple heuristics (e.g., entropy-thresholding) could plausibly explain the gains. Overall, we observe consistent trends (e.g., differential treatment of 14 Learning Adaptive LLM Decoding 
+
+low- vs. high-entropy tokens), but we do not find a single low-dimensional qualitative pattern that fully characterizes the learned behavior. 
+
+Entropy modulation. Figure 3 compares token entropy distributions under static decoding and the learned token-level adapter. A consistent qualitative trend is that the adapter collapses low-entropy tokens to near-deterministic behavior more often, while high-entropy tokens retain stochasticity more frequently. Importantly, this trend should be interpreted as a correlational signature of the learned policy rather than a complete explanation of its success: in the main paper we show that an entropy-only observation is insufficient to match the full adapter’s performance.   
+
+> Figure 3. Entropy modulation under token-level control. Token entropy distributions for a representative static strategy versus the learned token-level adapter, using the temperature-only action set from Table 14. Action 0 is greedy; larger action indices correspond to higher temperature. Qualitatively, the adapter more often preserves stochasticity on higher-entropy tokens, while collapsing many low-entropy tokens to near-deterministic behavior.
+
+Generation length statistics. Figure 4 reports generation-length distributions for a representative static strategy and for the learned sequence- and token-level adapters. We include this as a coarse behavioral check: large performance gains can sometimes be confounded by systematic changes in generation length (e.g., consistently shorter outputs). Here, lengths shift only moderately, suggesting the gains are not solely a trivial artifact of length. 
+
+Example generation (action traces). To make token-level control concrete, we show an example generation with tokens colored by the current selected action (Section B.3) and the next action (Section B.3). Black indicates tokens with very low entropy, where the choice of decoding action rarely changes the sampled token; other colors correspond to the four actions in Table 14. While these examples illustrate that the policy switches actions within a single trajectory, we did not find a simple, global rule (e.g., a single entropy threshold) that explains when switches occur across prompts. Example Generation (Current Action)      
+
+> To determine how many seconds it takes for the plane to reach an altitude of 12,000 feet, we need to analyze the pattern of its climbing. The plane climbs 100 feet in the first second, 200 feet in the second second, 300 feet in the third second, and so on. This forms an arithmetic series where the first term \(a 1 \) is 100 feet and the common difference \(d \) is also 100 feet. The total altitude climbed after \(n \) seconds is the sum of the first \(n \)terms of this arithmetic series. The sum
+> \(S n \)ofthefirst \(n \)terms of an arithmetic series is given by the formula: \[S n= \frac {n}{ 2}(2a 1+(n-1)d) \]
+
+15 Learning Adaptive LLM Decoding 
+
+(a) Static decoding (representative strategy). (b) Sequence-level adapter. 
+
+Figure 4. Generation length distributions. Generation length statistics for a representative static strategy and the learned adapters. Length shifts are present but not extreme, suggesting the token-level gains are not explained solely by systematic truncation/verbosity changes. Substituting the given values \(a 1=100 \) and \(d=100 \), we get: \[S n = \frac {n}{ 2}(2 \cdot100+(n-1) \cdot100) = 
+
+\frac {n}{ 2}(200+100(n-1)) = \frac {n}{ 2}(100n+100)=50n(n+1) \]We need to find \(n \) such that \(S n=12000 \): \[50n(n+1)=12000 \] \[n(n+1)= \frac {12000 }{ 50 }=240 \]Now, we need to solve the quadratic equation \(n \ˆ2+n-240 = 0 \). We can use the quadratic formula \(n= \frac {-b \pm \sqrt {b\ˆ 2-4ac }}{ 2a }\ ), where \(a=1 \), \(b = 1 \),and \(c=-240 \): \[n= \frac {-1 \pm \sqrt {1\ˆ2-4 \cdot1 \cdot(-240) }}{ 2\cdot1 } = \frac {-1\pm \sqrt {1+960 }}{ 2} = \frac {-1 \pm \sqrt {961 }}{ 2} = \frac {-1 \pm31 }{ 2}\ ]This gives us two solutions: 
+
+\[n= \frac {30 }{ 2}=15 \]
+
+\[n= \frac {-32 }{ 2}=-16 \]Since \(n \) must be a positive integer, we discard the negative solution. Therefore, \(n=15 \). To verify, we calculate the sum of the first 15 terms of the series: \[S {15 } = 50 \cdot15 \cdot16 = 12000 \]Thus, it takes the plane \(\boxed {15 }\ 
+
+Example Generation (Next Action) 
+
+To determine how many seconds it takes for the plane to reach an altitude of 12,000 feet, we need to analyze the pattern of its climbing. The plane climbs 100 feet in the first second, 200 feet in the second second, 300 feet in thethirdsecond, and so on. This forms an arithmetic series where the first term \(a 1 \) is 100 feet and the common difference \(d \) is also 100 feet. The total altitude climbed after \(n \) seconds is the sum of the first \(n \) terms of this arithmetic series. The sum \(S n \) of the first \(n \) terms of an arithmetic series is given by the formula: \[S n= \frac {n}{ 2}(2a 1+(n-1)d) \]Substituting the given values \(a 1=100 \) and \(d = 100 \), we get: \[S n = \frac {n}{ 2}(2 \cdot100+(n-1) \cdot100) = 
+
+\frac {n}{ 2}(200+100(n-1))= \frac {n}{ 2}(100n+100) = 50n(n+1) \]We need to find \(n \) such that \(S n = 12000 \): \[50n(n+1)=12000 \] \[n(n+1) = \frac {12000 }{ 50 } = 240 \]Now, we need to solve the quadratic equation 
+
+\(n \ˆ2+n-240 = 0 \). We can use the quadratic formula 
+
+\(n = \frac {-b \pm \sqrt {b\ˆ 2-4ac }}{ 2a }\ ), where \(a = 1 \), \(b=1 \), and \(c=-240 \): \[n = \frac {-1 \pm \sqrt {1\ˆ 2-4 \cdot1 \cdot(-240) }}{ 2 \cdot 1 } = \frac {-1\pm \sqrt {1+960 }}{ 2}=\frac {-1 \pm \sqrt {961 }}{ 2} = \frac {-1 \pm31 }{ 2}\ ]This gives us two solutions: 
+
+\[n= \frac {30 }{ 2}=15 \]
+
+16 Learning Adaptive LLM Decoding            
+
+> Figure 5. Word clouds by action. Most frequent tokens under each temperature-based action from Table 14. This is a lightweight diagnostic and does not by itself explain the policy’s performance improvements.
+> \[n = \frac {-32 }{ 2}= -16 \]Since \(n \) must be a positive integer, we discard the negative solution. Therefore, \(n=15 \). To verify, we calculate the sum of the first 15 terms of the series: \[S {15 }= 50 \cdot 15 \cdot 16 = 12000 \]Thus, it takes the plane \(\boxed {15 }\
+
+Token content (word clouds). Figure 5 visualizes frequent tokens under each action. We view this as an exploratory diagnostic rather than strong evidence: word clouds can highlight obvious stylistic differences, but are insensitive to context and can be dominated by generic tokens. In our runs, these visualizations did not reveal a clean, human-interpretable separation between actions beyond coarse stylistic effects. 
+
+Limitations. These qualitative analyses are intended to provide intuition and sanity checks, not a definitive mechanistic account of the learned policy. In particular, the entropy trend in Fig. 3 is consistent with adaptive modulation of stochasticity, but the main paper’s entropy-only ablation indicates that richer contextual information is required to recover the full gains. 
+
+## C. Action Space Selection 
+
+This appendix describes the procedure used to construct a finite action space for the decoding adapters, along with empirical details of the selection process and the final strategies used in our experiments. 
+
+Candidate action pool. Let S denote a finite set of candidate decoding strategies. Each strategy s ∈ S corresponds to a fixed configuration of decoding hyperparameters (e.g., temperature, top-k, top-p, min-p). In our experiments, S is formed by the Cartesian product of the parameter ranges shown in Table 10, yielding a total of 5 × 4 × 3 × 3 = 180 candidate strategies. This pool is designed to span a broad range of decoding behaviors, from near-greedy to highly stochastic sampling. 
+
+Reward model. Let D = {xi}Ni=1 denote a validation dataset. For each input xi and strategy s, we compute a verifiable terminal reward r(xi, s ) ∈ { 0, 1} indicating task success (e.g., correctness of the generated solution). We define the empirical performance of a strategy as 
+
+Q(s) = 1
+
+N
+
+> N
+
+X
+
+> i=1
+
+r(xi, s ).
+
+17 Learning Adaptive LLM Decoding                  
+
+> Table 10. Sweep ranges of as the action space for our sampling adapter.
+> Parameter Value
+> Temperature [0 .3,0.5,0.75 ,1.0,1.25]
+> Top-k[5 ,10 ,50 ,“off” ]
+> Top-p[0 .9,0.95 ,“off” ]
+> Min-p[0 .1,0.2,“off” ]
+
+Objective. Our goal is not to identify a single best decoding strategy, but rather to select a small subset S ⊆ S such that, for each input, at least one strategy in S performs well. Accordingly, we consider the following coverage-based objective: 
+
+F (S) = 1
+
+N
+
+> N
+
+X
+
+> i=1
+
+max  
+
+> s∈S
+
+r(xi, s ),
+
+which corresponds to the expected performance of a best-of-S decoder. 
+
+Greedy selection. Directly optimizing F (S) is combinatorial. Following prior work on coverage-based selec-tion (Mavalankar et al., 2025), we construct S using a greedy procedure: starting from S0 = ∅, at each step we add 
+
+s∗ = arg max 
+
+> s∈S\ Sk
+
+(F (Sk ∪ { s}) − F (Sk)) ,
+
+until a desired cardinality |S| = K is reached. In practice, K is chosen to balance expressivity of the action space against training stability of the downstream policy. 
+
+Empirical selection behavior. Figure 6 compares greedy coverage-based selection against a baseline that selects the top-K
+
+strategies by average performance Q(s). Greedy selection consistently achieves higher best-of-K accuracy, indicating that it favors complementary strategies that succeed on different subsets of inputs rather than redundant high-average strategies. This behavior motivates the use of greedy coverage as a principled method for constructing a compact but expressive action space.    
+
+> Figure 6. Best of Naccuracy vs number of selected actions for greedy selection (our approach) vs the baseline of taking the top N actions.
+
+18 Learning Adaptive LLM Decoding 
+
+Selected strategies. Tables 13 and 14 report the final sets of decoding strategies selected by the greedy procedure for the sequence-level and token-level experiments, respectively. At the sequence level, the selected strategies span a range of sampling behaviors and include both stochastic and near-greedy decoding. At the token level, the selected actions differ in temperature, reflecting the exploratory observation that stochasticity is the dominant axis along which complementary decoding behaviors emerge. Below we provide the best set of strategies for math, coding, and the mixture of math and coding evaluation sets.    
+
+> Table 11. Selected decoding strategies for math tasks.
+
+Strategy Parameters 
+
+do sample temperature top k top p min p 
+
+1 true 0.75 – 0.9 0.1 2 true 1.0 – 0.9 –3 true 1.25 10 0.9 –4 true 1.0 5 0.9 –5 true 1.25 50 0.9 –6 true 1.25 – – –   
+
+> Table 12. Selected decoding strategies for coding tasks.
+
+Strategy Parameters 
+
+do sample temperature top k top p min p 
+
+1 true 1.25 – 0.95 0.1 2 true 1.25 – 0.95 0.2 3 true 1.0 – 0.95 0.2 4 true 1.25 50 0.9 0.1 5 true 1.25 5 0.9 –6 true 0.75 5 – 0.1    
+
+> Table 13. Selected decoding strategies for a mix of math and coding tasks.
+
+Strategy Parameters 
+
+do sample temperature top k top p min p 
+
+0 true 0.5 – – –1 true 1.0 – – –2 true 1.25 – – –3 true 0.75 10 – –4 true 0.75 10 0.95 0.1 5 false 0.0 – – –
+
+Discussion. Although the candidate pool includes combinations of multiple sampling parameters, the greedy procedure tends to select strategies that differ primarily along a single axis of stochasticity. This observation motivates our use of temperature-based actions in the token-level experiments, while retaining a more general action space at the sequence level. We emphasize that this selection procedure is used only to define a finite action space prior to training; during policy learning, the adapter receives only task-level rewards and does not observe per-strategy performance estimates. 
+
+## D. Implementation Details 
+
+D.1. Hyperparameters 
+
+In this section, we provide details on the implementation of our adapters. 19 Learning Adaptive LLM Decoding 
+
+Table 14. Selected decoding strategies for token-level math tasks. 
+
+Strategy Parameters 
+
+do sample temperature 
+
+0 false 01 true 0.5 2 true 1.0 3 true 1.25 
+
+Table 15. Parameters of token -level sampling adapter. 
+
+Parameter Value 
+
+Architecture MLP Number of Layers 3Activation SiLU Dropout 0.1 Optimizer Adam format bf16 Learning rate scheduler exponential 
+
+We provide pseudocode for our sequence-level (Algorithm 1) and token-level (Algorithm 2) Adapters below. For Sequence-Level Adapters, We use vLLM engine to fastly generate rollout. For token-Level, We use Ray Train (Team, 2025b) and distributed data parallelism (DDP). We use past key values as an incremental KV-cache returned by the model each step, pass it back into the next forward for speed, and whenever some sequences finish early we “shrink” the cache to only the still-active batch rows via index select so it stays aligned with active idx. 24.79 
+
+> 23.08
+> 28.21
+> 34.19
+> Val Reward
+
+(a) CoT action distribution 24.79  
+
+> 23.08
+> 28.21
+> 34.19
+> Val Reward
+
+(b) Non-CoT action distribution 34.19  
+
+> 28.21
+> 23.08
+> 24.79
+> Val Reward
+
+(c) Overall action distribution 
+
+Figure 7. Action distributions and val reward on CodeContests for sampling strategies with sequence-level adapter. The actions are defined in table 12. Axes are same as in Figure 2. 
+
+D.2. Prompts for Qwen3 Models MATH. 
+
+• Without thinking: “Provide the final answer within \\ boxed {} . /nothink” • With thinking: “Provide the final answer within \\ boxed {} . /think” 
+
+CodeContests. 
+
+• Without thinking: “You are a coding assistant. /nothink” • With thinking: “You are a coding assistant. Please reason step by step. /think” 20 Learning Adaptive LLM Decoding 
+
+Algorithm 1 Sequence-Level Decoding Adapter 
+
+1: function SEQ FORWARD (e, a, T )
+
+2: if a̸ = ∅ then 
+
+3: z ← [e ∥ EmbedAux( a)] 
+
+4: else 
+
+5: z ← e
+
+6: ℓ ← MLP( z) ▷ logits over strategies 
+
+7: p ← softmax( ℓ/T )
+
+8: return p
+
+9: function SEQ SELECT STRATEGY (e, a, T, deterministic )
+
+10: p ← SEQ FORWARD (e, a, T )
+
+11: if deterministic then 
+
+12: s ← arg max p
+
+13: else 
+
+14: s ∼ Categorical( p)
+
+15: return s, p77.60 80.21 
+
+> 72.60
+> Val Reward
+
+(a) CoT action distribution 72.60  
+
+> 80.21
+> 77.60
+> Val Reward
+
+(b) Non-CoT action distribution 72.60  
+
+> 80.21
+> 77.60
+> Val Reward
+
+(c) Overall action distribution 
+
+Figure 8. Action distributions and val reward on MATH for sampling strategies with the token -level adapter. Actions are defined in table 11. Axes match fig. 2. Note that a CoT action probability of 0 indicates that no CoT prompt was sampled in that batch. 
+
+Algorithm 2 Token-Level Decoding Adapter 
+
+1: function TOK FORWARD (xt, T )
+
+2: ℓt ← MLP( xt) ▷ logits over strategies 
+
+3: pt ← softmax( ℓt/T )
+
+4: return pt
+
+5: function TOK SELECT STRATEGY (xt, T, deterministic )
+
+6: pt ← TOK FORWARD (xt, T )
+
+7: if deterministic then 
+
+8: st ← arg max pt
+
+9: else 
+
+10: st ∼ Categorical( pt)
+
+11: return st, pt
+
+12: function TOK FEATURES (LLM , prefix , t )
+
+13: ht ← LastHidden(LLM( prefix )) 
+
+14: return xt ← [ ht ∥ ϕ(t) ] ▷ optional aux/budget features 
+
+15: function TOK STEP (LLM , prefix , transforms , T, deterministic )
+
+16: xt ← TOK FEATURES (LLM , prefix , t )
+
+17: (st, pt) ← TOK SELECT STRATEGY (xt, T, deterministic) 
+
+18: yt ← SampleToken(LLM , prefix ; transforms [st]) 
+
+19: return yt, s t, pt
+
+21

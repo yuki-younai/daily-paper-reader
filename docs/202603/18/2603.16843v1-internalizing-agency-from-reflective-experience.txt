@@ -1,0 +1,658 @@
+Title: Internalizing Agency from Reflective Experience
+
+URL Source: https://arxiv.org/pdf/2603.16843v1
+
+Published Time: Wed, 18 Mar 2026 01:45:52 GMT
+
+Number of Pages: 17
+
+Markdown Content:
+# Internalizing Agency from Reflective Experience 
+
+Rui Ge 1 2 * Yichao Fu 1 Yu-Yang Qian 3 Junda Su 1 Yiming Zhao 1 Peng Zhao 3 Hao Zhang 1
+
+## Abstract 
+
+Large language models are increasingly deployed as autonomous agents that must plan, act, and re-cover from mistakes through long-horizon interac-tion with environments that provide rich feedback. However, prevailing outcome-driven post-training methods (e.g., RL with verifiable rewards) primar-ily optimize final success signals, leaving rich en-vironment feedback underutilized. Consequently, they often lead to distribution sharpening : the policy becomes better at reproducing a narrow set of already-successful behaviors, while failing to improve the feedback-grounded agency needed to expand problem-solving capacity (e.g., Pass@ k)in long-horizon settings. To address this, we propose LEAFE ( Learning Feedback-Grounded Agency from Reflective Ex-perience ), a framework that internalizes recovery agency from reflective experience. Specifically, during exploration, the agent summarizes environ-ment feedback into actionable experience, back-tracks to earlier decision points, and explores alter-native branches with revised actions. We then dis-till these experience-guided corrections into the model through supervised fine-tuning, enabling the policy to recover more effectively in future in-teractions. Across a diverse set of interactive cod-ing and agentic tasks under fixed interaction bud-gets, LEAFE consistently improves Pass@1 over the base model and achieves higher Pass@ k than outcome-driven baselines(GRPO) and experience-based methods such as Early Experience, with gains of up to 14% on Pass@128. 
+
+## 1. Introduction 
+
+Large Language Models (LLMs) are rapidly shifting from passive responders to autonomous actors that plan, act, and adapt in complex environments. In interactive domains such 
+
+* Work done during an internship at UCSD. 1University of Cali-fornia San Diego 2Shanghai Jiao Tong Univsersity 3Nanjing Uni-versity. Correspondence to: Hao Zhang <haozhang@ucsd.edu >.
+
+Preprint. March 18, 2026. 1 2 4 8 16 32 64 128 256 512 1024 
+
+> Number of Samples ( k)
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> Success Rate (pass@k)  CodeContests
+> Base
+> GRPO
+> Ours
+> Ours+GRPO
+
+Figure 1. Internalizing feedback-grounded agency improves model capability (i.e., Pass@K) in long-horizon interaction, while outcome-only training (e.g., GRPO) yields limited gains beyond the base model. 
+
+as web navigation, program synthesis with execution feed-back, and long-horizon task completion, an agent’s success relies on agentic behavior : making a sequence of decisions, observing their consequences, and recovering from mistakes over time (Yao et al., 2022b; Nakano et al., 2021), rather than solely producing a single-round response. Crucially, such environments provide rich and structured feedback (e.g., invalid actions, state transitions, and compiler errors) that goes beyond simple failure signals, often pinpointing why a trajectory becomes unproductive and how it can be corrected (Yang et al., 2024; Shinn et al., 2023). Thus, the central promise of agentic LLMs is not one-shot correctness, but robust decision-making under feedback: detecting when a trajectory is failing and updating actions accordingly. A common practice for post-training agentic LLM is outcome-based reinforcement learning with verifiable re-wards (RLVR): the agent samples multiple trajectories, re-ceives a single scalar reward for final task success (e.g., completion or pass/fail), and uses policy gradient to in-crease the likelihood of rewarded trajectories (Guo et al., 2025; Zeng et al., 2025b; Shao et al., 2024). In long-horizon interactive settings, a single terminal scalar reward provides limited guidance: across many rollouts, only a small fraction is rewarded, so updates are dominated by a few rewarded (often already-competent) trajectories, and most partially-correct failures contribute little direct signal. As a result, RLVR often behaves like distribution sharpening : it con-1
+
+> arXiv:2603.16843v1 [cs.AI] 17 Mar 2026 Internalizing Agency from Reflective Experience
+
+centrates probability mass on a small set of already-solved behaviors latent in long tail area of the base model, boosting Pass@1 but yielding limited or even negative gains at large 
+
+k (e.g., Pass@1024) that more closely reflect coverage of the model capability (Yue et al., 2025; Zhao et al., 2025b). This biases learning toward exploiting existing capabilities, rather than exploring behaviors outside the current support of the model’s trajectory distribution. Consequently, practi-tioners have to rely on the expensive test-time computation (e.g., multiple retries, sampling-and-voting, or explicit tree search) to escape early mistakes, increasing both the latency and the deployment complexity (Wang et al., 2022b; Yao et al., 2023; Fu et al., 2025b). This disconnect highlights a missing link in current agent training: the distinction between distribution sharpening 
+
+and agency internalization . By agency internalization, we mean training the model to acquire an agentic capabil-ity(agency) of interacting with the environment, interpreting structured feedback, reflecting on what went wrong, and revising subsequent decisions accordingly. Outcome-driven methods such as GRPO can upweight trajectories that end in success, but they typically reduce interaction feedback (e.g., invalid actions, error messages, failed tests) to an episode-level scalar signal, providing weak supervision on where a trajectory went off course and what decision should change. In contrast, robust agency requires internalizing the recovery procedure itself: identifying the critical decision points that induced failure and revising them in a feedback-conditioned, targeted manner, rather than relying on blind retries or exter-nal branching (e.g., Tree of Thoughts). Our goal is to make such feedback-grounded recovery an intrinsic capability of the model, reducing reliance on heavy test-time sampling. As a preview, Figure 1 shows that this form of internaliza-tion expands the model’s effective capability in long-horizon interaction, while RLVR exhibits little improvement beyond the base model. In this work, we propose LEAFE ( Lea rning Feedback-Grounded Agency from Reflective Experience ), a two-stage framework that explicitly teaches LLMs agents to acquire feedback-grounded agency from reflective experience (i.e., the ability to use environment feedback to detect when a tra-jectory is failing and revise decisions to recover). At a high level, outcome-driven post-training methods such as GRPO, when trained with a scalar success reward, tend to sharpen the policy within the model’s existing capability support, favoring exploitation over expanding exploration, whereas LEAFE trains the agent to repair trajectories that start to fail: instead of only reinforcing end-to-end successes, we explic-itly expose the model to failure cases, identify where they went wrong, and supervise the corrective revisions that turn them back into productive progress. To be more specific, in stage 1 (§3.1 Tree-Based Experience Generation with Rollback ), the agent periodically performs reflection and produces a rollback point τ and an experience summary 
+
+(a brief diagnosis-and-fix instruction). We then backtrack to 
+
+τ and branch with experience-guided revised actions, gen-erating trajectories that exhibit failure → rollback → fix →
+
+success (see Table 3). In Stage 2 (§3.2 Experience Distil-lation ), we internalize these improvements via experience-to-policy distillation , training the model to reproduce the post-rollback corrective decisions without providing experi-ence at test time (see Table 4). We evaluate LEAFE across a diverse set of agentic bench-marks that demand long-horizon interaction and error recov-ery, including CodeContests (Li et al., 2022), WebShop (Yao et al., 2022a), ALFWorld (Shridhar et al., 2020), Science-World (Wang et al., 2022a), and Sokoban(Schrader, 2018). Across tasks and fixed interaction budgets, LEAFE consis-tently improves success rates and achieves stronger large-k
+
+performance, substantially outperforming outcome-driven RLVR baselines such as GRPO in Pass@k efficiency. These results highlight a central takeaway: by enabling back-track during exploration and learning from the resulting reflective experience turns environment feedback into ac-tionable supervision, shifting the burden of competence from heavy test-time sampling to internalized, experience-driven agency. Our contributions are listed as follows: • Structured exploration via feedback-to-experience. We propose reflective backtracking that turns scalar sig-nals into experience-guided branches (rollback + cor-rection), enabling targeted exploration beyond simple exploitation of base policy’s dominant modes. • Richer supervision than scalar rewards. Our experi-ence trajectories provide decision-level reflect → revise 
+
+supervision, explicitly specifying where a rollout errs and how to fix it, rather than treating each rollout as an independent sample scored by a terminal reward. • Internalized recovery improves Pass@k. By fine-tuning on post-backtrack actions, we internalize feedback-grounded agency into the model weights, ex-panding behavioral coverage and improving Pass@k in long-horizon interaction (up to 14% for Pass@128). 
+
+## 2. Background 
+
+2.1. LLMs as Interacting Agents Single-Agent Interaction. Following the previous ReAct paradigm (Yao et al., 2022b), we view an interactive episode as an interleaved sequence of textual observations and agent actions. Given an instruction q ∈ Q , at step t the environ-ment returns a textual observation ot, and the LLM-based 2Internalizing Agency from Reflective Experience 
+
+agent ( πθ ) outputs an executable action 
+
+at ∼ πθ (· | ht, q ), ht = ( o0, a 0, . . . , o t−1, a t−1, o t). (1) A rollout (trajectory) is denoted by τ = ( q, o 0, a 0, . . . , o T ),whose outcome can be evaluated by a task-specific veri-fier/environment to produce a success or failure signal. 
+
+2.2. Reinforcement Learning with Verifiable Rewards 
+
+A common post-training paradigm for agentic LLMs is outcome-based RL with verifiable rewards (RLVR), where a programmatic verifier or environment signal assigns a scalar reward to a completed trajectory (e.g., success/failure or the number of passing tests). Representative algorithms include PPO (Schulman et al., 2017) and its variants, as well as group-based methods such as GRPO (Guo et al., 2025; Zeng et al., 2025b; Shao et al., 2024). More concretely, given a group of sampled traces for the same problem, GRPO computes a normalized reward (or advantage) within the group to stabilize learning and encour-age relative improvement among samples. The trace-level reward used by GRPO is computed as follows: 
+
+ℓi(θ) = min 
+
+
+
+ri(θ)Ai, clip( ri(θ), 1 − ϵ, 1 + ϵ)Ai
+
+
+
+− β · KL ,
+
+and JGRPO (θ) = Eq, {oi}
+
+"
+
+1
+
+G
+
+> G
+
+X
+
+> i=1
+
+ℓi(θ)
+
+#
+
+,
+
+where KL ≜ DKL 
+
+ πθ ∥πref 
+
+. Despite their success, outcome-based RLVR provides supervision only at the trajectory level, which makes credit assignment difficult for long-horizon generation and tool use. Moreover, because op-timization is driven by rewards on sampled rollouts under a fixed training-time sampling procedure, such updates often 
+
+reweight or sharpen the model’s behavior within its existing solution space, rather than reliably discovering qualitatively new solutions. This motivates a separate evaluation of the model’s capability under increased sampling budgets. 
+
+2.3. LLM’s Capability Boundary 
+
+To quantify a model’s capability boundary (i.e., whether cor-rect solutions exist within its rollout distribution given suffi-cient sampling budget), we evaluate Pass@ K, following the capability-oriented evaluation protocol in prior work (Yue et al., 2025). For each problem instance, we generate K
+
+rollouts from the agentic LLM. Each instance receives a bi-nary score: it is counted as 1 if at least one of the K rollouts successfully solves the problem under the task-specific veri-fier/environment, and 0 otherwise. We then report Pass@ K
+
+as the average of these binary outcomes over the dataset. Importantly, Pass@ 1 corresponds to the single-rollout set-ting that is most relevant for deployment, while Pass@ K
+
+(for large K) estimates the model’s best-of-K potential un-der large enough sampling budget. In our experiments, we use a sufficiently large K (i.e., 128 ) to characterize the em-pirical boundary of the model’s capability under the given environment and interaction protocol, and we additionally use Pass@ 1 when assessing single-attempt effectiveness. 
+
+## 3. Learning From Reflective Experience 
+
+This section introduces LEAFE, a two-stage framework for learning from reflective experience (see Figure 2). In Stage 1, we collect experience discovered during exploration and use it as additional context to induce an experience-conditioned policy that revises decisions after rollback. The pseudo-code of the algorithm is shown in Algo 1. In Stage 2, we distill these experience-conditioned policies into model parameters, so the resulting model internalizes the improve-ments without relying on explicit experience at test time. 
+
+3.1. Tree-Based Experience Generation with Rollback Setup and Notation. We consider an episodic interactive environment E with a maximum horizon T . For a given instruction q ∈ Q , an episode is characterized by a sequence of environment states {Et}Tt=0 . At each time step t, the agent receives a textual observation ot and generates an executable action at. A language-model policy πθ induces a distribution over actions conditioned on the instruction and history as in Eq. 1. The environment’s transition dynamics are defined by a function Step( ·):
+
+Et+1 , o t+1 ← Step( Et, a t),
+
+where executing at in state Et transitions the environment to Et+1 and yields the subsequent observation ot+1 . An episode stops upon reaching the step limit T or encountering a terminal condition (e.g., success or irreversible failure). A rollout is a complete attempt that executes the policy from an initial state until termination. During rollout, the agent repeatedly produces actions, receives feedback from E, and appends the interaction to the history. 
+
+Periodic Reflection. A fundamental challenge in lever-aging experience is that linguistic feedback is inherently qualitative and unstructured, making it difficult to directly internalize into model weights via standard optimization. We address this by treating experience as a contextual in-tervention that induces a policy shift via the input context. Inspired by rollback mechanisms (Li et al., 2025; Wang & Choudhury), we allow the model to identify a suboptimal decision point and initiate a new execution branch based on synthesized insights. Formally, every K steps or upon failure, the agent invokes a 3Internalizing Agency from Reflective Experience Trajectory 
+
+> Assistant Obs 1
+> Act 1
+> Obs ?- 1
+> Act ?- 1
+> Obs ?
+> Act ?
+
+... 
+
+...  
+
+> Ref lection :
+> Suboptimal round :?
+> Reason :...
+> Experience- augmented
+> prompt ( Prompt +(h ?,e) )
+> Act ?'
+> Previous
+> History (h t)
+> Experience( e)
+> Obs ?+1'
+
+... 
+
+> Rollback Tree
+
+...         
+
+> Successful
+> Trajectories
+> (i) Behavior Rehersal
+> (ii) Experience- to- Policy Distillation
+> (x t, a t)pairs
+> Random
+> Sample Rehersal Dataset
+> Dreh :(Prompt(h t), a t)
+> Reflection +
+> Branching
+> Events
+> (x ?, a ?') pairs Counterfactual Dataset
+> Dcf : ( Prompt(h ?), a ?')
+> Stage 1: Tree- Based Experience Generation w ith Rollback Stage 2: Experience Distillation
+> : Rollback + Branchout
+> Reflect every Krounds
+> or upon fail
+
+Figure 2. Illustration of the LEAFE framework. Stage 1 : During experience collection, the assistant periodically reviews the current trajectory and identifies a suboptimal round (denoted as red-colored τ ). It then produces the actionable experience e, which is concatenated with the restored history to facilitate subsequent attempts. Stage 2 : During experience distillation, the model optimizes a joint loss using two datasets: randomly sampled rehearsal pairs to maintain capabilities, and counterfactual pairs (original prompts paired with experience-improved actions) to internalize diverse exploration. For simplicity, we depict one branching event from the rollback exploration tree. 
+
+reflection procedure. Given the interaction history ht and a reflection prompt prefl , the policy πθ generates a rollback target τ and an experience summary e:
+
+(τ, e ) ∼ πθ (· | ht, p refl ), τ ∈ { 1, . . . , t }.
+
+Here, τ indicates the time step where the trajectory deviated from the desired path, while e provides a natural-language diagnostic with actionable suggestions to guide the subse-quent attempt for the agent. 
+
+Branching via Rollback. To initiate a new execution branch from a rollback target (τ, e ), we first reconstruct the environment state Eτ and its corresponding interaction history hτ . This is achieved by resetting the environment and replaying the original action sequence a1: τ −1 to reach the decision point τ . Under the guidance of the synthesized experience e, the policy generates a revised action: 
+
+a′ 
+
+> τ
+
+∼ πθ (· | hτ , q, e ).
+
+Executing a′ 
+
+> τ
+
+transitions the environment to a new successor state E′  
+
+> τ+1
+
+← Step( Eτ , a ′ 
+
+> τ
+
+), effectively branching the tra-jectory away from the original suboptimal path. The agent then continues the rollout from E′  
+
+> τ+1
+
+until the next periodic reflection or episode termination. We manage branching requests using a queue-based Breadth-First Search (BFS) strategy. By iteratively selecting targets from the queue and generating new trajectories, the system constructs an implicit rollback tree of experiences. Expan-sion continues until the exploration reaches a maximum tree depth or exhausts the allocated attempt budget. Figure 5 provides a concrete example from Sokoban to illustrate how Stage 1 performs reflection, rollback, and branch exploration in practice. 
+
+3.2. Experience Distillation 
+
+Stage 2 distills the experience-induced policy improvements from Stage 1 into model parameters. We construct two types of supervised data and perform standard next-token likelihood training. 
+
+(i) Behavior Rehearsal. To mitigate catastrophic forget-ting and preserve the agent’s fundamental task-solving ca-pabilities, we incorporate a rehearsal set Dreh sampled from successful episodes. Inspired by rejection sampling (Ahn et al., 2024), we treat successful rollouts—including those generated through branching—as high-quality demonstra-tions. Specifically, for each successful trajectory, we extract state-action pairs (ht, a t) and optimize the rehearsal loss: 
+
+Lreh (θ′) = −E(h,a )∼D reh [log πθ′ (a | h, q )] .
+
+By maximizing the likelihood of actions that led to terminal success state, this objective ensures the policy maintains a stable performance baseline while adapting to new insights. 
+
+(ii) Experience-to-Policy Distillation. Our core supervi-sion is derived from the branching points identified during 4Internalizing Agency from Reflective Experience 
+
+reflection. When an experience e is injected at round τ to yield an improved action a′ 
+
+> τ
+
+, we treat this action as a counter-factual target for the original history without the experience. The objective is to internalize the policy shift—distilling the model’s ability to correct its own mistakes into the model weights, even when the explicit natural-language guidance 
+
+e is absent at test time. Specifically, for each branching event in Drefl , we maximize the likelihood of the corrected action a′ 
+
+> τ
+
+conditioned only on the original history hτ and instruction q:
+
+Lcf (θ′) = −E(hτ ,a ′  
+
+> τ)∼D refl
+
+[log πθ′ (a′ 
+
+> τ
+
+| hτ , q )] .
+
+By mapping the experience-augmented decision back to the experience-free context, we effectively expand the model’s policy space. This allows the agent to recover from sub-optimal states by making corrected actions more probable under its intrinsic policy, thereby increasing success rate (e.g., pass@ k) without requiring additional reflection steps during inference. 
+
+Training Objective. The final objective jointly optimizes counterfactual distillation and behavior rehearsal: 
+
+L(θ′) = Lcf (θ′) + β Lreh (θ′),
+
+where β is a hyperparameter scaling the rehearsal strength. This multi-task formulation yields a distilled policy πθ′
+
+that preserves foundational task competence while inter-nalizing corrective strategies derived from experience. By enriching the policy’s intrinsic action distribution with these experience-induced alternatives, we enhance exploration diversity and significantly improve success metrics such as pass@ k under limited test-time sampling. 
+
+## 4. Experiment 
+
+We evaluate our proposed framework across a diverse range of agentic tasks, spanning from competitive programming to multi-step interactive reasoning in simulated physical and digital environments. 
+
+Models. We evaluate LEAFE using the Qwen2.5 (7B/72B) (Team et al., 2024) and Llama-3/3.1 (8B/70B) (Grattafiori et al., 2024) series. These models are selected for their competitive performance and widespread adoption as standardized benchmarks in recent RLVR (Zeng et al., 2025b; Shao et al., 2025) and agentic reasoning (Da et al., 2025; Feng et al., 2025) research. Their robust reasoning and instruction-following capabilities provide a rigorous baseline to demonstrate that LEAFE enhances the fundamental agency of even the most capable and leading open-source models. 
+
+Datasets. We evaluate LEAFE on four benchmarks that demand strategic interaction, long-horizon decision mak-ing, and mistake recovery. (1) WebShop (Yao et al., 2022a) requires agents to navigate over one million of products via multi-hop search and attribute matching; (2) ALFWorld 
+
+(Shridhar et al., 2020) challenges the model’s grounded common-sense reasoning in a text-based interactive environ-ment aligned with embodied household tasks; (3) Science-World (Wang et al., 2022a) presents a text-based scientific experimentation environment in which agents must solve multi-step tasks by interacting with objects, manipulating materials, and following procedural constraints; and (4) 
+
+Sokoban (Schrader, 2018) is a planning-intensive puzzle environment that requires precise sequential manipulation and effective correction of earlier mistakes. In addition, we evaluate on CodeContests (Li et al., 2022), a competitive programming benchmark with execution-based test-case verification. Together, these benchmarks assess an agent’s broad ability to incorporate environmental feedback and recover from errors across web navigation, embodied inter-action, scientific experimentation, and program synthesis. 
+
+Baselines & Metrics. We compare LEAFE against four baselines: Base (instruct model with no task-specific fine-tuning), GRPO-RLVR (outcome-supervised RL with verifi-able final rewards using GRPO (Guo et al., 2025)), EarlyExp 
+
+(reward-free agent learning that converts early interaction experience into supervision (Zhang et al., 2025a)), and ACE 
+
+(a training-free, prompt-based method that improves agents by constructing evolving playbooks from execution feed-back (Zhang et al., 2025b)). We report Pass@1 and Pass@128 (Sec. 2.3); Specifically, Pass@1 quantifies single-try pass rate as a measure of ex-ploitation ability. In contrast, Pass@128 estimates the best-of-k performance under a much larger sampling budget, serving as a proxy for the model’s exploration capacity and fundamental performance boundary. All our reported Pass@128 is computed from independent inference-time samples from the trained policy (i.e., without Stage 1 roll-backing or experience-guided branching). 
+
+Implementation Details. For the interactive agentic bench-marks, we use verl-agent (Feng et al., 2025) as a unified framework for both training and evaluation. For ALFWorld ,
+
+WebShop , and Sokoban , we directly adopt the settings and environment interfaces provided by the framework. For Sci-enceWorld , which is not natively supported, we implement a compatible wrapper that follows the same verl-agent inter-face and training format. For CodeContests , we train with 
+
+verl (Sheng et al., 2025) and follow CTRL (Xie et al., 2025) for execution-based evaluation. For the baselines, GRPO-RLVR is obtained by directly train-ing the base model with GRPO. Since EarlyExp does not provide an official codebase, we re-implement its core com-ponent, Implicit World Modeling (IWM), and use the verl 
+
+SFT module for all supervised training stages; specifically, EarlyExp first performs IWM training on the base model 5Internalizing Agency from Reflective Experience 
+
+Table 1. Main results on four agent benchmarks. We report Pass@1(%) and Pass@128(%) for two models per dataset. LEAFE consistently outperforms baselines across all tasks in terms of Pass@128. 
+
+WEB SHOP ALF WORLD 
+
+QWEN 2.5-7B LLAMA 3.1-8B QWEN 2.5-7B LLAMA 3.1-8B METHOD PASS @1 PASS @128 PASS @1 PASS @128 PASS @1 PASS @128 PASS @1 PASS @128 BASE (N O FT) 0.05 5.20 0.00 1.80 26.07 78.57 29.82 74.29 EARLY EXP 61.55 84.60 51.13 77.80 72.23 92.86 74.15 95.71 GRPO-RLVR 67.45 85.40 54.95 79.40 69.46 91.43 72.50 94.29 ACE 68.65 86.80 54.35 79.80 66.34 89.63 70.32 92.50 LEAFE 66.50 87.80 56.25 81.00 67.50 94.29 71.79 96.43 SCI WORLD SOKOBAN 
+
+QWEN 2.5-7B LLAMA 3.1-8B QWEN 2.5-7B LLAMA 3.1-8B METHOD PASS @1 PASS @128 PASS @1 PASS @128 PASS @1 PASS @128 PASS @1 PASS @128 BASE (N O FT) 7.00 47.33 7.17 48.67 6.90 43.80 17.70 61.40 EARLY -E XP 26.17 54.67 24.04 56.00 60.15 71.60 57.32 68.20 GRPO-RLVR 27.17 57.33 24.25 56.00 58.15 68.00 60.43 73.40 ACE 29.45 59.67 25.28 57.33 61.30 70.80 60.79 73.20 LEAFE 27.88 62.00 22.70 59.33 64.60 78.40 62.00 77.20 
+
+and then further applies GRPO optimization. For ACE , we follow the official repository’s implementation on AppWorld 
+
+for interactive tasks and extend the same playbook-based prompting strategy to our other benchmarks; ACE is ap-plied on top of the GRPO-trained model, while keeping the prompts and task execution protocol consistent with verl-agent . Finally, our method, LEAFE, is also initialized from the GRPO-trained model and further optimized to enhance reasoning and exploration capabilities. 
+
+4.1. Main Results 
+
+Table 1 summarizes our main results on four interactive agent benchmarks(WebShop, ALFWorld, ScienceWorld, and Sokoban), across multiple backbone models from the Qwen2.5 and Llama3.1 families. Table 2 further presents results on CodeContests using larger backbone models. We report both Pass@1 and Pass@128 to distinguish single-try accuracy from an agent’s broader capability under increased sampling. Across benchmarks, LEAFE ’s advantage is most pro-nounced at large k. While GRPO can match or even ex-ceed LEAFE at Pass@1 in some settings, these gains often plateau as k increases. In contrast, LEAFE not only im-proves Pass@1 over the base model, but also continues to yield larger improvements at higher sampling budgets. For example, on WebShop with Qwen2.5-7B, GRPO achieves a higher Pass@1, whereas LEAFE consistently attains a higher Pass@128. This behavior is consistent with distribu-tion sharpening in GRPO: it boosts the probability of sam-pling a small set of already-successful trajectories, boosting Pass@1 but offering limited additional coverage as k grows. The contrast is clearest on CodeContests, where LEAFE 
+
+Table 2. Main results on CodeContests with larger backbone mod-els. LEAFE yields substantial improvements in Pass@128 com-pared with the GRPO-RLVR baseline. Note: EarlyExp and ACE are not reported on CodeContests because it is designed for inter-active environments and does not directly apply to code execution feedback without a different implementation. QWEN 2.5-72B LLAMA 3-70B METHOD PASS @1 PASS @128 PASS @1 PASS @128 BASE (N O FT) 10.00 33.94 7.35 24.85 GRPO-RLVR 20.45 36.97 13.64 27.88 LEAFE 17.12 47.88 14.09 33.94 
+
+Table 3. CodeContests Pass@128 under different sampling strate-gies with Independent Sampling (IS), Iterative Refinement (IR), and our stage 1. 
+
+Model IS IR Ours (Stage 1) 
+
+Qwen2.5-32B 48.92 51.48 55.52 
+
+Qwen2.5-72B 48.65 49.52 54.30 
+
+Llama3-70B 30.20 38.10 42.50 
+
+improves Pass@128 by up to +14% over the base model, highlighting the benefit of internalizing feedback-grounded agency in domains that require iterative correction. Overall, the stronger large-k scaling indicates expanded behavioral coverage, i.e., the desired agency is trained into the model to better reflect and progress in long-horizon interaction. 
+
+4.2. Capability Scaling: Pass@k Analysis 
+
+Figure 3 studies Pass@ k scaling as the sampling budget 
+
+k increases. Given the different interaction costs and task characteristics, we cap the budget at k=256 for ALFWorld, 
+
+k=512 for ScienceWorld, and k=1024 for CodeContests. 6Internalizing Agency from Reflective Experience 
+
+Table 4. Experience-to-Policy distillation improves Pass@128.                      
+
+> Model pass@1 pass@128
+> Lreh Lcf +Lreh Lreh Lcf +Lreh
+> Qwen2.5-7B 27.67 27.88 59.33 62.00 Llama3.1-8B 22.54 22.70 57.33 59.33 Qwen2.5-14B 37.17 36.50 67.33 72.00
+
+Higher upper bound. Across all three benchmarks, our method consistently achieves the best performance in the large-k regime, indicating a genuine improvement in the model’s capability ceiling. The gain is particularly pro-nounced on CodeContests, where the margin remains sub-stantial even at the largest budget. 
+
+Better sample efficiency. As illustrated in Figure 3, our approach reaches the same accuracy threshold with fewer samples, and after a moderate budget, it maintains a higher success rate than the baselines at the same k, i.e., it dom-inates the scaling curve beyond a certain point. Overall, these results show that our method improves both the attain-able performance ceiling and the efficiency of converting additional samples into higher success rates. 
+
+4.3. Effectiveness Analysis Tree-Based Experience Generation with Rollback. Ta-ble 3 compares three ways of spending the same execution budget on CodeContests, where each attempt can be exe-cuted and returns compiler/runtime outputs and test feed-back. Independent Sampling draws independent solutions; Iterative Refinement updates the next attempt based on the previous execution result; our Stage 1 sampling performs tree-based experience-guided rollback branching to explore alternative fixes at critical failure points. Across all models, our sampling strategy yields the highest Pass@128, showing that structured, feedback-driven branching is more effective than either independent sampling or linear refinement for discovering successful programs under a fixed budget. 
+
+Experience-to-Policy Distillation. Table 4 compares train-ing with rehearsal alone ( Lreh ) vs. rehearsal plus counter-factual distillation ( Lcf + Lreh ) on ScienceWorld. Lreh 
+
+follows a reject-sampling style scheme (Ahn et al., 2024): it filters out failed trajectories and imitates decisions from successful rollouts, which helps preserve competent be-haviors but offers limited guidance on how to revise a tra-jectory once it starts to fail. Adding Lcf , which is the key that distills experience-guided corrections, largely im-proves Pass@128 across model sizes while keeping Pass@1 comparable (e.g., 59 .33% → 62 .00% on Qwen2.5-7B and 
+
+67 .33% → 72 .00% on Qwen2.5-14B). This suggests that experience-to-policy distillation Lcf is crucial for internal-izing corrective revisions, while Lreh mainly stabilizes and 
+
+Table 5. OOD Generalization on MBPP (trained on CodeContests). Values are Pass@128 (%). Red superscripts indicate the absolute drop relative to the corresponding base model, while blue super-scripts indicate the absolute gain. GRPO suffers clear degradation under distribution shift, whereas LEAFE better preserves OOD performance and can even surpass the base model.           
+
+> Method Qwen2.5-32B Qwen2.5-72B Llama3-70B
+> Base (No-train) 85.45 83.33 78.31 GRPO 81.22 −4.281.22 −2.174.07 −4.2
+> Ours 85.45 +0 .085.13 +1 .879.63 +1 .3
+
+Table 6. Ablation study on the impact of auxiliary training tar-get (i.e., EarlyExp(EE) and GRPO(RL)). Results are reported as Pass@ 1 / Pass@ 128 (%). While additional training target consis-tently enhances greedy precision (Pass@ 1 ), it may occasionally constrain the exploration ceiling (Pass@ 128 ).                            
+
+> Task Model Ours Ours + Enhancement
+> ALFWorld Qwen2.5-7B 67.50 / 94.29 67.86 /95.71 (w/ EE) Llama3.1-8B 71.79 / 96.43 74.46 / 93.57 (w/ EE)
+> CodeContests
+> Qwen2.5-32B 9.34 / 34.35 14.09 / 33.94 (w/ RL) Qwen2.5-72B 11.15 / 40.00 17.12 /47.88 (w/ RL) Llama3-70B 9.33 / 30.30 14.09 /33.94 (w/ RL)
+
+retains base behaviors. 
+
+4.4. Ablation Study Scaling Behavior Across Model Sizes. As illustrated in Figure 4, we observe a consistent scaling trend in Pass@128 performance across all benchmarks. Specifically, increasing the model size from Qwen2.5-7B to 14B yields gains of +0.6% on WebShop and +10.0% on ScienceWorld. Simi-larly, on CodeContests, the transition from Qwen2.5-32B to 72B results in a +13.9% improvement. Throughout these scales, our method consistently outperforms all baselines. The robustness of these gains across both Qwen and Llama architectures demonstrates that LEAFE effectively leverages increased model capacity to raise the performance ceiling. 
+
+Out-of-Distribution Generalization. To evaluate the Out-of-Distribution (OOD) generalization of our approach, we tested models trained on CodeContests on the held-out MBPP benchmark. As shown in Table 5, our method shows superior robustness to distribution shift compared to the GRPO baseline. Notably, while GRPO leads to severe per-formance drop on OOD tasks (e.g., -4.2% on Llama3-70B), our method not only mitigates this degradation but still keep-ing surpass the original base model’s performance. This result suggests that LEAFE helps the model to learn funda-mental reflective agency rather than simply over-fitting to dataset-specific shortcuts. 
+
+Synergy and Trade-offs with Auxiliary Training Tar-get. We investigated into the synergy of LEAFE with EarlyExp and GRPO. As presented in Table 6, integrat-ing these techniques consistently improves Pass@ 1 success 7Internalizing Agency from Reflective Experience 1 2 4 8 16 32 64 128 256 512 1024                    
+
+> Number of Samples ( k)
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> Success Rate (pass@k)
+> CodeContests
+> 124816 32 64 128 256
+> Number of Samples ( k)
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> ScienceWorld
+> 124816 32 64 128 256 512
+> Number of Samples ( k)
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> 0.8
+> 0.9
+> 1.0
+> ALFWorld
+> Base GRPO Ours+GRPO
+
+Figure 3. Scaling results on different benchmarks. We plot the Pass@ k success rate as a function of the number of samples k. Our method (red) consistently achieves higher efficiency and performance ceilings across all tasks compared to the baselines. Qwen-7B Qwen-14B   
+
+> 60
+> 80
+> SR (%)  WebShop WebShop
+> Qwen-7B Qwen-14B
+> 0
+> 50
+> SR (%)  SciWorld SciWorld
+> Qwen-32B Qwen-72B
+> 0
+> 20
+> 40
+> 60
+> SR (%)  CodeContests CodeContests
+> EarlyExp
+> GRPO
+> Ours
+> P@1
+> P@128
+
+Figure 4. Main results on WebShop and SciWorld. Bars represent 
+
+Pass@1 (solid) and Pass@k (hatched) (%). Ours consistently outperforms GRPO and other baselines across different model architectures and scales. 
+
+rates across all evaluated benchmarks: For instance, add EarlyExp to Llama3.1-8B on ALFWorld increases accuracy from 71.79% to 74.4%, while GRPO boosts Qwen2.5-7B on CodeContests from 11.15% to 17.12%. However, these gains in exploitation do not always translate to enhanced model capability at higher sampling budget. We observe that Pass@ 128 performance can sometimes decline under auxiliary training target, notably for Llama3.1-8B (96.43% 
+
+→ 93.57%) and Qwen2.5-32B (34.35% → 33.94%), sug-gesting that while EarlyExp and GRPO effectively align the primary training target, they may narrow the exploration space. In contrast, LEAFE consistently improves model’s capacity as analyzed in §4.1. 
+
+4.5. Discussion and Limitation Beyond Distribution Sharpening: Internalizing Agency from Experience. Across tasks, LEAFE’s gains are most pronounced at large k (e.g., Pass@128), where outcome-driven training such as GRPO often plateaus despite oc-casional Pass@1 improvements. This is consistent with terminal scalar rewards mainly upweighting a small set of already-successful trajectories, while long-horizon suc-cess depends on targeted, feedback-conditioned revisions. By generating repair-oriented rollback branches in Stage 1 and distilling the resulting corrective decisions in Stage 2, LEAFE internalizes feedback-grounded recovery into the model, improving both the Pass@ k ceiling and sample effi-ciency. Overall, our results suggest LEAFE expands behav-ioral coverage by training agents to fix failing trajectories rather than relying on blind retries or external search. 
+
+Limitation. LEAFE has the following limitations: For example, LEAFE is most effective when the environment provides clear, diagnostic feedback; its benefits may dimin-ish when feedback is weak, delayed, or hard to attribute. Besides, LEAFE assumes the environment can be reliably reset to a rollback point, which can be difficult in non-deterministic or stateful real-world settings. 
+
+## 5. Related Work 
+
+LLM-based Agents. Large Language Models (LLMs) have evolved from passive generators into autonomous agents capable of tool-use and multi-step reasoning. Early work largely relies on prompting to elicit agent behaviors without weight updates, including ReAct (Yao et al., 2022b), Reflex-ion (Shinn et al., 2023), and Tree of Thoughts (Yao et al., 2023). Recently, reinforcement-learning (often RLVR) has become a major route to improve reasoning robust-ness and long-horizon decision making, exemplified by DeepSeek-R1 (Guo et al., 2025) and OpenAI o1 (Jaech et al., 2024). Building on this direction, systems such as verl-agent/GiGPO (Feng et al., 2025), rLLM (Tan et al., 2025), and Agent-R1 (Cheng et al., 2025) scale multi-turn RL for tool-using agents, while open-weight releases (e.g., Kimi K2 (Team et al., 2025), GLM-4.5/4.7 (Zeng et al., 2025a; Z.ai, 2025), MiniMax-M2 (MiniMax, 2025)) further accelerate reproducible agent research. 8Internalizing Agency from Reflective Experience 
+
+Reinforcement Learning with Verifiable Rewards (RLVR). RLVR post-trains LLMs with automatically ver-ifiable signals (e.g., exact-match answers, unit tests, the-orem provers, or environment states), and has become a widely adopted recipe for improving reasoning on mathe-matics and programming-style tasks (Guo et al., 2025; Yu et al., 2025). PPO (Schulman et al., 2017) is a standard baseline, while critic-free group-based optimizers such as GRPO (Shao et al., 2024; Guo et al., 2025) and step-aware variants like GiGPO (Feng et al., 2025) improve stability and credit assignment; these recipes have been reproduced and scaled in open settings (e.g., SimpleRL-Zoo (Zeng et al., 2025b), ORZ (Hu et al., 2025), and Skywork-OR1 (He et al., 2025a)). Beyond sparse outcome rewards, recent work ex-plores denser step-wise supervision via process reward mod-eling and automated process verifiers (Setlur et al., 2024) as well as implicit/dense reward construction (Cui et al., 2025). RLVR is also being scaled and extended through efficient small-model RL scaling (Luo et al., 2025), budget-aware optimization (Qi et al., 2025), and system-level accelera-tion (e.g., asynchronous rollouts) (Fu et al., 2025a), and has expanded to new verifiable domains such as Verilog genera-tion (Zhu et al., 2025) and Lean-based theorem proving (Ji et al., 2025; Shang et al., 2025). 
+
+Self-Evolving LLM Agents. A growing body of work stud-ies how LLM agents can improve themselves through in-teraction, reflection, and accumulated experience. One line externalizes learning into prompts, memories, or reusable ex-perience libraries without directly updating model weights, as in ReasoningBank (Ouyang et al., 2025), FLEX (Cai et al., 2025), and ACE (Zhang et al., 2025b). Another line per-forms training-based self-evolution by iteratively turning in-teraction data into better policies, skills, or strategic abstrac-tions: SKILLRL (Xia et al., 2026) and EvolveR (Wu et al., 2025) distill trajectories into reusable skills or principles, while Agent0 (Xia et al., 2025), Absolute Zero (Zhao et al., 2025a), and CodeIt (Butt et al., 2024) further couple self-improvement with automatic task generation, self-play style curricula, or hindsight relabeling. A third line focuses on 
+
+test-time self-improvement, either through lightweight test-time fine-tuning on synthesized data (Acikgoz et al., 2025) or through repeated evolution of prompts, memory, and tool-use configurations across attempts (He et al., 2025b). Unlike these, our work emphasizes internalizing feedback-grounded exploratory experience into the policy itself for more effective long-horizon agency. 
+
+Learning From Experience. Learning from Experience is a long-standing goal in agentic systems. Before LLMs, model-based RL such as World Models (Ha & Schmidhu-ber, 2018) and Dreamer (Hafner et al., 2023; 2020; 2023) learned latent dynamics to imagine future outcomes for planning. For LLM agents, recent work either internalizes experience into weights or stores distilled experience for retrieval: Early Experience (EarlyExp) (Zhang et al., 2025a) learns from self-generated traces via implicit world mod-eling and self-reflection; Agent Q (Putta et al., 2024) com-bines guided MCTS and self-critique with off-policy DPO to learn from both successes and failures; HOPE (Wang & Choudhury) uses hindsight counterfactual actions to drive multi-turn RL exploration; and SPA (Chen et al., 2025) in-ternalizes world models via self-play finetuning. Closest to our setting, GA-Rollback (Li et al., 2025) triggers stepwise rollback to prevent error propagation, while EvolveR (Wu et al., 2025) distills trajectories into reusable strategic prin-ciples. In contrast, our proposed LEAFE explicitly localizes critical failure points and internalizes corrective rollback experiences into a single-rollout policy. 
+
+## 6. Conclusion 
+
+In this paper, we introduce LEAFE, a framework for train-ing LLM agents to internalize feedback-grounded agency through rollback and reflective experience. Unlike outcome-based RLVR methods that rely on terminal scalar rewards, LEAFE leverages structured exploration and environment feedback to identify where a trajectory fails and how it should be revised, providing informative, step-level learning signals. Across long-horizon agentic benchmarks, LEAFE consistently improves Pass@k efficiency over outcome-driven baselines such as GRPO, particularly at large k, re-flecting broader behavioral coverage rather than increased concentration on existing successful modes. These re-sults demonstrate that internalizing reflective experience improves an agent’s ability to interact with the environment and adapt under feedback, positioning LEAFE as a practical approach for developing agents that continue to improve through deployment-time interaction. 
+
+## Impact Statement 
+
+This work aims to advance research on training agentic language models for interaction in complex environments. Improvements in agent capability and deployment efficiency may support more practical use of learning-based agents in a range of applications. At the same time, as agents be-come more capable of sustained interaction and autonomous decision-making, careful consideration of reliability, secu-rity, and safety remains important. Beyond these general considerations, we do not identify specific societal impacts that require separate discussion. 9Internalizing Agency from Reflective Experience 
+
+## References 
+
+Acikgoz, E. C., Qian, C., Ji, H., Hakkani-T ¨ur, D., and Tur, G. Self-improving llm agents at test-time. arXiv preprint arXiv:2510.07841 , 2025. Ahn, J., Verma, R., Lou, R., Liu, D., Zhang, R., and Yin, W. Large language models for mathematical reasoning: Pro-gresses and challenges. arXiv preprint arXiv:2402.00157 ,2024. Butt, N., Manczak, B., Wiggers, A., Rainone, C., Zhang, D. W., Defferrard, M., and Cohen, T. Codeit: Self-improving language models with prioritized hindsight replay. arXiv preprint arXiv:2402.04858 , 2024. Cai, Z., Guo, X., Pei, Y., Feng, J., Su, J., Chen, J., Zhang, Y.-Q., Ma, W.-Y., Wang, M., and Zhou, H. Flex: Continuous agent evolution via forward learning from experience. 
+
+arXiv preprint arXiv:2511.06449 , 2025. Chen, S., Zhu, T., Wang, Z., Zhang, J., Wang, K., Gao, S., Xiao, T., Teh, Y. W., He, J., and Li, M. Internalizing world models via self-play finetuning for agentic rl. arXiv preprint arXiv:2510.15047 , 2025. Cheng, M., Ouyang, J., Yu, S., Yan, R., Luo, Y., Liu, Z., Wang, D., Liu, Q., and Chen, E. Agent-r1: Training pow-erful llm agents with end-to-end reinforcement learning. 
+
+arXiv preprint arXiv:2511.14460 , 2025. Cui, G., Yuan, L., Wang, Z., Wang, H., Zhang, Y., Chen, J., Li, W., He, B., Fan, Y., Yu, T., et al. Process re-inforcement through implicit rewards. arXiv preprint arXiv:2502.01456 , 2025. Da, J., Wang, C., Deng, X., Ma, Y., Barhate, N., and Hendryx, S. Agent-rlvr: Training software engineer-ing agents via guidance and environment rewards. arXiv preprint arXiv:2506.11425 , 2025. Feng, L., Xue, Z., Liu, T., and An, B. Group-in-group policy optimization for llm agent training. arXiv preprint arXiv:2505.10978 , 2025. Fu, W., Gao, J., Shen, X., Zhu, C., Mei, Z., He, C., Xu, S., Wei, G., Mei, J., Wang, J., et al. Areal: A large-scale asynchronous reinforcement learning system for language reasoning. arXiv preprint arXiv:2505.24298 , 2025a. Fu, Y., Wang, X., Tian, Y., and Zhao, J. Deep think with confidence. arXiv preprint arXiv:2508.15260 , 2025b. Grattafiori, A., Dubey, A., Jauhri, A., Pandey, A., Kadian, A., Al-Dahle, A., Letman, A., Mathur, A., Schelten, A., Vaughan, A., et al. The llama 3 herd of models. arXiv preprint arXiv:2407.21783 , 2024. Guo, D., Yang, D., Zhang, H., Song, J., Zhang, R., Xu, R., Zhu, Q., Ma, S., Wang, P., Bi, X., et al. Deepseek-r1: In-centivizing reasoning capability in llms via reinforcement learning. arXiv preprint arXiv:2501.12948 , 2025. Ha, D. and Schmidhuber, J. World models. arXiv preprint arXiv:1803.10122 , 2(3), 2018. Hafner, D., Lillicrap, T., Norouzi, M., and Ba, J. Mas-tering atari with discrete world models. arXiv preprint arXiv:2010.02193 , 2020. Hafner, D., Pasukonis, J., Ba, J., and Lillicrap, T. Mastering diverse domains through world models. arXiv preprint arXiv:2301.04104 , 2023. He, J., Liu, J., Liu, C. Y., Yan, R., Wang, C., Cheng, P., Zhang, X., Zhang, F., Xu, J., Shen, W., Li, S., Zeng, L., Wei, T., Cheng, C., An, B., Liu, Y., and Zhou, Y. Skywork open reasoner 1 technical report. arXiv preprint arXiv:2505.22312 , 2025a. He, Y., Liu, J., Liu, Y., Li, Y., Cao, T., Hu, Z., Xu, X., and Hooi, B. Evotest: Evolutionary test-time learn-ing for self-improving agentic systems. arXiv preprint arXiv:2510.13220 , 2025b. Hu, J., Zhang, Y., Han, Q., Jiang, D., Zhang, X., and Shum, H.-Y. Open-reasoner-zero: An open source approach to scaling up reinforcement learning on the base model. 
+
+arXiv preprint arXiv:2503.24290 , 2025. Jaech, A., Kalai, A., Lerer, A., Richardson, A., El-Kishky, A., Low, A., Helyar, A., Madry, A., Beutel, A., Car-ney, A., et al. Openai o1 system card. arXiv preprint arXiv:2412.16720 , 2024. Ji, X., Liu, Y., Wang, Q., Zhang, J., Yue, Y., Shi, R., Sun, C., Zhang, F., Zhou, G., and Gai, K. Leanabell-prover-v2: Verifier-integrated reasoning for formal theo-rem proving via reinforcement learning. arXiv preprint arXiv:2507.08649 , 2025. Li, X., Chen, K., Long, Y., Bai, X., Xu, Y., and Zhang, M. Generator-assistant stepwise rollback framework for large language model agent. arXiv preprint arXiv:2503.02519 ,2025. Li, Y., Choi, D., Chung, J., Kushman, N., Schrittwieser, J., Leblond, R., Eccles, T., Keeling, J., Gimeno, F., Lago, A. D., Hubert, T., Choy, P., de Masson d’Autume, C., Babuschkin, I., Chen, X., Huang, P.-S., Welbl, J., Gowal, S., Cherepanov, A., Molloy, J., Mankowitz, D. J., Robson, E. S., Kohli, P., de Freitas, N., Kavukcuoglu, K., and Vinyals, O. Competition-level code genera-tion with alphacode. Science , 378(6624):1092–1097, 2022. doi: 10.1126/science.abq1158. URL https: //www.science.org/doi/abs/10.1126/sc ience.abq1158 .10 Internalizing Agency from Reflective Experience 
+
+Luo, M., Tan, S., Wong, J., Shi, X., Tang, W. Y., Roongta, M., Cai, C., Luo, J., Li, L. E., Popa, R. A., and Stoica, I. Deepscaler: Surpassing o1-preview with a 1.5b model by scaling rl. https://pretty-radio-b75.notio n.site/DeepScaleR-Surpassing-O1-Previ ew-with-a-1-5B-Model-by-Scaling-RL-1 9681902c1468005bed8ca303013a4e2 , 2025. Notion Blog. MiniMax. Minimax m2 & agent: Ingenious in simplicity. 
+
+https://www.minimax.io/news/minimax-m 2, October 2025. Accessed: 2026-01-28. Nakano, R., Hilton, J., Balaji, S., Wu, J., Ouyang, L., Kim, C., Hesse, C., Jain, S., Kosaraju, V., Saunders, W., et al. Webgpt: Browser-assisted question-answering with hu-man feedback. arXiv preprint arXiv:2112.09332 , 2021. Ouyang, S., Yan, J., Hsu, I., Chen, Y., Jiang, K., Wang, Z., Han, R., Le, L. T., Daruki, S., Tang, X., et al. Rea-soningbank: Scaling agent self-evolving with reasoning memory. arXiv preprint arXiv:2509.25140 , 2025. Putta, P., Mills, E., Garg, N., Motwani, S., Finn, C., Garg, D., and Rafailov, R. Agent q: Advanced reasoning and learning for autonomous ai agents. arXiv preprint arXiv:2408.07199 , 2024. Qi, P., Liu, Z., Pang, T., Du, C., Lee, W. S., and Lin, M. Optimizing anytime reasoning via budget relative policy optimization. arXiv preprint arXiv:2505.13438 , 2025. Schrader, M.-P. B. gym-sokoban. https://github.c om/mpSchrader/gym-sokoban , 2018. Schulman, J., Wolski, F., Dhariwal, P., Radford, A., and Klimov, O. Proximal policy optimization algorithms. 
+
+arXiv preprint arXiv:1707.06347 , 2017. Setlur, A., Nagpal, C., Fisch, A., Geng, X., Eisenstein, J., Agarwal, R., Agarwal, A., Berant, J., and Kumar, A. Re-warding progress: Scaling automated process verifiers for llm reasoning. arXiv preprint arXiv:2410.08146 , 2024. Shang, S., Wan, R., Peng, Y., Wu, Y., Chen, X.-h., Yan, J., and Zhang, X. Stepfun-prover preview: Let’s think and verify step by step. arXiv preprint arXiv:2507.20199 ,2025. Shao, R., Li, S. S., Xin, R., Geng, S., Wang, Y., Oh, S., Du, S. S., Lambert, N., Min, S., Krishna, R., et al. Spu-rious rewards: Rethinking training signals in rlvr. arXiv preprint arXiv:2506.10947 , 2025. Shao, Z., Wang, P., Zhu, Q., Xu, R., Song, J., Bi, X., Zhang, H., Zhang, M., Li, Y., Wu, Y., et al. Deepseekmath: Push-ing the limits of mathematical reasoning in open language models. arXiv preprint arXiv:2402.03300 , 2024. Sheng, G., Zhang, C., Ye, Z., Wu, X., Zhang, W., Zhang, R., Peng, Y., Lin, H., and Wu, C. Hybridflow: A flexible and efficient rlhf framework. In Proceedings of the Twentieth European Conference on Computer Systems , pp. 1279– 1297, 2025. Shinn, N., Cassano, F., Gopinath, A., Narasimhan, K., and Yao, S. Reflexion: Language agents with verbal rein-forcement learning. Advances in Neural Information Processing Systems , 36:8634–8652, 2023. Shridhar, M., Yuan, X., C ˆot ´e, M.-A., Bisk, Y., Trischler, A., and Hausknecht, M. Alfworld: Aligning text and embodied environments for interactive learning. arXiv preprint arXiv:2010.03768 , 2020. Tan, S., Luo, M., Cai, C., Venkat, T., Montgomery, K., Hao, A., Wu, T., Balyan, A., Roongta, M., Wang, C., Li, L. E., Popa, R. A., and Stoica, I. rllm: A framework for post-training language agents, 2025. URL https://pr etty-radio-b75.notion.site/rLLM-A-Fra mework-for-Post-Training-Language-Age nts-21b81902c146819db63cd98a54ba5f31 .Notion Blog. Team, K., Bai, Y., Bao, Y., Chen, G., Chen, J., Chen, N., Chen, R., Chen, Y., Chen, Y., Chen, Y., et al. Kimi k2: Open agentic intelligence. arXiv preprint arXiv:2507.20534 , 2025. Team, Q. et al. Qwen2 technical report. arXiv preprint arXiv:2407.10671 , 2(3), 2024. Wang, H. and Choudhury, S. The road not taken: Hindsight exploration for llms in multi-turn rl. In ES-FoMo III: 3rd Workshop on Efficient Systems for Foundation Models .Wang, R., Jansen, P., C ˆot ´e, M.-A., and Ammanabrolu, P. Scienceworld: Is your agent smarter than a 5th grader? 
+
+arXiv preprint arXiv:2203.07540 , 2022a. Wang, X., Wei, J., Schuurmans, D., Le, Q., Chi, E., Narang, S., Chowdhery, A., and Zhou, D. Self-consistency im-proves chain of thought reasoning in language models. 
+
+arXiv preprint arXiv:2203.11171 , 2022b. Wu, R., Wang, X., Mei, J., Cai, P., Fu, D., Yang, C., Wen, L., Yang, X., Shen, Y., Wang, Y., et al. Evolver: Self-evolving llm agents through an experience-driven lifecycle. arXiv preprint arXiv:2510.16079 , 2025. Xia, P., Zeng, K., Liu, J., Qin, C., Wu, F., Zhou, Y., Xiong, C., and Yao, H. Agent0: Unleashing self-evolving agents from zero data via tool-integrated reasoning. arXiv preprint arXiv:2511.16043 , 2025. 11 Internalizing Agency from Reflective Experience 
+
+Xia, P., Chen, J., Wang, H., Liu, J., Zeng, K., Wang, Y., Han, S., Zhou, Y., Zhao, X., Chen, H., et al. Skillrl: Evolv-ing agents via recursive skill-augmented reinforcement learning. arXiv preprint arXiv:2602.08234 , 2026. Xie, Z., Chen, J., Chen, L., Mao, W., Xu, J., and Kong, L. Teaching language models to critique via reinforcement learning. arXiv preprint arXiv:2502.03492 , 2025. Yang, J., Jimenez, C. E., Wettig, A., Lieret, K., Yao, S., Narasimhan, K., and Press, O. Swe-agent: Agent-computer interfaces enable automated software engineer-ing. Advances in Neural Information Processing Systems ,37:50528–50652, 2024. Yao, S., Chen, H., Yang, J., and Narasimhan, K. Web-shop: Towards scalable real-world web interaction with grounded language agents. Advances in Neural Informa-tion Processing Systems , 35:20744–20757, 2022a. Yao, S., Zhao, J., Yu, D., Du, N., Shafran, I., Narasimhan, K. R., and Cao, Y. React: Synergizing reasoning and acting in language models. In The eleventh international conference on learning representations , 2022b. Yao, S., Yu, D., Zhao, J., Shafran, I., Griffiths, T., Cao, Y., and Narasimhan, K. Tree of thoughts: Deliberate problem solving with large language models. Advances in neural information processing systems , 36:11809–11822, 2023. Yu, Q., Zhang, Z., Zhu, R., Yuan, Y., Zuo, X., Yue, Y., Dai, W., Fan, T., Liu, G., Liu, L., et al. Dapo: An open-source llm reinforcement learning system at scale. arXiv preprint arXiv:2503.14476 , 2025. Yue, Y., Chen, Z., Lu, R., Zhao, A., Wang, Z., Song, S., and Huang, G. Does reinforcement learning really incentivize reasoning capacity in llms beyond the base model? arXiv preprint arXiv:2504.13837 , 2025. Z.ai. Glm-4.7: Advancing the coding capability, 2025. URL 
+
+https://z.ai/blog/glm-4.7 .Zeng, A., Lv, X., Zheng, Q., Hou, Z., Chen, B., Xie, C., Wang, C., Yin, D., Zeng, H., Zhang, J., et al. Glm-4.5: Agentic, reasoning, and coding (arc) foundation models. 
+
+arXiv preprint arXiv:2508.06471 , 2025a. Zeng, W., Huang, Y., Liu, Q., Liu, W., He, K., Ma, Z., and He, J. Simplerl-zoo: Investigating and taming zero reinforcement learning for open base models in the wild. 
+
+arXiv preprint arXiv:2503.18892 , 2025b. Zhang, K., Chen, X., Liu, B., Xue, T., Liao, Z., Liu, Z., Wang, X., Ning, Y., Chen, Z., Fu, X., et al. Agent learning via early experience. arXiv preprint arXiv:2510.08558 ,2025a. Zhang, Q., Hu, C., Upasani, S., Ma, B., Hong, F., Kamanuru, V., Rainton, J., Wu, C., Ji, M., Li, H., et al. Agentic con-text engineering: Evolving contexts for self-improving language models. arXiv preprint arXiv:2510.04618 ,2025b. Zhao, A., Wu, Y., Yue, Y., Wu, T., Xu, Q., Lin, M., Wang, S., Wu, Q., Zheng, Z., and Huang, G. Absolute zero: Reinforced self-play reasoning with zero data. arXiv preprint arXiv:2505.03335 , 2025a. Zhao, R., Meterez, A., Kakade, S., Pehlevan, C., Jelassi, S., and Malach, E. Echo chamber: Rl post-training am-plifies behaviors learned in pretraining. arXiv preprint arXiv:2504.07912 , 2025b. Zhu, Y., Huang, D., Lyu, H., Zhang, X., Li, C., Shi, W., Wu, Y., Mu, J., Wang, J., Jin, P., et al. Qimeng-codev-r1: Reasoning-enhanced verilog generation. In The Thirty-ninth Annual Conference on Neural Information Process-ing Systems , 2025. 12 Internalizing Agency from Reflective Experience 
+
+## A. Algorithm Detail 
+
+Algorithm 1 LEAFE Stage 1: Tree-Based Experience Generation 
+
+1: Input: environment E, policy πθ , instruction q, period K, max steps T , budget B
+
+2: Initialize W ← { (1 , ∅, ∅)}; Dtraj ← ∅ ; Drefl ← ∅ 
+
+3: count ← 0
+
+4: while W̸ = ∅ and count < B do 
+
+5: Dequeue (τ, e, a 1: τ −1) from W; count ← count + 1 
+
+6: Reset( E); Replay( E, a 1: τ −1) {Restore Eτ and hτ }
+
+7: t ← τ
+
+8: while t ≤ T and E not terminal do 
+
+9: if t = τ and e̸ = ∅ then 
+
+10: at ∼ πθ (· | ht, q, e ) {Generate improved action a′ 
+
+> τ
+
+}
+
+11: Drefl ← D refl ∪ { (ht, e, a t)} { Collect experience-guided sample }
+
+12: else 
+
+13: at ∼ πθ (· | ht, q )
+
+14: end if 
+
+15: Et+1 , o t+1 ← Step( Et, a t); ht+1 ← ht ∪ (at, o t+1 )
+
+16: if t mod K = 0 or E fails then 
+
+17: (ˆ τ , ˆe) ∼ πθ (· | ht+1 , p refl ) {Identify failure and provide guidance }
+
+18: Enqueue (ˆ τ , ˆe, a 1:ˆ τ −1) into W
+
+19: end if 
+
+20: if E succeeds then 
+
+21: Dtraj ← D traj ∪ { ht+1 }
+
+22: end if 
+
+23: t ← t + 1 
+
+24: end while 
+
+25: end while 
+
+## B. Implementation Details 
+
+B.1. Summary 
+
+Table 7 summarizes the data scale used across all benchmarks. For each dataset, we report the exact number of instances in the task split (training set and test set). In addition, we list the average amount of auxiliary SFT data (EarlyExp and our LEAFE) distilled from rollouts; these values are approximate and meant to indicate the typical order of magnitude (in thousands) rather than an exact count, since the final number can vary slightly across runs. 
+
+Table 7. Dataset statistics and approximate numbers of training samples used by auxiliary supervision. Training/test set sizes are exact instance counts, while EarlyExp and LEAFE refer to the average scale (order of magnitude) of distilled samples used for SFT across runs. 
+
+Dataset #Training Set #Test Set #EarlyExp samples #LEAFE samples 
+
+ALFWorld 3553 140 10k 12k ScienceWorld 2000 150 6k 12k WebShop 5000 500 15k 10k Sokoban 5000 500 10k 10k CodeContests 5000 165 N/A 10k 
+
+B.2. Implementation of Environment ALFWorld. ALFWorld is a household embodied task suite built on text-based environments. At each step, the environment executes the agent’s action and returns a textual observation describing the execution result and the updated scene state. In addition, ALFWorld provides a list of admissible actions for the next step, which we expose to the model as action 13 Internalizing Agency from Reflective Experience Failed at step 15 
+
+Steps 1 2 replayed 
+
+Failed at step 15 
+
+Steps 1 2 replayed 
+
+Solved! 
+
+# Attempt 1 Attempt 2 Attempt 3   
+
+> Step 1
+> Step 2
+> Step 3
+> Step 4
+> Step 5
+> Step 8
+> Step 9
+> Step 3
+> Step 4
+> Step 5
+> Step 8
+> Step 9
+> Step 3
+> Step 4
+> Step 5
+> Step 8
+> Step 9
+> Replayed steps New steps Success state
+> Rollback
+> to step 3
+> Experience
+> Rollback
+> to step 3
+> Experience
+
+Figure 5. A example on Sokoban illustrating Stage 1 of LEAFE. Starting from a failed trajectory, the agent reflects on the interaction history, identifies an earlier suboptimal decision(step 3), and generates a compact experience summary for rollback-based revision. The environment is then reset to the selected step, the prior history is replayed(step 1-2), and a new branch is explored under the guidance of the reflected experience. Repeating this failure → reflection → rollback → correction process enables the agent to recover from early mistakes and eventually reach a successful solution. 
+
+14 Internalizing Agency from Reflective Experience 
+
+candidates. 
+
+ScienceWorld. ScienceWorld is an interactive scientific reasoning environment in which the agent solves multi-step tasks by manipulating objects and instruments. After executing an action, the environment returns a textual observation describing the action outcome and the resulting world state. Unlike ALFWorld, ScienceWorld exposes a set of currently available objects . The agent must compose valid actions by selecting an action template and instantiating it with objects from this list (e.g., use [object] on [object] ), following the environment’s action syntax. 
+
+WebShop. WebShop simulates goal-directed online shopping as a browser-like interaction loop. At each step, the environment renders the current webpage content (including product lists, descriptions, and navigation elements). The agent can either issue a search action by providing a keyword query, or perform a click action by selecting a clickable element (e.g., a product entry, category link, or a back button) to navigate across pages toward the target purchase. 
+
+Sokoban. Sokoban is a grid-based puzzle environment in which the agent must push boxes onto designated target locations through sequential movement decisions. At each step, the environment executes one of four directional actions ( up , down ,
+
+left , right ) and returns the updated grid state. In our setup, we use a text-mode representation of the environment, where each grid cell is rendered as a symbolic token: walls, floor tiles, targets, boxes, the player are represented by symbols such as #,, O, X, P. This textual grid is exposed to the model as the observation, and the agent must infer spatial structure, object interactions, and long-horizon box-pushing plans directly from these symbolic layouts. 
+
+CodeContests. CodeContests is a competitive programming benchmark where each episode corresponds to a single coding problem. In our setup, at every round, the model produces a complete candidate solution (full code) for the problem. The environment compiles and executes the submitted code against test cases and returns execution feedback. On the public test set, the environment provides concrete runtime outputs (e.g., failing case outputs, errors, or mismatched results), whereas on the private set it reports only an aggregate correctness score. The model uses this feedback to generate a revised full-program submission in the next round. 
+
+B.3. Implementation of Our Method LEAFE Stage 1: Tree-Based Experience Generation with Rollback. During rollout, we trigger rollback reflection either (i) every fixed interval of K interaction rounds, or (ii) immediately when an episode terminates in failure. At each reflection, we provide the model with the full interaction history up to the current step and prompt it to (a) select a specific suboptimal round τ to roll back to, and (b) summarize a concise experience e (diagnosis-and-fix instruction) grounded in the observed feedback. The chosen τ is intended to correspond to the decision that caused the trajectory to enter an incorrect branch or become unproductive. A concrete prompt example is shown in Appendix B.5. In our implementation, we set K=10 for ALFWorld and ScienceWorld, K=5 for WebShop and Sokoban, and K=4 for CodeContests. Notably, CodeContests has a maximum horizon of 4, so rollback is only invoked when the attempt budget is exhausted. 
+
+Stage 2: Experience Distillation. We construct two types of supervised data for standard next-token likelihood training. First, Behavior Rehearsal samples successful trajectories to preserve the agent’s base competence. We randomly select 
+
+20% of successful rollouts to form the rehearsal set Dreh . Second, Experience-to-Policy Distillation builds a counterfactual 
+
+dataset Dcf from branching points: when an experience e injected at round τ yields an improved action a′ 
+
+> τ
+
+, we treat a′ 
+
+> τ
+
+as the counterfactual target for the original history without providing e at training time. In practice, we sample 3 counterfactual (branching) instances per task to populate Dcf . We then perform SFT on the union of Dreh and Dcf with batch size 128 and learning rate 1×10 −6 for 2–3 epochs, depending on the dataset and model scale. 
+
+B.4. Implementation of Baselines 
+
+B.4.1. GRPO-RLVR 
+
+Interactive agentic benchmarks (ALFWorld, ScienceWorld, WebShop, Sokoban). For ALFWorld, ScienceWorld, WebShop and Sokoban, we train the GRPO-RLVR baseline using the V ERL -A GENT framework. ALFWorld, WebShop and Sokoban are officially supported in the repository, and we directly follow the provided environment setup, default training configurations, and reward definitions. ScienceWorld is not officially implemented in V ERL -A GENT ; we therefore implement a compatible environment wrapper following the official interfaces and guidelines, while keeping the observation/action 15 Internalizing Agency from Reflective Experience 
+
+formatting and data structures consistent with existing tasks in the framework. Unless stated otherwise, we use the same default training setup and reward scheme as in V ERL -A GENT . The only ScienceWorld-specific modification is in the memory module: we keep at most the most recent 10 interaction turns in the context. 
+
+Competitive programming benchmark (CodeContests). For CodeContests, we train GRPO-RLVR using the V ERL 
+
+framework. We follow the environment setup and evaluation protocol of CTRL: a solution receives reward 1 if and only if the generated program passes all test cases, including both public and private tests; otherwise the reward is 0. We set the GRPO learning rate to 1 × 10 −6, the training batch size to 128 , and use n = 8 rollouts per prompt. We train for 3 epochs on the CodeContests training set. B.4.2. E ARLY EXPERIENCE 
+
+In this section, we describe our reproduction of the Early Experience baseline, with a focus on its key component, Implicit World Modeling (IWM). In short, IWM trains the agent to predict the next environment observation conditioned on the current interaction context and a candidate action, thereby implicitly capturing environment dynamics via supervised next-token prediction. EarlyExp constructs IWM supervision using expert demonstrations. In our setting, we focus on interaction-driven learning: both our method and the GRPO-RLVR baseline obtain supervision from environment feedback rather than ground-truth trajectories. Therefore, for a fair comparison, we implement IWM supervision purely from model-generated rollouts.: we rollout the base model on the training set and collect action–observation pairs, using the environment-returned observation as the prediction target. For each task instance, we perform 4 independent rollouts, select the highest-scoring attempt, and uniformly sample 3 action–observation pairs from that attempt to form the IWM supervision set. We then perform SFT on it with batch size 64 and learning rate 1×10 −6 for 1 epoch. An example prompt is shown in B.5. B.4.3. ACE ACE proposes a prompt-based self-evolving agent framework in which experience is accumulated in an external playbook 
+
+rather than internalized through parameter updates. The playbook is a structured context memory that stores reusable task-solving strategies, heuristics, and reflective insights extracted from past interactions. Its implementation is organized around three main roles: a Generator that interacts with the environment to solve tasks, a Reflector that analyzes trajectories and summarizes useful takeaways, and a Curator that updates the playbook by incorporating new entries. The open-source implementation of ACE is built on AppWorld, which serves as a representative interactive agent benchmark. In our experiments, we extend the official implementation to ALFWorld, WebShop, ScienceWorld, and Sokoban by following the same overall ACE pipeline. Specifically, we reuse the official prompts for the Generator, Reflector, and Curator roles, while keeping the task execution environments and interaction formatting consistent with the V ERL -A GENT setup used in our other interactive benchmarks. Since the current ACE implementation only appends new playbook entries and does not perform effective pruning or consolidation, the playbook can grow quickly and lead to excessive context length. To control context size, we cap the number of playbook entries during training at 100 . At test time, we use the playbook obtained after training as part of the model context for downstream evaluation. 16 Internalizing Agency from Reflective Experience 
+
+B.5. Example Prompts 
+
+EarlyExp Example Prompt 
+
+User: 
+
+You are an expert agent operating in the ALFRED Embodied Environment. Your task is to: put two cellphone in bed. Prior to this step, you have already taken 7 step(s). Below are the most recent 5 observations and the corresponding actions you took: [Observation 3: ’You arrive at desk 1...’, Action 3: ’take cellphone 2 from desk 1’] [Observation 4: ’You pick up the cellphone 2 from the desk 1.’, Action 4: ’go to bed 1’] [Observation 5: ’You arrive at bed 1. On the bed 1, you see ...’, Action 5: ’go to desk 1’] [Observation 6: ’You arrive at desk 1. On the desk 1, you see ...’, Action 6: ’take cellphone 1 from desk 1’] [Observation 7: ’Nothing happens.’, Action 7: ’move cellphone 2 to bed 1’] You are now at step 8 and your current observation is: Nothing happens. Your admissible actions of the current situation are: [’examine cellphone 2’, ’examine desk 1’, ’go to bed 1’, ’go to drawer 1’, ’go to drawer 2’, ’go to garbagecan 1’, ’go to shelf 1’, ’go to shelf 2’, ’go to shelf 3’, ’go to shelf 4’, ’go to shelf 5’, ’go to shelf 6’, ’go to shelf 7’, ’go to shelf 8’, ’go to sidetable 1’, ’inventory’, ’look’, ’move cellphone 2 to desk 1’]. The next action is **move cellphone 2 to desk 1**. Your task is to predict the environment observation after executing this action. Output only the observation. Assistant: You move the cellphone 2 to the desk 1... 
+
+LEAFE Example Prompt 
+
+User: 
+
+[STEP 1] Observation: This room is called the bathroom. In it, you see... Action: go kitchen [STEP 2] Observation: You move to the kitchen... Action: pick up apple [STEP 3] Observation: You move the apple to the inventory... Action: go to the counter [STEP 4] Observation: It’s not clear how to go to/through a counter... Action: go stove [STEP 5] Observation: It’s not clear how to go to/through a stove... Action: go counter [STEP 6] Observation: It’s not clear how to go to/through a counter... Action: focus on apple 
+
+... 
+
+You are an expert agent playing ScienceWorld, a text-based science simulation game. Your task is to boil apple juice. For compounds without a boiling point, combusting the substance is also acceptable. You have already taken 6 step(s), but the task failed without completing the objective. FAILURE REASON: The environment closed early, but the task was not properly completed. IMPORTANT: Analyze your failed attempt and identify where things went wrong. You have a chance to go back to a specific step and try a different approach, with the benefit of your current experience. First, carefully analyze the trajectory within <think> </think> tags. Then, provide your final decision in the following format: <step> ... </step> <experience> ... 
+
+</experience> 
+
+Assistant: 
+
+<think> The trajectory initially seemed promising as I picked up the apple and moved towards the counter, but I became confused about how to proceed... </think> <step> 2</step> <experience> Plan the full procedure before acting: focus on the target substance, use valid appli-ances/containers, and avoid actions that the environment rejects (e.g., going “to/through” non-locations). 
+
+</experience> 
+
+17
