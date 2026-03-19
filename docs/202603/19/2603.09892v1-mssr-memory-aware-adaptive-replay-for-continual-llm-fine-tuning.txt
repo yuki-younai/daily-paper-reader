@@ -1,0 +1,955 @@
+Title: MSSR: Memory-Aware Adaptive Replay for Continual LLM Fine-Tuning
+
+URL Source: https://arxiv.org/pdf/2603.09892v1
+
+Published Time: Wed, 11 Mar 2026 01:21:26 GMT
+
+Number of Pages: 22
+
+Markdown Content:
+# MSSR: Memory-Aware Adaptive Replay for Continual LLM Fine-Tuning 
+
+Yiyang Lu 1 Yu He 2 Jianlong Chen 1 Hongyuan Zha 1
+
+# Abstract 
+
+Continual fine-tuning of large language models (LLMs) is becoming increasingly crucial as these models are deployed in dynamic environments where tasks and data distributions evolve over time. While strong adaptability enables rapid acquisition of new knowledge, it also exposes LLMs to catastrophic forgetting, where previ-ously learned skills degrade during sequential training. Existing replay-based strategies, such as fixed interleaved replay, accuracy-supervised, and loss-driven scheduling, remain limited: some depend on heuristic rules and provide only par-tial mitigation of forgetting, while others improve performance but incur substantial computational overhead. Motivated by retention dynamics un-der sequential fine-tuning, we propose Memory-Inspired Sampler and Scheduler Replay ( MSSR ), an experience replay framework that estimates sample-level memory strength and schedules re-hearsal at adaptive intervals to mitigate catas-trophic forgetting while maintaining fast adap-tation. Extensive experiments across three back-bone models and 11 sequential tasks show that 
+
+MSSR consistently outperforms state-of-the-art replay baselines, with particularly strong gains on reasoning-intensive and multiple-choice bench-marks. 
+
+# 1. Introduction 
+
+Large Language Models (LLMs) have demonstrated strong capabilities across a wide range of natural language process-ing tasks (Qin et al., 2024; Hadi et al., 2023; Zhao et al., 2023; Kaddour et al., 2023; Yang et al., 2024b; Zhuang et al., 2023; Team et al., 2024a; Guo et al., 2025; Chen et al., 2024). As these models are increasingly deployed in dynamic and evolving environments, there is a growing demand for continual learning (CL), enabling models to         
+
+> 1The Chinese University of Hong Kong, Shenzhen
+> 2Nanjing University. Correspondence to: Yiyang Lu <yiyan-glu1@link.cuhk.edu.cn >.
+> Preprint. March 11, 2026.
+
+acquire new knowledge incrementally while retaining previ-ously learned skills (Wang et al., 2024; Chen & Liu, 2018). This need is particularly evident in domains such as health-care (Lee & Lee, 2020; Amrollahi et al., 2022), personalized applications (Cai et al., 2022; Yang et al., 2025), and law and policy (Chalkidis et al., 2021; Zhang et al., 2023). How-ever, continual fine-tuning of LLMs remains challenging due to representation drift and gradient interference, often resulting in catastrophic forgetting (van de Ven et al., 2024; Luo et al., 2025; Zhai et al., 2023; Ren et al., 2024). Replay-based continual learning has been widely recog-nized as an effective strategy for mitigating catastrophic forgetting, with representative methods such as AQM (Cac-cia et al., 2020), GEM (Lopez-Paz & Ranzato, 2017), A-GEM (Chaudhry et al., 2018), and LOGD (Tang et al., 2021) primarily focusing on buffer construction and memory uti-lization. Beyond storage efficiency, prior work has also explored replay scheduling mechanisms, including fixed interleaving, accuracy-based replay (Bang et al., 2021), and loss-driven scheduling (Aljundi et al., 2019a). Despite this progress, existing replay strategies still exhibit notable limi-tations: (i) they are largely heuristic and lack grounding in cognitive memory theory, limiting principled scheduling de-cisions (Murre & Dros, 2015); (ii) they inadequately model the temporal heterogeneity of forgetting, often assuming uniform replay intervals across time scales; and (iii) their scalability to LLM fine-tuning remains unclear, as most eval-uations focus on small-scale or short-horizon settings, while monitoring overhead becomes prohibitive in long training runs (Ke et al., 2023). As illustrated in Figure 1, we conceptually compare repre-sentative replay scheduling strategies. Fixed replay applies rehearsal at uniform intervals, while loss- and accuracy-based methods trigger replay based on performance signals. Although these strategies offer different trade-offs, they re-main reactive and lack a principled mechanism to align replay timing with the evolving forgetting dynamics of the model. To address these limitations, we propose MSSR, a continual fine-tuning framework for LLMs inspired by the Ebbinghaus forgetting curve. Rather than relying on fixed or reactive replay triggers, MSSR models memory retention as a time-dependent decay process and schedules replay accordingly, 1              
+
+> arXiv:2603.09892v1 [cs.LG] 10 Mar 2026 MSSR: Memory-Aware Adaptive Replay for Continual LLM Fine-Tuning
+> (a) Fixed Replay (b) Loss-Based Replay
+> (c) Accuracy-Based Replay (d) MSSR (Ours)
+> Figure 1. Comparison of replay triggering strategies in continual fine-tuning. (a) Fixed replay performs replay at a constant interval, ignoring optimization dynamics. (b) Loss-based replay triggers replay when the loss exceeds a threshold, but noisy high-frequency fluctuations can cause frequent spurious triggers. (c) Accuracy-based replay reacts to evaluation drops, yet often suffers from lag since replay starts after accuracy has already degraded. (d)
+> MSSR (ours) is time-aware and memory-inspired, scheduling replay based on time-dependent retention to stabilize long-term performance.
+
+progressively expanding replay intervals as model stability increases. This design provides a cognitively motivated yet practical alternative to heuristic replay strategies for long-horizon LLM continual learning. To rigorously establish the validity of our contributions, we organize our work into three interrelated stages. We first propose an memory-inspired replay scheduling frame-work that bridges cognitive memory theory with continual learning for LLMs. Building on this design, we further in-troduce a methodological perspective that highlights how cognitively motivated scheduling can serve as a principled alternative to existing heuristic strategies(Howard & Kahana, 2002; Kaplan et al., 2020). Finally, we validate the effec-tiveness of our approach through extensive experiments on reasoning benchmarks such as GSM8K(Cobbe et al., 2021), MATH(Hendrycks et al., 2021b), and MMLU(Hendrycks et al., 2021a), showing that it achieves favorable reten-tion–efficiency trade-offs and substantially mitigates for-getting with minimal computational overhead. In summary, our contributions are as follows: • Framework. We introduce a memory-aware adaptive replay sampler and scheduler that bridges cognitive memory theory and continual learning in LLMs. • Methodological insight. We show how cognitively motivated scheduling provides a principled alternative to existing heuristic replay strategies. • Empirical experiments. We demonstrate through experiments on long-sequence reasoning benchmarks (e.g., GSM8K, MATH, MMLU) that our approach im-proves retention–efficiency trade-offs and mitigates catastrophic forgetting with minimal overhead. 
+
+# 2. Preliminaries 
+
+Catastrophic Forgetting Measurement In continual learning or multi-stage fine-tuning, the model is sequen-tially trained on a series of datasets {D1, D 2, . . . , D T },each corresponding to a task or domain. Let Ft(Di) de-note the performance (e.g., accuracy or loss) of the model after completing the training on dataset Dt and evaluated on the previously seen dataset Di (i ≤ t). The average forgetting is defined as 
+
+F = 1
+
+T − 1 
+
+> T−1
+
+X
+
+> i=1
+
+max  
+
+> t>i
+
+[Fi(Di) − Ft(Di)] , (1) where a larger F indicates more severe forgetting. This metric quantifies the degradation of model performance on previous tasks as new tasks are learned. 
+
+Experience Replay Formalization Experience replay mitigates catastrophic forgetting by mixing old and new data during fine-tuning. Let Dnew and Breplay denote the current training data and the replay buffer containing repre-sentative samples from previous datasets, respectively. At each training step, the model is optimized over a mixed dataset: 
+
+Dmix = Dnew ∪ { (xi, y i) ∼ Breplay }. (2) The total training objective is 
+
+Ltotal = E(x,y )∼Dnew 
+
+ℓ(fθ (x), y )
+
++ λ E(x,y )∼Breplay 
+
+ℓ(fθ (x), y ), (3) where ℓ(·) is the task loss, λ controls the replay ratio, and θ
+
+denotes model parameters. By periodically re-exposing the model to past samples, experience replay alleviates parame-ter drift and knowledge degradation. 2MSSR: Memory-Aware Adaptive Replay for Continual LLM Fine-Tuning 
+
+Forgetting Curve as Scheduling Inspiration The Ebbinghaus forgetting curve characterizes memory retention as a monotonically decreasing function of elapsed time, with repeated reviews progressively slowing down the decay and extending optimal review intervals. In this work, we adopt this principle as a heuristic inspiration rather than a literal cognitive model. Specifically, it motivates time-dependent replay scheduling and memory-aware prioritization, with-out assuming that large language models follow the same forgetting dynamics as humans. 
+
+# 3. MSSR: Modeling Memory Decay for Time-Dependent Replay 
+
+3.1. Sample-Level Memory Strength Modeling 
+
+We model the retention of each sample i as a stochastic decay process modulated by time and difficulty, follow-ing classical forgetting and survival-based memory mod-els (Ebbinghaus, 1885; Rubin & Wenzel, 1996; Wixted, 2004). Let t ∈ N denote training steps and Ri the set of replay exposures. We define a memory strength mi,t ∈ (0 , 1] 
+
+and a stability variable Si,t > 0 controlling resistance to forgetting: 
+
+mi,t +1 = mi,t exp( −hi,t ),hi,t = αi + γd ϕ(bℓi,t )
+
+Si,t 
+
+, (4) where αi denotes baseline decay, γd controls loss sensitivity, and ϕ is a monotone mapping (e.g., calibrated sigmoid) applied to normalized loss bℓi,t .1
+
+Review and Consolidation. At each review step t ∈ R i,the memory state is reset and stabilized through: 
+
+mi,t + = 1 ,Si,t + = Si,t + ηs(Smax − Si,t )β e−ρ∆ti
+
+× (1 − mi,t )γs + ϵt,
+
+(5) where ∆ti = t − t⋆i is the elapsed time since the last review, and ϵt ∼ N (0 , σ 2 
+
+> s
+
+) captures stochastic variation. Here, ηs,
+
+β, ρ, and γs respectively control learning rate, saturation, spacing sensitivity, and error-driven reinforcement. This rule jointly models saturating stability growth, spacing mod-ulation, error-dependent consolidation, and stochastic replay efficiency. 
+
+Epoch-Level Update. Unrolling Eq. (4) gives: 
+
+mi,t ≈ exp 
+
+
+
+−
+
+Z tt⋆i
+
+hi(τ )dτ 
+
+
+
+, (6)   
+
+> 1In practice, bℓi,t is computed via EMA-denoised loss followed by quantile normalization; see the Appendix for details.
+
+where t⋆i is the last review step. To reduce computation in large-scale fine-tuning, we use a piecewise-constant hazard updated at epoch boundaries {T0, T 1, . . . , T E } with ∆te =
+
+Te − Te−1:
+
+mi,T e = mi,T e−1 e−hi,Te ∆te ,hi,T e = αi + γd ϕ(bℓi,T e )
+
+Si,T e
+
+. (7) This provides an efficient discrete approximation to the continuous retention dynamics suitable for large-scale LLM fine-tuning. 
+
+3.2. Scheduling Dataset-Level Replay Dynamics 
+
+Building on the sample-level memory formulation, we now model replay scheduling at the dataset level, determining 
+
+when replay occurs and how much past data is mixed with new samples at each step. This process captures the tempo-ral organization of rehearsal events, analogous to the spaced reinforcement observed in human memory systems. 
+
+Replay timing and spacing expansion. Let t ∈ N denote training steps, and Tr = {t1, t 2, . . . } be the sequence of replay checkpoints. Following the spacing principle, the interval between two adjacent replay events expands gradu-ally: 
+
+∆t(k+1)  
+
+> r
+
+= ∆ t(k) 
+
+> r
+
+(1 + ηp e−ρpk), (8) where ∆t(k) 
+
+> r
+
+= tk − tk−1 is the k-th replay interval, ηp
+
+controls the expansion rate, and ρp regulates how quickly the spacing growth saturates. This ensures that replay events are dense in the early stage to prevent rapid forgetting and gradually sparser as memory stabilizes. (See Appendix B.2 for derivation from the stability dynamics.) 
+
+Dynamic replay ratio and composition. At each replay step tk ∈ T r , we construct a mixed batch combining current-task data Dnew and replayed data Breplay from previous tasks: 
+
+D(tk ) 
+
+> mix
+
+= Dnew ∪ { (xi, y i) ∼ Breplay },λtk = λ0 e−βr tk + λmin , (9) where λtk controls the ratio of replayed samples within the mixed batch. The exponential decay form arises naturally from an optimal control perspective balancing rehearsal benefit and computational cost (Appendix B.3). Initially, 
+
+λtk ≈ λ0 encourages strong rehearsal, while the ratio decays exponentially toward λmin as training progresses and model stability increases. 
+
+Interaction with sample-level retention. Each replayed sample i maintains its own memory strength mi,t , which determines its forgetting risk. To focus replay on more un-stable samples, we weight each sample’s replay probability 3MSSR: Memory-Aware Adaptive Replay for Continual LLM Fine-Tuning   
+
+> Figure 2. Overall architecture of the MSSR framework. The framework consists of two core components that jointly govern replay behavior. (1) a sample-level replay sampler (left), which tracks per-sample memory strength by modeling loss-driven and time-dependent decay, and converts memory states into probabilistic replay weights. (2) an adaptive replay scheduler (right), which which regulates replay timing via expanding intervals and replay volume via a time-decaying ratio. At each replay event, sampled data are merged with current-task samples and used for LoRA-based fine-tuning, forming a closed-loop, memory-aware continual learning process.
+
+by a normalized inverse retention score: 
+
+p(tk ) 
+
+> i
+
+= m−ζi,t k
+
+P 
+
+> j∈Breplay
+
+m−ζj,t k
+
+, (10) where ζ > 0 controls the prioritization intensity. This design extends memory-based prioritization (Schaul et al., 2015) to continual fine-tuning: samples with lower mi,t (faster forgetting) are replayed more often. A full derivation linking this weighting to the expected consolidation gain is provided in Appendix B.4. 
+
+3.3. Integration Components: the MSSR Framework Framework Overview. To operationalize the sample-level and dataset-level formulations introduced above, we develop a unified continual-learning framework, termed MSSR. Built upon the LoRA -based fine-tuning pipeline (Hu et al., 2022) implemented in LLaMAFactory (Zheng et al., 2024), MSSR transforms the theoretical retention dy-namics into a practical replay-driven training algorithm. As illustrated in Fig. 2, MSSR implements a memory-aware continual fine-tuning pipeline organized as a closed-loop workflow. On the left, a sample memory module tracks per-sample memory strength mi,t , which is updated at the epoch level based on observed loss and time-dependent decay. These memory states are converted into replay proba-bilities via probabilistic sampling, prioritizing samples with weaker memory or longer unseen intervals. On the right, an adaptive replay scheduler determines both when to trig-ger replay, using an expanding-interval strategy, and how many samples to replay, through a time-decaying replay ratio. The selected replay set is mixed with the current task data and jointly optimized using LoRA-based fine-tuning. Together, these components provide a unified framework for mitigating catastrophic forgetting in sequential learning. 
+
+Sample Memory Tracking. This module maintains per-sample retention states during fine-tuning. At each epoch, the observed loss bℓi,t updates the memory strength and stability according to Eq. (4) , capturing time-dependent for-getting and difficulty-dependent adaptation. The resulting states {mi,t , S i,t } provide replay-related statistics that guide the subsequent scheduler. 
+
+Replay Scheduler. This module converts the tracked memory states into adaptive replay decisions. Each sample is assigned a replay probability preplay  
+
+> i
+
+∝ (1 − mi,t )βm eρ∆ti ,favoring items with weaker memory or longer unseen inter-4MSSR: Memory-Aware Adaptive Replay for Continual LLM Fine-Tuning 
+
+vals. An adaptive replay ratio rt further controls the overall replay volume. The selected replay set Rt is then mixed with new samples for LoRA-based fine-tuning, enabling memory-aware continual learning. 
+
+LoRA-based Fine-tuning Integration. After the replay subset Rt is selected, it is merged with the current task data 
+
+Dt for joint optimization under the parameter-efficient fine-tuning scheme introduced above. During each training step, the combined dataset Dt ∪ R t is used to compute the total loss: 
+
+Lt = E(x,y )∼D t∪R t
+
+ ℓ(fθ (x), y ) , (11) where fθ denotes the backbone model equipped with LoRA adapters and ℓ(·) is the task-specific loss. Gradients from both newly introduced and replayed samples are aggregated to update the LoRA parameters θLoRA via backpropagation. This joint training mechanism enables MSSR to continu-ously refine task-relevant knowledge while mitigating forget-ting, leveraging replay without increasing the total number of trainable parameters. 
+
+Training Workflow. As shown in Algorithm 1, the overall training of MSSR forms an end-to-end continual learning loop integrating memory updates, replay scheduling, and LoRA-based optimization. At initialization, all samples start with mi, 0 = 1 and default stability Si, 0. In each epoch, sample losses update memory states via Eq. (4) ; the scheduler then selects a replay subset Rt by Eq. (10) ; and the model is optimized on Dt ∪ R t using the joint loss in Eq. (11) . Afterward, memory statistics are recorded for monitoring and analysis. 
+
+# 4. Experiments 
+
+4.1. Experimental Setup Tasks and Datasets. To rigorously evaluate catastrophic forgetting under different replay strategies, we adopt a se-quential multi-domain fine-tuning setup. Our primary eval-uation employs a progression of three datasets of increas-ing reasoning complexity, trained in the order of Alpaca-GPT4 (Peng et al., 2023) (general instruction following) 
+
+→ GSM8K-RFT (Cobbe et al., 2021) (elementary mathe-matical reasoning) → Competition Math (Hendrycks et al., 2021c) (advanced problem solving). This setup allows us to examine knowledge interference between heterogeneous domains and retention when tasks share closer reasoning structures. To further assess the scalability and robustness of our method in long-sequence continual learning, we extend the evaluation to an 11-task sequence encompassing diverse domains such as AGNews, SQuAD, SciQ, BoolQ, ARC, and multiple MATH subsets. Detailed dataset descriptions and preprocessing procedures are provided in Appendix C. 
+
+Algorithm 1 Training workflow of the MSSR framework 
+
+Input: dataset D, initial parameters θ, memory states 
+
+{mi, 0, S i, 0}
+
+for each epoch t = 1 , . . . , T do for each batch (xi, y i) in Dt do 
+
+Compute loss bℓi,t = ℓ(fθ (xi), y i)
+
+Update mi,t , S i,t according to Eq. (4) 
+
+end for 
+
+Estimate replay probabilities preplay  
+
+> i
+
+using Eq. (10) Select replay set Rt based on preplay  
+
+> i
+
+and ratio rt
+
+Optimize LoRA parameters θLoRA on Dt ∪ R t with loss Eq. (11) Record metrics {mi,t , S i,t , bℓi,t } for analysis 
+
+end for Evaluation Metrics. We evaluate the model after each training stage on the held-out test splits of the corresponding datasets. For SQuAD, we report the standard token-level F1 score following the official evaluation protocol. For other tasks including mathematical reasoning datasets (GSM8K-RFT and Competition Math), we report exact-match accu-racy . Additionally, to comprehensively evaluate the model’s general knowledge retention amidst sequential fine-tuning, we consistently report its performance on the MMLU bench-mark after each stage. An average normalized score aggre-gated across all tasks is also computed to capture global retention stability. Formal metric definitions are provided in Appendix D. 
+
+Baselines. We compare several continual fine-tuning strategies: (1) No Replay : Sequential training without reusing previous data. (2) Fixed Replay : Uniformly re-playing a constant subset of prior samples at each stage. (3) 
+
+Loss-based Replay : Triggering replay based on increased loss landscape sharpness/variance. (4) Accuracy-based Replay : Activating replay upon detecting significant per-formance drops on previous validation sets. (5) MSSR :Our proposed method, where MSSR spl uses the Ebbinghaus-inspired sampler, MSSR sch uses the Ebbinghaus-inspired scheduler, and MSSR full integrates both components. 
+
+Model Training. We perform all fine-tuning experiments using the LoRA framework (Hu et al., 2022) as imple-mented in the LLaMA-Factory toolkit (Zheng et al., 2024). We primarily use the Qwen2.5-7B model (Yang et al., 2024a) as the base architecture for detailed analysis, with additional experiments on Gemma2-9B (Team et al., 2024b), Llama-3.1-8B (Dubey et al., 2024) and Mistral-7B-v0.3 (Jiang et al., 2023) to ensure generalizability. Train-ing is conducted in a distributed multi-GPU environment with NVIDIA A100 GPUs (80 GB each). For each dataset, fine-tuning proceeds until validation performance converges, 5MSSR: Memory-Aware Adaptive Replay for Continual LLM Fine-Tuning 
+
+Table 1. Basic 3-task continual learning results. Best results are shown in bold and second-best are underlined within each backbone. 
+
+Model Mistral-7B-v0.3 Llama-3.1-8B Qwen2.5-7B Dataset MMLU GSM8K MATH AVG MMLU GSM8K MATH AVG MMLU GSM8K MATH AVG Vanilla 60.2 57.7 27.5 48.5 64.5 63.8 29.3 52.5 57.6 70.1 28.6 52.1 Rfixed 60.5 58.8 28.3 49.2 65.1 64.4 29.5 53 58.5 70.5 29.3 52.8 Rloss 60.7 58.4 28.8 49.3 65.3 64.7 29.6 53.2 58.4 72.3 30.4 53.7 Raccu 61.0 59.3 29.4 49.9 64.9 64.5 29.9 53.1 59.5 71.7 29.9 53.7 MSSR sch 60.8 59.5 28.6 49.6 64.8 65.3 29.5 53.2 59.1 71.9 31.1 54.3 MSSR spl 61.3 59.1 29.3 49.9 65.1 64.7 30.3 53.4 58.9 72.3 30.2 53.8 MSSR full 61.9 60.4 30.1 50.8 65.6 66.2 31.4 54.4 59.2 72.5 31.7 54.5 
+
+Table 2. Extended 11-task continual learning results. Best results are shown in bold and second-best are underlined within each backbone. 
+
+Model Method AGNews SQuAD SciQ BoolQ ARC GSM8K MATH 1 MATH 2 MATH 3 MATH 4 MATH 5
+
+Gemma2-9B None 0.714 73.98 0.952 0.889 0.336 0.520 0.778 0.688 0.649 0.425 0.242 Fixed 0.761 74.23 0.944 0.876 0.388 0.638 0.873 0.743 0.626 0.387 0.228 Loss 0.758 73.42 0.961 0.890 0.425 0.643 0.847 0.726 0.632 0.394 0.257 Accu 0.754 74.67 0.959 0.901 0.441 0.636 0.864 0.731 0.650 0.392 0.276 MSSR sch 0.772 75.83 0.952 0.906 0.456 0.654 0.834 0.725 0.649 0.409 0.302 
+
+MSSR spl 0.769 76.10 0.957 0.903 0.462 0.646 0.852 0.741 0.635 0.399 0.263 MSSR full 0.785 77.16 0.969 0.911 0.487 0.665 0.867 0.752 0.651 0.412 0.296 Qwen2.5-7B None 0.622 70.59 0.926 0.878 0.385 0.540 0.873 0.807 0.718 0.570 0.376 Fixed 0.764 72.28 0.951 0.882 0.432 0.706 0.841 0.780 0.701 0.606 0.383 Loss 0.748 73.50 0.962 0.885 0.453 0.698 0.842 0.776 0.725 0.611 0.380 Accu 0.763 73.89 0.955 0.898 0.461 0.683 0.849 0.822 0.751 0.594 0.372 MSSR sch 0.771 73.38 0.953 0.896 0.532 0.727 0.825 0.798 0.763 0.596 0.386 MSSR spl 0.762 73.46 0.966 0.893 0.557 0.733 0.855 0.786 0.784 0.623 0.375 MSSR full 0.781 74.21 0.972 0.911 0.569 0.748 0.864 0.817 0.810 0.637 0.398 
+
+Llama-3.1-8B None 0.781 76.03 0.920 0.837 0.598 0.532 0.801 0.706 0.611 0.474 0.302 Fixed 0.768 77.17 0.912 0.876 0.576 0.626 0.783 0.715 0.671 0.518 0.329 Loss 0.794 77.74 0.922 0.854 0.637 0.647 0.825 0.712 0.658 0.521 0.337 Accu 0.771 78.53 0.934 0.852 0.645 0.653 0.812 0.721 0.675 0.517 0.352 MSSR sch 0.756 79.50 0.921 0.853 0.688 0.635 0.781 0.722 0.694 0.507 0.345 MSSR spl 0.775 78.26 0.933 0.881 0.650 0.645 0.814 0.731 0.682 0.530 0.338 MSSR full 0.787 79.95 0.945 0.889 0.692 0.651 0.825 0.746 0.705 0.524 0.363 
+
+Table 3. Effect of buffer size on retention performance under the Ebbinghaus scheduler. Buffer Size Average Retention (%) 512 62.1 1024 71.4 2048 78.9 4096 80.3 
+
+with the total number of optimization steps kept consistent across all replay strategies to ensure fair comparison. All experiments use identical optimizer configurations and ran-dom seeds for reproducibility. Hyperparameter settings are detailed in Appendix E. 
+
+4.2. Main Results 
+
+We report the performance of different replay strategies under the standard 3-task setting in Table 1, and further evaluate their robustness under extended 11-task continual 
+
+Table 4. Replay interval comparison. Ebbinghaus-inspired spac-ing achieves the highest accuracy and lowest forgetting. (Uniform, Heuristic, and Cognitive correspond to the three row types.) 
+
+Interval Sequence Acc. (%) Forget ↓
+
+Fixed ( ∆tr =3 ) 84.6 0.0 Geometric {1, 3, 7, 14 , 30 } 87.2 2.6 Ebbinghaus {1, 2, 4, 7, 15 } 89.1 4.5 
+
+learning in Table 2. Several key observations emerge. 
+
+(1) MSSR full achieves the strongest and most consistent performance across models and tasks. Across both ta-bles, MSSR full attains the best results on the majority of datasets and backbones, indicating that jointly modeling sample-level memory strength and adaptive replay schedul-ing yields clear benefits. MSSR sch and MSSR spl also con-sistently outperform baseline methods, frequently achieving the second-best performance across tasks, demonstrating the effectiveness of both components individually. 6MSSR: Memory-Aware Adaptive Replay for Continual LLM Fine-Tuning 
+
+Table 5. Sensitivity to initial replay ratio λ0 (Qwen2.5-7B, 11-task sequence).                       
+
+> Strategy / λ0fixed loss eval 0.05 0.10 0.20 0.30 GSM8K Avg Acc 0.706 0.698 0.727 0.716 0.725 0.748 0.731 BoolQ Avg Acc 0.876 0.854 0.865 0.874 0.892 0.889 0.883
+
+Table 6. Effect of buffer size on average retention (%). 
+
+Buffer Size (samples) 512 1024 2048 4096 Average Retention (%) 68.7 73.5 75.9 76.8 
+
+(2) Sample-level and schedule-level variants exhibit com-plementary trade-offs. In comparison, MSSR spl tends to outperform MSSR sch on a larger number of tasks, reflecting the advantage of fine-grained, sample-level replay prioriti-zation. However, MSSR sch requires lower computational overhead, as it avoids intensive per-sample operations. As a result, both variants offer practical advantages depending on resource constraints, while their combination in MSSR full 
+
+provides the most robust overall performance. 
+
+(3) Accuracy-based replay is competitive but computa-tionally expensive. The accuracy-based baseline achieves strong results on several tasks, often comparable to MSSR variants. However, it relies on frequent evaluation to trigger replay, leading to substantially higher computational and time costs. In contrast, MSSR attains similar or better per-formance without repeated evaluations, making it a more efficient and scalable solution. 
+
+(4) MSSR is particularly effective at mitigating early-task forgetting in long sequences. In the 11-task setting (Table 2), MSSR full achieves the best performance on most early tasks (e.g., the first six datasets), while the second-best results are almost always obtained by MSSR sch or MSSR spl .This pattern highlights the strength of MSSR in alleviating catastrophic forgetting of earlier tasks as the task horizon grows. 
+
+(5) Gains are task-dependent and most pronounced on moderately difficult benchmarks. MSSR variants yield particularly large improvements on ARC, a multiple-choice reasoning benchmark, with gains of up to +0.108 compared to baselines. This suggests that MSSR is especially effective when pre-trained LLMs exhibit low initial accuracy but can benefit from targeted rehearsal. It also achieves strong performance on SQuAD . In contrast, for simpler tasks such as MATH 1, performance differences across methods are smaller, likely because these skills are already well captured during pre-training. 
+
+Table 7. Training and memory overhead of MSSR (normalized to fixed replay).                     
+
+> Method Wall-clock Time Peak Memory Throughput (samples/s) Per-step Latency Fixed Replay 1.00 1.00 1.00 1.00 MSSR spl 1.03 1.04 0.99 1.02 MSSR sch 1.04 1.05 0.98 1.02 MSSR full 1.05 1.06 0.98 1.05
+
+Table 8. Effect of interval scheduling on average accuracy (%) and forgetting drop (%).             
+
+> Interval Pattern Interval Sequence Avg Acc (%) Forget Drop (%) Fixed 3,3,3,... 76.1 4.8 Geometric 1,3,7,15,... 77.8 3.1 MSSR 1,2,4,7,15,... 78.5 2.4
+
+4.3. Ablation Studies 
+
+We analyze the influence of key hyperparameters, replay strategies, and memory buffer sizes on the overall replay behavior and continual learning performance of MSSR. 
+
+Replay Ratio. In our formulation (Eq. 9), the replay ratio 
+
+λtk is dynamically determined at each replay step rather than fixed a priori. To examine how this dynamic adjust-ment affects model performance, we simulate different ini-tial replay coefficients λ0 while keeping the decay schedule constant. Table 5 reports the final test accuracy for represen-tative tasks (Qwen2.5-7B, 11-task sequence). As shown, MSSR maintains stable performance over a wide range of λ0, with best results around 0.10–0.20. This indi-cates that the method is robust to the choice of initial replay ratio, providing consistent accuracy without fine-tuning hy-perparameters excessively. 
+
+Buffer Size. We next study the effect of buffer size, which determines the memory budget available for storing past samples. Smaller buffers exacerbate forgetting, while ex-cessively large buffers may introduce redundant storage. Table 6 reports average retention under different buffer sizes with the Ebbinghaus scheduler. Retention improves monotonically with buffer size, but marginal gains diminish beyond 2048 samples. This sug-gests that MSSR remains effective even under constrained memory budgets, thanks to cognitive-inspired scheduling. 
+
+Scheduler Variants. We evaluate the impact of differ-ent replay interval sequences to assess the robustness of scheduling strategies. Specifically, we compare fixed uni-form intervals, geometric sequences, and the Ebbinghaus-inspired sequence. Results are shown in Table 8. All expanding-interval strategies outperform fixed spacing, with the Ebbinghaus sequence consistently achieving superior long-term retention. This confirms that cognitive-inspired scheduling provides a principled advantage over uniform or 7MSSR: Memory-Aware Adaptive Replay for Continual LLM Fine-Tuning 
+
+heuristic patterns. 
+
+Computational and Memory Overhead. Although MSSR reduces redundant replay, it requires maintaining per-sample memory strength and scheduling logic. Table 7 reports normalized wall-clock time, peak memory, through-put, and per-step latency relative to a fixed-replay baseline (7B backbone). The overhead is minimal (3–5% wall-clock, 4–6% peak memory), as all updates involve only scalar oper-ations per sample. No additional forward/backward passes are required, and throughput remains largely unchanged. Considering that MSSR improves accuracy by 1–3 points and reduces forgetting, this small computational cost is jus-tified. 
+
+# 5. Related Work 
+
+5.1. Catastrophic Forgetting in LLM Fine-Tuning 
+
+When Large Language Models (LLMs) are fine-tuned se-quentially across tasks, they often suffer from catastrophic forgetting, where performance on prior tasks degrades as new knowledge is acquired (van de Ven et al., 2024). In the continual learning (CL) literature, mitigation strategies are commonly categorized into parameter regularization (e.g., Kirkpatrick et al. (2017); Zenke et al. (2017)), knowledge distillation, and architectural isolation. However, scaling these approaches to LLMs remains challenging: regular-ization requires reliable parameter importance estimation across billions of weights, distillation introduces additional training and storage overhead (Shi et al., 2024; Xu et al., 2024), and architectural methods complicate deployment and adaptation (Rusu et al., 2016; Shi et al., 2024). As a result, experience replay has emerged as a particularly practi-cal solution, as it operates at the data level and integrates nat-urally with parameter-efficient fine-tuning methods such as LoRA (Rolnick et al., 2019; Aljundi et al., 2019a; Chaudhry et al., 2019; Hu et al., 2022; Wang et al., 2025). 
+
+5.2. Replay-Based Strategies for LLMs 
+
+Replay alleviates forgetting by reintroducing samples from past tasks during training. Early approaches adopt fixed interleaving, inserting replay batches at uniform intervals, which is computationally efficient but ignores forgetting dynamics (Rolnick et al., 2019). Subsequent work explores priority sampling (Aljundi et al., 2019a; Schaul et al., 2015; Aljundi et al., 2019b) and dynamic scheduling based on val-idation accuracy or training loss, improving retention at the cost of frequent evaluations and increased computation. Re-cent studies further investigate logit-level replay (Buzzega et al., 2020; 2021) and synthetic replay (Shin et al., 2017; Huang et al., 2024), where pseudo-samples are generated when original data are unavailable. Memory-augmented approaches extend replay with explicit long-term storage and consolidation mechanisms (Rebuffi et al., 2017; Zhong et al., 2024; Shan et al., 2025). Despite these advances, existing methods still face trade-offs between effectiveness and efficiency, motivating the search for more principled and lightweight replay scheduling strategies (Li et al., 2025; Guti´ errez et al., 2025). 
+
+5.3. Cognitive-Inspired Replay Scheduling 
+
+Cognitive science suggests that forgetting follows a nonlin-ear trajectory: the Ebbinghaus forgetting curve shows that memory decays exponentially and can be reinforced through spaced repetition at expanding intervals (Ebbinghaus, 2013; Wixted, 2004; Cepeda et al., 2006; Pashler et al., 2007). Although spaced repetition is widely used in education and cognitive modeling, its application to replay scheduling in LLM continual learning remains limited (Shi et al., 2024; Zheng et al., 2025). Some recent studies explore learned schedulers via reinforcement learning or search-based meth-ods (Klasson et al., 2022), but these approaches often in-cur substantial computational cost and lack interpretability. Grounding replay timing in the Ebbinghaus principle of-fers a lightweight and theoretically motivated alternative that better aligns with the temporal dynamics of forget-ting (Mozer et al., 2008; Settles & Meeder, 2016; Cepeda et al., 2008), motivating our approach to cognitively inspired replay scheduling for LLM fine-tuning. 
+
+# 6. Conclusion 
+
+We proposed MSSR, a memory-aware replay framework for continual fine-tuning of LLMs that combines sample-level retention modeling with adaptive replay scheduling in a parameter-efficient LoRA pipeline. Across both 3-task and extended 11-task continual learning settings, MSSR delivers stable gains over fixed, loss-based, and accuracy-based replay on multiple backbones (Qwen2.5-7B, LLaMA-3.1-8B, Gemma2-9B), with the largest im-provements on long-context and reasoning benchmarks where early-task forgetting is most severe. Ablations show that MSSR remains robust to replay ratio, buffer size, and scheduling choices, and achieves reliable long-term reten-tion with minimal computational and memory overhead. Overall, MSSR provides a practical and scalable approach to long-horizon continual fine-tuning, balancing retention, efficiency, and interpretability. 
+
+# Impact Statement 
+
+This paper presents work whose goal is to advance the field of Machine Learning. There are many potential societal consequences of our work, none which we feel must be specifically highlighted here. 8MSSR: Memory-Aware Adaptive Replay for Continual LLM Fine-Tuning 
+
+# Acknowledgements 
+
+We acknowledge USTC for providing computational re-sources, and thank Dr. Lin Yang and Hanzhu Chen for helpful discussions. 
+
+# References 
+
+Aljundi, R., Belilovsky, E., Tuytelaars, T., Charlin, L., Cac-cia, M., Lin, M., and Page-Caccia, L. Online continual learning with maximal interfered retrieval. Advances in neural information processing systems , 32, 2019a. Aljundi, R., Lin, M., Goujaud, B., and Bengio, Y. Gradi-ent based sample selection for online continual learning. 
+
+Advances in neural information processing systems , 32, 2019b. Amrollahi, F., Shashikumar, S. P., Holder, A. L., and Nemati, S. Leveraging clinical data across healthcare institutions for continual learning of predictive risk models. Scientific reports , 12(1):8380, 2022. Bang, J., Kim, H., Yoo, Y., Ha, J.-W., and Choi, J. Rainbow memory: Continual learning with a memory of diverse samples. In Proceedings of the IEEE/CVF conference on computer vision and pattern recognition , pp. 8218–8227, 2021. Buzzega, P., Boschini, M., Porrello, A., Abati, D., and Calderara, S. Dark experience for general continual learn-ing: a strong, simple baseline. Advances in neural infor-mation processing systems , 33:15920–15930, 2020. Buzzega, P., Boschini, M., Porrello, A., and Calderara, S. Rethinking experience replay: a bag of tricks for contin-ual learning. In 2020 25th International Conference on Pattern Recognition (ICPR) , pp. 2180–2187. IEEE, 2021. Caccia, L., Belilovsky, E., Caccia, M., and Pineau, J. Online learned continual compression with adaptive quantiza-tion modules. In International conference on machine learning , pp. 1240–1250. PMLR, 2020. Cai, G., Zhu, J., Dai, Q., Dong, Z., He, X., Tang, R., and Zhang, R. Reloop: A self-correction continual learning loop for recommender systems. In Proceedings of the 45th International ACM SIGIR Conference on Research and Development in Information Retrieval , pp. 2692– 2697, 2022. Cepeda, N. J., Pashler, H., Vul, E., Wixted, J. T., and Rohrer, D. Distributed practice in verbal recall tasks: A review and quantitative synthesis. Psychological bulletin , 132 (3):354, 2006. Cepeda, N. J., Vul, E., Rohrer, D., Wixted, J. T., and Pashler, H. Spacing effects in learning: A temporal ridgeline of optimal retention. Psychological science , 19(11):1095– 1102, 2008. Chalkidis, I., Jana, A., Hartung, D., Bommarito, M., An-droutsopoulos, I., Katz, D. M., and Aletras, N. Lexglue: A benchmark dataset for legal language understanding in english. arXiv preprint arXiv:2110.00976 , 2021. Chaudhry, A., Ranzato, M., Rohrbach, M., and Elhoseiny, M. Efficient lifelong learning with a-gem. arXiv preprint arXiv:1812.00420 , 2018. Chaudhry, A., Rohrbach, M., Elhoseiny, M., Ajanthan, T., Dokania, P. K., Torr, P. H., and Ranzato, M. On tiny episodic memories in continual learning. arXiv preprint arXiv:1902.10486 , 2019. Chen, Z. and Liu, B. Lifelong machine learning . Morgan & Claypool Publishers, 2018. Chen, Z., Wu, J., Wang, W., Su, W., Chen, G., Xing, S., Zhong, M., Zhang, Q., Zhu, X., Lu, L., et al. Internvl: Scaling up vision foundation models and aligning for generic visual-linguistic tasks. In Proceedings of the IEEE/CVF conference on computer vision and pattern recognition , pp. 24185–24198, 2024. Clark, C., Lee, K., Chang, M.-W., Kwiatkowski, T., Collins, M., and Toutanova, K. Boolq: Exploring the surprising difficulty of natural yes/no questions. arXiv preprint arXiv:1905.10044 , 2019. Clark, P., Cowhey, I., Etzioni, O., Khot, T., Sabharwal, A., Schoenick, C., and Tafjord, O. Think you have solved question answering? try arc, the ai2 reasoning challenge. 
+
+arXiv preprint arXiv:1803.05457 , 2018. Cobbe, K., Kosaraju, V., Bavarian, M., Chen, M., Jun, H., Kaiser, L., Plappert, M., Tworek, J., Hilton, J., Nakano, R., Hesse, C., and Schulman, J. Training verifiers to solve math word problems. arXiv preprint arXiv:2110.14168 ,2021. Dubey, A., Jauhri, A., Pandey, A., Kadian, A., Al-Dahle, A., Letman, A., Mathur, A., Schelten, A., Yang, A., Fan, A., et al. The llama 3 herd of models. arXiv e-prints , pp. arXiv–2407, 2024. Ebbinghaus, H. ¨Uber das ged ¨achtnis: untersuchungen zur experimentellen psychologie . Duncker & Humblot, 1885. Ebbinghaus, H. [image] memory: A contribution to experi-mental psychology. Annals of neurosciences , 20(4):155, 2013. Guo, D., Yang, D., Zhang, H., Song, J., Zhang, R., Xu, R., Zhu, Q., Ma, S., Wang, P., Bi, X., et al. Deepseek-r1: In-centivizing reasoning capability in llms via reinforcement learning. arXiv preprint arXiv:2501.12948 , 2025. 9MSSR: Memory-Aware Adaptive Replay for Continual LLM Fine-Tuning 
+
+Guti ´errez, B. J., Shu, Y., Qi, W., Zhou, S., and Su, Y. From rag to memory: Non-parametric continual learning for large language models. arXiv preprint arXiv:2502.14802 ,2025. Hadi, M. U., Qureshi, R., Shah, A., Irfan, M., Zafar, A., Shaikh, M. B., Akhtar, N., Wu, J., Mirjalili, S., et al. Large language models: a comprehensive survey of its applications, challenges, limitations, and future prospects. 
+
+Authorea preprints , 1(3):1–26, 2023. Hendrycks, D., Burns, C., Basart, S., Critch, A., Li, J., Song, D., and Steinhardt, J. Aligning ai with shared human values. Proceedings of the International Conference on Learning Representations (ICLR) , 2021a. Hendrycks, D., Burns, C., Kadavath, S., Arora, A., Basart, S., Tang, E., Song, D., and Steinhardt, J. Measuring math-ematical problem solving with the math dataset. arXiv preprint arXiv:2103.03874 , 2021b. Hendrycks, D., Burns, C., Kadavath, S., Arora, A., Basart, S., Tang, E., Song, D., and Steinhardt, J. Measuring math-ematical problem solving with the math dataset. arXiv preprint arXiv:2103.03874 , 2021c. Howard, M. W. and Kahana, M. J. A distributed repre-sentation of temporal context. Journal of mathematical psychology , 46(3):269–299, 2002. Hu, E. J., Shen, Y., Wallis, P., Allen-Zhu, Z., Li, Y., Wang, S., Wang, L., Chen, W., et al. Lora: Low-rank adaptation of large language models. ICLR , 1(2):3, 2022. Huang, J., Cui, L., Wang, A., Yang, C., Liao, X., Song, L., Yao, J., and Su, J. Mitigating catastrophic forgetting in large language models with self-synthesized rehearsal. 
+
+arXiv preprint arXiv:2403.01244 , 2024. Jiang, A. Q., Sablayrolles, A., Mensch, A., Bamford, C., Chaplot, D. S., de las Casas, D., Bressand, F., Lengyel, G., Lample, G., Saulnier, L., Lavaud, L. R., Lachaux, M.-A., Stock, P., Scao, T. L., Lavril, T., Wang, T., Lacroix, T., and Sayed, W. E. Mistral 7b, 2023. URL https: //arxiv.org/abs/2310.06825 .Kaddour, J., Harris, J., Mozes, M., Bradley, H., Raileanu, R., and McHardy, R. Challenges and applications of large language models. arXiv preprint arXiv:2307.10169 ,2023. Kaplan, J., McCandlish, S., Henighan, T., Brown, T. B., Chess, B., Child, R., Gray, S., Radford, A., Wu, J., and Amodei, D. Scaling laws for neural language models. 
+
+arXiv preprint arXiv:2001.08361 , 2020. Ke, Z., Shao, Y., Lin, H., Konishi, T., Kim, G., and Liu, B. Continual pre-training of language models. arXiv preprint arXiv:2302.03241 , 2023. Kirkpatrick, J., Pascanu, R., Rabinowitz, N., Veness, J., Des-jardins, G., Rusu, A. A., Milan, K., Quan, J., Ramalho, T., Grabska-Barwinska, A., et al. Overcoming catastrophic forgetting in neural networks. Proceedings of the national academy of sciences , 114(13):3521–3526, 2017. Klasson, M., Kjellstr ¨om, H., and Zhang, C. Learn the time to learn: Replay scheduling in continual learning. arXiv preprint arXiv:2209.08660 , 2022. Lee, C. S. and Lee, A. Y. Clinical applications of continual learning machine learning. The Lancet Digital Health , 2 (6):e279–e281, 2020. Li, D., Sun, Z., Hu, X., Hu, B., and Zhang, M. Cmt: A memory compression method for continual knowledge learning of large language models. In Proceedings of the AAAI Conference on Artificial Intelligence , volume 39, pp. 24413–24421, 2025. Lin, C.-Y. Rouge: A package for automatic evaluation of summaries. In Text summarization branches out , pp. 74–81, 2004. Lopez-Paz, D. and Ranzato, M. Gradient episodic memory for continual learning. Advances in neural information processing systems , 30, 2017. Luo, Y., Yang, Z., Meng, F., Li, Y., Zhou, J., and Zhang, Y. An empirical study of catastrophic forgetting in large language models during continual fine-tuning. IEEE Transactions on Audio, Speech and Language Processing ,2025. Mozer, M. C., Pashler, H., and Homaei, H. Optimal predic-tions in everyday cognition: The wisdom of individuals or crowds? Cognitive science , 32(7):1133–1147, 2008. Murre, J. M. and Dros, J. Replication and analysis of ebbing-haus’ forgetting curve. PloS one , 10(7):e0120644, 2015. Papineni, K., Roukos, S., Ward, T., and Zhu, W.-J. Bleu: a method for automatic evaluation of machine transla-tion. In Proceedings of the 40th annual meeting of the Association for Computational Linguistics , pp. 311–318, 2002. Pashler, H., Rohrer, D., Cepeda, N. J., and Carpenter, S. K. Enhancing learning and retarding forgetting: Choices and consequences. Psychonomic bulletin & review , 14(2): 187–193, 2007. Peng, B., Li, C., He, P., Galley, M., and Gao, J. Instruc-tion tuning with gpt-4. arXiv preprint arXiv:2304.03277 ,2023. Qin, L., Chen, Q., Feng, X., Wu, Y., Zhang, Y., Li, Y., Li, M., Che, W., and Yu, P. S. Large language models meet nlp: A survey. arXiv preprint arXiv:2405.12819 , 2024. 10 MSSR: Memory-Aware Adaptive Replay for Continual LLM Fine-Tuning 
+
+Rajpurkar, P., Zhang, J., Lopyrev, K., and Liang, P. Squad: 100,000+ questions for machine comprehension of text. 
+
+arXiv preprint arXiv:1606.05250 , 2016. Rebuffi, S.-A., Kolesnikov, A., Sperl, G., and Lampert, C. H. icarl: Incremental classifier and representation learning. In Proceedings of the IEEE conference on Computer Vision and Pattern Recognition , pp. 2001–2010, 2017. Ren, W., Li, X., Wang, L., Zhao, T., and Qin, W. Analyzing and reducing catastrophic forgetting in parameter efficient tuning. arXiv preprint arXiv:2402.18865 , 2024. Rolnick, D., Ahuja, A., Schwarz, J., Lillicrap, T., and Wayne, G. Experience replay for continual learning. 
+
+Advances in neural information processing systems , 32, 2019. Rubin, D. C. and Wenzel, A. E. One hundred years of forgetting: A quantitative description of retention. Psy-chological review , 103(4):734, 1996. Rusu, A. A., Rabinowitz, N. C., Desjardins, G., Soyer, H., Kirkpatrick, J., Kavukcuoglu, K., Pascanu, R., and Had-sell, R. Progressive neural networks. arXiv preprint arXiv:1606.04671 , 2016. Schaul, T., Quan, J., Antonoglou, I., and Silver, D. Priori-tized experience replay. arXiv preprint arXiv:1511.05952 ,2015. Settles, B. and Meeder, B. A trainable spaced repetition model for language learning. In Proceedings of the 54th annual meeting of the association for computational lin-guistics (volume 1: long papers) , pp. 1848–1858, 2016. Shan, L., Luo, S., Zhu, Z., Yuan, Y., and Wu, Y. Cogni-tive memory in large language models. arXiv preprint arXiv:2504.02441 , 2025. Shi, H., Xu, Z., Wang, H., Qin, W., Wang, W., Wang, Y., Wang, Z., Ebrahimi, S., and Wang, H. Continual learning of large language models: A comprehensive survey. ACM Computing Surveys , 2024. Shin, H., Lee, J. K., Kim, J., and Kim, J. Continual learning with deep generative replay. Advances in neural informa-tion processing systems , 30, 2017. Tang, S., Chen, D., Zhu, J., Yu, S., and Ouyang, W. Layer-wise optimization by gradient decomposition for contin-ual learning. In Proceedings of the IEEE/CVF conference on Computer Vision and Pattern Recognition , pp. 9634– 9643, 2021. Team, G., Georgiev, P., Lei, V. I., Burnell, R., Bai, L., Gulati, A., Tanzer, G., Vincent, D., Pan, Z., Wang, S., et al. Gemini 1.5: Unlocking multimodal understand-ing across millions of tokens of context. arXiv preprint arXiv:2403.05530 , 2024a. Team, G., Riviere, M., Pathak, S., Sessa, P. G., Hardin, C., Bhupatiraju, S., Hussenot, L., Mesnard, T., Shahri-ari, B., Ram ´e, A., et al. Gemma 2: Improving open language models at a practical size. arXiv preprint arXiv:2408.00118 , 2024b. van de Ven, G. M., Soures, N., and Kudithipudi, D. Contin-ual learning and catastrophic forgetting. arXiv preprint arXiv:2403.05175 , 2024. Wang, L., Zhang, X., Su, H., and Zhu, J. A comprehen-sive survey of continual learning: Theory, method and application. IEEE transactions on pattern analysis and machine intelligence , 46(8):5362–5383, 2024. Wang, L., Chen, S., Jiang, L., Pan, S., Cai, R., Yang, S., and Yang, F. Parameter-efficient fine-tuning in large language models: a survey of methodologies. Artificial Intelligence Review , 58(8):227, 2025. Welbl, J., Liu, N. F., and Gardner, M. Crowdsourc-ing multiple choice science questions. arXiv preprint arXiv:1707.06209 , 2017. Wixted, J. T. The psychology and neuroscience of forgetting. 
+
+Annu. Rev. Psychol. , 55(1):235–269, 2004. Xu, X., Li, M., Tao, C., Shen, T., Cheng, R., Li, J., Xu, C., Tao, D., and Zhou, T. A survey on knowledge distillation of large language models. arXiv preprint arXiv:2402.13116 , 2024. Yang, A., Zhang, B., Hui, B., Gao, B., Yu, B., Li, C., Liu, D., Tu, J., Zhou, J., Lin, J., et al. Qwen2. 5-math techni-cal report: Toward mathematical expert model via self-improvement. arXiv preprint arXiv:2409.12122 , 2024a. Yang, J., Jin, H., Tang, R., Han, X., Feng, Q., Jiang, H., Zhong, S., Yin, B., and Hu, X. Harnessing the power of llms in practice: A survey on chatgpt and beyond. ACM Transactions on Knowledge Discovery from Data , 18(6): 1–32, 2024b. Yang, M., Yang, F., Guo, Y., Xu, S., Zhou, T., Chen, Y., Shao, S., Liu, J., and Gao, Y. Pcl: Prompt-based continual learning for user modeling in recommender systems. In 
+
+Companion Proceedings of the ACM on Web Conference 2025 , pp. 1475–1479, 2025. Zenke, F., Poole, B., and Ganguli, S. Continual learning through synaptic intelligence. In International conference on machine learning , pp. 3987–3995. PMLR, 2017. Zhai, Y., Tong, S., Li, X., Cai, M., Qu, Q., Lee, Y. J., and Ma, Y. Investigating the catastrophic forgetting in multimodal large language models. arXiv preprint arXiv:2309.10313 ,2023. 11 MSSR: Memory-Aware Adaptive Replay for Continual LLM Fine-Tuning 
+
+Zhang, X., Zhao, J., and LeCun, Y. Character-level convolu-tional networks for text classification. Advances in neural information processing systems , 28, 2015. Zhang, Y., Wang, Y., Cheng, F., Kurohashi, S., et al. Re-formulating domain adaptation of large language models as adapt-retrieve-revise: A case study on chinese legal domain. arXiv preprint arXiv:2310.03328 , 2023. Zhao, W. X., Zhou, K., Li, J., Tang, T., Wang, X., Hou, Y., Min, Y., Zhang, B., Zhang, J., Dong, Z., et al. A survey of large language models. arXiv preprint arXiv:2303.18223 ,1(2), 2023. Zheng, J., Qiu, S., Shi, C., and Ma, Q. Towards lifelong learning of large language models: A survey. ACM Com-puting Surveys , 57(8):1–35, 2025. Zheng, Y., Zhang, R., Zhang, J., Ye, Y., Luo, Z., Feng, Z., and Ma, Y. Llamafactory: Unified efficient fine-tuning of 100+ language models. In Proceedings of the 62nd Annual Meeting of the Association for Computa-tional Linguistics (Volume 3: System Demonstrations) ,Bangkok, Thailand, 2024. Association for Computational Linguistics. URL http://arxiv.org/abs/2403. 13372 .Zhong, W., Guo, L., Gao, Q., Ye, H., and Wang, Y. Memo-rybank: Enhancing large language models with long-term memory. In Proceedings of the AAAI Conference on Arti-ficial Intelligence , volume 38, pp. 19724–19731, 2024. Zhuang, Z., Chen, Q., Ma, L., Li, M., Han, Y., Qian, Y., Bai, H., Feng, Z., Zhang, W., and Liu, T. Through the lens of core competency: Survey on evaluation of large language models. arXiv preprint arXiv:2308.07902 , 2023. 12 MSSR: Memory-Aware Adaptive Replay for Continual LLM Fine-Tuning 
+
+# A. Derivations for Sample-Level Memory Dynamics 
+
+This appendix provides derivations and technical clarifications for the sample-level memory model introduced in Section 3.1 (see Eqs. 4–7 in the main text). We state the modeling assumptions behind the hazard-based retention dynamics, its continuous-time survival form, the epoch-level discretization, and the consolidation rule applied at review events. 
+
+A.1. Notation and Review-Event Definition 
+
+We index training by discrete steps t ∈ N. For each sample i, we maintain: • Memory strength mi,t ∈ (0 , 1] , interpreted as the retained strength (or survival probability) of sample i at step t;• Stability Si,t > 0, controlling resistance to forgetting (larger Si,t implies slower decay); • Instantaneous hazard hi,t ≥ 0, the per-step decay rate used in the multiplicative retention update; • Normalized loss bℓi,t ∈ [0 , 1] , a denoised, scale-stabilized per-sample loss signal; • A monotone mapping ϕ : [0 , 1] → [0 , 1] applied to bℓi,t (e.g., identity or a calibrated sigmoid). We also use nonnegative scalars αi (baseline drift) and γd (difficulty sensitivity). 
+
+Review times and inter-review interval. We denote by Ri ⊂ N the set of review times of sample i, i.e., the set of training steps at which sample i is explicitly revisited (replayed) by the sampler/scheduler. Formally, 
+
+t ∈ R i ⇐⇒ sample i is selected and used for training at step t as a replay exposure. For any review step t ∈ R i, we use t+ to denote the post-review state immediately after the review update is applied. Let 
+
+t⋆i (t) = max {τ ∈ R i : τ < t }
+
+be the most recent review time strictly before t (if it exists). The elapsed steps since the previous review are 
+
+∆ti(t) = t − t⋆i (t),
+
+which is the discrete inter-review interval used in the consolidation rule. When the dependence on t is clear, we abbreviate 
+
+∆ti(t) as ∆ti.
+
+Core per-step retention update. Between review events, the memory strength decays multiplicatively: 
+
+mi,t +1 = mi,t exp( −hi,t ), hi,t = αi + γd ϕ(bℓi,t )
+
+Si,t 
+
+, (12) which guarantees mi,t ∈ (0 , 1] for all t given mi, 0 ∈ (0 , 1] and hi,t ≥ 0.
+
+A.2. Loss Denoising and Normalization 
+
+Let ℓi,t denote the raw per-sample loss (e.g., token-averaged NLL). We compute a denoised loss using an exponential moving average (EMA): 
+
+eℓi,t = βema eℓi,t −1 + (1 − βema ) ℓi,t , βema ∈ (0 , 1) . (13) We then apply robust quantile normalization to obtain bℓi,t ∈ [0 , 1] :
+
+bℓi,t = clip eℓi,t − Qql
+
+Qqu − Qql
+
+, 0, 1
+
+!
+
+, (14) where Qq denotes a running quantile of eℓi,t and (ql, q u) are fixed quantile levels. 13 MSSR: Memory-Aware Adaptive Replay for Continual LLM Fine-Tuning 
+
+A.3. Closed-Form Between Reviews and Survival Form 
+
+Unrolling the multiplicative decay between two reviews gives a closed form. 
+
+Lemma A.1 (Closed form between reviews) . Fix a review time t⋆i and assume no review occurs on [t⋆i , t ). Then 
+
+mi,t = mi,t ⋆i exp 
+
+
+
+−
+
+> t−1
+
+X 
+
+> τ=t⋆i
+
+hi,τ 
+
+
+
+. (15) 
+
+Proof. For τ = t⋆i , . . . , t − 1, iterating the recurrence yields 
+
+mi,t = mi,t ⋆i
+
+> t−1
+
+Y 
+
+> τ=t⋆i
+
+exp( −hi,τ ).
+
+Using Q 
+
+> τ
+
+exp( −hi,τ ) = exp( − P 
+
+> τ
+
+hi,τ ) completes the proof. 
+
+Stationary (piecewise-constant) hazard over an inter-review interval. On an interval without review events [t⋆i , t ), the stability is unchanged by design (i.e., Si,τ = Si,t ⋆i for all τ ∈ [t⋆i , t )), since Si,t is updated only at t ∈ R i. Moreover, we approximate the difficulty signal by an interval-average (or epoch-average) loss: 
+
+¯ℓi, [t⋆i ,t ) = 1
+
+t − t⋆it−1X 
+
+> τ=t⋆i
+
+bℓi,τ , ¯ϕi, [t⋆i ,t ) = ϕ ¯ℓi, [t⋆i ,t )
+
+.
+
+Under these approximations, the hazard becomes approximately constant on [t⋆i , t ):
+
+hi,τ ≈ ¯hi, [t⋆i ,t ) = αi + γd ¯ϕi, [t⋆i ,t )
+
+Si,t ⋆i
+
+, τ ∈ [t⋆i , t ). (16) Substituting into Eq. (15) yields the exponential retention form 
+
+mi,t ≈ mi,t ⋆i exp   − ¯hi, [t⋆i ,t ) ∆ti
+
+, ∆ti = t − t⋆i , (17) which recovers an Ebbinghaus-style decay with effective rate ¯hi, [t⋆i ,t ).
+
+A.4. Epoch-Level Approximation and Error Control 
+
+To reduce the overhead of updating mi,t at every training step, we approximate the hazard dynamics by an epoch-wise (piecewise-constant) hazard. Let {T0, . . . , T E } be epoch boundaries and ∆te = Te − Te−1. The main text adopts 
+
+hi,T e = αi + γd ϕ(bℓi,T e )
+
+Si,T e
+
+, mi,T e = mi,T e−1 exp( −hi,T e ∆te), (7 revisited) i.e., a right-endpoint Riemann discretization (using epoch-end statistics for bℓ and S). 
+
+Proposition A.2 (Riemann approximation error) . Let ˜mi(t) = ˜ mi(Te−1) exp   − R tTe−1 hi(τ ) dτ  be the continuous-time solution on [Te−1, T e]. If hi(τ ) is L-Lipschitz on [Te−1, T e], then 
+
+log mi,T e − log ˜ mi(Te) ≤ L 
+
+> 2
+
+(∆ te)2. (18) 
+
+Hence the epoch-level approximation converges to the continuous-time solution as max e ∆te → 0.Proof. Let I = R Te 
+
+> Te−1
+
+hi(τ ) dτ and Q = hi(Te) ∆ te. By L-Lipschitz continuity, |hi(τ ) − hi(Te)| ≤ L|τ − Te| for all τ in the interval, so |I − Q| ≤ R Te 
+
+> Te−1
+
+L|τ − Te| dτ = L 
+
+> 2
+
+(∆ te)2. Since log ˜ mi(Te) − log ˜ mi(Te−1) = −I and 
+
+log mi,T e − log mi,T e−1 = −Q, the claim follows. 14 MSSR: Memory-Aware Adaptive Replay for Continual LLM Fine-Tuning 
+
+Lazy update. In practice, we store (t⋆i , m i,t ⋆i , S i,t ⋆i ) and update mi,t only when queried. A convenient implementation uses mi,t = mi,t ⋆i exp( −bhi,e ∆ti), where bhi,e is the most recent epoch-level hazard estimate (e.g., hi,T e ) and ∆ti = t − t⋆i .This avoids per-step updates while preserving the same survival form. 
+
+A.5. Generalized Consolidation at Review 
+
+At review times t ∈ R i, we reset retention and increase stability according to 
+
+mi,t + = 1 ,Si,t + = Si,t + ηs (Smax − Si,t )β exp   − ρ ∆ti(t)(1 − mi,t )γs + ϵt, (5 revisited) where ϵt ∼ N (0 , σ 2 
+
+> s
+
+) and ∆ti(t) = t − t⋆i .
+
+Monotonicity and boundedness. Assume ηs ≥ 0, β ∈ (0 , 1] , ρ ≥ 0, γs ≥ 0, and E[ϵt] = 0 . Then E[Si,t + | Si,t ] ≥ Si,t and the expected increment vanishes as Si,t → Smax because (Smax − Si,t )β → 0. In implementations we additionally clip 
+
+Si,t ∈ [Smin , S max ] to enforce boundedness. 
+
+Spacing implication (time-to-threshold). Between reviews, with average hazard ¯hi ≈ (αi + γdϕ(bℓi)) /S i,t , the time τ ⋆
+
+to hit a retention threshold θ ∈ (0 , 1) satisfies 
+
+τ ⋆ = Si,t 
+
+αi + γdϕ(bℓi) log 1
+
+θ , (19) which increases with stability Si,t . Thus repeated consolidation lengthens the optimal inter-review interval. 
+
+A.6. Choices of the Monotone Mapping ϕ
+
+The mapping ϕ : [0 , 1] → [0 , 1] converts the normalized loss bℓi,t into a monotone difficulty signal that modulates the hazard. In all experiments, we instantiate ϕ as a calibrated sigmoid (Table 9), while other monotone choices yield similar behavior. 
+
+Identity. ϕ(x) = x (linear sensitivity). This is simple but can be more sensitive to noisy loss spikes. 
+
+Calibrated sigmoid (default). 
+
+ϕ(x) = 11 + exp[ −k(x − c)] , k > 0, c ∈ (0 , 1) . (20) which saturates for extreme losses and concentrates sensitivity around the difficulty band near c (with slope controlled by k). 
+
+Power/log mappings. ϕ(x) = xp (p > 0) or ϕ(x) = log(1 + κx )/ log(1 + κ) (κ > 0), allowing sub-/super-linear emphasis on harder examples. All choices preserve monotonicity. Since Si,t > 0 and γd ≥ 0, we have ∂h i,t /∂ bℓi,t = ( γd/S i,t ) ϕ′(bℓi,t ) ≥ 0 (where differentiable), hence larger loss implies a larger hazard at fixed stability. 
+
+A.7. Hyperparameter Settings and Practical Defaults 
+
+Table 9 summarizes the hyperparameters used in the sample-level memory model. Unless otherwise stated, all hyperparame-ters are shared across samples. 
+
+# B. Derivations for Dataset-Level Replay Scheduling 
+
+This appendix provides derivations supporting the dataset-level replay scheduling equations (Eqs. 8–10) in the main text. Our goal is to connect the micro-level sample dynamics (Appendix A) to macro-level replay decisions— when to replay ,
+
+how much to replay , and which samples to replay .15 MSSR: Memory-Aware Adaptive Replay for Continual LLM Fine-Tuning Parameter Default Candidate Values Role Where used 
+
+α (shared) 0.01 {0, 0.005 , 0.01 , 0.02 , 0.05 } baseline decay Eq. (4), Eq. (7) 
+
+γd 0.20 {0.05 , 0.10 , 0.20 , 0.30 , 0.50 } loss sensitivity Eq. (4), Eq. (7) 
+
+ϕ(·) sigmoid — monotone mapping Eq. (4), Eq. (7) (via ϕ(bℓ))
+
+k (sigmoid) 10 [5 , 20] slope / hardness band width Eq. (20) 
+
+c (sigmoid) 0.5 [0 .4, 0.6] center of difficulty band Eq. (20) EMA βema 0.95 {0.90 , 0.95 , 0.97 , 0.99 } loss denoising Eq. (13) Quantiles (ql, q u) (0 .05 , 0.95) fixed robust normalization Eq. (14) 
+
+ηs 0.05 {0.01 , 0.02 , 0.05 , 0.10 , 0.20 } consolidation step size Eq. (5) 
+
+βs 0.5 {0.5, 0.75 , 1.0} saturation exponent Eq. (5) 
+
+ρ 0.01 {0, 0.005 , 0.01 , 0.02 , 0.05 } spacing sensitivity Eq. (5) (via e−ρ∆ti )
+
+γs 1.0 {0.5, 1.0, 2.0} error-driven reinforcement Eq. (5) (via (1 − mi,t )γs )
+
+Smin , S max (1 , 10) Smax ∈ { 5, 10 , 20 } stability clipping Eq. (5), text in App. A.5 
+
+σs 0 fixed noise std Eq. (5) (via ϵt ∼ N (0 , σ 2 
+
+> s
+
+))
+
+Table 9. Hyperparameters for the sample-level memory dynamics (Appendix A). 
+
+B.1. Setup, Indexing, and Mean-Field Aggregation 
+
+We index dataset-level replay cycles by k = 1 , 2, . . . . Let tk denote the training step at which the k-th dataset-level replay event is executed, and define the inter-replay interval 
+
+∆t(k) 
+
+> r
+
+= tk − tk−1.
+
+At cycle k, we also maintain a replay ratio λtk ∈ [0 , 1] that controls the fraction of replayed samples in a batch, and a per-sample replay probability p(tk ) 
+
+> i
+
+over the replay buffer Breplay .To relate dataset-level scheduling to sample-level states, we adopt a mean-field (population-averaged) view: we summarize the sample-level hazard and stability by aggregated statistics at cycle k,
+
+¯hk ≈ Ei∼Breplay [hi,t k ] , Sk ≈ Ei∼Breplay [Si,t k ] , ϕ(bℓ) ≈ Ei∼Breplay 
+
+h
+
+ϕ(bℓi,t k )
+
+i
+
+.
+
+This aggregation is used only to motivate a tractable global schedule; the actual algorithm operates on per-sample states. 
+
+B.2. Derivation of Replay Interval Expansion 
+
+We derive why replay intervals naturally expand over cycles as stability accumulates. Starting from the sample-level hazard form (Eq. 4), we adopt a mean-field approximation at replay cycle k:
+
+¯hk ≈ Ei∼Breplay [hi,t k ] ≈ ¯α + ¯ γd ϕ(bℓ)k
+
+Sk
+
+, (21) where ¯α ≈ E[αi], ¯γd is the shared loss-sensitivity coefficient, Sk ≈ E[Si,t k ], and ϕ(bℓ)k ≈ E[ϕ(bℓi,t k )] . Within a single cycle, we treat ϕ(bℓ)k as slowly varying compared to the evolution of Sk, so that the dominant driver of ¯hk is 1/S k.
+
+Threshold-triggered replay and τ ⋆k ∝ Sk. Assuming exponential retention decay between two dataset-level replay events, the population-average retention follows ¯m(τ ) = exp( −¯hk τ ). If the next replay is triggered when ¯m drops below a fixed threshold θ ∈ (0 , 1) , then 
+
+τ ⋆k = 1¯hk
+
+log 1
+
+θ = Sk
+
+¯α + ¯ γd ϕ(bℓ)k
+
+log 1
+
+θ , i.e., τ ⋆k ∝ Sk. (22) In practice, batching and discrete steps introduce mild deviations; we therefore use this threshold-derived optimal spacing as a proxy for the realized schedule, i.e., ∆t(k) 
+
+> r
+
+≈ τ ⋆k .16 MSSR: Memory-Aware Adaptive Replay for Continual LLM Fine-Tuning 
+
+From stability growth to interval expansion. From the sample-level consolidation rule (Eq. 5), stability increases after replay. Aggregating the per-sample updates yields the following schematic population-level recursion: 
+
+Sk+1 = Sk + ∆ Sk, ∆Sk = ηs(Smax − Sk)βs exp   − ρ ∆t(k)
+
+> r
+
+(1 − ¯mk)γs , (23) where ¯mk denotes the average retention just before the k-th replay. Since ∆t(k) 
+
+> r
+
+≈ τ ⋆k ∝ Sk, the ratio of consecutive replay intervals satisfies 
+
+∆t(k+1) 
+
+> r
+
+∆t(k)
+
+> r
+
+≈ Sk+1 
+
+Sk
+
+= 1 + ∆Sk
+
+Sk
+
+, (24) highlighting that interval expansion is governed by the relative stability gain ∆Sk/S k.
+
+Exponential envelope for diminishing relative gains. The relative gain ∆Sk/S k decreases with k because: (i) 
+
+(Smax − Sk)βs shrinks as Sk approaches Smax (saturating consolidation), and (ii) ∆t(k) 
+
+> r
+
+increases, which further re-duces exp( −ρ ∆t(k) 
+
+> r
+
+) (spacing attenuation). To obtain a simple closed-form schedule, we parameterize this diminishing trend using an exponential envelope: 
+
+∆Sk
+
+Sk
+
+≈ ηp exp( −ρpk), (25) where ηp and ρp are population-level hyperparameters summarizing the net effects of (ηs, β s, ρ, γ s) and the evolution of 
+
+¯mk. Substituting Eq. (25) into Eq. (24) yields the interval expansion rule :
+
+∆t(k+1)  
+
+> r
+
+= ∆ t(k)
+
+> r
+
+ 1 + ηpe−ρpk , (26) which corresponds to Eq. 8 in the main text. Since 1+ ηpe−ρpk > 1 for all k, replay is dense early and becomes progressively sparser as k increases. 
+
+B.3. Derivation of the Dynamic Replay Ratio 
+
+Let λt denote the proportion of replayed samples mixed into the batch at time t. We view λt as a resource-allocation variable trading marginal benefit against marginal cost . Let the instantaneous replay benefit be Atg(λ), where At ≥ 0 is the current 
+
+rehearsal utility and g(λ) is concave (diminishing returns), e.g., g(λ) = 1 − e−bλ with b > 0. We consider the proxy objective 
+
+max  
+
+> λ∈[0 ,1]
+
+Atg(λ) − μλ, (27) where μ > 0 weights compute cost. The stationarity condition gives Atbe −bλ ⋆t = μ, hence 
+
+λ⋆t = 1
+
+b log Atbμ . (28) As fine-tuning proceeds, At decreases due to stability accumulation and diminishing replay gains, so λ⋆t should decrease. We adopt an exponential schedule as a simple first-order approximation to this decreasing trajectory: 
+
+λtk = λmin + ( λ0 − λmin )e−βr tk , (29) corresponding to Eq. 9 in the main text. This maintains higher replay intensity early and gradually approaches a small background replay rate λmin .
+
+B.4. Coupling Replay Probability with Memory Strength 
+
+We finally derive the per-sample replay probability p(tk ) 
+
+> i
+
+used to select samples from the replay buffer Breplay . A natural (but noisy) proxy for replay utility is the expected consolidation gain, which increases with forgettability and error-driven plasticity: 
+
+Gi(t) ∝ αi + γd ϕ(bℓi,t )
+
+Si,t 
+
+(1 − mi,t )γs . (30) 17 MSSR: Memory-Aware Adaptive Replay for Continual LLM Fine-Tuning Parameter Default Candidate Values Role Where used                                                        
+
+> ∆t(1)
+> r100 {50 ,100 ,200 ,500 }initial replay interval Eq. (26)
+> θ0.5{0.3,0.5,0.7}replay trigger threshold Eq. (22)
+> ηp0.5{0.1,0.3,0.5,0.7,1.0}early expansion gain Eq. (25), Eq. (26)
+> ρp0.05 {0.01 ,0.03 ,0.05 ,0.10 }decay rate of expansion gain Eq. (25), Eq. (26)
+> λ00.3{0.1,0.3,0.5}initial replay ratio Eq. (29)
+> λmin 0.05 {0,0.01 ,0.05 ,0.10 }minimal replay ratio Eq. (29)
+> βr1e −5{5e −6,1e −5,2e −5}ratio decay rate Eq. (29)
+> ζ1.0{0,0.5,1.0,2.0}prioritization strength Eq. (31)
+> Table 10. Hyperparameters for dataset-level replay scheduling (Appendix B).
+
+Directly sampling from (30) would require maintaining multiple high-variance signals. Instead, we use the retention state 
+
+mi,t —already maintained by the sample-level dynamics and amenable to lazy updates— as a low-variance surrogate. This yields a normalized power-law prioritization: 
+
+p(tk ) 
+
+> i
+
+= m−ζi,t k
+
+P 
+
+> j∈Breplay
+
+m−ζj,t k
+
+, ζ > 0, (31) which matches Eq. 10 in the main text. Here ζ controls the strength of prioritization: ζ = 0 reduces to uniform sampling, while larger ζ biases selection toward low-retention (high-risk) samples. Equivalently, p(tk ) 
+
+> i
+
+∝ exp( −ζ log mi,t k ).
+
+B.5. Summary of Hierarchical Dynamics 
+
+Combining Eqs. (26), (29), and (31), the dataset-level replay schedule can be summarized as: • Temporal spacing: replay intervals ∆t(k) 
+
+> r
+
+expand as stability accumulates; • Replay intensity: replay ratio λt decays toward a stable baseline; • Replay prioritization: sampling probability pi prioritizes weaker-retention samples via mi,t .Together, these mechanisms form a hierarchical replay policy that aligns micro-level memory decay with macro-level temporal scheduling and replay resource allocation. 
+
+B.6. Hyperparameter Settings for Dataset-Level Scheduling 
+
+For completeness, Table 10 summarizes the dataset-level scheduling hyperparameters. 
+
+# C. Training Dataset Details 
+
+We describe the datasets used in our sequential fine-tuning experiments, which span instruction following, natural language understanding, and progressively harder quantitative reasoning tasks. Together, they form a curriculum from general-purpose instruction learning to long-horizon mathematical reasoning. 
+
+AG News. AG News (Zhang et al., 2015) is a topic classification dataset consisting of news articles labeled into four categories: World , Sports , Business , and Sci/Tech . We use the standard training split and evaluate performance using exact-match accuracy. Each example is formatted as a short text classification prompt, asking the model to predict the corresponding topic label. This dataset introduces a lightweight supervised classification stage within the continual learning sequence. 
+
+SQuAD. The Stanford Question Answering Dataset (SQuAD) (Rajpurkar et al., 2016) is an extractive reading comprehen-sion benchmark, where each question requires identifying a contiguous answer span from a given passage. We evaluate performance using the standard token-level F1 score following the official evaluation protocol. This dataset complements classification-style tasks by introducing span-based reading comprehension. 18 MSSR: Memory-Aware Adaptive Replay for Continual LLM Fine-Tuning 
+
+SciQ. SciQ (Welbl et al., 2017) is a multiple-choice science question answering dataset, containing approximately 13.7K questions constructed via crowdsourcing and web-based extraction. Each instance consists of a question, four answer options, and a single correct choice. We convert each example into a multiple-choice prompt and supervise the model to generate the correct option. Performance is evaluated using exact-match accuracy over answer choices. 
+
+BoolQ. BoolQ (Clark et al., 2019) is a binary (yes/no) question answering dataset derived from real user queries paired with supporting passages. Each instance requires the model to determine whether a given statement is true or false based on the provided context. We formulate BoolQ as a binary classification task and evaluate using exact-match accuracy. This dataset emphasizes logical reasoning and natural language inference. 
+
+ARC. The AI2 Reasoning Challenge (ARC) (Clark et al., 2018) is a multiple-choice science question answering benchmark, designed to test elementary-level reasoning beyond simple retrieval. We use the challenge setting, where each question has four or five candidate answers. All examples are formatted as multiple-choice prompts, and performance is measured by exact-match accuracy. ARC introduces more challenging reasoning scenarios with relatively low pre-training familiarity. 
+
+GSM8K (reasoning-formatted). GSM8K (Cobbe et al., 2021) contains around 8.5K grade-school mathematical word problems. We use a reasoning-formatted variant where each example includes a question and a step-by-step solution (ratio-nale) followed by the final answer. We apply light text normalization (whitespace and punctuation), symbol standardization, and the same tokenizer as the base LLM. This stage strengthens structured numerical reasoning and provides a controlled transition from general language instruction to math-focused training. 
+
+Competition Math (MATH). Competition Math (Hendrycks et al., 2021c) (commonly referred to as the MATH dataset) consists of approximately 12K problems drawn from math competitions (e.g., AMC/AIME and Olympiad-style exams), covering algebra, geometry, combinatorics, and number theory. We use the short-answer setting, where each problem is paired with its final numeric or symbolic solution. For consistency with earlier stages, we convert each instance into a reasoning-style prompt–response format when intermediate solutions are available; otherwise, we supervise only the final answer. 
+
+Data splits and preprocessing. For each dataset, we randomly split 95% of the samples for training and 5% for validation using a fixed random seed. Preprocessing includes removing non-semantic markup (e.g., stray LaTeX environments) while preserving mathematical content, standardizing numeric formats, and filtering invalid or empty answers. All datasets are tokenized with the base LLM tokenizer to maintain vocabulary consistency. We cap the maximum sequence length at 2048 tokens; for overlength examples, we truncate from the end, prioritizing retention of the question, reasoning steps (when present), and the final answer. 
+
+# D. Evaluation Metric Definitions 
+
+This section defines the evaluation metrics used in our experiments: BLEU, ROUGE-L, exact-match (EM) accuracy, and the average normalized score. 
+
+BLEU. Following Papineni et al. (2002), BLEU measures modified n-gram precision between a generated response G and its reference R:
+
+BLEU = BP · exp 
+
+> nmax
+
+X
+
+> n=1
+
+wn log pn
+
+!
+
+, (32) where pn is the modified n-gram precision, wn are uniform weights ( wn = 1 /n max ), and BP is the brevity penalty. Unless otherwise noted, we report BLEU-4 with smoothing enabled. For reproducibility, we compute BLEU using sacreBLEU 
+
+with standard tokenization and smoothing (details in the released code/config). 
+
+ROUGE-L. ROUGE-L (Lin, 2004) is based on the longest common subsequence (LCS) between G and R. Let L =LCS( G, R ), then 
+
+PLCS = L
+
+|G| , RLCS = L
+
+|R| , (33) 19 MSSR: Memory-Aware Adaptive Replay for Continual LLM Fine-Tuning 
+
+and the ROUGE-L F-score is 
+
+ROUGE -L = (1 + β2) PLCS RLCS 
+
+RLCS + β2PLCS 
+
+. (34) We set β = 1 .2 following common practice and compute ROUGE-L on tokenized text with the same preprocessing pipeline across methods. 
+
+Exact-match (EM) accuracy. For math reasoning datasets ( GSM8K and Competition Math/MATH ), we compute exact-match accuracy as 
+
+EM = 1
+
+M
+
+> M
+
+X
+
+> i=1
+
+1[Norm(ˆ yi) = Norm( yi)] , (35) where ˆyi is the model-predicted final answer , yi is the ground truth, and M is the number of evaluated samples. Norm( ·)
+
+denotes a deterministic answer-normalization procedure (e.g., stripping whitespace and punctuation, removing wrappers such as “ \boxed {} ”, and canonicalizing numeric formats). This metric evaluates end-to-end correctness of the final answer regardless of intermediate reasoning steps. 
+
+Average normalized score. To summarize overall stability across datasets, we compute a per-dataset normalized score 
+
+˜sd = sd
+
+max( smax  
+
+> d
+
+, ϵ ) , (36) where sd is the raw metric on dataset d after the final training stage (BLEU/ROUGE-L for instruction data, EM for math data), and smax  
+
+> d
+
+is the maximum score achieved by the same training run across all stages when evaluated on dataset d. We use ϵ (a small constant) for numerical safety. The average normalized score is 
+
+Score avg = 1
+
+D
+
+> D
+
+X
+
+> d=1
+
+˜sd, (37) where D = 3 is the number of datasets. A higher value indicates better overall retention and cross-domain stability. 
+
+# E. Training and Hyperparameter Settings 
+
+This appendix summarizes the optimization configuration shared by all methods and clarifies practical settings used by the replay implementation. Model-agnostic replay/memory hyperparameters are reported in Appendix A (Table 9) and Appendix B (Table 10); here we focus on training setup and engineering details required for reproducibility. 
+
+E.1. General Fine-tuning Configuration 
+
+All methods are implemented in LLaMAFactory (Zheng et al., 2024) and evaluated on three pretrained backbones: 
+
+Gemma2-9B , Qwen2.5-7B , and LLaMA-3.1-8B (Appendix F). Unless otherwise stated, we keep the optimizer, LoRA configuration, training steps, and evaluation protocol identical across backbones and replay strategies. Because GPU memory footprints differ across backbones, the micro-batch size may vary; we therefore adjust gradient accumulation to keep the 
+
+effective batch size fixed. 
+
+E.2. Replay Implementation Details 
+
+Dataset-level scheduling uses (∆ t(1)  
+
+> r
+
+, η p, ρ p) for interval expansion, (λ0, λ min , β r ) for replay ratio decay, and ζ for prioriti-zation (Table 10). Sample-level memory dynamics follow the hazard and consolidation parameters in Table 9. The following additional settings control replay overhead and buffering: 
+
+E.3. Reproducibility Notes 
+
+All runs use a fixed random seed (42) for data shuffling, replay-buffer initialization, and sampling. We train with PyTorch 2.x under distributed data-parallel (DDP) with CUDA. Data loading uses 8 workers per GPU. We log training curves, per-stage evaluation metrics, and replay statistics (e.g., λt, ∆t(k) 
+
+> r
+
+, and summary statistics of mi,t ) for all methods. 20 MSSR: Memory-Aware Adaptive Replay for Continual LLM Fine-Tuning 
+
+Table 11. LoRA fine-tuning and optimization hyperparameters (shared across replay strategies). 
+
+Item Setting 
+
+Backbone model Gemma2-9B / Qwen2.5-7B / LLaMA-3.1-8B Fine-tuning framework LLaMAFactory (Zheng et al., 2024) LoRA rank r 8LoRA scaling αlora 16 LoRA target modules q proj , v proj (all Transformer layers) Optimizer AdamW Learning rate 2 × 10 −4
+
+Adam β1, β 2 (0.9, 0.999) Weight decay 0.01 LR schedule cosine decay with warmup ratio 0.05 Max sequence length 2048 Micro-batch size (per GPU) backbone-dependent (memory-limited) Gradient accumulation adjusted to match effective batch Effective batch size fixed across backbones (256 sequences) Training steps (per stage) 2000 Evaluation frequency every 100 steps Precision bfloat16 (fp16 fallback if bf16 unsupported) 
+
+Table 12. Practical replay implementation settings. 
+
+Item Setting 
+
+Replay buffer Breplay size 1024 samples (maintained within each stage) Buffer refresh interval every 50 training steps Replay batch composition mix current-task samples with replayed samples at ratio λt
+
+Replay sampling distribution p(tk ) 
+
+> i
+
+∝ m−ζi,t k (Eq. (31)) Lazy state update compute mi,t on demand using the latest epoch-/cycle-level hazard estimate (App. A.4) Staleness safety cap force refresh if ∆ti exceeds a fixed cap (default: 10 epochs) 
+
+Sequence truncation. All inputs are truncated to the maximum sequence length (2048 tokens). When truncation is required, we prioritize preserving the prompt and the final answer segment, and remove trailing tokens first. 
+
+# F. Model Details 
+
+We employ three open-source large language models (LLMs) as pretrained backbones for all experiments: Gemma2-9B (Team et al., 2024b), LLaMA-3.1-8B (Dubey et al., 2024), and Qwen2.5-7B (Yang et al., 2024a). All models are obtained from the Hugging Face Hub under their respective licenses and are used in their pretrained (non–instruction-tuned) variants to minimize prior exposure to our evaluation tasks. 
+
+Gemma2-9B. Gemma2-9B is a decoder-only Transformer model with approximately 9B parameters. We use the official pretrained checkpoint and tokenizer released by Google. While each backbone supports a large native context window, in our experiments we cap the maximum sequence length to 2048 tokens for fair comparison across backbones and to match the sequential fine-tuning setup. 
+
+LLaMA-3.1-8B. LLaMA-3.1-8B is a decoder-only Transformer with 8B parameters. We use the Hugging Face checkpoint (meta-llama/Llama-3.1-8B ) and its default tokenizer. As above, we set the effective training/evaluation maximum sequence length to 2048 tokens for consistency across backbones. 
+
+Qwen2.5-7B. Qwen2.5-7B is a 7B-parameter pretrained model with strong multilingual coverage and long-context capability. We use the base checkpoint ( Qwen/Qwen2.5-7B ) and the official tokenizer. This backbone is used for our primary ablations and analysis due to its strong reasoning performance under the same fine-tuning budget. 
+
+Implementation and fine-tuning setup. All backbones are fine-tuned using LLaMAFactory (Zheng et al., 2024) with parameter-efficient LoRA (Hu et al., 2022). We freeze all backbone weights and train rank-r=8 LoRA adapters inserted into 21 MSSR: Memory-Aware Adaptive Replay for Continual LLM Fine-Tuning 
+
+the attention projection layers ( q proj and v proj ) for all Transformer blocks. Optimization uses AdamW with learning rate 2 × 10 −4, warmup ratio 0.05 , and weight decay 0.01 . We use bfloat16 training when supported (fp16 otherwise). Due to different memory footprints across backbones, micro-batch sizes may vary; we adjust gradient accumulation to keep the effective batch size fixed across backbones (Appendix E). For reproducibility, we fix random seeds to 42 and keep data ordering identical across model runs. 22

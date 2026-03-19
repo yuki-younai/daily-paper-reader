@@ -1,0 +1,787 @@
+Title: InfoDensity: Rewarding Information-Dense Traces for Efficient Reasoning
+
+URL Source: https://arxiv.org/pdf/2603.17310v1
+
+Published Time: Thu, 19 Mar 2026 00:41:15 GMT
+
+Number of Pages: 15
+
+Markdown Content:
+## InfoDensity: Rewarding Information-Dense Traces for Efficient Reasoning 
+
+Chengwei Wei ♢, Jung-jae Kim ♢, Longyin Zhang ♢, Shengkai Chen ♢, Nancy F. Chen ♢, †♢Institute for Infocomm Research (I 2R), A*STAR, Singapore 
+
+> †
+
+Centre for Frontier AI Research (CFAR), A*STAR, Singapore 
+
+wei_chengwei@a-star.edu.sg 
+
+Abstract 
+
+Large Language Models (LLMs) with extended reasoning capabilities often generate verbose and redundant reasoning traces, incurring un-necessary computational cost. While exist-ing reinforcement learning approaches address this by optimizing final response length, they neglect the quality of intermediate reasoning steps, leaving models vulnerable to reward hacking. We argue that verbosity is not merely a length problem, but a symptom of poor in-termediate reasoning quality. To investigate this, we conduct an empirical study tracking the conditional entropy of the answer distribu-tion across reasoning steps. We find that high-quality reasoning traces exhibit two consistent properties: low uncertainty convergence and 
+
+monotonic progress . These findings suggest that high-quality reasoning traces are informa-tionally dense, that is, each step contributes meaningful entropy reduction relative to the total reasoning length. Motivated by this, we propose InfoDensity , a reward framework for RL training that combines an AUC-based re-ward and a monotonicity reward as a unified measure of reasoning quality, weighted by a length scaling term that favors achieving equiv-alent quality more concisely. Experiments on mathematical reasoning benchmarks demon-strate that InfoDensity matches or surpasses state-of-the-art baselines in accuracy while sig-nificantly reducing token usage, achieving a strong accuracy–efficiency trade-off. 
+
+1 Introduction 
+
+Recent reasoning-focused Large Language Mod-els (LLMs), often termed Large Reasoning Mod-els (LRMs) (Guo et al., 2025; Yang et al., 2025), have demonstrated remarkable capabilities across diverse domains by generating multi-step Chain-of-Thought (CoT) traces (Wei et al., 2022). Despite their effectiveness, LRMs tend to produce verbose and redundant reasoning traces, leading to unneces-sary token generation and elevated computational cost (Chen et al., 2024; Zhu and Li, 2025; Luo et al., 2025). To address this, reinforcement learning (RL) with length-based rewards has emerged as a promi-nent approach for encouraging concise reasoning. One line of work incorporates length penalties di-rectly into the RL objective to incentivize shorter reasoning traces (Kimi et al., 2025; Arora and Zanette, 2025), while another line of work deter-mines explicit length targets during training, either through progressively tightened token budgets (Ag-garwal and Welleck, 2025; Hou et al., 2025) or by estimating problem difficulty to set adaptive length thresholds (Jiang et al., 2024; Liu et al., 2025; Luo et al., 2025). However, these approaches share a key limita-tion: by optimizing only the length and final an-swer correctness of the reasoning trace, they leave the quality of intermediate reasoning steps unsu-pervised. We argue that verbosity is not merely a length problem, but a symptom of a deeper issue: incorrect or redundant intermediate steps reflect poor step-level reasoning quality. Without super-vising reasoning quality, models are vulnerable to reward hacking, where they learn to produce super-ficially concise responses that satisfy length con-straints without generating correct and complete reasoning traces (Yeo et al., 2025; Shrivastava et al., 2025). Measuring the quality of reasoning traces, how-ever, is a non-trivial challenge. Process Reward Models (PRMs) (Lightman et al.) introduced step-level supervision for evaluating reasoning pro-cesses, and subsequent work has automated such signals via Monte Carlo Tree Search (Luo et al., 2024) or multi-dimensional rubrics (Do et al., 2025). More recently, information-theoretic frame-works offer an annotation-free alternative (Ton et al.; Guo, 2025). Rather than relying on labeled step-level data, they quantify reasoning quality by measuring how much each step reduces the model’s 
+
+> arXiv:2603.17310v1 [cs.AI] 18 Mar 2026
+
+uncertainty about the final answer. This is formal-ized as the information gain at each reasoning step, computed as the reduction in conditional entropy of the answer distribution. This enables the iden-tification of incorrect and redundant steps purely from the model’s own probability estimates, with-out any step-level labeled data. Inspired by this, we ask whether such information-theoretic signals can be incorporated as reward signals in RL training to guide models toward efficient and high-quality reasoning. In this work, we first conduct an empirical study on how information-theoretic signals characterize the quality of reasoning traces. Specifically, we use reasoning trace correctness as a proxy for quality, treating traces that arrive at correct answers via co-herent intermediate reasoning as high-quality, and those that fail to do so as low-quality. We find that correct traces exhibit two consistent properties: they converge to low uncertainty (low cumulative entropy) and progress monotonically (entropy de-creases at nearly every step). Incorrect traces, by contrast, stall or reverse at the point of the first error and sustain high uncertainty throughout. Together, these findings suggest that high-quality reasoning traces are informationally dense, that is, each step contributes meaningful entropy reduction relative to the total reasoning length. Motivated by this, we propose InfoDensity , a re-ward framework for RL training that directly mea-sures reasoning quality by encouraging high in-formation density throughout the reasoning trace. InfoDensity combines an AUC-based reward that penalizes prolonged uncertainty with a monotonic-ity reward that encourages consistent step-by-step entropy reduction as a unified measure of reasoning quality, further weighted by a length scaling term that favors more concise reasoning at equal qual-ity. Experiments on mathematical reasoning bench-marks show that InfoDensity matches or outper-forms state-of-the-art baselines in accuracy while significantly reducing token usage, achieving a strong trade-off between accuracy and efficiency. Our main contributions are as follows: • We conduct an empirical study of entropy trajectories across correct and incorrect rea-soning traces, identifying two trajectory-level properties, low uncertainty convergence and monotonic progress, that distinguish high-quality from low-quality reasoning traces. • We propose InfoDensity, an entropy trajectory-based reward framework that supervises both the quality and conciseness of reasoning traces. Through extensive experiments, In-foDensity achieves comparable or superior accuracy to baselines while generating more concise reasoning traces, with consistent re-sults across both in-distribution and challeng-ing out-of-distribution benchmarks. • We open-source the InfoDensity model, train-ing, and evaluation pipelines to enable repro-ducibility and support further research in effi-cient reasoning. 1
+
+2 Related Work 
+
+Efficient Reasoning. The emergence of Large Reasoning Models (LRMs) that produce extended chain-of-thought outputs incurs substantial compu-tational overhead, motivating a growing body of work on efficient reasoning (Feng et al.; Zhu and Li, 2025). Existing approaches include prompt-driven methods (Xu et al., 2025; Aytes et al., 2025), su-pervised fine-tuning on length-efficient data (Xia et al., 2025; Kang et al., 2025), and decoding-stage early termination (Zhang et al., 2025; Yong et al.). RL with length-based rewards has also be-come prominent, encompassing direct length penal-ties (Kimi et al., 2025; Arora and Zanette, 2025), conditional reward under accuracy constraints (Luo et al., 2025), progressively tightened token bud-gets (Hou et al., 2025), and difficulty-adaptive length targets (Shen et al., 2025; Xiang et al.; Li et al., 2025a). Closely related to our work, PEAR (Huang et al., 2025) leverages entropy as a reward signal to encourage more focused reason-ing. Unlike PEAR, which operates on the phase-level entropy of the training model, InfoDensity measures the conditional entropy over the final an-swer distribution using a fixed judge model and characterizes reasoning trace quality through two trajectory-level properties: convergence and mono-tonicity. 
+
+Evaluation of reasoning traces. Evaluating rea-soning quality in LLMs has evolved beyond an-swer accuracy to assess intermediate steps. Pro-cess Reward Models (PRMs) (Lightman et al.) introduced step-level supervision via large-scale human annotations, and subsequent work has au-tomated such signals through Monte Carlo Tree  
+
+> 1Code and models are available at https://github.com/ anonymous/InfoDensity .
+
+Search (Luo et al., 2024) or multi-dimensional rubrics (Do et al., 2025). Information-theoretic ap-proaches offer an annotation-free alternative (Ton et al.; Guo, 2025). They formalize each reasoning step in terms of its information gain toward the correct answer, enabling the identification of redun-dant or failing steps purely from the model’s own probability estimates. However, these works use information-theoretic signals solely as evaluation tools. Our work goes beyond evaluation by empiri-cally identifying two trajectory-level properties of entropy: low uncertainty convergence and mono-tonic progress, and directly incorporating them as reward signals in RL training. 
+
+3 Information-theoretic Analysis of Reasoning Traces 
+
+3.1 Preliminary 
+
+We formalize the computation of information gain (IG) for each reasoning step produced by an LRM. Let X be an input problem and Z the ground-truth final answer. An LRM’s reasoning trace is a se-quence Y = ( Y1, Y 2, . . . , Y T ), where Yt is the 
+
+t-th intermediate reasoning step. At each step t,the model extends its reasoning path by generat-ing step Yt based on the conditional distribution 
+
+pθ(Yt | X, Y <t ), where θ denotes the parameters of the LRM. The conditional mutual information between 
+
+Z and X, Y ≤t given the previous reasoning pre-fix X, Y <t , denoted as I(Z; X, Y ≤t | X, Y <t ),quantifies how much new information about the final answer Z is revealed by the current step 
+
+Yt. Conceptually, this conditional mutual infor-mation measures the incremental contribution of the newly generated reasoning step relative to the previous reasoning prefix. We therefore interpret 
+
+I(Z; X, Y ≤t | X, Y <t ) as the IG at step t, which can be written as 
+
+H(Z | X, Y <t ) − H(Z | X, Y ≤t)
+
+where H(·) denotes the entropy of the model’s pre-dictive distribution over the final answer. A large IG indicates that the reasoning step Yt significantly reduces the uncertainty about the correct answer. Since the direct computation of H(Z | X, Y ) is infeasible, we estimate it using token-level con-ditional probabilities from an LRM. Let Z =(z1, . . . , z K ) denote the sequence of answer to-kens. Given a context C (e.g., C = ( X, Y ≤t) or 
+
+C = ( X, Y <t )), the conditional entropy over the answer sequence is defined as the mean of token-level entropies: 
+
+H(Z | C) = 1
+
+K
+
+> K
+
+X
+
+> k=1
+
+H(zk | C, z <k )
+
+with the token-level entropy defined as 
+
+H(zk | C, z <k )= − X
+
+> v∈V
+
+pθ(v | C, z <k ) log pθ(v | C, z <k )
+
+where V denotes the model vocabulary and pθ(v |
+
+C, z <k ) is the model’s predicted probability for token v given the context and the previous answer tokens. Implementation details of the conditional entropy computation are provided in Appendix A. 
+
+3.2 Step-level and Trajectory-level Analysis 
+
+We investigate whether the entropy and IG calcu-lated from an LRM can serve as a practical signal for reasoning quality. A reasoning step can be low-quality in two ways: it may be incorrect, in-troducing errors that derail the reasoning process, or redundant, contributing little new information toward the final answer. Both manifest as a failure to reduce answer uncertainty. We therefore use step correctness as a proxy for reasoning quality and examine whether IG can distinguish correct from incorrect steps. We first examine IG at the step level, then shift to the entropy trajectory of a full reasoning trace. 
+
+Dataset. We construct a step-quality dataset from ProcessBench (Zheng et al., 2025), which pro-vides human-annotated step-level correctness la-bels across diverse math problems of varying dif-ficulty. We select samples whose corresponding problems exist in the original source datasets (e.g., GSM8K, MATH) and have a ground-truth answer. For step-level analysis, we identify the first incor-rect step in each incorrect reasoning trace and ex-clude all subsequent steps to ensure each step’s IG is measured without interference from preceding errors. Dataset statistics are summarized in Table 1. 
+
+Challenges of step-level information gain. For each reasoning step t, a positive IG should indicate that a step moves the model closer to the ground truth, while a low or negative value might signal an error. However, Figures 1 and 2 demonstrate that using IG as a standalone classifier is empiri-cally challenging. Across four models, including 0.5 0.0 0.5 1.0 1.5                    
+
+> Step-level Information Gain
+> 0.0
+> 0.5
+> 1.0
+> 1.5
+> Llama-3.2-3B-Instruct
+> Cohen's d=0.06
+> Correct steps
+> Incorrect steps
+> 0.4 0.2 0.0 0.2 0.4 0.6
+> Step-level Information Gain
+> Gemma-3-4B-IT
+> Cohen's d=0.08
+> Correct steps
+> Incorrect steps
+> 0.4 0.2 0.0 0.2 0.4 0.6
+> Step-level Information Gain
+> Qwen3-4B-Instruct
+> Cohen's d=0.26
+> Correct steps
+> Incorrect steps
+> 0.4 0.2 0.0 0.2 0.4 0.6
+> Step-level Information Gain
+> Qwen3-30B-A3B-Instruct
+> Cohen's d=0.58
+> Correct steps
+> Incorrect steps
+
+Figure 1: Step-level information gain distributions for correct steps (blue) and first incorrect steps (red) in the ProcessBench subset across four models. Dotted vertical lines mark the group means. 0.0 0.2 0.4 0.6 0.8 1.0 
+
+> False Positive Rate
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> True Positive Rate
+> Chance (AUC=0.50)
+> Llama-3.2-3B-Instruct (AUC=0.520)
+> Gemma-3-4B-IT (AUC=0.531)
+> Qwen3-4B-Instruct (AUC=0.577)
+> Qwen3-30B-A3B-Instruct (AUC=0.667)
+
+Figure 2: ROC curves for step-level information gain as a binary error detector (correct vs. first incorrect step) in the ProcessBench subset across four models. 
+
+Llama-3.2-3B-Instruct, Gemma-3-4B-IT, Qwen3-4B-Instruct, and Qwen3-30B-A3B-Instruct, the IG distributions of correct and incorrect steps overlap substantially, as shown in Figure 1. We quantify this overlap using Cohen’s d, which measures the standardized distance between the two means. The values range from a negligible 0.06 to a modest 
+
+0.58 . These effect sizes indicate that while the means differ, the distributions of individual steps are often too similar for reliable standalone classifi-cation. Furthermore, Figure 2 reports the step-level ROC AUC for each model, ranging from 0.52 to 0.67. The more capable Qwen3-30B-A3B-Instruct achieves a noticeably higher AUC, suggesting that reliable step-level error detection requires stronger models. However, the generally low classification performance across models indicates that per-step 
+
+Table 1: Statistics of the ProcessBench subset used for step-level and trajectory-level analysis. 
+
+Dataset #Questions %Correct Avg. Steps 
+
+GSM8K 400 48.3 3.9 MATH 117 43.6 4.7 OlympiadBench 1000 33.9 5.8 Omni-MATH 999 24.1 4.8 
+
+IG alone may be too noisy to serve as a robust error detector, especially for smaller models. 
+
+From local steps to full trajectories. We there-fore shift focus to the shape of the full entropy tra-jectory {H0, H 1, . . . , H T }. Figure 3 presents the mean conditional entropy trajectories of Qwen3-4B-Instruct for correct and incorrect reasoning traces across multiple datasets. Since different gen-erated reasoning traces contain varying numbers of steps, we normalize all entropy trajectories to a fixed length via linear interpolation before averag-ing. Green and red lines correspond to correct and incorrect reasoning traces, respectively. The orange dashed line marks the average position of the first incorrect step among incorrect traces. Additional results for Qwen3-30B-A3B-Instruct, Gemma-3-4B-IT, and Llama-3.2-3B-Instruct are provided in Appendix B and exhibit similar trends. A clear divergence emerges between the two groups. Correct traces display a steady, near-monotonic decline in conditional entropy, converg-ing to low values by the final step as the model narrows its answer distribution. Incorrect traces decrease initially but plateau around the position of the first error step regardless of subsequent reason-ing. In addition, the two groups differ in trajectory variance. Both start with similarly large variance, reflecting diverse initial states. For incorrect traces, variance remains persistently high throughout. For correct traces, variance decreases progressively, in-dicating that the model consistently converges to-ward low uncertainty about the correct answer. 
+
+Characterizing high-quality reasoning. The en-tropy trajectories reveal two complementary proper-ties that separate correct from incorrect reasoning: • Low uncertainty convergence : Correct traces accumulate substantially less total un-certainty. The area under the answer entropy 0.0 2.5 5.0 7.5 10.0 12.5 15.0 
+
+> Reasoning Step (normalized)
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> Conditional Entropy (bits)  Correct (n=193)
+> Incorrect (n=207)
+> Avg. first error
+
+(a) GSM8K 0.0 2.5 5.0 7.5 10.0 12.5 15.0  
+
+> Reasoning Step (normalized)
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> Conditional Entropy (bits)  Correct (n=339)
+> Incorrect (n=661)
+> Avg. first error
+
+(b) OlympiadBench (c) Omni-MATH 
+
+Figure 3: Mean conditional entropy trajectory of Qwen3-4B-Instruct across three datasets: GSM8K, OlympiadBench, and OmniMath. Each curve shows the mean entropy over normalized reasoning steps, with shaded regions indicating 
+
+±1 standard deviation. 
+
+curve is markedly smaller than that of incor-rect traces, which linger at high answer en-tropy beyond the first error step. • Monotonic progress : Correct traces reduce entropy at nearly every step. Incorrect traces, by contrast, exhibit a characteristic break in monotonicity at the first error step, after which entropy stalls rather than continuing to de-crease. A trajectory may reach low uncertainty quickly on average yet still exhibit local entropy reversals, or decrease monotonically yet never converge to low uncertainty. These two properties jointly char-acterize high-quality reasoning at the trajectory level, and directly motivate the reward design we propose in Section 4. 
+
+4 InfoDensity 
+
+Building on our trajectory-level observations, we propose InfoDensity , a reward framework de-signed to promote efficient reasoning. The name reflects its core idea: it captures information qual-ity relative to reasoning length , combining a qual-ity score that measures how completely a trace resolves uncertainty with a length scaling term that favors achieving this more concisely. 
+
+Information Quality. The information quality of a reasoning trace is defined through two met-rics: low uncertainty convergence and monotonic progress. • AUC Reward: This reward quantifies how efficiently a model resolves uncertainty by measuring the normalized area under the en-tropy curve. For a reasoning trace τ with T
+
+steps: 
+
+AUC( τ ) = 1
+
+T · H0
+
+> T
+
+X
+
+> t=1
+
+Ht (1) The corresponding reward is RAUC (τ ) =1 − AUC( τ ). A high RAUC indicates that the model narrowed its answer distribution to low uncertainty and maintained it throughout the reasoning process. • Monotonicity Reward: This reward encour-ages monotonic progress by measuring the fraction of steps at which uncertainty strictly decreases: 
+
+Rmono (τ ) = 1
+
+T
+
+> T
+
+X
+
+> t=1
+
+1[Ht < H t−1] (2) where 1[·] is the indicator function. A high 
+
+Rmono indicates that the model made consis-tent step-by-step progress toward the answer. The two rewards form a complementary pair: the AUC reward captures the overall level of uncer-tainty, while the monotonicity reward captures the regularity of its reduction. The combined quality score is: 
+
+Rquality (τ ) = α · RAUC (τ ) + (1 − α) · Rmono (τ )
+
+(3) We set α = 0 .5 in all experiments. 
+
+Length Scaling. For the length scaling term, we adopt a group-relative formulation that requires no predefined length target. Following GRPO LEAD (Zhang and Zuo, 2025), we define: 
+
+RL(τ ) = exp 
+
+
+
+−λ · L(τ ) − μL
+
+σL
+
+
+
+(4) where L(τ ) is the response length, μL, σ L are the mean and standard deviation of lengths within the rollout group, and λ is the coefficient of the length scaling intensity. Shorter-than-average responses yield RL > 1, while longer-than-average ones yield RL < 1.
+
+The InfoDensity Formulation. The final reward is the product of the quality score and the length scaling term: 
+
+RInfoDensity (τ ) = Rquality (τ ) · RL(τ ) (5) 
+
+RInfoDensity is applied only to traces with correct final answers. The final reward for a trace τ is: 
+
+R(τ ) = 
+
+(
+
+RInfoDensity (τ ) if τ is correct 
+
+0 otherwise. (6) 
+
+5 Results 
+
+5.1 Experiment Setup Base Models. We evaluate InfoDensity on two widely used compact LRMs: Qwen3-0.6B (Yang et al., 2025) and DeepSeek-R1-Distill-Qwen-1.5B (Guo et al., 2025). The original model perfor-mance is also evaluated as a reference to quantify the improvement in both accuracy and token effi-ciency. 
+
+Baseline Methods. We compare InfoDensity against four representative baselines: 1) GRPO-Acc (Shao et al., 2024) utilizes standard GRPO training with accuracy-only rewards. 2) GRPO-LP incorporates the length-dependent penalty from GRPO-LEAD (Zhang and Zuo, 2025), applying the same length scaling as in Equation 4. 3) Direct-Scoring (DS) serves as a reference baseline that shares the identical mathematical framework as In-foDensity. It differs only in the computation of the Rquality . Rather than using entropy trajectories, DS prompts the judge model to directly assign a scalar quality score to each reasoning trace. This controlled setup isolates whether reasoning quality is better captured by predictive uncertainty or ex-plicit evaluation. The prompt template is provided in Appendix C. 4) PEAR (Huang et al., 2025) is a state-of-the-art efficient reasoning method that uses phase-level entropy of the training model as a reward signal, penalizing high entropy during the thinking phase and encouraging low entropy in the answer phase. It outperforms Step Entropy (Li et al., 2025b), an entropy-based RL baseline, and 
+
+LCPO (Aggarwal and Welleck, 2025), a length-constrained RL baseline, in balancing token reduc-tion and accuracy, making it a competitive baseline for InfoDensity. 
+
+Judge Model. We use Qwen3-4B-Instruct as a fixed external judge model across InfoDensity and DS. For InfoDensity, it computes token-level condi-tional probabilities for entropy trajectory rewards; for DS, it generates explicit quality scores via direct prompting. Using a fixed external model, rather than the training model itself, ensures that the re-ward signal remains stable throughout training. 
+
+Training and Evaluation Setup. We train all models on the training sets of GSM8K (Cobbe et al., 2021) and MATH (Hendrycks et al., 2021). We evaluate on four benchmarks spanning a range of mathematical reasoning difficulties: GSM8K 
+
+and MATH500 serve as in-domain benchmarks, while AIME 24 (Zhang and Math-AI, 2024) and 
+
+OlympiadBench (He et al., 2024) provide chal-lenging out-of-domain evaluations. We evaluate all methods along two dimensions: accuracy (Acc) and the mean number of generated tokens (Tok). During inference, we use a maximum generation length of 32,768 tokens, a sampling temperature of 0.6, and top-p of 0.95, following standard protocols (Guo et al., 2025; Huang et al., 2025). Given the trade-off between accuracy and response length, we select checkpoints for all meth-ods following the same criterion. Specifically, we choose the checkpoint with the highest GSM8K accuracy; if the accuracy difference is within 1%, we prefer the more token-efficient one. 
+
+5.2 Experimental Results 
+
+Table 2 reports accuracy and token usage across all methods and benchmarks. 
+
+Accuracy. InfoDensity maintains or improves ac-curacy over baselines across both models on av-erage. On DeepSeek-R1-Distill-Qwen-1.5B, In-foDensity achieves the highest average accuracy of 64.0%, outperforming GRPO-Acc, GRPO-LP, PEAR, and DS. On Qwen3-0.6B, InfoDensity achieves 49.2% average accuracy, on par with DS, and only marginally below PEAR and the original model. 
+
+Token Efficiency. InfoDensity reliably reduces token usage across both models. On Qwen3-0.6B, it achieves the lowest average token usage among all methods (6014), outperforming PEAR, DS, Table 2: Accuracy (Acc, %) and mean response length in tokens (Tok) across four mathematical reasoning benchmarks. Bold indicates the best result among trained methods. Green and red values indicate improvement and degradation, respectively, relative to the Original model. 
+
+Method In-Domain Out-of-Domain Average GSM8K MATH500 AIME24 OlymBench Acc Tok Acc Tok Acc Tok Acc Tok Acc Tok 
+
+DeepSeek-R1-Distill-Qwen-1.5B 
+
+Original 85.4 2558 82.2 5569 33.3 17172 45.0 11570 61.5 9217 GRPO-Acc 86.4 1757 84.0 4456 40.0 13615 45.2 9162 63.9 (+2.4) 7248 (-21%) GRPO-LP 86.4 1560 82.8 4734 30.0 13231 44.3 10218 60.9 (-0.6) 7436 (-19%) DS 86.5 1551 84.6 4010 26.7 16379 46.8 9684 61.2 (-0.3) 7906 (-14%) PEAR 85.1 1046 83.8 3744 30.0 11944 45.3 7810 61.1 (-0.4) 6136 (-33%) InfoDensity 86.8 1352 84.4 4207 40.0 10998 44.7 9215 64.0 (+2.5) 6443 (-30%) 
+
+Qwen3-0.6B 
+
+Original 78.3 2013 73.2 5745 10.0 15457 36.4 9950 49.5 8291 GRPO-Acc 82.9 2310 75.8 5574 10.0 17983 38.7 9409 51.9 (+2.4) 8819 (+6%) GRPO-LP 77.8 1212 71.4 4604 10.0 13995 34.1 8014 48.3 (-1.2) 6956 (-16%) DS 78.0 1278 70.2 4187 13.3 13778 34.4 8085 49.0 (-0.5) 6832 (-18%) PEAR 80.2 1190 73.2 4005 10.0 14201 37.3 7846 50.2 (+0.7) 6811 (-18%) InfoDensity 78.3 865 72.2 3959 10.0 12027 36.4 7205 49.2 (-0.3) 6014 (-27%) 
+
+and GRPO-LP. On DeepSeek-R1-Distill-Qwen-1.5B, InfoDensity reduces tokens to 6443, be-low GRPO-Acc and DS. While PEAR achieves shorter responses on DeepSeek-R1-Distill-Qwen-1.5B (6136), this comes at the cost of a 0.4% av-erage accuracy drop relative to the original model, whereas InfoDensity improves accuracy by 2.5%. We also observe that the effect of accuracy-only training (GRPO-Acc) on response length is model-dependent: it reduces token usage on DeepSeek-R1-Distill-Qwen-1.5B (from 9217 to 7248) but in-creases it on Qwen3-0.6B (from 8291 to 8819). 
+
+Overall Trade-off. InfoDensity achieves a strong accuracy–efficiency trade-off: on DeepSeek-R1-Distill-Qwen-1.5B it achieves the highest accu-racy while reducing token usage by 30%, and on Qwen3-0.6B, it achieves the lowest token usage while maintaining accuracy close to the original model, avoiding the accuracy degradation observed in GRPO-LP’s aggressive length optimization. 
+
+5.3 Effectiveness of InfoDensity 
+
+A key challenge in efficient reasoning is balanc-ing reasoning quality with response brevity. To evaluate how InfoDensity manages this trade-off, we analyze its training dynamics, specifically, how the model’s reasoning length and test accuracy co-0 500 1000 1500 2000      
+
+> Mean Response Length (tokens)
+> 0.60
+> 0.65
+> 0.70
+> 0.75
+> GSM8K Test Accuracy
+> InfoDensity =0.5
+> InfoDensity =0.01
+> InfoDensity =0.05
+> GRPO-Acc
+> GRPO-LP =0.01
+> Direct-Scoring =0.01
+
+Figure 4: Accuracy vs. Length Trade-off. This plot il-lustrates the relationship between mean response length and test accuracy on the GSM8K dataset. Sampling temperature is set to 0 for deterministic generation. 
+
+evolve across training steps. We compare InfoDen-sity against the GRPO-Acc, GRPO-LP, and DS baselines under various length-scaling intensities 
+
+λ.Figure 4 presents the training trajectories of Qwen3-0.6B on the GSM8K dataset. Each data point denotes an evaluation checkpoint, with con-necting lines tracing the co-evolution of accuracy and response length across training steps. The larger, color-bordered hollow and solid markers indicate the initial state and the last state during training, respectively. 
+
+Accuracy vs. Efficiency Trade-off. InfoDensity (orange dots) demonstrates a superior balance be-tween performance and brevity compared to all baselines. In the visualization, the ideal state is the top-left corner, i.e., high accuracy with minimal token usage. While GRPO-Acc primarily pursues the upward direction (maximizing accuracy) with-out reducing length, GRPO-LP suffers from severe reward hacking, achieving shortness at the cost of a sharp accuracy drop. In addition, we observe that DS struggles to reduce length effectively, with accu-racy fluctuating significantly during training. This instability suggests that the judge model, lacking specific training for process-based evaluation, fails to provide a reliable quality signal for evaluating reasoning traces. In contrast, InfoDensity consis-tently compresses response length with minimal performance loss. 
+
+Stability. We also observe that the stability of InfoDensity depends on the length scaling intensity 
+
+λ. While moderate values ( 0.01 to 0.05 ) lead to stable and efficient states, an extreme setting of λ =0.5 (dark blue circle) causes the model to collapse. In this case, the accuracy drops sharply to below 60%, indicating that an excessive length penalty causes the model to prioritize extreme brevity over reasoning quality. 
+
+5.4 Impact of AUC and Monotonicity Rewards 0 20 40 60 80    
+
+> Training Step
+> 30
+> 40
+> 50
+> 60
+> 70
+> 80
+> 90
+> GSM8K Test Accuracy (%)
+> =0.0 (mono only)
+> =0.25
+> =0.5
+> =0.75
+> =1.0 (AUC only)
+> Figure 5: Accuracy over training steps for different coefficients αin Rquality .
+
+We ablate the coefficient α in Rquality , varying 
+
+α ∈ 0.0, 0.25 , 0.5, 0.75 , 1.0 to examine the relative contribution of the AUC and monotonicity rewards. Figure 5 reports the GSM8K validation accuracy and mean response length over training steps for DeepSeek-R1-Distill-Qwen-1.5B. The two extremes reveal complementary failure modes. With α = 1 .0 (AUC-only), the reward favours low uncertainty throughout the entire rea-soning trace. Rather than reasoning progressively toward the answer, the model learns to commit to a solution early and pad the remaining trace with redundant re-derivations, maintaining low en-tropy while contributing no new reasoning. This reward hacking pattern is directly observed in the generated responses, where the same arithmetic is re-derived multiple times under phrases such as “let me double-check” and “alternatively, I can ap-proach it another way.” Consequently, accuracy collapses within 20 training steps. With α = 0 .0
+
+(monotonicity-only), the reward only requires un-certainty to decrease at each step, with no con-straint on the final level of convergence. The model can thus satisfy the reward with short, incremental entropy reductions that never fully resolve uncer-tainty, leaving reasoning traces at persistently high entropy and degrading accuracy to around 70.0%. Intermediate values avoid both failure modes. For example, α = 0 .5 achieves stable accuracy throughout training. This confirms that the two components are complementary: the AUC reward ensures entropy genuinely converges to a low value, while the monotonicity reward enforces gradual, step-by-step progress that prevents shortcut solu-tions. 
+
+6 Conclusion 
+
+We presented InfoDensity, a reward framework for RL-based training of LRMs that supervises rea-soning quality through entropy trajectory signals. Through an empirical study on correct and incor-rect reasoning traces, we identified two trajectory-level properties of high-quality reasoning: low uncertainty convergence and monotonic progress. Motivated by this, InfoDensity combines an AUC-based reward and a monotonicity reward into a uni-fied quality measure, weighted by a length scaling term that favors concise reasoning. Experiments show that InfoDensity achieves a strong trade-off between accuracy and efficiency, matching or out-performing state-of-the-art baselines in accuracy while significantly reducing token usage. Limitations 
+
+First, our empirical analysis and experiments are conducted exclusively on mathematical reasoning tasks, where correctness is verifiable, and entropy trajectories are well-defined. Whether the observed trajectory-level properties generalize to other do-mains, such as code generation or open-ended rea-soning, is an open question. Second, the entropy trajectory rewards depend on a fixed external judge model. The choice of judge model may affect re-ward quality, and a weaker judge could introduce noise into the training signal. We plan to investi-gate whether the training model itself can serve as a reliable entropy estimator, which would eliminate the additional inference overhead and improve scal-ability to larger models or longer reasoning traces. 
+
+References 
+
+Pranjal Aggarwal and Sean Welleck. 2025. L1: Controlling how long a reasoning model thinks with reinforcement learning. arXiv preprint arXiv:2503.04697 .Daman Arora and Andrea Zanette. 2025. Training lan-guage models to reason efficiently. arXiv preprint arXiv:2502.04463 .Simon A Aytes, Jinheon Baek, and Sung Ju Hwang. 2025. Sketch-of-thought: Efficient llm reasoning with adaptive cognitive-inspired sketching. In Pro-ceedings of the 2025 Conference on Empirical Meth-ods in Natural Language Processing , pages 24307– 24331. Xingyu Chen, Jiahao Xu, Tian Liang, Zhiwei He, Jianhui Pang, Dian Yu, Linfeng Song, Qiuzhi Liu, Mengfei Zhou, Zhuosheng Zhang, and 1 others. 2024. Do not think that much for 2+ 3=? on the overthinking of o1-like llms. arXiv preprint arXiv:2412.21187 .Karl Cobbe, Vineet Kosaraju, Mohammad Bavarian, Mark Chen, Heewoo Jun, Lukasz Kaiser, Matthias Plappert, Jerry Tworek, Jacob Hilton, Reiichiro Nakano, and 1 others. 2021. Training verifiers to solve math word problems. arXiv preprint arXiv:2110.14168 .Heejin Do, Jaehui Hwang, Dongyoon Han, Seong Joon Oh, and Sangdoo Yun. 2025. What defines good rea-soning in llms? dissecting reasoning steps with multi-aspect evaluation. arXiv preprint arXiv:2510.20603 .Sicheng Feng, Gongfan Fang, Xinyin Ma, and Xinchao Wang. Efficient reasoning models: A survey. Trans-actions on Machine Learning Research .Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song, Peiyi Wang, Qihao Zhu, Runxin Xu, Ruoyu Zhang, Shirong Ma, Xiao Bi, and 1 others. 2025. Deepseek-r1: Incentivizing reasoning capability in llms via reinforcement learning. arXiv preprint arXiv:2501.12948 .Xu Guo. 2025. Measuring reasoning utility in llms via conditional entropy reduction. arXiv preprint arXiv:2508.20395 .Chaoqun He, Renjie Luo, Yuzhuo Bai, Shengding Hu, Zhen Thai, Junhao Shen, Jinyi Hu, Xu Han, Yujie Huang, Yuxiang Zhang, and 1 others. 2024. Olympiadbench: A challenging benchmark for pro-moting agi with olympiad-level bilingual multimodal scientific problems. In Proceedings of the 62nd An-nual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , pages 3828– 3850. Dan Hendrycks, Collin Burns, Saurav Kadavath, Akul Arora, Steven Basart, Eric Tang, Dawn Song, and Ja-cob Steinhardt. 2021. Measuring mathematical prob-lem solving with the math dataset. arXiv preprint arXiv:2103.03874 .Bairu Hou, Yang Zhang, Jiabao Ji, Yujian Liu, Kaizhi Qian, Jacob Andreas, and Shiyu Chang. 2025. Thinkprune: Pruning long chain-of-thought of llms via reinforcement learning. arXiv preprint arXiv:2504.01296 .Chen Huang, Wei Lu, and Wenxuan Zhang. 2025. Pear: Phase entropy aware reward for efficient reasoning. 
+
+arXiv preprint arXiv:2510.08026 .Zhuoxuan Jiang, Haoyuan Peng, Shanshan Feng, Fan Li, and Dongsheng Li. 2024. Llms can find math-ematical reasoning mistakes by pedagogical chain-of-thought. In Proceedings of the Thirty-Third Inter-national Joint Conference on Artificial Intelligence ,pages 3439–3447. Yu Kang, Xianghui Sun, Liangyu Chen, and Wei Zou. 2025. C3ot: Generating shorter chain-of-thought without compromising effectiveness. In Proceedings of the AAAI Conference on Artificial Intelligence ,volume 39, pages 24312–24320. Team Kimi, Angang Du, Bofei Gao, Bowei Xing, Changjiu Jiang, Cheng Chen, Cheng Li, Chenjun Xiao, Chenzhuang Du, Chonghua Liao, and 1 others. 2025. Kimi k1. 5: Scaling reinforcement learning with llms. arXiv preprint arXiv:2501.12599 .Ruosen Li, Ziming Luo, Quan Zhang, Ruochen Li, Ben Zhou, Ali Payani, and Xinya Du. 2025a. Aalc: Large language model efficient reasoning via adaptive accuracy-length control. arXiv preprint arXiv:2506.20160 .Zeju Li, Jianyuan Zhong, Ziyang Zheng, Xiangyu Wen, Zhijian Xu, Yingying Cheng, Fan Zhang, and Qiang Xu. 2025b. Compressing chain-of-thought in llms via step entropy. arXiv preprint arXiv:2508.03346 .Hunter Lightman, Vineet Kosaraju, Yuri Burda, Harri-son Edwards, Bowen Baker, Teddy Lee, Jan Leike, John Schulman, Ilya Sutskever, and Karl Cobbe. Let’s verify step by step. In The Twelfth Interna-tional Conference on Learning Representations .Wei Liu, Ruochen Zhou, Yiyun Deng, Yuzhen Huang, Junteng Liu, Yuntian Deng, Yizhe Zhang, and Junx-ian He. 2025. Learn to reason efficiently with adap-tive length-based reward shaping. arXiv preprint arXiv:2505.15612 .Haotian Luo, Li Shen, Haiying He, Yibo Wang, Shi-wei Liu, Wei Li, Naiqiang Tan, Xiaochun Cao, and Dacheng Tao. 2025. O1-pruner: Length-harmonizing fine-tuning for o1-like reasoning prun-ing. arXiv preprint arXiv:2501.12570 .Liangchen Luo, Yinxiao Liu, Rosanne Liu, Samrat Phatale, Harsh Lara, Yunxuan Li, Lei Shu, Yun Zhu, Lei Meng, Jiao Sun, and 1 others. 2024. Improve mathematical reasoning in language models by auto-mated process supervision. CoRR .Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, YK Li, Yang Wu, and 1 others. 2024. Deepseekmath: Pushing the limits of mathematical reasoning in open language models. arXiv preprint arXiv:2402.03300 .Yi Shen, Jian Zhang, Jieyun Huang, Shuming Shi, Wen-jing Zhang, Jiangze Yan, Ning Wang, Kai Wang, Zhaoxiang Liu, and Shiguo Lian. 2025. Dast: Difficulty-adaptive slow-thinking for large reasoning models. In Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing: Industry Track , pages 2322–2331. Vaishnavi Shrivastava, Ahmed Awadallah, Vidhisha Bal-achandran, Shivam Garg, Harkirat Behl, and Dimitris Papailiopoulos. 2025. Sample more to think less: Group filtered policy optimization for concise reason-ing. arXiv preprint arXiv:2508.09726 .Jean-Francois Ton, Muhammad Faaiz Taufiq, and Yang Liu. Understanding chain-of-thought in llms through information theory. In Forty-second International Conference on Machine Learning .Jason Wei, Xuezhi Wang, Dale Schuurmans, Maarten Bosma, Fei Xia, Ed Chi, Quoc V Le, Denny Zhou, and 1 others. 2022. Chain-of-thought prompting elic-its reasoning in large language models. Advances in neural information processing systems , 35:24824– 24837. Heming Xia, Chak Tou Leong, Wenjie Wang, Yongqi Li, and Wenjie Li. 2025. Tokenskip: Controllable chain-of-thought compression in llms. In Proceed-ings of the 2025 Conference on Empirical Methods in Natural Language Processing , pages 3351–3363. Violet Xiang, Chase Blagden, Rafael Rafailov, Nathan Lile, Sang T Truong, Chelsea Finn, and Nick Haber. Just enough thinking: Efficient reasoning with adap-tive length penalties reinforcement learning. In 
+
+NeurIPS 2025 Workshop on Efficient Reasoning .Silei Xu, Wenhao Xie, Lingxiao Zhao, and Pengcheng He. 2025. Chain of draft: Thinking faster by writing less. arXiv preprint arXiv:2502.18600 .An Yang, Anfeng Li, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo Zheng, Bowen Yu, Chang Gao, Chengen Huang, Chenxu Lv, and 1 others. 2025. Qwen3 technical report. arXiv preprint arXiv:2505.09388 .Edward Yeo, Yuxuan Tong, Morry Niu, Graham Neu-big, and Xiang Yue. 2025. Demystifying long chain-of-thought reasoning in llms. arXiv preprint arXiv:2502.03373 .Xixian Yong, Xiao Zhou, Yingying Zhang, Jinlin Li, Yefeng Zheng, and Xian Wu. Think or not? explor-ing thinking efficiency in large reasoning models via an information-theoretic lens. In The Thirty-ninth An-nual Conference on Neural Information Processing Systems .Jixiao Zhang and Chunsheng Zuo. 2025. Grpo-lead: A difficulty-aware reinforcement learning approach for concise mathematical reasoning in language models. In Proceedings of the 2025 Conference on Empiri-cal Methods in Natural Language Processing , pages 5642–5665. Kongcheng Zhang, Qi Yao, Shunyu Liu, Yingjie Wang, Baisheng Lai, Jieping Ye, Mingli Song, and Dacheng Tao. 2025. Consistent paths lead to truth: Self-rewarding reinforcement learning for llm reasoning. 
+
+arXiv preprint arXiv:2506.08745 .Yifan Zhang and Team Math-AI. 2024. American invi-tational mathematics examination (aime) 2024. Chujie Zheng, Zhenru Zhang, Beichen Zhang, Runji Lin, Keming Lu, Bowen Yu, Dayiheng Liu, Jingren Zhou, and Junyang Lin. 2025. Processbench: Iden-tifying process errors in mathematical reasoning. In 
+
+Proceedings of the 63rd Annual Meeting of the As-sociation for Computational Linguistics (Volume 1: Long Papers) , pages 1009–1024. Jason Zhu and Hongyu Li. 2025. Towards concise and adaptive thinking in large reasoning models: A sur-vey. arXiv preprint arXiv:2507.09662 .
+
+A Conditional Entropy Estimation 
+
+To estimate the conditional entropy of the final an-swer under different reasoning contexts, we prompt the model to continue the reasoning trace and produce the final answer. Specifically, given the context C (which may correspond to (X, Y <t ) or 
+
+(X, Y ≤t)), we append a short continuation instruc-tion that encourages the model to naturally com-plete the reasoning and output the final answer. After experimenting with different prompting strategies, we find that a simple natural continu-ation prompt yields the most stable and reliable entropy estimates: 
+
+Therefore, the answer is \boxed{answer} 
+
+B Entropy Trajectory 
+
+Figures 6, 7, 9, and 9 show the mean conditional entropy trajectories for correct and incorrect rea-soning traces. 
+
+C Experimental Setup 
+
+Prompts for Direct Scoring The Direct-Scoring (DS) baseline prompts the judge model to assign a scalar quality score to each reasoning trace based on two criteria: completeness (whether all neces-sary reasoning steps are shown) and correctness (whether each step is logically and mathematically sound). The score ranges from 0.0 to 1.0 according to the rubric below. The judge model is instructed to return only the numeric score in boxed format. Direct-Scoring Prompt Template 
+
+You are evaluating mathematical reasoning quality. Check BOTH completeness and correctness. Problem: {question} Solution: {solution} Expected Answer: {ground_truth} Evaluate based on two criteria: 1. COMPLETENESS: Are all necessary steps shown? - Missing steps or jumps in logic reduce the score - Just stating the answer = incomplete (score 0.0) 2. CORRECTNESS: Is each step logically and mathematically accurate? - Incorrect calculations or flawed logic reduce score - Wrong intermediate steps = low score, even if final answer is correct Scoring Guidelines: 1.0 = Complete AND correct 0.8 = Mostly complete AND correct 0.6 = Partially complete OR has minor errors 0.4 = Incomplete OR has significant errors 0.2 = Minimal reasoning OR mostly incorrect 0.0 = No reasoning OR fundamentally wrong CRITICAL: If solution just states the final answer without showing calculation steps, score must be 0.0 Provide ONLY the numeric score in \boxed{} format. 0 2 4 6 8 10 12 14 16 
+
+Reasoning Step (Normalized) 
+
+0.0 
+
+0.2 
+
+0.4 
+
+0.6 
+
+0.8 
+
+1.0 
+
+> Entropy (bits)
+
+Entropy Trajectory 
+
+> Correct
+> Incorrect
+> Avg 1st Error
+
+(a) GSM8K 0.0 2.5 5.0 7.5 10.0 12.5 15.0 17.5 
+
+Reasoning Step (Normalized) 
+
+0.0 
+
+0.2 
+
+0.4 
+
+0.6 
+
+0.8 
+
+1.0 
+
+1.2 
+
+> Entropy (bits)
+
+Entropy Trajectory  
+
+> Correct
+> Incorrect
+> Avg 1st Error
+
+(b) MATH 0 10 20 30 40 
+
+Reasoning Step (Normalized) 
+
+0.2 
+
+0.4 
+
+0.6 
+
+0.8 
+
+1.0 
+
+1.2 
+
+> Entropy (bits)
+
+Entropy Trajectory 
+
+> Correct
+> Incorrect
+> Avg 1st Error
+
+(c) OlympiadBench 0 5 10 15 20 25 30 35 
+
+Reasoning Step (Normalized) 
+
+0.0 
+
+0.2 
+
+0.4 
+
+0.6 
+
+0.8 
+
+1.0 
+
+1.2 
+
+> Entropy (bits)
+
+Entropy Trajectory  
+
+> Correct
+> Incorrect
+> Avg 1st Error
+
+(d) Omni-MATH 
+
+Figure 6: Entropy trajectories calculated by Qwen3-30B-A3B-Instruct for correct (green) and incorrect (red) final answers. Solid lines represent mean entropy across examples. Shaded regions indicate ±1 standard deviation, showing the variability across different reasoning trajectories. 0 2 4 6 8 10 12 14 16 
+
+Reasoning Step (Normalized) 
+
+0.2 
+
+0.4 
+
+0.6 
+
+0.8 
+
+> Entropy (bits)
+
+Entropy Trajectory 
+
+> Correct
+> Incorrect
+> Avg 1st Error
+
+(a) GSM8K 0.0 2.5 5.0 7.5 10.0 12.5 15.0 17.5 
+
+Reasoning Step (Normalized) 
+
+0.1 
+
+0.2 
+
+0.3 
+
+0.4 
+
+0.5 
+
+0.6 
+
+0.7 
+
+0.8 
+
+> Entropy (bits)
+
+Entropy Trajectory  
+
+> Correct
+> Incorrect
+> Avg 1st Error
+
+(b) MATH 0 10 20 30 40 
+
+Reasoning Step (Normalized) 
+
+0.2 
+
+0.4 
+
+0.6 
+
+0.8 
+
+> Entropy (bits)
+
+Entropy Trajectory 
+
+> Correct
+> Incorrect
+> Avg 1st Error
+
+(c) OlympiadBench 0 5 10 15 20 25 30 35 
+
+Reasoning Step (Normalized) 
+
+0.0 
+
+0.2 
+
+0.4 
+
+0.6 
+
+0.8 
+
+> Entropy (bits)
+
+Entropy Trajectory  
+
+> Correct
+> Incorrect
+> Avg 1st Error
+
+(d) Omni-MATH 
+
+Figure 7: Entropy trajectories calculated by Qwen3-4B-Instruct for correct (green) and incorrect (red) final answers. Solid lines represent mean entropy across examples. Shaded regions indicate ±1 standard deviation, showing the variability across different reasoning trajectories. 0 2 4 6 8 10 12 14 16 
+
+Reasoning Step (Normalized) 
+
+0.1 
+
+0.2 
+
+0.3 
+
+0.4 
+
+0.5 
+
+0.6 
+
+0.7 
+
+0.8 
+
+> Entropy (bits)
+
+Entropy Trajectory 
+
+> Correct
+> Incorrect
+> Avg 1st Error
+
+(a) GSM8K 0.0 2.5 5.0 7.5 10.0 12.5 15.0 17.5 
+
+Reasoning Step (Normalized) 
+
+0.1 
+
+0.2 
+
+0.3 
+
+0.4 
+
+0.5 
+
+0.6 
+
+0.7 
+
+0.8 
+
+> Entropy (bits)
+
+Entropy Trajectory  
+
+> Correct
+> Incorrect
+> Avg 1st Error
+
+(b) MATH 0 10 20 30 40 
+
+Reasoning Step (Normalized) 
+
+0.1 
+
+0.2 
+
+0.3 
+
+0.4 
+
+0.5 
+
+0.6 
+
+0.7 
+
+0.8 
+
+0.9 
+
+> Entropy (bits)
+
+Entropy Trajectory 
+
+> Correct
+> Incorrect
+> Avg 1st Error
+
+(c) OlympiadBench 0 5 10 15 20 25 30 35 
+
+Reasoning Step (Normalized) 
+
+0.1 
+
+0.2 
+
+0.3 
+
+0.4 
+
+0.5 
+
+0.6 
+
+0.7 
+
+0.8 
+
+> Entropy (bits)
+
+Entropy Trajectory  
+
+> Correct
+> Incorrect
+> Avg 1st Error
+
+(d) Omni-MATH 
+
+Figure 8: Entropy trajectories calculated by gemma-3-4b-it for correct (green) and incorrect (red) final answers. Solid lines represent mean entropy across examples. Shaded regions indicate ±1 standard deviation, showing the variability across different reasoning trajectories. 0 2 4 6 8 10 12 14 16 
+
+Reasoning Step (Normalized) 
+
+0.5 
+
+1.0 
+
+1.5 
+
+2.0 
+
+2.5 
+
+3.0 
+
+> Entropy (bits)
+
+Entropy Trajectory 
+
+> Correct
+> Incorrect
+> Avg 1st Error
+
+(a) GSM8K 0.0 2.5 5.0 7.5 10.0 12.5 15.0 17.5 
+
+Reasoning Step (Normalized) 
+
+0.50 
+
+0.75 
+
+1.00 
+
+1.25 
+
+1.50 
+
+1.75 
+
+2.00 
+
+2.25 
+
+> Entropy (bits)
+
+Entropy Trajectory  
+
+> Correct
+> Incorrect
+> Avg 1st Error
+
+(b) MATH 0 10 20 30 40 
+
+Reasoning Step (Normalized) 
+
+0.5 
+
+1.0 
+
+1.5 
+
+2.0 
+
+2.5 
+
+> Entropy (bits)
+
+Entropy Trajectory 
+
+> Correct
+> Incorrect
+> Avg 1st Error
+
+(c) OlympiadBench 0 5 10 15 20 25 30 35 
+
+Reasoning Step (Normalized) 
+
+0.5 
+
+1.0 
+
+1.5 
+
+2.0 
+
+2.5 
+
+> Entropy (bits)
+
+Entropy Trajectory  
+
+> Correct
+> Incorrect
+> Avg 1st Error
+
+(d) Omni-MATH 
+
+Figure 9: Entropy trajectories calculated by llama-3.2-3B-Instruct for correct (green) and incorrect (red) final answers. Solid lines represent mean entropy across examples. Shaded regions indicate ±1 standard deviation, showing the variability across different reasoning trajectories.

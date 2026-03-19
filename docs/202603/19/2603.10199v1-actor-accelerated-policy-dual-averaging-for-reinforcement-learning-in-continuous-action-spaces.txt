@@ -1,0 +1,1547 @@
+Title: Actor-Accelerated Policy Dual Averaging for Reinforcement Learning in Continuous Action Spaces
+
+URL Source: https://arxiv.org/pdf/2603.10199v1
+
+Published Time: Thu, 12 Mar 2026 00:20:30 GMT
+
+Number of Pages: 22
+
+Markdown Content:
+# ACTOR -A CCELERATED POLICY DUAL AVERAGING FOR 
+
+# REINFORCEMENT LEARNING IN CONTINUOUS ACTION SPACES 
+
+Ji Gao ∗ Caleb Ju † Guanghui Lan ‡ Zhaohui Tong §
+
+## ABSTRACT 
+
+Policy Dual Averaging (PDA) offers a principled Policy Mirror Descent (PMD) framework that more naturally admits value function approximation than standard PMD, enabling the use of approximate advantage (or Q-) functions while retaining strong convergence guarantees. However, applying PDA in continuous state and action spaces remains computationally challenging, since action selection involves solving an optimization sub-problem at each decision step. In this paper, we propose actor-accelerated PDA , which uses a learned policy network to approximate the solution of the optimization sub-problems, yielding faster runtimes while maintaining convergence guarantees. We provide a theoretical analysis that quantifies how actor approximation error impacts the convergence of PDA under suitable assumptions. We then evaluate its performance on several benchmarks in robotics, control, and operations research problems. Actor-accelerated PDA achieves superior performance compared to popular on-policy baselines such as Proximal Policy Optimization (PPO). Overall, our results bridge the gap between the theoretical advantages of PDA and its practical deployment in continuous-action problems with function approximation. 
+
+Keywords Markov Decision Process, Reinforcement Learning, Dual Averaging, Mirror Descent 
+
+## 1 Introduction 
+
+Recent advances in reinforcement learning (RL) have been largely driven by parameterized policy gradient methods, such as Trust Region Policy Optimization (TRPO) Schulman et al. [2015] and Proximal Policy Optimization (PPO) Schulman et al. [2017]. These methods have achieved great success in continuous control tasks in various disciplines Duan et al. [2016], Lillicrap et al. [2016]. Their practical performance has been partially supported by recent theoretical analysis. In particular, Policy Mirror Descent (PMD) serves as a unifying framework for first order RL methods with convergence guarantees Lan [2023], Zhan et al. [2023], Tomar et al. [2021], Alfano et al. [2023], Lan et al. [2023], Li and Lan [2025], Li et al. [2024], Neu et al. [2017]. However, existing first order methods designed for RL problems over continuous action spaces require solving challenging optimization sub-problems during each policy update step. These sub-problems are often non-convex and lead to ill-posed policy evaluation steps Fan et al. [2020], Liu et al. [2019], Ju and Lan [2024a], Alfano et al. [2023], Agarwal et al. [2021]. The former issue arises when reducing an (intractable) infinite-dimensional sub-problem to a (tractable) finite-dimensional one by using nonlinear function approximations (e.g., neural networks) for both the value function and policy Schulman et al. [2017, 2015]. The latter issue arises since the policy evaluation step must approximate both the value function and policy, and the policy involves a large penalty coefficient to ensure that the policies do not change too much between iterations Ju and Lan [2024a]. But, the large coefficients lead to ill-posed problems whose objective functions have a large Lipschitz constant. As a result, efficiently solving these sub-problems may be slow or even fail. 
+
+> ∗
+
+School of Chemical and Biomolecular Engineering, Georgia Institute of Technology, GA, USA. Supported by NSF-Cyber-Physical Systems (CPS)-NIFA (2024-67021-43862). 
+
+> †
+
+H. Milton Stewart School of Industrial and Systems Engineering, Georgia Institute of Technology, GA, USA. Supported by NSF-Cyber-Physical Systems (CPS)-NIFA (2024-67021-43862). 
+
+> ‡
+
+H. Milton Stewart School of Industrial and Systems Engineering, Georgia Institute of Technology, GA, USA. Supported by NSF AI Institute for Advances in Optimization (2112533), and NSF-Cyber-Physical Systems (CPS)-NIFA (2024-67021-43862). 
+
+> §
+
+School of Chemical and Biomolecular Engineering, Georgia Institute of Technology, GA, USA. Supported by NSF-Cyber-Physical Systems (CPS)-NIFA (2024-67021-43862). 
+
+> arXiv:2603.10199v1 [cs.LG] 10 Mar 2026
+
+Actor-Accelerated Policy Dual Averaging A P REPRINT 
+
+Recently, Policy Dual Averaging (PDA), inspired by Nesterov’s Dual Averaging algorithm Nesterov [2009], is proposed as a promising alternative that matches PMD’s convergence guarantees and offers a new perspective on policy optimization Ju and Lan [2024a]. Through careful algorithm design, PDA’s optimization sub-problems are made weakly convex while avoiding policy function approximation. As a result, locally (possibly globally) optimal solutions for the sub-problems can be efficiently solved for while evading explicit policy parameterization. While this leads to efficiently solvable policy update steps, the policy evaluation step becomes the main bottleneck. Each policy evaluation requires solving a separate optimization sub-problem, and this per-decision cost is often prohibitively slow when implemented directly Ju and Lan [2024a], Lan [2023]. Building upon PDA, we introduce actor-accelerated PDA . By using a learned policy network to approximate the solution of the expensive optimization sub-problem, we can accelerate the action computation during policy evaluation. The main contributions of this paper consist of the following three aspects: 1) Practical Framework: Actor-accelerated PDA has a simple implementation, with only two algorithm specific hyperparameters for regularization and exploration in addition to the standard hyperparameters for deep RL (Table 4), making the PDA framework practical for deep RL problems; 2) Convergence and Error Analysis: We conduct theoretical analysis that characterizes how approximation errors from actor-based sub-problem solutions impact the overall convergence and optimality; 3) Experimental Validation: Empirical results on continuous RL benchmarks demonstrate that actor-accelerated PDA is competitive with, and sometimes outperform, on-policy baselines such as PPO. 
+
+## 2 Preliminaries 
+
+We study RL problems with continuous state and action spaces, modeled as infinite-horizon discounted Markov decision processes (MDPs) defined by a five-tuple (S, U, P, c, γ ). S ⊆ Rns denotes the state space and U ⊆ Rnu denotes the action space, with U assumed to be closed and convex. The transition dynamics are specified by a stochastic transition model P : B(S) × S × U → [0 , 1] , which assigns a probability measure over next states for each state-action pair. 
+
+c : S × U → R is the cost function, and γ ∈ [0 , 1) is the discount factor. A policy π : S → U selects a feasible action for a given state. For a given policy π, its performance is quantified by either the action-value function, 
+
+Qπ (s, a ) := Eπ
+
+" ∞X
+
+> t=0
+
+γtc(st, a t) s0 = s, a 0 = a
+
+#
+
+, (1) or the state-value function, 
+
+V π (s) := Eπ
+
+" ∞X
+
+> t=0
+
+γtc(st, a t) s0 = s
+
+#
+
+. (2) Note that our results can be extended to the regularized case, i.e., the cost c(st, a t) is replaced by a regularized cost 
+
+c(st, a t) + hat (st) for a convex regularizer h·(s) : U → R in (1) and (2) . We only study the un-regularized case since it simplifies the analysis, and our numerical results do not use regularizers. These definitions imply the identities 
+
+V π (s) = Qπ (s, π (s)) and 
+
+Qπ (s, a ) = c(s, a ) + γ
+
+Z
+
+> S
+
+V π (s′) P(ds ′ | s, a ). (3) The objective of the RL problem is to find a policy that minimizes the expected discounted cost under an initial state distribution ρ:
+
+min  
+
+> π
+
+fρ(π), fρ(π) := 
+
+Z
+
+> S
+
+V π (s) ρ(ds ). (4) In this paper, we let ρ be an arbitrary distribution over states S. By deriving convergence results for any distribution ρ,our results are distribution-free , which leads to some important consequences Ju and Lan [2024b]. First, it ensures nonlinear programming methods for solving (4) achieve a similar convergence rate as dynamic programming (e.g., value iteration) and linear programming methods. Second, it leads to faster performance because the policy optimization does not depend on the unknown stationary distribution ν∗ of the optimality policy π∗ as seen in Lan [2023], Li et al. [2024]. Here, an optimal policy π∗ satisfies V π∗
+
+(s) ≤ V π (s) for all s ∈ S and all feasible policies π. To analyze policy improvement, we define the discounted state visitation measure following a policy π. For an initial state s and any measurable set B ⊆ S, this measure is given by 
+
+κπs (B) := (1 − γ)
+
+> ∞
+
+X
+
+> t=0
+
+γtPr π (st ∈ B | s0 = s), (5) 2Actor-Accelerated Policy Dual Averaging A P REPRINT 
+
+Algorithm 1 Actor-accelerated PDA with function approximation 
+
+Input: Weights βk ≥ 0, step sizes λk ≥ 0, initial policy ˆπ0 = π0.
+
+for k = 0 , 1, . . . do 
+
+Define an approximate advantage function: 
+
+˜ψ(s, a ; θk) ≈ ψˆπk (s, a ) := Qˆπk (s, a ) − V ˆπk (s)
+
+Compute approximate update ˆπk+1 :
+
+ˆπk+1 (s; θπk ) ≈ πk+1 (s) = arg min a∈U ˜Ψk(s, a )
+
+where the cumulative objective is: 
+
+˜Ψk(s, a ) := Pkt=0 βt ˜ψ(s, a ; θt) + λkD(ˆ π0(s), a )
+
+end for 
+
+where Pr π (st ∈ · | s0 = s) denotes the state distribution of st following the policy π with initial state s0 = s.The performance difference lemma relates the performance of two policies Kakade [2001], Ju and Lan [2024a]. For any pair of feasible policies π and π′, the difference in their value functions can be written as 
+
+V π′
+
+(s) − V π (s) = 11 − γ
+
+Z
+
+> S
+
+ψπ (q, π ′(q)) κπ′ 
+
+> s
+
+(dq ), (6) where the state advantage function is defined as 
+
+ψπ (q, a ) := Qπ (q, a ) − V π (q). (7) 
+
+## 3 Method 
+
+3.1 Actor-accelerated Policy Dual Averaging 
+
+We analyze the PDA method where the optimum of the optimization sub-problem is solved inexactly by the approxima-tion of an actor, shown in Algorithm 1. Let ˆπk denote the policy parameterized by θπk at iteration k and ˜ψ denote the advantage function parameterized by θk. The policy update πk+1 is defined as the exact minimizer of the cumulative regularized objective ˜Ψk. The stepsizes βk and λk therein will be specified later in Theorems 3.4 and 3.5. Here, D(·, ·)
+
+is a Bregman divergence generated by a (without loss of generality by scaling) 1-strongly convex distance generating function ω : U → R with respect to a norm ∥ · ∥ :
+
+D(a2, a 1) := ω(a1) − [ω(a2) + ⟨ω′(a2), a 1 − a2⟩] ≥ ∥ a1 − a2∥2/2, ∀a1, a 2 ∈ U (8) We also define a state averaged Bregman divergence originating at state s as Ds(π, π ′) := Eq∼κπ∗ 
+
+> s
+
+[D(π(q), π ′(q))] .
+
+3.2 Convergence Analysis 
+
+We analyze the convergence of actor-accelerated PDA under the presence of both function approximation error in the advantage function ˜ψ and optimality gap in actor ˆπ for sub-problem solution. We start by placing assumptions on ˜ψ.Let ξk denote the random samples generated at iteration k to fit/learn ˜ψ(s, a ; θk). Define the approximation error 
+
+δk(s, ·) := ˜ψ(s, ·; θk) − ψˆπk (s, ·) = [ ˜ψ(s, ·; θk) − Eξk
+
+˜ψ(s, ·; θk)
+
+| {z } 
+
+> δsto k(s, ·)
+
+] − [Eξk
+
+˜ψ(s, ·; θk) − ψˆπk (s, ·)
+
+| {z } 
+
+> δdet k(s, ·)
+
+],
+
+where Eξk is the expectation w.r.t. ξk conditioned on the filtration Fk−1 := {ξ0, . . . , ξ k−1}. Statistical estimation errors are denoted by δsto k , while deterministic errors (i.e., bias and function approximation error) are denoted by δdet k .
+
+Assumption 3.1 (Regularity) . We make the following assumptions regarding the advantage function and the objective: 1. Lipschitz continuity : The approximate advantage function ˜ψ(s, ·; θ) is M ˜Q-Lipschitz, meaning ∥ ˜ψ(s, a ; θ) −
+
+˜ψ(s, a ′; θ)∥ ≤ M ˜Q∥a − a′∥ for all a, a ′. The true advantage function ψπ (s, ·) is similarly MQ-Lipschitz. Consequently, the approximation error δk(s, ·) is (M ˜Q + MQ)-Lipschitz. 2. Weak convexity : The approximate advantage function ˜ψ(s, ·; θ) is μ ˜Q-weakly convex, where μ ˜Q ∈ R,meaning that the function ˜ψ(s, a ; θ) + μ ˜Q 
+
+> 2
+
+∥a∥2 is convex with respect to a. We define ˜μd := −˜μQ.3Actor-Accelerated Policy Dual Averaging A P REPRINT 
+
+3. Approximate evaluation error bound : For all iterations k, the expected approximation errors are bounded by a constant ς > 0 such that max s∈S E
+
+h
+
+δdet k−1(s, π k−1(s)) + δdet k−1(s, π ∗(s)) 
+
+i
+
+≤ ς.An immediate consequence of the “weak convexity” assumption is that the cumulative objective ˜Ψk(s, a ) from Algorithm 1 is strongly convex with respect to a, with modulus ˜μk := ˜ μd
+
+Pkt=0 βt + λk as long as λk ensures ˜μk ≥ 0.Note that we do not need bounds on the statistical error δsto k as long as M ˜Q is bounded. Additionally, these assumptions can often be satisfied, as described below. 
+
+Remark 3.2 . Lipschitz continuity holds for smooth neural network architectures, such as fully connected neural networks with smooth activation functions like Tanh Allen-Zhu et al. [2019]. Weak convexity also holds for such smooth neural networks because its Hessian is bounded Beck [2017], Davis and Drusvyatskiy [2019]. The “approximate evaluation error bound” presumes that the function approximator, such as a neural network, can learn the true advantage function up to a error threshold ς. The threshold ς is finite when both the costs c(s, a ) and neural network outputs are bounded. Furthermore, since neural networks are univeral function approximators, ς can possibly be made arbitrarily small when 
+
+ψπ (·, ·) is jointly continuous in both inputs (see Ju and Lan [2024a] for sufficient conditions) and the width or depth of the neural network is sufficiently large. We next state an assumption on the approximate updated policy ˆπk+1 from Algorithm 1. This assumption can be viewed as the policy update analogue of the “Approximate evaluation error bound” assumption above. Thus it can also be satisfied in practice depending on the function approximator for ˆπk+1 .
+
+Assumption 3.3 (Optimality Gap) . The actor ˆπk+1 approximates the optimization sub-problem with a function value error bounded by ϵopt,k (s), which satisfies: 
+
+˜Ψk(s, ˆπk+1 (s)) ≤ ˜Ψk(s, π k+1 (s)) + ϵopt,k (s), ∀s ∈ S, k. (9) Moreover, there exists a constant ϵ such that 0 ≤ ϵopt,k (s) ≤ ϵ for all iterations k and states s ∈ S.Using the generalized strong convexity with Bregman divergence Lan [2020] of ˜Ψk, this implies a bound on the distance between the ideal and approximate policies: 
+
+D(πk+1 (s), ˆπk+1 (s)) ≤ ϵopt,k (s)˜μk
+
+, ∀s ∈ S, k. (10) 
+
+3.2.1 Convergence when ˜μd ≥ 0
+
+We start with the case of ˜μd ≥ 0, which means the cumulative advantage term Pkt=0 βt ˜ψ(s, a ; θt) is convex in a. In this case, we attain convergence to global optimality. 
+
+Theorem 3.4. Suppose λk+1 ≥ λk ≥ 0 for all k ≥ 0. Then under Assumptions 3.1 and 3.3, if ˜μd ≥ 0, the performance gap of the sequence of policies generated by actor-accelerated PDA satisfies: 
+
+(1 − γ) 1¯βkk−1X
+
+> t=0
+
+βtE[V ˆπt (s) − V π∗
+
+(s)] + ˜μk−1
+
+¯βk
+
+E[Ds(πk, π ∗)] 
+
+≤ λk−1
+
+¯βk
+
+Ds(π0, π ∗) + M 2˜Q
+
+2 ¯βkk−1X
+
+> t=0
+
+β2
+
+> t
+
+˜μt−1
+
++ ς + ¯ϵopt (k)¯βk
+
+,
+
+(11) 
+
+for any s ∈ S, where ¯βk = Pk−1 
+
+> t=0
+
+βt, and the cumulative optimization error term is defined as: 
+
+¯ϵopt (k) = Es∼κπ∗
+
+> q
+
+
+
+E[ϵopt,k −1(s)] + 
+
+> k−1
+
+X
+
+> t=0
+
+E[ϵopt,t (s)] 
+
+| {z }
+
+> Optimality Gap
+
++ M ˜Qk−1X
+
+> t=0
+
+E
+
+"s 
+
+2β2 
+
+> t
+
+ϵopt,t −1(s)˜μt−1
+
+#| {z }
+
+> Distance to Exact Policy
+
+
+
+(12) 
+
+When ˜μd > 0, if we choose βk = k + 1 , λk = ˜ μd, and bound ϵopt with ϵ, then 
+
+2(1 − γ)
+
+k(k + 1) 
+
+> k−1
+
+X
+
+> t=0
+
+{(t + 1) E[V ˆπt (q) − V π∗
+
+(q)] } + ˜ μdE[Dq (πk, π ∗)] 
+
+≤ 2˜ μdDq (π0, π ∗)
+
+k2 + 4M 2˜Q
+
+˜μdk + ς + 2ϵk + 4M ˜Q
+
+√2ϵ
+
+√˜μdk .
+
+(13) 4Actor-Accelerated Policy Dual Averaging A P REPRINT 
+
+When ˜μd = 0 , if we choose βk = k + 1 , λk = λ(k + 1) 3/2, and bound ϵopt with ϵ, then 
+
+2(1 − γ)
+
+k(k + 1) 
+
+> k−1
+
+X
+
+> t=0
+
+{(t + 1) E[V ˆπt (q) − V π∗
+
+(q)] } ≤ 2λ
+
+√k Dq (π0, π ∗) + 8M 2˜Q
+
+λ√k + ς + 2ϵk + 8M ˜Q
+
+√2ϵ
+
+√λk 3/4 (14) We notice that as k → ∞ , the algorithm will achieve global convergence up to function approximation error on the order of O(ς).
+
+3.2.2 Convergence when ˜μd < 0
+
+We next examine the case of ˜μd < 0, which means the cumulative advantage term Pkt=0 βt ˜ψ(s, a ; θt) is non-convex in 
+
+a with bounded lower curvature. In this case, we will establish a different type of convergence based on the negative advantage function. 
+
+Theorem 3.5. Under Assumptions 3.1 and 3.3, if ˜μd < 0 and step sizes are chosen such that λk = k(k + 1) |˜μd| and 
+
+βt = t + 1 , t = 0 , 1, ..., k − 1, then for any s ∈ S, there exist iteration index ¯k(s) s.t. 
+
+− (MQ + M ˜Q)2
+
+|˜μd|(k + 1) ≤ − ψˆπ¯k(s) (s, ˆπ¯k(s)+1 (s)) 
+
+≤ 2 V π0 (s) − V π∗
+
+(s)
+
+k + 1 + 3( MQ + M ˜Q)2
+
+(1 − γ)|˜μd|(k + 1) + 4ϵ(Hk + 1) (1 − γ)( k + 1) ,
+
+(15) 
+
+where Hk = Pkj=1 1 
+
+> j
+
+is the k-th harmonic number, and ˜μt = t(t+1) 2 ˜μd + k(k + 1) |˜μd|, for t = 0 , . . . , k − 1.
+
+As k → ∞ , the error term involving the harmonic number Hk vanishes because the k in the denominator dominates the growth of the numerator. The meaning of this convergence is discussed in Ju and Lan [2024a], which may imply global convergence is some special cases. In general, the consequences of this convergence result remain open and is an important future direction to pursue. 
+
+3.3 Implementation 
+
+To maintain numerical stability during training and avoid performance degradation when dealing with large values of the cumulative summation term in the PDA objective in Algorithm 1, we implement a scaled version of the objective function. The scaling factors are chosen to ensure that the weighting remains consistent with the original theoretical framework. In addition, we use a recursive scheme to store the weighted sum of advantage. Specifically, the accumulated advantage is updated as 
+
+˜ψ 
+
+> P
+> k
+
+(s, a ; Θ k) ≈ 1 − βk
+
+Pki=0 βi
+
+!
+
+˜ψ
+
+> P
+> k−1
+
+(s, a ; Θ k−1) + βk
+
+Pki=0 βi
+
+˜ψ(s, a ; θk). (16) With this representation, the action can be obtained by solving the following optimization problem: 
+
+πk+1 (s) = arg min 
+
+> a∈A
+
+˜Ψ′(s, a ) = arg min 
+
+> a∈A
+
+"
+
+˜ψ 
+
+> P
+> k
+
+(s, a ; Θ k) + λk
+
+Pki=0 βi
+
+D(π0(s), a )
+
+#
+
+, (17) where ˜Ψ′ represents the scaled objective with parameterized accumulated advantage. We employ the parameter schedule with βk = k + 1 , λ k = λ(k + 1) 3/2. This implementation follows the μd = 0 case, which allows for adaptive updates as the training progresses without the need to estimate the weak convexity parameter 
+
+μd. This leaves λ as a primary hyperparameter that requires tuning. For problems with continuous action space, we choose the Euclidean norm as the distance generating function, hence the corresponding Bregman divergence term for PDA is 12 ∥a − π0(s)∥22. The prox-center π0(s) can be a random initial policy, a pretrained policy, or simply set to zero. The approximate solution of the optimization sub-problem can then be obtained with standard optimizers, with gradients obtained through backpropagation of action a on ˜Ψ′.For on-policy algorithms such as PPO, Gaussian policy are typically used with learnable parameters to control the variance of the sampling noise. The degree of exploration is subsequently controlled by entropy coefficients. In PDA, we apply heuristic noise by employing a Gaussian actor with a time-dependent standard deviation of σ(t) = σ0/β 0.3, where 
+
+σ0 is an additional hyperparameter that controls the exploration magnitude. The pseudo-code of the actor-accelerated PDA implementation is shown in Algorithm 2. 5Actor-Accelerated Policy Dual Averaging A P REPRINT 
+
+Algorithm 2 Actor-Accelerated PDA Training Loop 
+
+Input: Networks VθV , ψΣ 
+
+> θψ
+
+, πθπ ; Parameters β = Σ β = 1 , λ 
+
+Initialize: π0 (prior policy or zero) 
+
+for k = 1 to K do 
+
+Collect trajectories τ = {(st, a t, r t, s ′
+
+> t
+
+)}Tt=1 
+
+Compute returns and normalized advantage 
+
+{G, ˜A} ← ProcessBatch (τ )
+
+Update Value Function 
+
+θV ← argmin θV E ∥VθV (s) − G∥22
+
+
+
+Update Sum Advantage Network 
+
+ψΣ 
+
+> old
+
+← ψΣ 
+
+> θψ
+
+(s, a )
+
+θψ ← argmin θψ E
+
+h
+
+∥ψΣ 
+
+> θψ
+
+(s, a ) − ( Σβ −β 
+
+> Σβ
+
+ψΣ 
+
+> old
+
++ β
+
+> Σβ
+
+˜A)∥22
+
+i
+
+Update Actor 
+
+a ← πθπ (s)
+
+θπ ← argmin θπ E
+
+h
+
+ψΣ 
+
+> θψ
+
+(s, a ) + β1.5λ 
+
+> Σβ
+
+∥a − π0(s)∥22
+
+i
+
+Update Coefficients 
+
+β ← β + 1 Σβ ← Σβ + β
+
+end for 
+
+## 4 Experiment 
+
+4.1 Evaluation of Optimum Tracking 
+
+We use the inverted pendulum swing-up (Pendulum-v1) environment from Gymnasium Towers et al. [2025] as an example to visualize the behavior of the actor. In this problem, the state is defined as s = [cos( θ), sin( θ), ˙θ], where θ
+
+and ˙θ represent the pendulum angle and angular velocity, respectively. The goal of this problem is to apply a torque τ
+
+to maintain the pendulum at its upright position. By fixing the angular velocity ˙θ, we can visualize the landscape of 
+
+˜Ψ′ over the (θ, τ ) domain, which allows for observing how the actor learns to track the solution of the optimization sub-problem. As shown in Figure 1, the first three plots track the evolution of the PDA objective ( Ψ′) and the learning trajectory of the actor, confirming that the actor successfully tracks the optimum and solves the problem. The final plot demonstrates that the approximation error of the actor stabilizes during the extended training process, providing empirical support for the optimality gap condition postulated in Assumption 3.3. 
+
+4.2 Continuous Control Benchmark 
+
+We implemented PDA within the Tianshou Weng et al. [2022] framework, an open-source RL library built on PyTorch Paszke et al. [2019] and Gymnasium Towers et al. [2025]. This enables a robust implementation and fair comparisons with other RL algorithms using its well-tuned hyperparameters. Tianshou’s PPO implementation achieves substantially better performance in episodic return on MuJoCo Todorov et al. [2012] benchmarks compared to the original implementation. For this reason, we adopt Tianshou’s PPO as the primary baseline for evaluating our PDA algorithm. We evaluate PDA on classic continuous control environments, including MuJoCo and Box2d, and compare its perfor-mance against widely used on-policy algorithms such as PPO, TRPO, and Natural Policy Gradient (NPG) Kakade [2001]. PDA hyperparameters are tuned on Hopper and Walker2d and then kept fixed for all remaining environments. Hyperparameters for PPO, TRPO, and NPG are from Tianshou and also kept constant throughout. Note that Tianshou’s official benchmarks report the maximum testing episodic return over 1 million environment steps, while we use the average testing episodic return of the final five epochs, a more conservative and commonly used metric. PDA consistently outperforms the performance of PPO and other on-policy baselines in most tasks, as shown in Figure 2 and Table 2. In particular, PDA achieves substantially better performance in high-dimensional locomotion tasks, including HalfCheetah, Ant, Walker2d, Hopper, and the Humanoid variants. Notably, for the challenging Humanoid variants, PDA achieves significantly better performance than PPO within 1–3 million timesteps using default parameters. 6Actor-Accelerated Policy Dual Averaging A P REPRINT 
+
+Figure 1: Visualization of optimum tracking with the actor in the Pendulum-v1 environment. The landscape evolution of the scaled optimization sub-problem ˜Ψ′ over epochs 5, 8, and 11, at a fixed ˙θ = 0 .2 is shown in the first three plots. The pink dotted line represents the true optimum of ˜Ψ′, and the solid red line represents the output of the actor network. The final plot tracks the mean absolute error (MAE) between the true optimum and the actor output averaged across a range of states and actions at each epoch for an extended training process. 
+
+4.3 Operations Research Benchmark 
+
+Beyond continuous control tasks, RL shows strong potential for addressing decision-making problems in operations research (OR). To assess PDA’s performance, we evaluate PDA across four OR environments from the OR-Gym benchmark suite Hubbs et al. [2020], Balaji et al. [2019], Glasserman and Tayur [1995], Dantzig and Infanger [1993]. Our evaluation includes comparisons with on-policy algorithms such as PPO, as well as traditional OR methods. We first consider two classic tasks in stochastic optimization: Newsvendor, a multi-period newsvendor problem with lead times, and PortfolioOpt, a multi-period asset allocation problem (Figure 3), where we examine the reward distribution of the trained agents. In the Newsvendor environment, PDA achieves significantly better performance than PPO in both mean and median values, where a mean larger than the median indicates the reward distribution is positively skewed. In the PortfolioOpt environment, PDA achieves slightly better overall performance, with its return distribution shifted positively relative to PPO. For InvManagement environments (multi-echelon supply chain inventory management problems with backlog or lost sales), we compared the RL policies against classical OR methods, including Shrinking Horizon Linear Programming (SHLP), Derivative-Free Optimization (DFO), and Mixed-Integer Programming (MIP). These methods are further compared to an Oracle model that computes a theoretical upper bound using knowledge of the actual demand. As shown in Table 2, the PDA policy achieves comparable performance to PPO. In addition, PDA achieves returns close to SHLP in both Backlog and Lost Sales settings, with much lower standard deviations than the aforeentioned classic OR methods. 7Actor-Accelerated Policy Dual Averaging A P REPRINT 
+
+Figure 2: Performance comparison of PDA, PPO, TRPO, and NPG across MuJoCo and Box2D environments. The curves and the shaded areas represent the mean and standard deviation across 100 test evaluations (10 seeds per environment and 10 tests per seed), respectively. Table 1: Performance comparison of PDA, PPO, and classical OR methods on the InvManagement environments with Backlog and Lost Sales (LS) settings. We report the mean episodic return, standard deviation (Std), and performance ratio relative to the Oracle benchmark (lower is better). Results for the OR methods and the Oracle are taken from the original study Hubbs et al. [2020].                                                 
+
+> Backlog PDA PPO SHLP DFO MIP Oracle Mean 491.6 496.4 508.0 360.9 388.0 546.8 Std 11.8 6.8 28.1 39.9 30.8 30.3 Ratio 1.1 1.1 1.1 1.5 1.4 1.0 LS PDA PPO SHLP DFO MIP Oracle Mean 472.3 447.4 485.4 364.3 378.5 542.7 Std 10.3 16.8 29.1 33.8 26.1 29.9 Ratio 1.1 1.2 1.1 1.5 1.4 1.0
+
+## 5 Analysis 
+
+5.1 Sensitivity Study for σ0 and λ
+
+RL performance is often highly sensitive to hyperparameter choices Henderson et al. [2018], hence fully realizing an algorithm’s potential requires careful tuning. Throughout the benchmark, we apply a fixed set of hyperparameters across all environments, with PDA-specific hyperparameters, step size set to λ = 0 .5 and the exploration noise standard deviation parameter set to σ0 = 1 .3. To better understand the robustness of PDA and the effect of tuning, we conduct a sensitivity study over λ and σ0 across five continuous-control environments: Hopper, Walker2d, Ant, HalfCheetah, and BipedalWalker (Figure 4). Sweeping through a range of parameters shows the sensitivity of PDA with respect to hyperparameter tuning and helps to explain the rationale for parameter selection. 8Actor-Accelerated Policy Dual Averaging A P REPRINT 
+
+Figure 3: OR-Gym Benchmark for PDA and PPO. Episodic reward distributions of agents after training for 3 million (Newsvendor) and 1 million (PortfolioOpt) environment steps, aggregated over 10 random seeds with 10 3 random trials per seed. A lower threshold is applied for the Newsvendor environment to maintain readability of the plot due to the existence of extreme negative values for PPO. The training curves are shown in Appendix B.2. In dynamic balancing tasks (Hopper, Walker2d, BipedalWalker), higher exploration noise is generally favored, which facilitates the discovery of stabilizing behaviors in the state-action space. In contrast, quadrupedal locomotion tasks (Ant and HalfCheetah) are more stable due to multiple contact points to the floor, which require lower exploration noise and larger step sizes to achieve better performance. In this case, increased step sizes provide stronger regularization and improve training efficiency. Interestingly, the initial performance of the Ant-v4 training curve (Figure 2) is due to the healthy reward gained from stable behaviors by PDA regularization. The two PDA-specific hyperparameters ( λ and σ0)have intuitive interpretations about the algorithm’s training dynamics. Hence, physical intuitions about task dynamics and stability can guide the identification of effective parameter regimes for PDA. Importantly, PDA’s strong performance does not depend on a single set of fine-tuned configurations. There exists a broad region of hyperparameters that yields competitive results. In addition, we explored the option of using constant noise σ(t) = σ0 illustrated as the last plot in Figure 4. The results indicate that constant noise can also be advantageous, particularly for environments that require stronger and sustained exploration like Hopper and Walker2d. However, it is challenging to identify a single σ0 that performs well across all environments at the same time. A decreasing noise schedule traverses a wider range of noise levels, hence making it more adaptive and robust across different tasks. 
+
+5.2 Choice for Sum Advantage Update 
+
+The scaled sum advantage update ψΣ ←
+
+
+
+1 − β
+
+> Σβ
+
+
+
+ψΣ 
+
+> old
+
++ β
+
+> Σβ
+
+˜A can be viewed as a weighted averaging of the advantage estimates. The weighting scheme is theoretically important in PDA as it is involved in the telescoping operation that cancels accumulated terms across iterations during the convergence proof. From a practical perspective, the update is similar to the exponential smoothing scheme commonly used in RL implementations. This motivates a study in which we replace the theoretically derived weighting with a standard exponential smoothing weighting: 
+
+ψΣ ← (1 − α)ψΣ 
+
+> old
+
++ α ˜A where α ∈ (0 , 1) is a constant smoothing coefficient. We evaluate this substitution in two environments over different values of α. From Figure 5, for certain choices of α,exponential smoothing can improve empirical performance compared to the original PDA by a more aggressive or stable averaging in the sum advantage update. However, this modification introduces an additional hyperparameter that must be tuned and is likely to vary across environments. More importantly, this breaks the connection to the dual averaging theory underlying PDA. These findings highlight a trade-off between theory and empirical performance in the design of sum advantage update schemes. 
+
+5.3 Choice of Optimizer 
+
+We utilize the SOAP Vyas et al. [2024] optimizer for neural network training in PDA. SOAP employs Kronecker-factored preconditioning, which calculates and maintains preconditioner matrices that approximate second-order curvature information. As a result, it benefits from a larger batch size and fewer iterations for training . This makes the 9Actor-Accelerated Policy Dual Averaging A P REPRINT 
+
+Figure 4: Sensitivity on exploration noise parameter σ0 and step size λ. The heatmap shows the testing episodic reward averaged for the last 5 epochs. The final plot shows the sensitivity study with constant noise (3 seeds per environment and 10 tests per seed), while the rest of the plots show the default decreasing noise (5 seeds per environment and 10 tests per seed) .training wall-clock speed approximately twice as fast as Adam’s. We choose this optimizer for its strong empirical performance for training neural networks and that they are easily accessibe in RL training enviroments, even the theoretical underpinnings are generally lacking. Figure 6 compares the performance of PDA (using SOAP by default) with PDA-Adam, as well as PPO (using with Adam Kingma and Ba [2015]) by default) with PPO-SOAP, for the Ant and Hopper environments. In both benchmarks, PDA and PDA-Adam show similar learning curves, and both variants can achieve higher episodic rewards than PPO. Although SOAP substantially accelerates training, it does not provide a significant improvement in sample efficiency or final performance for PDA relative to Adam. Moreover, substituting Adam with SOAP in PPO does not lead to consistent performance gains. These results indicate that while SOAP is an effective tool for accelerating computation, it is not a primary contributor to PDA’s performance advantages. 
+
+## 6 Related Work 
+
+Dual Averaging. Dual Averaging (DA) was originally introduced by Nesterov Nesterov [2009]. In gradient descent or mirror descent methods, only the local gradient is used at the current iteration. More recent gradients have decreasing weighting throughout the update, although they are not less important. DA determines the next update by maintaining a running average of the past gradients, so that all previous gradients have equal weighting. This accumulation of history gradients allows DA to achieve strong convergence results. These ideas have been extended to online learning and RL Xiao [2010], Neu et al. [2017], Ju and Lan [2024a]. DA style policy updates correspond to regularized policy improvement using cumulative advantages or gradients. Existing theoretical analyses demonstrate favorable convergence properties under assumptions of exact solution of the optimization sub-problem Ju and Lan [2024a]. 
+
+Policy mirror descent. PMD has recently emerged as a unifying framework for policy optimization for many widely used RL algorithms. PMD provides a way to connect a wide range of algorithms, including policy gradient and trust-region methods, under a common theoretical basis. Existing work establishes convergence guarantees for PMD 10 Actor-Accelerated Policy Dual Averaging A P REPRINT 
+
+Figure 5: Performance comparison between the PDA with scaled sum advantage update (labeled as PDA) and an exponential smoothing scheme (labeled with smoothing parameter α) across two environments. Results are averaged over 5 random seeds. The curve and shaded region represent the mean and standard deviation of the test results. 
+
+Figure 6: Comparison of optimizer effects on PDA and PPO in the Ant and Hopper environments. across two environments. Results are averaged over 5 random seeds. The curve and shaded region represent the mean and standard deviation of the test results. under suitable regularity conditions, usually assuming exact or sufficiently accurate policy evaluation Lan [2023], Zhan et al. [2023], Alfano et al. [2023]. PMD is closely related to PDA but differs in its regularization structure. While PDA regularizes with respect to the distance between the new policy and initial policy (a fixed prox-center), PMD regularizes with respect to the distance between the new policy and current policy. 
+
+Regularized and Trust-Region Policy Optimization. Regularization is central to many practical policy optimization algorithms.TRPO Schulman et al. [2015] formulates policy updates as a constrained or penalized optimization problem to guarantee monotonic improvement. PPO Schulman et al. [2017] applies clipping to a surrogate objective as an approximation. These methods rely on a linear approximation of the cost function in the PMD framework, where the approximation error is bounded by the KL divergence between the old and new policies. To ensure monotonic improvement, the update step can be formulated as minimizing the objective subject to a penalty on the maximum state-wise KL divergence. TRPO relaxes the impractical maximum KL constraint to an average KL constraint. PPO introduces a ratio clipping mechanism to bound the likelihood ratio r(s, a ) = π(a|s)/π k(a|s), which helps mitigate the impact of heavy-tailed noise in stochastic advantage estimates. Furthermore, the PMD framework generalizes these formulations by allowing for arbitrary Bregman divergences and strongly convex regularizers 
+
+## 7 Conclusion 
+
+This work proposes actor-accelerated PDA, which enables the practicality of PDA for RL problems in continuous state and action spaces. We introduce a parameterized policy network to directly learn the solution of the optimization 11 Actor-Accelerated Policy Dual Averaging A P REPRINT 
+
+sub-problem during the policy evaluation step. This approximation significantly accelerates the algorithm for use across various continuous RL problems. The actor-accelerated PDA shows competitive performance in continuous control and operations research tasks compared with widely used on-policy RL algorithms. 12 Actor-Accelerated Policy Dual Averaging A P REPRINT 
+
+## References 
+
+John Schulman, Sergey Levine, Pieter Abbeel, Michael Jordan, and Philipp Moritz. Trust Region Policy Optimization. In Proceedings of the 32nd International Conference on Machine Learning , pages 1889–1897. PMLR, June 2015. John Schulman, Filip Wolski, Prafulla Dhariwal, Alec Radford, and Oleg Klimov. Proximal Policy Optimization Algorithms, August 2017. URL https://arxiv.org/abs/1707.06347 .Yan Duan, Xi Chen, Rein Houthooft, John Schulman, and Pieter Abbeel. Benchmarking Deep Reinforcement Learning for Continuous Control. In Proceedings of The 33rd International Conference on Machine Learning , pages 1329–1338. PMLR, June 2016. Timothy P. Lillicrap, Jonathan J. Hunt, Alexander Pritzel, Nicolas Heess, Tom Erez, Yuval Tassa, David Silver, and Daan Wierstra. Continuous control with deep reinforcement learning. In Yoshua Bengio and Yann LeCun, editors, 
+
+4th International Conference on Learning Representations, ICLR 2016, San Juan, Puerto Rico, May 2-4, 2016, Conference Track Proceedings , 2016. Guanghui Lan. Policy mirror descent for reinforcement learning: Linear convergence, new sampling complexity, and generalized problem classes. Mathematical Programming , 198(1):1059–1106, March 2023. ISSN 1436-4646. doi:10.1007/s10107-022-01816-5. Wenhao Zhan, Shicong Cen, Baihe Huang, Yuxin Chen, Jason D. Lee, and Yuejie Chi. Policy Mirror Descent for Regularized Reinforcement Learning: A Generalized Framework with Linear Convergence. SIAM Journal on Optimization , 33(2):1061–1091, June 2023. ISSN 1052-6234. doi:10.1137/21M1456789. Manan Tomar, Lior Shani, Yonathan Efroni, and Mohammad Ghavamzadeh. Mirror Descent Policy Optimization. In 
+
+International Conference on Learning Representations , October 2021. Carlo Alfano, Rui Yuan, and Patrick Rebeschini. A Novel Framework for Policy Mirror Descent with General Parameterization and Linear Convergence. Advances in Neural Information Processing Systems , 36:30681–30725, December 2023. Guanghui Lan, Yan Li, and Tuo Zhao. Block Policy Mirror Descent. SIAM Journal on Optimization , 33(3):2341–2378, September 2023. ISSN 1052-6234. doi:10.1137/22M1480409. Yan Li and Guanghui Lan. Policy Mirror Descent Inherently Explores Action Space. SIAM Journal on Optimization ,35(1):116–156, March 2025. ISSN 1052-6234. doi:10.1137/23M1560215. Yan Li, Guanghui Lan, and Tuo Zhao. Homotopic policy mirror descent: Policy convergence, algorithmic regularization, and improved sample complexity. Mathematical Programming , 207(1):457–513, September 2024. ISSN 1436-4646. doi:10.1007/s10107-023-02017-4. Gergely Neu, Anders Jonsson, and Vicenç Gómez. A unified view of entropy-regularized Markov decision processes, May 2017. URL https://arxiv.org/abs/1705.07798 .Jianqing Fan, Zhaoran Wang, Yuchen Xie, and Zhuoran Yang. A theoretical analysis of deep q-learning. In Learning for dynamics and control , pages 486–489. PMLR, 2020. Boyi Liu, Qi Cai, Zhuoran Yang, and Zhaoran Wang. Neural trust region/proximal policy optimization attains globally optimal policy. Advances in neural information processing systems , 32, 2019. Caleb Ju and Guanghui Lan. Policy Optimization over General State and Action Spaces, September 2024a. URL 
+
+https://arxiv.org/abs/2211.16715 .Alekh Agarwal, Sham M Kakade, Jason D Lee, and Gaurav Mahajan. On the theory of policy gradient methods: Optimality, approximation, and distribution shift. Journal of Machine Learning Research , 22(98):1–76, 2021. Yurii Nesterov. Primal-dual subgradient methods for convex problems. Mathematical Programming , 120(1):221–259, August 2009. ISSN 1436-4646. doi:10.1007/s10107-007-0149-x. Caleb Ju and Guanghui Lan. Strongly-polynomial time and validation analysis of policy gradient methods. arXiv preprint arXiv:2409.19437 , 2024b. Sham M Kakade. A Natural Policy Gradient. In Advances in Neural Information Processing Systems , volume 14. MIT Press, 2001. Zeyuan Allen-Zhu, Yuanzhi Li, and Zhao Song. A convergence theory for deep learning via over-parameterization. In 
+
+International conference on machine learning , pages 242–252. PMLR, 2019. Amir Beck. First-order methods in optimization . SIAM, 2017. Damek Davis and Dmitriy Drusvyatskiy. Stochastic model-based minimization of weakly convex functions. SIAM Journal on Optimization , 29(1):207–239, 2019. 13 Actor-Accelerated Policy Dual Averaging A P REPRINT 
+
+Guanghui Lan. Deterministic Convex Optimization. In Guanghui Lan, editor, First-Order and Stochastic Optimization Methods for Machine Learning , pages 53–111. Springer International Publishing, Cham, 2020. ISBN 978-3-030-39568-1. doi:10.1007/978-3-030-39568-1_3. Mark Towers, Ariel Kwiatkowski, John U. Balis, Gianluca De Cola, Tristan Deleu, Manuel Goulão, Kallinteris Andreas, Markus Krimmel, Arjun Kg, Rodrigo De Lazcano Perez-Vicente, J. K. Terry, Andrea Pierré, Sander V. Schulhoff, Jun Jet Tai, Hannah Tan, and Omar G. Younis. Gymnasium: A Standard Interface for Reinforcement Learning Environments. In The Thirty-ninth Annual Conference on Neural Information Processing Systems Datasets and Benchmarks Track , October 2025. Jiayi Weng, Huayu Chen, Dong Yan, Kaichao You, Alexis Duburcq, Minghao Zhang, Yi Su, Hang Su, and Jun Zhu. Tianshou: A Highly Modularized Deep Reinforcement Learning Library. Journal of Machine Learning Research , 23 (267):1–6, 2022. ISSN 1533-7928. Adam Paszke, Sam Gross, Francisco Massa, Adam Lerer, James Bradbury, Gregory Chanan, Trevor Killeen, Zeming Lin, Natalia Gimelshein, Luca Antiga, Alban Desmaison, Andreas Kopf, Edward Yang, Zachary DeVito, Martin Raison, Alykhan Tejani, Sasank Chilamkurthy, Benoit Steiner, Lu Fang, Junjie Bai, and Soumith Chintala. PyTorch: An Imperative Style, High-Performance Deep Learning Library. In Advances in Neural Information Processing Systems , volume 32. Curran Associates, Inc., 2019. Emanuel Todorov, Tom Erez, and Yuval Tassa. MuJoCo: A physics engine for model-based control. In 
+
+2012 IEEE/RSJ International Conference on Intelligent Robots and Systems , pages 5026–5033, October 2012. doi:10.1109/IROS.2012.6386109. Christian D. Hubbs, Hector D. Perez, Owais Sarwar, Nikolaos V. Sahinidis, Ignacio E. Grossmann, and John M. Wassick. OR-Gym: A Reinforcement Learning Library for Operations Research Problems, October 2020. URL 
+
+https://arxiv.org/abs/2008.06319 .Bharathan Balaji, Jordan Bell-Masterson, Enes Bilgin, Andreas Damianou, Pablo Moreno Garcia, Arpit Jain, Runfei Luo, Alvaro Maggiar, Balakrishnan Narayanaswamy, and Chun Ye. ORL: Reinforcement Learning Benchmarks for Online Stochastic Optimization Problems. In NeurIPS 2019 Workshop on Deep Reinforcement Learning , December 2019. Paul Glasserman and Sridhar Tayur. Sensitivity Analysis for Base-Stock Levels in Multiechelon Production-Inventory Systems. Management Science , February 1995. doi:10.1287/mnsc.41.2.263. George B. Dantzig and Gerd Infanger. Multi-stage stochastic linear programs for portfolio optimization. Annals of Operations Research , 45(1):59–76, December 1993. ISSN 1572-9338. doi:10.1007/BF02282041. Peter Henderson, Riashat Islam, Philip Bachman, Joelle Pineau, Doina Precup, and David Meger. Deep reinforcement learning that matters. In Proceedings of the Thirty-Second AAAI Conference on Artificial Intelligence and Thirtieth Innovative Applications of Artificial Intelligence Conference and Eighth AAAI Symposium on Educational Advances in Artificial Intelligence , AAAI’18/IAAI’18/EAAI’18, pages 3207–3214, New Orleans, Louisiana, USA, February 2018. AAAI Press. ISBN 978-1-57735-800-8. Nikhil Vyas, Depen Morwani, Rosie Zhao, Itai Shapira, David Brandfonbrener, Lucas Janson, and Sham M. Kakade. SOAP: Improving and Stabilizing Shampoo using Adam for Language Modeling. In The Thirteenth International Conference on Learning Representations , October 2024. Diederik P. Kingma and Jimmy Ba. Adam: A Method for Stochastic Optimization. In Yoshua Bengio and Yann LeCun, editors, 3rd International Conference on Learning Representations, ICLR 2015, San Diego, CA, USA, May 7-9, 2015, Conference Track Proceedings , 2015. Lin Xiao. Dual Averaging Methods for Regularized Stochastic Learning and Online Optimization. Journal of Machine Learning Research , 11(88):2543–2596, 2010. ISSN 1533-7928. 14 Actor-Accelerated Policy Dual Averaging A P REPRINT 
+
+## A Proof of Theorems 
+
+A.1 Lemmas Lemma A.1. For any feasible policy ˆπk+1 (s) and πk+1 (s):
+
+˜Ψk(s, ˆπk+1 (s)) − ϵopt,k (s) + ˜ μkD(πk+1 (s), a ) ≤ ˜Ψk(s, a )
+
+Proof. From the strong convexity of ˜Ψk and the generalized optimality condition of πk+1 with Bregman divergence, we have: ˜Ψk(s, π k+1 (s)) + ˜ μkD(πk+1 (s), a ) ≤ ˜Ψk(s, a ). Substituting ˜Ψk(s, π k+1 (s)) with Assumption 3.3 gives the result. 
+
+A.2 Proof of Theorem 3.4 
+
+Proof. We first write the recursive form of ˜Ψk (which follows directly from its definition) for k ≥ 0:
+
+˜Ψk(s, a ) = ˜Ψk−1(s, a ) + βk ˜ψ(s, a ; θk) + ( λk − λk−1)D(π0(s), a ),
+
+where we define dummy variables ˜Ψ−1(s, a ) = λ−1 = 0 for all s, a . Setting a = ˆ πk+1 (s) above and taking note that 
+
+λk − λk−1 ≥ 0 and the Bregman divergence is nonnegative, we arrive at: 
+
+βk ˜ψ(s, ˆπk+1 (s); θk) ≤ ˜Ψk(s, ˆπk+1 (s)) − ˜Ψk−1(s, ˆπk+1 (s)) .
+
+Using Lemma A.1 with index k − 1 evaluated a = ˆ πk+1 (s), we have: 
+
+− ˜Ψk−1(s, ˆπk+1 (s)) ≤ − ˜Ψk−1(s, ˆπk(s)) + ϵopt,k −1(s) − ˜μk−1D(πk(s), ˆπk+1 (s)) .
+
+Combine the two inqualities above, we have: 
+
+βk ˜ψ(s, ˆπk+1 (s); θk) ≤ ˜Ψk(s, ˆπk+1 (s)) − ˜Ψk−1(s, ˆπk(s)) + ϵopt,k −1(s) − ˜μk−1D(πk(s), ˆπk+1 (s)) 
+
+Applying this inequality recursively yields a telescopic sum. With the dummy variable ˜Ψ−1(s, ˆπ0) = 0 , we have: 
+
+> k−1
+
+X
+
+> t=0
+
+βt ˜ψ(s, ˆπt+1 (s); θt) ≤ ˜Ψk−1(s, ˆπk(s)) + 
+
+> k−1
+
+X
+
+> t=0
+
+ϵopt,t (s) −
+
+> k−1
+
+X
+
+> t=0
+
+˜μt−1D(πt(s), ˆπt+1 (s)) .
+
+We now apply Lemma A.1 with index k − 1 and an arbitrary action a to the inequality derived above to upper bound the ˜Ψk−1(s, ˆπk(s)) term: 
+
+> k−1
+
+X
+
+> t=0
+
+βt ˜ψ(s, ˆπt+1 (s); θt) ≤ ˜Ψk−1(s, a ) + ϵopt,k −1(s) − ˜μk−1D(πk(s), a )+
+
+> k−1
+
+X
+
+> t=0
+
+ϵopt,t (s) −
+
+> k−1
+
+X
+
+> t=0
+
+˜μt−1D(πt(s), ˆπt+1 (s)) .
+
+Expanding ˜Ψk−1(s, a ) with definition and substituting, we have: 
+
+> k−1
+
+X
+
+> t=0
+
+βt[ ˜ψ(s, ˆπt+1 (s); θt) − ˜ψ(s, a ; θt)] ≤λk−1D(π0(s), a ) − ˜μk−1D(πk(s), a )+
+
+> k−1
+
+X
+
+> t=0
+
+ϵopt,t (s) + ϵopt,k −1(s) −
+
+> k−1
+
+X
+
+> t=0
+
+˜μt−1D(πt(s), ˆπt+1 (s)) .
+
+For the first term on the lefthand side, use Lipschitz continuity and function approximation error from Assumption 3.1: 
+
+˜ψ(s, ˆπt+1 (s); θt) ≥ − M ˜Q∥ˆπt+1 (s) − ˆπt(s)∥ + δt(s, ˆπt(s)) .
+
+For the ˜ψ(s, a ; θt) term on the lefthand side, apply function approximation error again and let a = π∗(s):
+
+− ˜ψ(s, π ∗(s); θt) = −ψˆπt (s, π ∗(s)) − δt(s, π ∗(s)) .
+
+15 Actor-Accelerated Policy Dual Averaging A P REPRINT 
+
+Combining these, we have: 
+
+> k−1
+
+X
+
+> t=0
+
+βt[−ψˆπt (s, π ∗(s))] ≤λk−1D(π0(s), π ∗(s)) − ˜μk−1D(πk(s), π ∗(s)) +
+
+> k−1
+
+X
+
+> t=0
+
+ϵopt,t (s) + ϵopt,k −1(s) −
+
+> k−1
+
+X
+
+> t=0
+
+˜μt−1D(πt(s), ˆπt+1 (s)) +
+
+> k−1
+
+X
+
+> t=0
+
+βt[δt(s, π ∗(s)) − δt(s, ˆπt(s))] + 
+
+> k−1
+
+X
+
+> t=0
+
+βtM ˜Q∥ˆπt+1 (s) − ˆπt(s)∥.
+
+To simplify the last three summations above, we use the triangle inequality ∥ˆπt+1 (s) − ˆπt(s)∥ ≤ ∥ ˆπt+1 (s) − πt(s)∥ +
+
+∥πt(s) − ˆπt(s)∥ in the following derivation: 
+
+> k−1
+
+X
+
+> t=0
+
+
+
+βtM ˜Q∥ˆπt+1 (s) − ˆπt(s)∥ − ˜μt−1D(πt(s), ˆπt+1 (s)) 
+
+
+
++
+
+> k−1
+
+X
+
+> t=0
+
+βt[δt(s, π ∗(s)) − δt(s, ˆπt(s))] 
+
+≤
+
+> k−1
+
+X
+
+> t=0
+
+
+
+βtM ˜Q∥ˆπt+1 (s) − πt(s)∥ − ˜μt−1D(πt(s), ˆπt+1 (s)) 
+
+
+
++
+
+> k−1
+
+X
+
+> t=0
+
+βtM ˜Q∥πt(s) − ˆπt(s)∥ + ς
+
+> k−1
+
+X
+
+> t=0
+
+βt
+
+≤
+
+> k−1
+
+X
+
+> t=0
+
+M 2˜Qβ2
+
+> t
+
+2˜ μt−1
+
++
+
+> k−1
+
+X
+
+> t=0
+
+βtM ˜Q
+
+s
+
+2ϵopt,t −1(s)˜μt−1
+
++ ς
+
+> k−1
+
+X
+
+> t=0
+
+βt,
+
+where the first inequality uses Assumption 3.1. Meanwhile, the first summation in the second inequality uses strong convexity of Bregman Divergence D(x, y ) ≥ 12 ∥x − y∥2 and the inequality bx − a 
+
+> 2
+
+x2 ≤ b2 
+
+> 2a
+
+, and the second summation follows from Assumption 3.3. Now fix any q ∈ S. Combining the last two intermeditate results, taking expectations first w.r.t. the noise ξ and then the state s ∼ κπ∗ 
+
+> q
+
+, applying (6) with π′ = π∗, and dividing through by ¯βk := Pk−1 
+
+> t=0
+
+βt, we have 
+
+(1 − γ) 1¯βkk−1X
+
+> t=0
+
+βtE[V ˆπt (q) − V π∗
+
+(q)] + ˜μk−1
+
+¯βk
+
+E[Dq (πk, π ∗)] 
+
+≤ λk−1
+
+¯βk
+
+Dq (π0, π ∗) + M 2˜Q
+
+2 ¯βkk−1X
+
+> t=0
+
+β2
+
+> t
+
+˜μt−1
+
++ ς + ¯ϵopt (k)¯βk
+
+,
+
+where the cumulative optimization error term is defined as: 
+
+¯ϵopt (k) = Es∼κπ∗
+
+> q
+
+
+
+E[ϵopt,k −1(s)] + 
+
+> k−1
+
+X
+
+> t=0
+
+E[ϵopt,t (s)] 
+
+| {z }
+
+> Optimality Gap
+
++ M ˜Qk−1X
+
+> t=0
+
+E
+
+"s 
+
+2β2 
+
+> t
+
+ϵopt,t −1(s)˜μt−1
+
+#| {z }
+
+> Distance to Exact Policy
+
+
+
+When ˜μd > 0, if we choose βk = k + 1 , λk = ˜ μd, and use the approximation error bound 0 ≤ ϵopt,k (s) ≤ ϵ, then 
+
+˜μt−1 = ˜ μd
+
+
+
+1 + t(t+1) 2
+
+
+
+, and 
+
+2(1 − γ)
+
+k(k + 1) 
+
+> k−1
+
+X
+
+> t=0
+
+{(t + 1) E[V ˆπt (q) − V π∗
+
+(q)] } + ˜ μdE[Dq (πk, π ∗)] 
+
+≤ 2˜ μdDq (π0, π ∗)
+
+k(k + 1) + 4M 2˜Q
+
+˜μd(k + 1) + ς + 2ϵk + 4M ˜Q
+
+√2ϵ
+
+√˜μd(k + 1) 
+
+!
+
+.
+
+The bound for follows after simplifying terms w.r.t. k.16 Actor-Accelerated Policy Dual Averaging A P REPRINT 
+
+When ˜μd = 0 , if we choose βk = k + 1 , λk = λ(k + 1) 3/2, and use the approximation error bound 0 ≤ ϵopt,k (s) ≤ ϵ,and the integral bound ( Pkx=1 
+
+√x ≤ R k+1 0
+
+√xdx ), then 
+
+2(1 − γ)
+
+k(k + 1) 
+
+> k−1
+
+X
+
+> t=0
+
+{(t + 1) E[V ˆπt (q) − V π∗
+
+(q)] }≤ 2λDq (π0, π ∗)√kk + 1 + 4M 2˜Q
+
+√k + 1 
+
+λk + ς
+
++ 2ϵk + 4M ˜Q
+
+√2ϵ
+
+√λ
+
+(k + 1) 1/4
+
+k
+
+!
+
+,
+
+and we get the result after simplifying terms w.r.t. k.
+
+A.3 Proof of Theorem 3.5 
+
+Proof. Similar to the proof for Theorem 3.4, we apply Lemma A.1 for ˜Ψk−1(s, ˆπk+1 (s)) :
+
+βk ˜ψ(s, ˆπk+1 (s); θk) ≤ ˜Ψk(s, ˆπk+1 (s)) − ˜Ψk−1(s, ˆπk(s)) + ϵopt ,k −1(s) − ˜μk−1D(πk(s), ˆπk+1 (s)) .
+
+Apply Lemma A.1 again for ˜Ψk(s, ˆπk+1 (s)) at step k evaluated at a = ˆ πk(s):
+
+˜Ψk(s, ˆπk+1 (s)) + ˜ μkD(πk+1 (s), ˆπk(s)) ≤ ˜Ψk(s, ˆπk(s)) + ϵopt ,k (s).
+
+Substituting ˜Ψk(s, ˆπk+1 (s)) and using the recursive definition ˜Ψk(s, ˆπk(s)) = ˜Ψk−1(s, ˆπk(s)) + βk ˜ψ(s, ˆπk(s); θk) + (λk − λk−1)D(π0(s), ˆπk(s)) , we obtain: 
+
+βk ˜ψ(s, ˆπk+1 (s); θk) ≤ − ˜μkD(πk+1 (s), ˆπk(s)) − ˜μk−1D(πk(s), ˆπk+1 (s)) + βk ˜ψ(s, ˆπk(s); θk) + ( λk − λk−1)D(π0(s), ˆπk(s)) + ϵopt ,k (s) + ϵopt ,k −1(s).
+
+Using the function approximation error from Assumption 3.1 and noting that ψˆπk (s, ˆπk(s)) = 0, we have 
+
+˜ψ(s, ˆπk(s); θk) = δk(s, ˆπk(s)) . Rearranging terms yields: 
+
+ψˆπk (s, ˆπk+1 (s)) − λk − λk−1
+
+βk
+
+D(π0(s), ˆπk(s)) − 1
+
+βk
+
+[ϵopt ,k (s) + ϵopt ,k −1(s)] 
+
+− [δk(s, ˆπk(s)) − δk(s, ˆπk+1 (s))] 
+
+≤ − ˜μk
+
+βk
+
+D(πk+1 (s), ˆπk(s)) − ˜μk−1
+
+βk
+
+D(πk(s), ˆπk+1 (s)) ≤ 0.
+
+Using the Lipschitz property of δk, we bound the terms involving δk by δk(s, ˆπk(s)) − δk(s, ˆπk+1 (s)) ≤ (MQ +
+
+M ˜Q)∥ˆπk+1 − ˆπk∥. From the 1-strong convexity of Bregman divergence, we have: 
+
+− ˜μk
+
+βk
+
+D(πk+1 (s), ˆπk(s)) − ˜μk−1
+
+βk
+
+D(πk(s), ˆπk+1 (s)) 
+
+≤ − 12βk
+
+
+
+˜μk∥πk+1 (s) − ˆπk(s)∥2 + ˜ μk−1∥πk(s) − ˆπk+1 (s)∥2
+
+≤ 12βk
+
+
+
+˜μk∥πk+1 (s) − ˆπk+1 (s)∥2 + ˜ μk−1∥πk(s) − ˆπk(s)∥2
+
+− 14βk
+
+(˜ μk + ˜ μk−1)∥ˆπk+1 (s) − ˆπk(s)∥2.
+
+The second inequality comes from expanding the policy difference terms using triangle inequality and Young’s inequality to derive ∥a − b∥2 ≥ −∥ a∥2 + 12 ∥b∥2.Combining with the Lipschitz bound and using Young’s inequality ax − bx 2 ≤ a2/(4 b) on the terms involving 
+
+∥ˆπk+1 − ˆπk∥:
+
+(MQ + M ˜Q)∥ˆπk+1 (s) − ˆπk(s)∥ − 14βk
+
+(˜ μk + ˜ μk−1)∥ˆπk+1 (s) − ˆπk(s)∥2 ≤ βk(MQ + M ˜Q)2
+
+˜μk + ˜ μk−1
+
+.
+
+From the 1-strong convexity of Bregman divergence and the Assumption 3.3, we have: 
+
+˜μk∥πk+1 (s) − ˆπ(s)k+1 ∥2 ≤ 2ϵopt ,k (s).
+
+17 Actor-Accelerated Policy Dual Averaging A P REPRINT 
+
+Let ¯DA := max a1,a 2∈A D (a1, a 2). Combine the relationships to result in the bound for the advantage: 
+
+0 ≤ − ψˆπk (s, ˆπk+1 (s)) + λk − λk−1
+
+βk
+
+¯DA + 2
+
+βk
+
+[ϵopt ,k (s) + ϵopt ,k −1(s)] + βk(MQ + M ˜Q)2
+
+˜μk + ˜ μk−1
+
+. (18) Define constants Ck ≥ 0 and Ek ≥ 0 as: 
+
+Ck := λk − λk−1
+
+βk
+
+¯DA + βk(MQ + M ˜Q)2
+
+˜μk + ˜ μk−1
+
+≥ βk(MQ + M ˜Q)2
+
+˜μk + ˜ μk−1
+
+,Ek := 4
+
+βk
+
+ϵ ≥ 2
+
+βk
+
+[ϵopt ,k (s) + ϵopt ,k −1(s)] .
+
+Using the performance difference lemma (Equation 6), since κˆπk+1  
+
+> s
+
+is a probability measure, we can add and subtract a constant term in and outside the integral: 
+
+V ˆπk+1 (s) − V ˆπk (s) ≤ 11 − γ
+
+Z ψˆπk (q, ˆπk+1 (q)) − Ck − Ek
+
+ κˆπk+1  
+
+> s
+
+(dq ) + 11 − γ (Ck + Ek)
+
+≤ 11 − γ
+
+ψˆπk (s, ˆπk+1 (s)) − Ck − Ek
+
+ κˆπk+1  
+
+> s
+
+({s}) + 11 − γ (Ck + Ek)
+
+≤ ψˆπk (s, ˆπk+1 (s)) + γ
+
+1 − γ (Ck + Ek),
+
+(19) where the second inequality follows the fact κπk+1  
+
+> s
+
+({s}) ≥ 1 − γ.We define Sk := Pk−1 
+
+> t=0
+
+βt[V ˆπt (s) − V ˆπt+1 (s)] . With βt = t + 1 ,
+
+Sk =
+
+> k−1
+
+X
+
+> t=0
+
+(t + 1)[ V ˆπt (s) − V ˆπt+1 (s)] = 
+
+> k−1
+
+X
+
+> t=0
+
+V ˆπt (s) − kV ˆπk (s) ≤
+
+> k−1
+
+X
+
+> t=0
+
+V ˆπt (s) − kV π∗
+
+(s).
+
+From Equation 18 and 19, we have: 
+
+V ˆπt+1 (s) − V ˆπt (s) ≤ 11 − γ (Ct + Et).
+
+Substituting the telescopic sum, we have: 
+
+V ˆπt (s) ≤ V ˆπ0 (s) + 
+
+> t−1
+
+X
+
+> j=0
+
+11 − γ (Cj + Ej )
+
+Substituting V ˆπt (s) in Sk, we have 
+
+Sk ≤
+
+> k−1
+
+X
+
+> t=0
+
+V ˆπ0 (s) + 
+
+> t−1
+
+X
+
+> j=0
+
+11 − γ (Cj + Ej )
+
+ − kV π∗
+
+(s)
+
+≤ kV ˆπ0 (s) + 11 − γ
+
+> k−1
+
+X
+
+> t=0
+> t−1
+
+X
+
+> j=0
+
+(Cj + Ej ) − kV π∗
+
+(s)
+
+Using the relationship Pk−1 
+
+> t=0
+> β2
+> t
+> ˜μt+˜ μt−1
+
+≤ Pk−1 
+
+> t=0 (t+1) 2
+> |˜μd|(k+1) k
+
+≤ k 
+
+> |˜μd|
+
+, we have: 
+
+Sk ≤ k
+
+"
+
+V π0 (s) − V π∗
+
+(s) + (MQ + M ˜Q)2
+
+2(1 − γ)|˜μd| + 4ϵH k
+
+1 − γ
+
+#
+
+,
+
+where Hk = Pk−1  
+
+> j=0 1
+> j+1
+
+is the k-th harmonic number. Rearranging Equation 19, we have: 
+
+0 ≤ − βk
+
+ψˆπk (s, ˆπk+1 (s)) − (Ck + Ek) ≤ βk
+
+V ˆπk (s) − V ˆπk+1 (s) + βk
+
+1 − γ (Ck + Ek).
+
+18 Actor-Accelerated Policy Dual Averaging A P REPRINT 
+
+Summing the inequality above from t = 0 to k − 1 and use the inequality for Sk:
+
+0 ≤
+
+> k−1
+
+X
+
+> t=0
+
+−βt
+
+ψˆπt (s, ˆπt+1 (s)) − (Ct + Et) ≤k
+
+h
+
+V π0 (s) − V π∗
+
+(s)
+
+i
+
++ 3k(MQ + M ˜Q)2
+
+2(1 − γ)|˜μd| + 4ϵ
+
+1 − γ (kH k + k).
+
+Choosing index ¯k(s) that minimizes the term in the summation, and using β¯k(s) = ¯k(s) + 1 , we derive the bound on the advantage for Theorem 3.5. To derive a bound for policy improvement. Returning Equation 18 without substituting ∥ˆπk+1 (s) − ˆπk(s)∥, we split the term using the triangle inequality and combine with the advantage bound: 
+
+˜μk + ˜ μk−1
+
+8βk
+
+∥ˆπk+1 (s) − ˆπk(s)∥2 ≤ − ψˆπk (s, ˆπk+1 (s)) + 4ϵβk
+
++ 2βk(MQ + M ˜Q)2
+
+˜μk + ˜ μk−1
+
+.
+
+Combining with Equation 15 and the fact that 0 ≤ β¯k(s)
+
+> ˜μ¯k(s)+˜ μ¯k(s)−1
+
+≤ 1 
+
+> |˜μd|(k+1)
+
+, we have: 
+
+∥ˆπ¯k(s)+1 (s) − ˆπ¯k(s)(s)∥2 ≤ 8
+
+|˜μd|(k + 1) 
+
+ 2 V π0 (s) − V π∗
+
+(s)
+
+k + 1 + 3( MQ + M ˜Q)2
+
+(1 − γ)|˜μd|(k + 1) + 2( MQ + M ˜Q)2
+
+|˜μd|(k + 1) + 4ϵ(Hk + 1) (1 − γ)( k + 1) + 4ϵ
+
+¯k(s) + 1 
+
+
+
+19 Actor-Accelerated Policy Dual Averaging A P REPRINT 
+
+## B Experimental Setups and Results 
+
+B.1 Benchmark Results 
+
+Table 2: Benchmark results of PDA, PPO, TRPO, and NPG for MuJoCo-v4, Box2d, and OR-Env environments in 1M (or 3M) environment steps (mean ± std). The results are calculated with the average episodic reward of the last 5 epochs using 10 seeds per eenvironment and 10 tests per epoch. The Newsvendor-v0 environment uses 500 tests per epoch due to its high variance. 
+
+Environment NPG PPO TRPO PDA HalfCheetah-v4 3556.4 ± 837.9 4067.5 ± 572.3 4496.8 ± 969.7 5174.6 ± 686.7 
+
+Ant-v4 2002.5 ± 300.6 2589.5 ± 445.8 2807.1 ± 645.5 3568.2 ± 449.7 
+
+Hopper-v4 1650.8 ± 726.4 2329.7 ± 572.9 2017.0 ± 849.0 2944.3 ± 787.4 
+
+Walker2d-v4 2923.2 ± 707.2 3277.0 ± 762.6 4128.8 ± 638.1 4367.1 ± 915.9 
+
+InvertedPendulum-v4 1000.0 ± 0.0 993.3 ± 20.2 380.3 ± 391.6 1000.0 ± 0.0 
+
+InvertedDoublePendulum-v4 7967.2 ± 1205.3 7926.8 ± 1241.8 2723.4 ± 2393.5 9167.5 ± 552.6 
+
+Reacher-v4 -5.7 ± 0.9 -18.7 ± 17.5 -6.1 ± 1.0 -4.0 ± 0.4 
+
+Swimmer-v4 25.1 ± 9.7 54.2 ± 14.2 35.0 ± 28.3 111.3 ± 29.7 
+
+Humanoid-v4 745.1 ± 141.4 669.2 ± 107.4 719.5 ± 107.0 760.1 ± 139.9 
+
+Humanoid-v4 (3M) 4650.6 ± 686.8 933.3 ± 294.5 4745.1 ± 592.5 5020.0 ± 501.5 
+
+HumanoidStandup-v4 38364.7 ± 3926.9 135853.7 ± 21036.7 36737.7 ± 2413.4 161184.5 ± 3275.5 
+
+LunarLander-v3 34.1 ± 59.5 204.4 ± 44.7 -83.0 ± 53.3 204.7 ± 54.6 
+
+BipedalWalker-v3 212.3 ± 39.8 273.2 ± 45.1 106.3 ± 103.0 149.0 ± 117.4 NewsvendorEnv-v0 -2.7e7 ± 5.7e7 -1.9e5 ± 4.1e5 -3.4e7± 6.0e7 -1.5e5 ± 1.9e5 
+
+NewsvendorEnv-v0 (3M) -1.0e7 ±2.3e7 -37225.9 ± 48015.8 -5.3e7 ±10.0e7 21857.9 ± 11382.1 
+
+PortfolioOptEnv-v0 10095.3 ± 1522.9 10062.3 ± 1230.8 10195.6 ± 1496.7 10550.9 ± 1277.1 
+
+InvManagementBacklogEnv-v0 430.4 ± 31.0 496.4 ± 6.8 397.5 ± 25.4 491.6 ± 11.8 
+
+InvManagementLostSalesEnv-v0 431.5 ± 7.0 447.4 ± 16.8 432.3 ± 8.8 472.3 ± 10.3 
+
+B.2 Training curves for OR-Gym 
+
+Figure 7: Performance comparison of PDA, PPO, TRPO, and NPG for OR-Env environments. The curves and the shaded areas represent the mean and standard deviation across 100 test evaluations (10 seeds per environment and 10 tests per seed), respectively. 20 Actor-Accelerated Policy Dual Averaging A P REPRINT 
+
+B.3 Additional Benchmark Results for MuJoCo-v5 
+
+Table 3: Benchmark results of PDA, PPO for MuJoCo-v5 environments in 1M (or 3M) environment steps (mean ± std) . The results are calculated with the average episodic reward of the last 5 epochs using 10 seeds per environment and 10 tests per epoch.                         
+
+> Environment PPO PDA HalfCheetah-v5 4067.5 ± 572.3 5174.6 ± 686.7
+> Ant-v5 1115.4 ± 302.8 2625.1 ± 368.2
+> Hopper-v5 2397.8 ± 344.2 2693.9 ± 867.0
+> Walker2d-v5 3796.7 ± 908.3 3642.3 ± 1285.8 InvertedPendulum-v5 975.8 ± 72.6 916.0 ± 221.1 InvertedDoublePendulum-v5 6782.6 ± 1691.0 9349.2 ± 9.6
+> Reacher-v5 -11.1 ± 12.7 -3.9 ± 0.4
+> Swimmer-v5 54.2 ± 14.2 111.3 ± 29.7
+> Humanoid-v5 671.1 ± 128.3 793.1 ± 142.5
+> Humanoid-v5 (3M) 941.5 ± 288.5 5180.1 ± 424.7
+> HumanoidStandup-v5 130309.3 ± 26224.7 161199.0 ± 4788.2
+
+Figure 8: Performance comparison of PDA and PPO for MuJoCo environments. The curves and the shaded areas represent the mean and standard deviation across 100 test evaluations (10 seeds per environment and 10 tests per seed), respectively. 21 Actor-Accelerated Policy Dual Averaging A P REPRINT 
+
+B.4 Algorithm Hyperparameters 
+
+Table 4: Hyperparameters for NPG, PDA, PPO, and TRPO algorithms 
+
+Hyperparameter NPG PDA PPO TRPO 
+
+Hidden sizes [64 , 64] [64 , 64] [64 , 64] [64 , 64] 
+
+Activation Tanh Tanh Tanh Tanh Learning rate 1 × 10 −3 1 × 10 −3 3 × 10 −4 1 × 10 −3
+
+Batch size 1024 1000 64 1024 Discount factor 0.99 0.99 0.99 0.99 GAE λ 0.95 0.95 0.95 0.95 Learning rate decay True None True True Max gradient norm — 0.1 0.5 —
+
+Algorithm-Specific Hyperparameters NPG 
+
+Actor step size 0.1 — — —Critic optimization iterations 20 — — —
+
+PDA 
+
+Step size (regularization) — 0.5 — —Action noise — 1.3 — —
+
+PPO 
+
+Clipping parameter — — 0.2 —Value function coefficient — — 0.25 —Entropy coefficient — — 0.0 —Value clipping — — None —Dual clipping — — None —
+
+TRPO 
+
+Max KL divergence — — — 0.01 Backtrack coefficient — — — 0.8 Max backtracks — — — 10 Critic optimization iterations — — — 20 
+
+B.5 Algorithm Runtime on MuJoCo-v4 
+
+Table 5: Average runtime (5 parallel runs) on Intel i7-14700K for 1M environment steps of training and testing. Times are reported in seconds (mean ± standard deviation). 
+
+Algorithm MuJoCo-v4 (w/o humanoid) MuJoCo-v4 (humanoid variants) 
+
+PDA 423 .4 ± 104 .8 1480 .7 ± 178 .2
+
+PPO 677 .8 ± 278 .2 1720 .8 ± 295 .8
+
+NPG 566 .5 ± 283 .3 1484 .3 ± 420 .0
+
+TRPO 512 .3 ± 268 .7 1365 .6 ± 422 .6
+
+22
