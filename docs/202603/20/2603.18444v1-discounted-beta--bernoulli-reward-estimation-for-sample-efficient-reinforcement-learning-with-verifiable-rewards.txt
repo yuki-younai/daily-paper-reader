@@ -1,0 +1,1043 @@
+Title: Discounted Beta--Bernoulli Reward Estimation for Sample-Efficient Reinforcement Learning with Verifiable Rewards
+
+URL Source: https://arxiv.org/pdf/2603.18444v1
+
+Published Time: Fri, 20 Mar 2026 00:36:10 GMT
+
+Number of Pages: 14
+
+Markdown Content:
+# Discounted Beta–Bernoulli Reward Estimation for Sample-Efficient Reinforcement Learning with Verifiable Rewards 
+
+Haechan Kim 1 Soohyun Ryu 1 Gyouk Chu 1 Doohyuk Jang 1 Eunho Yang 1 2 
+
+Abstract 
+
+Reinforcement learning with verifiable rewards (RLVR) has emerged as an effective post-training paradigm for improving the reasoning capabili-ties of large language models. However, existing group-based RLVR methods often suffer from se-vere sample inefficiency. This inefficiency stems from reliance on point estimation of rewards from a small number of rollouts, leading to high estima-tion variance, variance collapse, and ineffective utilization of generated responses. In this work, we reformulate RLVR from a statistical estima-tion perspective by modeling rewards as samples drawn from a policy-induced distribution and cast-ing advantage computation as the problem of es-timating the reward distribution from finite data. Building on this view, we propose Discounted 
+
+Beta– Bernoulli ( DBB ) reward estimation, which leverages historical reward statistics for the non-stationary distribution. Although biased, the resulting estimator exhibits reduced and stable variance, theoretically avoids estimated variance collapse, and achieves lower mean squared er-ror than standard point estimation. Extensive experiments across six in-distribution and three out-of-distribution reasoning benchmarks demon-strate that GRPO with DBB consistently outper-forms naive GRPO, achieving average Acc@8 improvements of 3.22/2.42 points in-distribution and 12.49/6.92 points out-of-distribution on the 1.7B and 8B models, respectively, without addi-tional computational cost or memory usage. 
+
+1. Introduction 
+
+RLVR (Lambert et al., 2025) has recently emerged as a key post-training paradigm for enhancing the complex reason-ing capabilities of large language models (Plaat et al., 2025) 
+
+> 1
+
+Kim Jaechul Graduate School of AI, KAIST, Daejeon, South Korea 2AITRICS, Seoul, South Korea. Correspondence to: Eunho Yang <eunhoy@kaist.ac.kr >.
+
+Preprint. March 20, 2026. 
+
+and improving their performance on downstream tasks (Guo et al., 2025; Yang et al., 2025; Yu et al., 2025b). Since most RLVR algorithms, including Group Relative Policy Opti-mization (GRPO; Shao et al., 2024), rely on group-based advantage estimation (Yu et al., 2025a; Liu et al., 2025; Zheng et al., 2025a; Zhao et al., 2025), they require generat-ing multiple responses per prompt, which can account for a large fraction of the overall training time, often approaching 50% (Le et al., 2025). Despite this substantial computational cost, many existing group-based RLVR algorithms fail to utilize information from the generated responses efficiently. This sample inefficiency can be attributed to two funda-mental characteristics of RLVR. The first characteristic is that the variance of rewards can collapse to zero when all generated responses receive identical rewards under group-relative estimation. This variance collapse issue not only wastes the computational cost of response generation but also eliminates meaningful training signals within the batch (Zhang et al., 2025). To address this issue, approaches such as dynamic sampling (Yu et al., 2025a) and GRPO with Efficient Selective Rollout (GRESO; Zheng et al., 2025b) have been proposed. However, dynamic sampling requires several times more rollout cost, and GRESO cannot fully resolve the problem since it probabilistically filters prompts that are likely to result in variance collapse. The second characteristic is that, due to the on-policy na-ture of RLVR algorithms, information from all generated responses is discarded after a single gradient update. Recent replay-based methods (Li et al., 2025; Zhan et al., 2025) attempt to reuse rollouts generated from the training his-tory. However, unbiased reuse of off-policy data requires importance sampling, which in turn necessitates storing all token-level probabilities under historical policies and per-forming additional forward passes on the current policy. As a result, replay-based approaches introduce substantial GPU memory overhead and additional computational cost, limiting their practical scalability. These two sources of sample inefficiency primarily arise because most group-based RLVR algorithms rely on point estimators that consider only the rewards from the current rollout group when estimating the underlying reward dis-tribution for advantage estimation. While such estimators 1
+
+> arXiv:2603.18444v1 [cs.LG] 19 Mar 2026
+
+Discounted Beta–Bernoulli Reward Estimation for Sample-Efficient RLVR Reward Distribution Estimation                                       
+
+> 𝑝 ̂!
+> "# =1
+> 𝑁 &𝑋 !,%
+> &
+> %'(
+> 𝑝 ̂!
+> )**=𝛼 !
+> 𝛼 !+𝛽 !
+> Point Estimation
+> Discounted Beta -Bernoulli Estimation
+> 𝛼 !=𝜆 𝛼 !+(+S!𝛽 !=𝜆 𝛽 !+(+N−S!
+> Bias -Variance Trade -off & Shrinkage
+> MSE (𝑝 ̂!
+> "# #)<MSE (𝑝 ̂!
+> $% )
+> 𝑝 ̂!
+> $%
+> Unbiased, High Variance
+> True Value
+> (p!)
+> Var (𝑝 ̂!
+> "# )
+> 𝑝 ̂!
+> "# #
+> Shrinkage
+> Biased, Low Variance
+> p!
+> Var (𝑝 ̂!
+> )* *)
+> Bias 𝑝 ̂!
+> "# =0Var 𝑝 ̂!
+> "# =𝑝 !(1−𝑝 !)
+> N
+> Bias 𝑝 ̂!
+> )** ≠0Var 𝑝 ̂!
+> )**≪Var 𝑝 ̂!
+> "#
+> Performance Comparison
+
+Figure 1. Comparison between point estimation and DBB estimation. By trading a small bias for substantial variance reduction via shrinkage, DBB estimation achieves lower mean squared error. Compared to naive GRPO using point estimation, GRPO with DBB estimation consistently demonstrates superior performance across all benchmarks and both model scales. 
+
+can be reliable when the number of sampled responses per group is sufficiently large (Casella & Berger, 2024), prac-tical RLVR settings often operate in low-sample regimes due to computational constraints. In these settings, point estimators remain unbiased but suffer from high variance, which can lead to variance collapse and unstable training dynamics. To address this limitation, we adopt a statistical perspective that models rewards as stochastic outcomes drawn from a distribution induced by the policy. Instead of relying on point estimation, we employ a Bayesian framework (Gel-man et al., 1995) to model uncertainty explicitly and incor-porate temporal reward dynamics. Within this framework, we propose the Discounted Beta– Bernoulli ( DBB ) reward estimation, which tracks the evolving reward distribution by discounting historical observations. While DBB introduces a small bias, it significantly reduces variance and avoids variance collapse, thereby providing more stable and infor-mative training signals (Figure 1). Empirically, DBB yields a lower mean-squared error with respect to the true reward distribution than point estimation in low-sample scenarios. We evaluate GRPO with the DBB reward estimator (GRPO-DBB) on two model scales, Qwen3-1.7B-Base and Qwen3-8B-Base (Yang et al., 2025), across six in-distribution math-ematical reasoning benchmarks, including MATH500, Min-erva, AIME24/25, AMC24, and OlympiadBench. GRPO-DBB consistently outperforms naive GRPO and other base-lines across all benchmarks and model sizes. Specifically, compared to GRPO, GRPO-DBB achieves average Acc@8 improvements of 3.22 and 2.42 points on Qwen3-1.7B-Base and Qwen3-8B-Base, respectively. Furthermore, on three out-of-distribution reasoning benchmarks such as MMLU-Pro, GPQA-Diamond, and Big-Bench Hard, GRPO-DBB yields average Acc@8 gains of 12.49 and 6.92 points over GRPO on 1.7B and 8B models, respectively. 
+
+2. Preliminaries 
+
+We briefly introduce RLVR and its commonly used baseline, GRPO, to establish the foundation for our method. 
+
+2.1. Reinforcement Learning with Verifiable Rewards 
+
+Given a prompt q ∼ D from the training dataset and a policy 
+
+πθ , a generated response is o ∼ πθ (· | q). In RLVR, the reward function r(·) is typically defined as a binary signal indicating whether the response contains a correct answer. 
+
+r(o, q ) = 
+
+(
+
+1, if o contains the answer of q
+
+0, otherwise . (1) 
+
+2.2. Group Relative Policy Optimization (GRPO) 
+
+GRPO (Shao et al., 2024) is a foundational baseline for RLVR that eliminates the need for an explicit value model and Generalized Advantage Estimation (Schulman et al., 2017). Instead, it relies on group-relative normalization to estimate advantages. For a given prompt q, GRPO samples N independent responses {oi}Ni=1 from the old policy πθold and com-putes advantages by normalizing the corresponding rewards 
+
+{r(oi, q )}Ni=1 within the group: 
+
+ˆAi = r(oi, q ) − μσ , (2) where μ =  
+
+> PNi=1 r(oi,q )
+> N
+
+and σ2 =  
+
+> PNi=1 (r(oi,q )−μ)2
+> N−1
+
+. The resulting advantage ˆAi is broadcast to all tokens in the re-sponse, i.e., ˆAi,t = ˆAi for all token positions t.The policy is then updated by maximizing a clipped surro-2Discounted Beta–Bernoulli Reward Estimation for Sample-Efficient RLVR 
+
+gate objective based on estimated advantages: 
+
+JGRPO (θ) = Eq∼D , {oi}Ni=1 ∼πθold (·| q)
+
+"
+
+1
+
+N
+
+> N
+
+X
+
+> i=1
+
+1
+
+|oi|
+
+> |oi|
+
+X
+
+> t=1
+
+min 
+
+
+
+wi,t (θ) ˆAi,t , clip  wi,t (θ), 1 − ϵ, 1 + ϵ ˆAi,t 
+
+#
+
+,
+
+(3) where ϵ is the clipping hyperparameter and wi,t (θ) =   
+
+> πθ(oi,t |q,o i,<t )
+> πθold (oi,t |q,o i,<t )
+
+denotes the per-token importance weight. Following DAPO (Yu et al., 2025a), we omit the KL diver-gence term between the online and reference policies, as it may restrict exploration. 
+
+3. Method 
+
+Many group-based RLVR methods (Shao et al., 2024; Liu et al., 2025; Xie et al., 2025; Le et al., 2025) primarily focus on the design of advantage estimators, while paying com-paratively little attention to the more fundamental problem of reward estimation that underlies advantage computation. In practice, computational and memory constraints limit the number of sampled responses per prompt, making accurate reward estimation inherently difficult. In contrast, we introduce a new perspective that reformulates RLVR through the lens of statistical estimation (Section 3.1). Specifically, we view the reward not as a deterministic sig-nal, but as a distribution induced by the policy, and frame advantage computation as a problem of estimating this dis-tribution from finite samples. Building on this reformula-tion, we propose Discounted Beta– Bernoulli ( DBB ) reward estimation for RLVR, which estimates the non-stationary reward distribution by leveraging historical rewards (Sec-tion 3.2). Despite introducing bias, DBB reduces estimator variance and achieves lower MSE. Moreover, it fundamen-tally prevents variance collapse and preserves informative training signals (Section 3.3). 
+
+3.1. Reward Estimation as Distributional Inference 
+
+For a given prompt q ∼ D and training step η with corre-sponding epoch τ , each response generated by the policy 
+
+πθη, old produces a binary reward indicating whether the re-sponse is correct. Under our formulation, this reward is naturally modeled as a Bernoulli random variable 
+
+Xτ,i ∼ Bernoulli( pτ ) , (4) where pτ = P Xτ,i = 1 | q, π θη, old 
+
+ denotes the probability of obtaining a correct response. Within this framework, group-based RLVR algorithms such as GRPO and Dr.GRPO can be interpreted as implicitly estimating the reward distribution from a finite set of rollout samples. Given N observed rewards {Xτ,i }Ni=1 , existing approaches rely on point estimation of pτ via the empirical mean 
+
+ˆppt  
+
+> τ
+
+= 1
+
+N
+
+> N
+
+X
+
+> i=1
+
+Xτ,i . (5) The corresponding reward variance is then estimated using the sample variance, 
+
+dVar pt 
+
+(Xτ ) = 
+
+PNi=1 (Xτ,i − ˆppt  
+
+> τ
+
+)2
+
+N − 1 = N · ˆppt 
+
+> τ
+
+ 1 − ˆppt 
+
+> τ
+
+
+
+N − 1 .
+
+(6) Since the estimated variance dVar pt 
+
+is determined by the point estimator (mean) ˆppt  
+
+> τ
+
+, it suffices to consider only the point estimator in our analysis. Concretely, the point esti-mator ˆppt  
+
+> τ
+
+has expectation and variance as follows: 
+
+E[ˆ ppt  
+
+> τ
+
+| pτ ] = pτ , (7) 
+
+Var(ˆ ppt  
+
+> τ
+
+| pτ ) = pτ (1 − pτ )
+
+N . (8) While the point estimator is unbiased, its variance grows as the number of rollouts N decreases. As a result, individual rollout outcomes can exert disproportionate influence on the estimate, causing the estimator to fluctuate widely. More-over, the estimated variance can collapse to zero when all sampled rewards are identical. Since group-relative methods compute advantages directly from these reward estimates, such estimation noise naturally propagates to the advantage signal, leading to unstable policy updates. 
+
+3.2. Discounted Beta–Bernoulli Reward Estimation 
+
+To estimate the Bernoulli reward distribution beyond em-pirical averaging, we adopt a well-established Bayesian perspective that leverages the conjugacy between the Beta prior and the Bernoulli likelihood. In this setting, the reward probability is modeled using a Beta prior and updated via a Beta posterior after observing rollout outcomes, leading to the naive Beta–Bernoulli model defined below. 
+
+Definition 1 (Beta–Bernoulli Reward Model) . To model uncertainty in the Bernoulli reward distribution, we place a Beta prior over the reward probability: 
+
+pτ ∼ Beta( ατ , β τ ), (9) 
+
+where (ατ , β τ ) denote the posterior parameters for a prompt at epoch τ , with initialization α0 = β0 = 1 .Given N rollouts with Sτ successes, the posterior distribu-tion is given by: 
+
+ατ = ατ −1 + Sτ , βτ = βτ −1 + N − Sτ . (10) However, the above model assumes a stationary reward distribution. In RLVR, this assumption does not hold: due 3Discounted Beta–Bernoulli Reward Estimation for Sample-Efficient RLVR 
+
+Algorithm 1 Discounted Beta–Bernoulli Reward Estimation 
+
+input LLM policy πθ , training dataset D
+
+1: Initialize (αq
+
+> 0
+
+, β q 
+
+> 0
+
+) ← (1 , 1) ∀q ∈ D 
+
+2: for epoch τ = 1 , . . . , I do 
+
+3: for iteration = 1 , . . . , M do 
+
+4: Sample a minibatch Db ⊂ D 
+
+5: Set old policy πθold ← πθ
+
+6: for each prompt q ∈ D b do 
+
+7: Sample outputs {oi}Ni=1 
+
+> i.i.d.
+
+∼ πθold (· | q)
+
+8: Compute rewards {Xi = r(oi, q )}Ni=1 
+
+9: Update posterior parameters: 
+
+10: 
+
+αqτ ← λα qτ −1 +
+
+> N
+
+X
+
+> i=1
+
+Xi,βqτ ← λβ qτ −1 + N −
+
+> N
+
+X
+
+> i=1
+
+Xi
+
+11: Compute advantage ˆAi with (αqτ , β qτ ) and Xi
+
+12: end for 
+
+13: for update = 1 , . . . , U do 
+
+14: Update πθ by maximizing the objective (Eq. 3) 
+
+15: end for 
+
+16: end for 
+
+17: end for 
+
+to the on-policy nature of training, the policy πθ evolves over time, inducing a non-stationary reward distribution. As a result, historical observations may become outdated and should not be weighted equally with recent rollouts. To address this challenge, we introduce the Discounted Beta– 
+
+Bernoulli ( DBB ) reward model, which gradually discounts past information to estimate the reward distribution accu-rately. 
+
+Definition 2 (Discounted Beta–Bernoulli Reward Model) .
+
+Given posterior parameters (ατ −1, β τ −1) and N rollouts with Sτ successes at epoch τ , the update is defined as 
+
+ατ = λα τ −1 + Sτ , βτ = λβ τ −1 + N − Sτ , (11) 
+
+where the discount factor λ ∈ (0 , 1] controls the influence of historical observations. 
+
+Under the DBB reward model, we estimate the mean and variance of the Bernoulli reward distribution as follows: 
+
+ˆpdbb  
+
+> τ
+
+= ατ
+
+ατ + βτ
+
+, (12) 
+
+dVar dbb 
+
+(Xτ | ατ , β τ ) = ατ βτ
+
+(ατ + βτ )2 . (13) To understand the statistical behavior of the DBB estimator, we analyze its expectation and variance: 
+
+Eˆpdbb  
+
+> τ
+
+| pτ , α τ −1, β τ −1
+
+ = w μ τ −1 + (1 − w) pτ , (14) 
+
+Var  ˆpdbb  
+
+> τ
+
+| pτ , α τ −1, β τ −1
+
+ = (1 − w)2 pτ (1 − pτ )
+
+N ,
+
+(15) where μτ −1 = ατ −1   
+
+> ατ−1+βτ−1
+
+denotes the historical posterior mean and w = λ(ατ −1+βτ −1)   
+
+> λ(ατ−1+βτ−1)+ N
+
+controls the contribution of past observations. These show that the DBB estimator introduces bias through shrinkage toward the historical mean, but substantially re-duces variance relative to the point estimator (Equation (8)). Importantly, unlike estimated variance based on small-sample rollouts, the posterior variance in DBB cannot col-lapse to zero, ensuring stable and informative reward signals throughout training. Algorithm 1 summarizes the overall training procedure of the group-based RLVR algorithm with DBB. 
+
+3.3. Mean Squared Error of the DBB estimator 
+
+To assess the effectiveness of our DBB estimator in predict-ing the reward distribution, we compute its mean squared error (MSE). To make the estimator’s dependence on the underlying reward probabilities {p1, . . . , p τ }, we re-express its expectation and variance, originally formulated in terms of the posterior parameters (ατ −1, β τ −1).Based on the update defined in Equation (11), posterior parameters can be expressed as 
+
+ατ = λτ α0+
+
+> τ
+
+X
+
+> k=1
+
+λτ −kSk, β τ = λτ β0+
+
+> τ
+
+X
+
+> k=1
+
+λτ −k(N −Sk).
+
+For convenience, define the sum of the posterior parameters as Hτ :
+
+Hτ = ατ + βτ = λτ (α0 + β0) + N
+
+> τ
+
+X
+
+> k=1
+
+λτ −k. (16) Under our formulation (Equation (4)), the number of suc-cessful rollouts at epoch k satisfies Sk ∼ Binomial( N, p k).Given this, the expectation and variance of the DBB estima-tor can be written as follows: 
+
+Eˆpdbb  
+
+> τ
+
+| p1: τ
+
+ =
+
+> τ
+
+X
+
+> k=0
+
+ckpk, (17) 
+
+Var  ˆpdbb  
+
+> τ
+
+| p1: τ
+
+ =
+
+Pτk=1 λ2( τ −k)N p k(1 − pk)
+
+H2
+
+> τ
+
+, (18) where p0 = α0 
+
+> α0+β0
+
+is the reward probability of the initial prior, and the weights c0 = λτ (α0+β0) 
+
+> Hτ
+
+and ck = N λ τ −k 
+
+> Hτ
+
+are constants. A detailed derivation is provided in Appendix B. Combining Equations (17) and (18) , the MSE of the DBB estimator under non-stationary rewards is 
+
+MSE  ˆpdbb  
+
+> τ
+
+| p1: τ
+
+ =  Eˆpdbb  
+
+> τ
+
+| p1: τ
+
+ − pτ
+
+2+Var  ˆpdbb  
+
+> τ
+
+| p1: τ
+
+ .
+
+(19) 4Discounted Beta–Bernoulli Reward Estimation for Sample-Efficient RLVR 
+
+In contrast, the MSE of the point estimator depends only on the current reward distribution 
+
+MSE  ˆppt  
+
+> τ
+
+| pτ
+
+ = pτ (1 − pτ )
+
+N , (20) and is therefore more prone to high variance, especially in low-sample settings. The bias of the DBB estimator becomes smaller when the underlying reward probabilities evolve gradually, as past values {pk}k<τ remain close to the current pτ . In contrast, the variance depends on both the discount factor λ and the number of rollouts N . On the other hand, the point estimator relies solely on pτ and is therefore more susceptible to high variance, particularly in low-sample settings. Considering these factors, we empirically evaluate the resulting MSE and present the findings in Section 5.2. 
+
+4. Experiments 
+
+We empirically demonstrate that HBB estimation is effec-tive in the RLVR setting. Section 4.1 describes the models, datasets, baselines, and detailed setup used in our experi-ments, while Section 4.2 presents the experimental results. 
+
+4.1. Experimental Settings Models & Datasets. We conduct experiments on two model sizes, Qwen3-1.7B-Base and Qwen3-8B-Base (Yang et al., 2025), to investigate the effect of model scales. For both model scales, we use DAPO-Math-17k (Yu et al., 2025a) as the training dataset. As in-distribution evaluation benchmarks for mathematical reasoning, we consider six widely used datasets: MATH500 (Hendrycks et al., 2021), Minerva (Lewkowycz et al., 2022), AIME24/25, AMC24 (Li et al., 2024), and OlympiadBench (Olympiad; He et al., 2024). To further assess out-of-distribution generalization, we evaluate performance on MMLU-Pro (Wang et al., 2024), GPQA-Diamond (GPQA-D; Rein et al., 2023), and Big-Bench Hard (BBH; Suzgun et al., 2022). 
+
+Baselines. The DBB reward estimation aims to improve reward distribution estimation by partially leveraging his-torical information. To isolate the effect of DBB, we first compare GRPO with the DBB estimator (GRPO-DBB) and naive GRPO, which relies on point estimation. In addi-tion, to compare against methods that more fully exploit historical information, we include RePO as a representative method in this category. 
+
+Training & Evaluation Setups. All training experi-ments are conducted using the verl 1 framework, and 
+
+> 1https://github.com/verl-project/verl
+
+Math-Verify 2 is employed to extract and verify final answers. Experiments with Qwen3-1.7B-Base and Qwen3-8B-Base are conducted on 4 ×H200 and 8 ×H200 GPUs, respectively, except for RePO. Due to the requirement for additional GPU memory, RePO is trained on 8 ×H200 GPUs for both model scales. The rollout batch size is set to 128, and the gradient update batch size is set to 64. We sample 8 responses per query from the on-policy model and train the model for a total of four epochs. For evaluation, we sample 8 responses per query for all benchmarks and report Avg@8 as the evaluation metric. The training setup details for each baseline and the sampling parameters used for validation and evaluation are also provided in Appendix C. 
+
+4.2. Main Results 
+
+Table 1 reports Acc@8 results across six mathematical rea-soning in-distribution benchmarks and three general rea-soning out-of-distribution (OOD) benchmarks for three dif-ferent RLVR algorithms. For GRPO-DBB, the discount-ing factor λ is set to 0.5 for Qwen3-1.7B-Base and 0.75 
+
+for Qwen3-8B-Base; these values are empirically selected based on performance trends under varying λ. Further de-tails are provided in Section 5.2. For in-distribution evaluation, GRPO-DBB consistently out-performs both GRPO and RePO across all benchmarks and model scales. Compared to GRPO, Acc@8 improves by an average of 3.22 points for Qwen3-1.7B-Base and 2.42 points for Qwen3-8B-Base. This indicates that, in the RLVR setting, replacing GRPO’s point estimator with the DBB estimator is more effective for in-distribution downstream tasks. When compared to RePO, GRPO-DBB achieves improvements of 3.99 and 4.71 points for Qwen3-1.7B-Base and Qwen3-8B-Base, respectively. Although RePO leverages diverse forms of historical information, including tokens, token probabilities, and rewards, GRPO-DBB relies solely on rewards. Despite this, its strong downstream per-formance suggests that the DBB estimator utilizes historical information both efficiently and effectively. For out-of-distribution evaluation, GRPO-DBB consistently outperforms both baselines across all OOD benchmarks and model scales. In particular, it achieves substantial gains over GRPO, with improvements of 12.49 and 6.92 points for Qwen3-1.7B-Base and Qwen3-8B-Base, respectively. These results demonstrate that the DBB estimation provides a strong advantage in improving generalization, which can be attributed to the characteristic of the Bayesian approach to account for uncertainty. 
+
+> 2https://github.com/huggingface/ Math-Verify
+
+5Discounted Beta–Bernoulli Reward Estimation for Sample-Efficient RLVR 
+
+Table 1. In-distribution (ID) and out-of-distribution (OOD) evaluation results trained on DAPO-Math-17k. GRPO with the DBB process (GRPO-DBB) consistently outperforms naive GRPO across all benchmarks and model scales. ∆ denotes the absolute Acc@8 improvement of GRPO-DBB over GRPO.                                                                                                           
+
+> In-Distribution Out-of-Distribution
+> Method MATH500 Minerva AIME24 AIME25 AMC24 Olympiad Avg. MMLU-Pro GPQA-D BBH Avg.
+> Qwen3-8B-Base trained with DAPO-Math-17k
+> GRPO 88.05 39.25 30.00 26.67 56.39 54.82 49.20 50.02 42.93 59.18 50.71 RePO 86.20 35.71 27.92 22.92 56.11 52.61 46.91 53.15 43.93 42.96 46.68 GRPO-DBB 88.92 39.48 34.17 30.83 60.00 56.34 51.62 63.12 46.46 63.32 57.63
+> ∆w.r.t. GRPO +0.87 +0.23 +4.17 +4.16 +3.61 +1.52 +2.42 +13.10 +3.53 +4.14 +6.92
+> Qwen3-1.7B-Base trained with DAPO-Math-17k
+> GRPO 68.37 25.74 8.75 4.58 23.61 29.41 26.74 33.72 20.70 12.71 22.38 RePO 67.87 23.76 6.67 6.67 21.67 29.17 25.97 35.49 26.26 30.95 30.90 GRPO-DBB 71.95 26.31 14.17 7.08 26.94 33.29 29.96 40.83 29.80 33.97 34.87
+> ∆w.r.t. GRPO +3.58 +0.57 +5.42 +2.50 +3.33 +3.88 +3.22 +7.11 +9.10 +21.26 +12.49
+
+Table 2. Effect of the discount factor λ of GRPO-DBB on in-distribution Acc@8 performance. Qwen3-8B-Base achieves the best performance at λ = 0 .75 , while Qwen3-1.7B-Base performs best at λ = 0 .5.                                                                                         
+
+> Method MATH500 Minerva AIME24 AIME25 AMC24 Olympiad Avg.
+> Qwen3-8B-Base trained with DAPO 17k
+> λ= 1 .089.08 37.91 33.33 26.25 59.44 55.19 50.20
+> λ= 0 .75 88.92 39.48 34.17 30.83 60.00 56.34 51.62
+> λ= 0 .589.35 38.56 33.33 27.08 59.17 56.19 50.61
+> λ= 0 .25 88.82 39.98 30.83 25.83 60.83 56.34 50.44 GRPO 88.05 39.25 30.00 26.67 56.39 54.82 49.20
+> Qwen3-1.7B-Base trained with DAPO 17k
+> λ= 1 .067.30 25.55 9.58 3.33 23.33 28.65 26.29
+> λ= 0 .75 72.28 25.60 11.25 7.50 26.39 32.68 29.28
+> λ= 0 .571.95 26.31 14.17 7.08 26.94 33.29 29.96
+> λ= 0 .25 72.22 25.97 14.17 6.25 22.50 32.88 29.00 GRPO 68.37 25.74 8.75 4.58 23.61 29.41 26.74
+
+5. Analysis & Discussion 
+
+In this section, we provide an in-depth analysis of the train-ing behavior and estimation properties of GRPO with the DBB reward estimator. We first examine training dynamics to understand how DBB influences optimization stability, exploration behavior, and reward progression over time (Sec-tion 5.1). We then conduct ablation studies on the discount factor λ to clarify its role in adapting to different learning regimes (Section 5.2). Next, we empirically analyze the mean squared error (MSE) of DBB relative to point estima-tion, connecting estimation accuracy to downstream perfor-mance (Section 5.3). Finally, we demonstrate that DBB can be readily integrated into alternative advantage formulations, highlighting its generality beyond GRPO (Section 5.4). 
+
+5.1. Training Dynamics 
+
+Figure 2 illustrates the validation accuracy and training dy-namics of GRPO-DBB and GRPO during training. For GRPO-DBB, the discounting factor λ is set to 0.5 for Qwen3-1.7B-Base and 0.75 for Qwen3-8B-Base. For both model scales, GRPO-DBB achieves higher validation accu-racy and training rewards than GRPO throughout most of the training process. Examining the response length over the course of training, we observe that GRPO-DBB consistently produces longer responses than GRPO throughout training. In contrast, the entropy under GRPO grows rapidly, indicating increasingly unstable exploration behavior. Taken together, these obser-vations suggest that GRPO-DBB attains higher rewards by pruning the breadth of response trajectories while allowing exploration to proceed along longer trajectories, correspond-ing to depth-wise exploration. 
+
+5.2. Ablation Study on λ
+
+To examine the effect of the discount factor λ in the DBB estimation, we conduct training experiments of GRPO-DBB with λ = 1 .0, 0.75 , 0.5, and 0.25 for both model scales. The hyperparameter λ controls the extent to which the es-timation of the Bernoulli parameter pτ for a given query at epoch τ depends on historical rollout statistics, namely 
+
+ατ −1 and βτ −1. When the learning dynamics are fast and the discrepancy between pτ and pτ −1 is large, a smaller λ
+
+is generally more effective, as it places greater emphasis on recent observations and reduces estimation bias. Conversely, when the learning dynamics are slower and more stationary, a larger λ tends to yield better performance by incorporating more historical information and thereby reducing estimation variance. This behavior can be interpreted in conjunction with the training reward dynamics shown in Figure 2. For Qwen3-1.7B-Base, the training reward exhibits sustained changes throughout the training process, indicating continuously evolving estimates of pτ . In contrast, for Qwen3-8B-Base, the training reward increases rapidly during the very early stage of training (within approximately the first 0.3 epoch) and remains relatively stationary for the remainder of train-6Discounted Beta–Bernoulli Reward Estimation for Sample-Efficient RLVR 0 100 200 300 400 500                                    
+
+> Training Steps
+> 0.18
+> 0.20
+> 0.22
+> 0.24
+> 0.26
+> 0.28
+> 0.30
+> 0.32
+> Acc@8
+> Acc@8
+> GRPO
+> GRPO-DBB
+> 0100 200 300 400 500
+> Training Steps
+> 0.05
+> 0.10
+> 0.15
+> 0.20
+> 0.25
+> 0.30
+> 0.35
+> Avg. Reward
+> Avg. Reward
+> GRPO
+> GRPO-DBB
+> 0100 200 300 400 500
+> Training Steps
+> 1000
+> 1250
+> 1500
+> 1750
+> 2000
+> 2250
+> 2500
+> Response Length
+> Response Length
+> GRPO
+> GRPO-DBB
+> 0100 200 300 400 500
+> Training Steps
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> Entropy
+> Entropy
+> GRPO
+> GRPO-DBB
+> 0100 200 300 400 500
+> Training Steps
+> 0.35
+> 0.40
+> 0.45
+> 0.50
+> 0.55
+> Acc@8
+> GRPO
+> GRPO-DBB
+> 0100 200 300 400 500
+> Training Steps
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> Avg. Reward
+> GRPO
+> GRPO-DBB
+> 0100 200 300 400 500
+> Training Steps
+> 1000
+> 1500
+> 2000
+> 2500
+> 3000
+> 3500
+> 4000
+> 4500
+> 5000
+> Response Length
+> GRPO
+> GRPO-DBB
+> 0100 200 300 400 500
+> Training Steps
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> 1.2
+> Entropy
+> GRPO
+> GRPO-DBB
+> 1.7B 8B
+
+Figure 2. Training dynamics of naive GRPO and GRPO with the DBB estimator (GRPO-DBB) on Qwen3-1.7B-Base (top) and Qwen3-8B-Base (bottom). GRPO-DBB achieves higher validation Acc@8 and training rewards, while maintaining longer responses with controlled entropy compared to GRPO, indicating more stable exploration during training. 0.0 0.2 0.4 0.6 0.8 1.0           
+
+> Discounting factor
+> 0.009
+> 0.010
+> 0.011
+> 0.012
+> 0.013
+> Avg. MSE
+> (a) MSE vs (N=8)
+> GRPO GRPO-DBB
+> 24816 32 64 128
+> Number of rollouts N
+> 0.00
+> 0.01
+> 0.02
+> 0.03
+> 0.04
+> Avg. MSE
+> (b) MSE vs N ( =0.4)
+> GRPO GRPO-DBB ( =0.4)
+
+Figure 3. MSE as a function of the discount factor λ and the number of rollouts N . The DBB estimator yields lower MSE than the point estimator across a wide range of λ, and it achieves lower MSE for rollout budgets up to N = 16 when λ = 0 .4.
+
+ing. As a result, a smaller discounting factor ( λ = 0 .5) is more effective for Qwen3-1.7B-Base, while a larger value (λ = 0 .75 ) better matches the slower and more gradual learning dynamics of Qwen3-8B-Base. 
+
+5.3. Analysis of MSE 
+
+To evaluate how accurately the point estimator ˆppt 
+
+τ and the DBB estimator ˆpdb 
+
+τ approximate the Bernoulli parameter pτ
+
+during training, we conduct an empirical estimation error analysis. Since obtaining the exact ground-truth value of pτ
+
+would require infinitely many samples, we instead approx-imate it using the empirical mean of rewards from a finite number of rollouts. During GRPO training of Qwen3-1.7B-Base, when a ran-domly selected 10% subset of training prompts Qτ appears in a rollout batch, we additionally sample 128 responses for each such prompt using the policy at that training step. These additional samples are used exclusively for analysis and are not incorporated into training. We then define the empirical mean of the resulting rewards as the reference value ˜pτ (q).
+
+˜pτ (q) ≜ 1128 
+
+128 X
+
+i=1 
+
+Xτ,i , (21) where oτ,i ∼ πθτ (· | q) and Xτ,i = r(oτ,i , q ). Since train-ing is conducted for a total of four epochs, this procedure yields a sequence of reference values {˜pτ (q)}4
+
+τ =1 for each query. Using ˜pτ (q) as a surrogate for the true Bernoulli param-eter, we measure the average MSE of the DBB estimator and the point estimator following Equation (19) and (20) ,respectively. 
+
+Effect of λ on MSE Since the value of the DBB estimator depends on the discount factor λ, we empirically analyze how the MSE varies as a function of λ. As shown in Fig-ure 3(a), the MSE attains its minimum at λ = 0 .4, and for most values of λ—except for λ = 0 .95 and λ = 1 .0—the DBB estimator yields a lower average MSE than the point estimator. This trend is closely aligned with downstream performance. As reported in Table 2, GRPO-DBB achieves the best per-formance at λ = 0 .5, while at λ = 1 .0 it performs slightly worse than GRPO with the point estimator. These observa-tions mirror the behavior of the MSE across different values of λ. Taken together, the results indicate that more accurate reward distribution estimation is strongly correlated with improved RLVR performance. 7Discounted Beta–Bernoulli Reward Estimation for Sample-Efficient RLVR 
+
+Table 3. In-distribution evaluation results on Qwen3-1.7B-Base trained with DAPO-MATH-17k. We apply the proposed dis-counted Beta–Bernoulli reward distribution estimation to the ad-vantage term of Dr.GRPO and observe consistent performance improvements. ∆ denotes the absolute Acc@8 improvement over naive Dr.GRPO.                                
+
+> Method MATH500 Minerva AIME24 AIME25 AMC24 Olympiad Avg.
+> Qwen3-1.7B-Base trained with DAPO-Math-17k
+> Dr.GRPO 69.00 25.14 9.17 7.92 23.89 32.78 27.98 Dr.GRPO-DBB 70.60 26.15 12.08 9.17 28.06 33.59 29.94
+> ∆w.r.t. Dr.GRPO +1.60 +1.01 +2.92 +1.25 +4.17 +0.81 +1.96
+
+Effect of N on MSE We further examine how the MSE varies as the number of rollouts N increases. Figure 2(b) reports the average MSE as a function of N when λ = 0 .4.The results show that the DBB estimator consistently out-performs the point estimator for N up to 16. This suggests that, in regimes where computational resource constraints necessitate small rollout budgets, the DBB estimator can serve as an effective alternative to point estimation. 
+
+5.4. Evaluation on Alternative Advantage Formulations 
+
+To examine whether the DBB estimation can be applied to other advantage formulations, we conduct experiments using the advantage term of Dr.GRPO, defined as Ai =
+
+Xi − E[ˆ pτ ]. All experiments are conducted on Qwen3-1.7B-Base with the discounting factor set to λ = 0 .5 for the Dr.GRPO with the DBB estimation (Dr.GRPO-DBB). As shown in Table 3, Dr.GRPO-DBB consistently improves per-formance over the naive Dr.GRPO across all in-distribution benchmarks, yielding an average Acc@8 gain of 1.96 points. These results suggest that the DBB estimation is not limited to the advantage term of GRPO, but can be broadly applied to other RLVR algorithms that rely on point estimation, yielding effective and consistent performance gains. 
+
+6. Related Work 
+
+Reinforcement Learning with Verifiable Rewards. Re-inforcement learning with verifiable rewards (RLVR) has emerged as an effective post-training paradigm for improv-ing the reasoning capabilities of large language models by leveraging automatically verifiable reward signals (Lambert et al., 2025; Plaat et al., 2025). In particular, group-based RLVR algorithms, including GRPO and its variants (Shao et al., 2024; Yu et al., 2025a; Liu et al., 2025; Zheng et al., 2025a; Zhao et al., 2025), have demonstrated strong perfor-mance on reasoning benchmarks without relying on explicit value models (Yu et al., 2025b). 
+
+Variance Collapse in Group-Based RLVR. A well-known limitation of group-based RLVR methods is variance collapse, where the estimated reward variance becomes zero when all sampled responses receive identical rewards, elimi-nating the training signal and leading to ineffective policy updates (Yu et al., 2025a; Zheng et al., 2025b; Le et al., 2025; Zhang et al., 2025). Prior approaches such as Dy-namic sAmpling Policy Optimization (DAPO; Yu et al., 2025a) and GRESO (Zheng et al., 2025b) mitigate this issue by modifying the rollout or sampling strategy. However, these methods either incur substantial additional compu-tational cost or fail to fundamentally eliminate variance collapse due to their probabilistic or heuristic nature. In contrast, our work addresses variance collapse at the re-ward estimator level by explicitly modeling uncertainty in the reward distribution. By maintaining a Beta posterior with strictly positive parameters, the DBB process theoreti-cally prevents variance collapse without additional rollouts or changes to the sampling strategy. 
+
+Replay- and History-Based RLVR Methods. Replay-based methods aim to improve sample efficiency in RLVR by reusing historical rollouts, as exemplified by RePO (Li et al., 2025) and ExGRPO (Zhan et al., 2025). While poten-tially effective, these approaches require storing tokens and their probabilities under historical policies and performing additional forward passes, introducing non-trivial memory and computational overhead. Our approach differs in that it leverages only historical re-ward statistics rather than full trajectory information, elimi-nating the need for additional GPU memory or extra forward passes. Empirical results demonstrate that reward signals alone can effectively capture useful historical information for improving RLVR performance. 
+
+7. Conclusion 
+
+We revisited RLVR from the perspective of reward distribu-tion estimation and identified point estimation under limited rollouts as a key source of sample inefficiency and vari-ance collapse. To this end, we proposed Discounted Beta– Bernoulli (DBB) reward estimation for RLVR, which lever-ages historical reward information for accurate estimation. Although biased, the DBB estimator achieves substantially lower variance and mean squared error, theoretically avoids variance collapse, and preserves informative training signals without additional rollouts or replay. Experiments across two model scales demonstrate consistent improvements over baselines on all in-distribution and out-of-distribution bench-marks. Our findings highlight reward distribution estima-tion as a critical yet underexplored component of effective RLVR and suggest that principled estimator design offers a promising direction for improving large-scale reinforce-ment learning of language models. As future work, we plan to design a dynamic discount factor λ that adapts across different stages of training. 8Discounted Beta–Bernoulli Reward Estimation for Sample-Efficient RLVR 
+
+Impact Statements 
+
+This paper presents work whose goal is to advance the field of machine learning. There are many potential societal consequences of our work, none of which we feel must be specifically highlighted here. 
+
+References 
+
+Casella, G. and Berger, R. Statistical inference . Chapman and Hall/CRC, 2024. Gelman, A., Carlin, J. B., Stern, H. S., and Rubin, D. B. 
+
+Bayesian data analysis . Chapman and Hall/CRC, 1995. Guo, D., Yang, D., Zhang, H., Song, J., Zhang, R., Xu, R., Zhu, Q., Ma, S., Wang, P., Bi, X., et al. Deepseek-r1: In-centivizing reasoning capability in llms via reinforcement learning. arXiv preprint arXiv:2501.12948 , 2025. He, C., Luo, R., Bai, Y., Hu, S., Thai, Z. L., Shen, J., Hu, J., Han, X., Huang, Y., Zhang, Y., Liu, J., Qi, L., Liu, Z., and Sun, M. Olympiadbench: A challeng-ing benchmark for promoting agi with olympiad-level bilingual multimodal scientific problems, 2024. URL 
+
+https://arxiv.org/abs/2402.14008 .Hendrycks, D., Burns, C., Kadavath, S., Arora, A., Basart, S., Tang, E., Song, D., and Steinhardt, J. Measuring math-ematical problem solving with the math dataset, 2021. URL https://arxiv.org/abs/2103.03874 .Lambert, N., Morrison, J., Pyatkin, V., Huang, S., Ivison, H., Brahman, F., Miranda, L. J. V., Liu, A., Dziri, N., Lyu, S., Gu, Y., Malik, S., Graf, V., Hwang, J. D., Yang, J., Bras, R. L., Tafjord, O., Wilhelm, C., Soldaini, L., Smith, N. A., Wang, Y., Dasigi, P., and Hajishirzi, H. Tulu 3: Pushing frontiers in open language model post-training, 2025. URL https://arxiv.org/abs/2411.15124 .Le, T.-L. V., Jeon, M., Vu, K., Lai, V., and Yang, E. No prompt left behind: Exploiting zero-variance prompts in llm reinforcement learning via entropy-guided advantage shaping, 2025. URL https://arxiv.org/abs/ 2509.21880 .Lewkowycz, A., Andreassen, A., Dohan, D., Dyer, E., Michalewski, H., Ramasesh, V., Slone, A., Anil, C., Schlag, I., Gutman-Solo, T., Wu, Y., Neyshabur, B., Gur-Ari, G., and Misra, V. Solving quantitative rea-soning problems with language models, 2022. URL 
+
+https://arxiv.org/abs/2206.14858 .Li, J., Beeching, E., Tunstall, L., Lipkin, B., Soletskyi, R., Huang, S., Rasul, K., Yu, L., Jiang, A. Q., Shen, Z., et al. Numinamath: The largest public dataset in ai4maths with 860k pairs of competition math problems and solutions. 
+
+Hugging Face repository , 13(9):9, 2024. Li, S., Zhou, Z., Lam, W., Yang, C., and Lu, C. Repo: Replay-enhanced policy optimization, 2025. URL 
+
+https://arxiv.org/abs/2506.09340 .Liu, Z., Chen, C., Li, W., Qi, P., Pang, T., Du, C., Lee, W. S., and Lin, M. Understanding r1-zero-like training: A critical perspective, 2025. URL https://arxiv. org/abs/2503.20783 .Plaat, A., Wong, A., Verberne, S., Broekens, J., van Stein, N., and Back, T. Multi-step reasoning with large language models, a survey, 2025. URL https://arxiv.org/ abs/2407.11511 .Rein, D., Hou, B. L., Stickland, A. C., Petty, J., Pang, R. Y., Dirani, J., Michael, J., and Bowman, S. R. Gpqa: A graduate-level google-proof q&a benchmark, 2023. URL 
+
+https://arxiv.org/abs/2311.12022 .Schulman, J., Wolski, F., Dhariwal, P., Radford, A., and Klimov, O. Proximal policy optimization algo-rithms, 2017. URL https://arxiv.org/abs/ 1707.06347 .Shao, Z., Wang, P., Zhu, Q., Xu, R., Song, J., Bi, X., Zhang, H., Zhang, M., Li, Y., Wu, Y., et al. Deepseekmath: Push-ing the limits of mathematical reasoning in open language models. arXiv preprint arXiv:2402.03300 , 2024. Suzgun, M., Scales, N., Sch ¨arli, N., Gehrmann, S., Tay, Y., Chung, H. W., Chowdhery, A., Le, Q. V., Chi, E. H., Zhou, D., and Wei, J. Challenging big-bench tasks and whether chain-of-thought can solve them, 2022. URL 
+
+https://arxiv.org/abs/2210.09261 .Wang, Y., Ma, X., Zhang, G., Ni, Y., Chandra, A., Guo, S., Ren, W., Arulraj, A., He, X., Jiang, Z., Li, T., Ku, M., Wang, K., Zhuang, A., Fan, R., Yue, X., and Chen, W. Mmlu-pro: A more robust and challenging multi-task language understanding benchmark, 2024. URL 
+
+https://arxiv.org/abs/2406.01574 .Xie, C., Pan, R., Wu, X., Zhang, Y., Fu, J., Gao, T., and Zhou, G. Unlocking exploration in rlvr: Uncertainty-aware advantage shaping for deeper reasoning. arXiv preprint arXiv:2510.10649 , 2025. Yang, A., Li, A., Yang, B., Zhang, B., Hui, B., Zheng, B., Yu, B., Gao, C., Huang, C., Lv, C., Zheng, C., Liu, D., Zhou, F., Huang, F., Hu, F., Ge, H., Wei, H., Lin, H., Tang, J., Yang, J., Tu, J., Zhang, J., Yang, J., Yang, J., Zhou, J., Zhou, J., Lin, J., Dang, K., Bao, K., Yang, K., Yu, L., Deng, L., Li, M., Xue, M., Li, M., Zhang, P., Wang, P., Zhu, Q., Men, R., Gao, R., Liu, S., Luo, S., Li, T., Tang, T., Yin, W., Ren, X., Wang, X., Zhang, X., Ren, X., Fan, Y., Su, Y., Zhang, Y., Zhang, Y., Wan, Y., Liu, Y., Wang, Z., Cui, Z., Zhang, Z., Zhou, Z., and 9Discounted Beta–Bernoulli Reward Estimation for Sample-Efficient RLVR 
+
+Qiu, Z. Qwen3 technical report, 2025. URL https: //arxiv.org/abs/2505.09388 .Yu, Q., Zhang, Z., Zhu, R., Yuan, Y., Zuo, X., Yue, Y., Dai, W., Fan, T., Liu, G., Liu, L., Liu, X., Lin, H., Lin, Z., Ma, B., Sheng, G., Tong, Y., Zhang, C., Zhang, M., Zhang, W., Zhu, H., Zhu, J., Chen, J., Chen, J., Wang, C., Yu, H., Song, Y., Wei, X., Zhou, H., Liu, J., Ma, W.-Y., Zhang, Y.-Q., Yan, L., Qiao, M., Wu, Y., and Wang, M. Dapo: An open-source llm reinforcement learning system at scale, 2025a. URL https://arxiv.org/abs/ 2503.14476 .Yu, T., Ji, B., Wang, S., Yao, S., Wang, Z., Cui, G., Yuan, L., Ding, N., Yao, Y., Liu, Z., Sun, M., and Chua, T.-S. Rlpr: Extrapolating rlvr to general domains without verifiers, 2025b. URL https://arxiv.org/abs/ 2506.18254 .Zhan, R., Li, Y., Wang, Z., Qu, X., Liu, D., Shao, J., Wong, D. F., and Cheng, Y. Exgrpo: Learning to reason from experience, 2025. URL https://arxiv.org/abs/ 2510.02245 .Zhang, Y., Yao, W., Yu, C., Liu, Y., Yin, Q., Yin, B., Yun, H., and Li, L. Improving sampling efficiency in rlvr through adaptive rollout and response reuse. arXiv preprint arXiv:2509.25808 , 2025. Zhao, Y., Liu, Y., Liu, J., Chen, J., Wu, X., Hao, Y., Lv, T., Huang, S., Cui, L., Ye, Q., Wan, F., and Wei, F. Geometric-mean policy optimization, 2025. URL 
+
+https://arxiv.org/abs/2507.20673 .Zheng, C., Liu, S., Li, M., Chen, X.-H., Yu, B., Gao, C., Dang, K., Liu, Y., Men, R., Yang, A., Zhou, J., and Lin, J. Group sequence policy optimization, 2025a. URL 
+
+https://arxiv.org/abs/2507.18071 .Zheng, H., Zhou, Y., Bartoldson, B. R., Kailkhura, B., Lai, F., Zhao, J., and Chen, B. Act only when it pays: Efficient reinforcement learning for llm reasoning via selective rollouts, 2025b. URL https://arxiv.org/abs/ 2506.02177 .10 Discounted Beta–Bernoulli Reward Estimation for Sample-Efficient RLVR 
+
+A. Comparison of Statistics Between Point Estimation and Discounted Beta–Bernoulli Estimation 
+
+We present Table 4 that summarizes the statistics of point estimation and Discounted Beta–Bernoulli estimation, as discussed in Sections 3.1 and 3.2, in a concise and accessible manner. 
+
+Table 4. Comparison between point estimation and DBB estimation for reward distribution modeling. We denote the Bernoulli distribution by Bern( ·).
+
+Point Estimation DBB Estimation 
+
+Xτ,i Xτ,i ∼ Bern( pτ ) Xτ,i ∼ Bern( pτ )
+
+pτ fixed but unknown pτ ∼ Beta( ατ , β τ )ˆpτ ˆppt  
+
+> τ
+
+= 1
+
+N
+
+> N
+
+X
+
+> i=1
+
+Xτ,i ˆpdb  
+
+> τ
+
+= ατ
+
+ατ + βτ
+
+dVar( Xτ ) NN − 1 ˆppt 
+
+> τ
+
+ 1 − ˆppt 
+
+> τ
+
+ ˆpdb 
+
+> τ
+
+ 1 − ˆpdb 
+
+> τ
+
+
+
+E[ˆ pτ ] pτ wμ τ −1 + (1 − w)pτ
+
+Bias(ˆ pτ ) 0 w(μτ −1 − pτ )Var(ˆ pτ ) pτ (1 − pτ )
+
+N (1 − w)2 pτ (1 − pτ )
+
+N
+
+B. Derivation of the Mean, Variance, and MSE of the DBB Estimator 
+
+In this section, we provide a detailed derivation of Equations (17) and (18) in the main text. To avoid ambiguity caused by implicit conditioning, we re-express the analysis in terms of the conditional distribution given the sequence of true reward probabilities {p1, p 2, . . . , p τ }.
+
+B.1. Expansion of Posterior Parameters under Historical Rewards 
+
+At each training step k, rollout rewards satisfy 
+
+Sk | pk ∼ Binomial( N, p k), Xk,i | pk ∼ Bernoulli( pk), (22) and the DBB updates are given by 
+
+αk = λα k−1 + Sk, βk = λβ k−1 + ( N − Sk). (23) Unrolling the recursion yields 
+
+ατ = λτ α0 +
+
+> τ
+
+X
+
+> k=1
+
+λτ −kSk, (24) and the total mass 
+
+Hτ ≜ ατ + βτ = λτ (α0 + β0) + N
+
+> τ
+
+X
+
+> k=1
+
+λτ −k. (25) Crucially, when N and λ are fixed, Hτ is deterministic and does not depend on the random variables {Sk}τk=1 . All stochasticity in the estimator arises from ατ alone. 11 Discounted Beta–Bernoulli Reward Estimation for Sample-Efficient RLVR 
+
+B.2. Mean of the DBB Estimator 
+
+The DBB estimator is defined as 
+
+ˆpdbb  
+
+> τ
+
+= ατ
+
+Hτ
+
+. (26) Since Hτ is deterministic, 
+
+Eˆpdbb  
+
+> τ
+
+| p1: τ
+
+ = E[ατ | p1: τ ]
+
+Hτ
+
+. (27) Using E[Sk | pk] = N p k, we obtain 
+
+E[ατ | p1: τ ] = λτ α0 + N
+
+> τ
+
+X
+
+> k=1
+
+λτ −kpk. (28) Therefore, 
+
+Eˆpdbb  
+
+> τ
+
+| p1: τ
+
+ = λτ α0 + N Pτk=1 λτ −kpk
+
+λτ (α0 + β0) + N Pτk=1 λτ −k (29) For interpretability, define weights 
+
+c0 ≜ λτ (α0 + β0)
+
+Hτ
+
+, ck ≜ N λ τ −k
+
+Hτ
+
+, k = 1 , . . . , τ, p0 ≜ α0
+
+α0 + β0
+
+. (30) Then the estimator mean can be written as 
+
+Eˆpdbb  
+
+> τ
+
+| p1: τ
+
+ =
+
+> τ
+
+X
+
+> k=0
+
+ckpk,
+
+> τ
+
+X
+
+> k=0
+
+ck = 1 , (31) revealing an exponentially weighted average of historical reward probabilities. 
+
+B.3. Variance of the DBB Estimator 
+
+Again using the determinism of Hτ ,
+
+Var  ˆpdbb  
+
+> τ
+
+| p1: τ
+
+ = Var( ατ | p1: τ )
+
+H2
+
+> τ
+
+. (32) Since {Sk} are independent conditioned on {pk} and Var( Sk | pk) = N p k(1 − pk),
+
+Var( ατ | p1: τ ) = 
+
+> τ
+
+X
+
+> k=1
+
+λ2( τ −k)N p k(1 − pk). (33) Hence, 
+
+Var  ˆpdbb  
+
+> τ
+
+| p1: τ
+
+ =
+
+Pτk=1 λ2( τ −k)N p k(1 − pk)(λτ (α0 + β0) + N Pτk=1 λτ −k)2 (34) 
+
+B.4. Bias and Mean Squared Error of the DBB Estimator 
+
+By definition, 
+
+MSE  ˆpdbb  
+
+> τ
+
+| p1: τ
+
+ = Bias 2 + Var . (35) Using Eq. (31), the conditional bias is 
+
+Bias  ˆpdbb  
+
+> τ
+
+| p1: τ
+
+ = 
+
+> τ−1
+
+X
+
+> k=0
+
+ck(pk − pτ ), (36) where the k = τ term vanishes since pτ − pτ = 0 .12 Discounted Beta–Bernoulli Reward Estimation for Sample-Efficient RLVR 
+
+Combining Eqs. (34) and (36), we obtain 
+
+MSE  ˆpdbb  
+
+> τ
+
+| p1: τ
+
+ = 
+
+> τ−1
+
+X
+
+> k=0
+
+ck(pk − pτ )
+
+!2
+
++
+
+Pτk=1 λ2( τ −k)N p k(1 − pk)
+
+H2
+
+> τ
+
+, (37) where Hτ = λτ (α0 + β0) + N Pτk=1 λτ −k.
+
+C. Implementation Details                                    
+
+> Table 5. Common Training hyperparameter settings for all experiments.
+> Hyperparameter Qwen3-1.7B-Base Qwen3-8B-Base Training Configuration
+> Training batch size 128 128 Mini-batch size 64 64 Number of epochs 44Total gradient steps 1080 1080 Samples per prompt 88Max response length 4096 8192
+> Sampling Configuration
+> Training temperature 1.0 1.0 Training top-p1.0 1.0 Validation temperature 0.6 0.6 Validation top-p0.95 0.95
+> Optimization
+> Optimizer AdamW AdamW Learning rate 1×10 −61×10 −6
+> LR warmup steps 00LR scheduler constant constant
+
+In this section, we describe the experimental setup details for the RLVR algorithm with the DBB process (RLVR-DBB) and all baseline methods. All training experiments are conducted using the verl framework, and Math-Verify is employed to extract and normalize final answers from model responses. Training Qwen3-1.7B-Base is performed using 4 ×H200 GPUs, while Qwen3-8B-Base is trained using 8 ×H200 GPUs. Due to its substantially higher GPU memory requirements, RePO is trained using 8 ×H200 GPUs for both model scales. All training experiments are conducted using the DAPO-Math-17k dataset. For training stability, we filter prompts to a maximum length of 1024 tokens. In addition, to facilitate analysis, we further restrict the dataset so that its size is an integer multiple of the rollout batch size, which is 128. As a result, out of the original 17,391 prompts, 17,280 are used for training. The hyperparameters shared across all training experiments are summarized in Table 5. Our experimental setup follows configurations that are most commonly adopted in recent RLVR studies. Following DAPO, we remove the KL regularization term during training. In addition, under the clip-higher strategy, we use a clipping range of (clip low , clip high ) = (0 .2, 0.28) 
+
+for all methods except RLVR-DBB. For RLVR-DBB, the importance ratios tend to be larger than those of naive methods. As a result, using the same clipping range would cause a substantially larger fraction of meaningful update signals to be clipped. To avoid overly aggressive clipping, we therefore adopt a wider clipping range of (0 .98 , 0.98) specifically for RLVR-DBB. For RePO, which introduces additional hyperparameters and configuration options, we follow the optimal settings recom-mended in the original paper. Specifically, we set the number of replay samples to 8, use a replay cache size of 16, and adopt the reward-oriented replay strategy. For both evaluation and validation, we use the sampling parameters specified in Table 5. To reduce training overhead, the validation set is restricted to AIME24/25, AMC24, Minerva, and MATH500. Evaluation on OlympiadBench and the out-of-distribution benchmarks (MMLU-Pro, GPQA-Diamond, and Big-Bench Hard) is performed only on the best 13 Discounted Beta–Bernoulli Reward Estimation for Sample-Efficient RLVR 
+
+checkpoint selected for each experiment. 14
