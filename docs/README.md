@@ -6,100 +6,76 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-03-20
-- 运行时间：2026-03-20 19:23:39 UTC
+- 最新运行日期：2026-03-21
+- 运行时间：2026-03-21 19:05:53 UTC
 - 运行状态：成功
-- 本次总论文数：26
-- 精读区：15
+- 本次总论文数：18
+- 精读区：7
 - 速读区：11
 
 ### 今日简报（AI）
-今日深挖 26 篇 AI 论文，重点攻克强化学习中的技能进化与多轮智能体训练难题。
-满分论文 ARISE 与 SLEA-RL 分别通过分层技能演化和步级经验增强，刷新了复杂任务下智能体的推理上限。
-建议关注多模态模型在建筑设计及自动化工具编排中的落地潜力。
-- 详情：[/202603/20/README](/202603/20/README)
+今日精选 18 篇前沿论文，重点聚焦 SQL 智能体反馈优化与强化学习的稳定性提升。
+SQL-ASTRA 通过列集匹配解决数据库交互中的反馈稀疏难题，而 MHPO 则为复杂环境下的策略优化提供了风险感知保障。
+建议关注多模态 VLM 在推荐领域的语义表达，以及 GRPO 算法如何实现从稀疏到稠密的反馈演进。
+- 详情：[/202603/21/README](/202603/21/README)
 
 ### 精读区论文标签
-1. [ARISE: Agent Reasoning with Intrinsic Skill Evolution in Hierarchical Reinforcement Learning](/202603/20/2603.16060v2-arise-agent-reasoning-with-intrinsic-skill-evolution-in-hierarchical-reinforcement-learning)  
-   标签：评分：10.0/10、query:rlaif
-   evidence：用于大模型推理和技能演化的分层强化学习
-2. [SLEA-RL: Step-Level Experience Augmented Reinforcement Learning for Multi-Turn Agentic Training](/202603/20/2603.18079v1-slea-rl-step-level-experience-augmented-reinforcement-learning-for-multi-turn-agentic-training)  
-   标签：评分：10.0/10、query:rlaif
-   evidence：针对多轮智能体训练的步级经验增强强化学习
-3. [Discounted Beta--Bernoulli Reward Estimation for Sample-Efficient Reinforcement Learning with Verifiable Rewards](/202603/20/2603.18444v1-discounted-beta--bernoulli-reward-estimation-for-sample-efficient-reinforcement-learning-with-verifiable-rewards)  
-   标签：评分：10.0/10、query:rlaif
-   evidence：用于大模型后训练的可验证奖励强化学习
-4. [AcceRL: A Distributed Asynchronous Reinforcement Learning and World Model Framework for Vision-Language-Action Models](/202603/20/2603.18464v1-accerl-a-distributed-asynchronous-reinforcement-learning-and-world-model-framework-for-vision-language-action-models)  
-   标签：评分：10.0/10、query:rlaif
-   evidence：视觉-语言-动作(VLA)模型的强化学习框架
-5. [HISR: Hindsight Information Modulated Segmental Process Rewards For Multi-turn Agentic Reinforcement Learning](/202603/20/2603.18683v1-hisr-hindsight-information-modulated-segmental-process-rewards-for-multi-turn-agentic-reinforcement-learning)  
-   标签：评分：10.0/10、query:rlaif
-   evidence：针对大语言模型多轮智能体强化学习的分段过程奖励
-6. [Are complicated loss functions necessary for teaching LLMs to reason?](/202603/20/2603.18756v1-are-complicated-loss-functions-necessary-for-teaching-llms-to-reason)  
-   标签：评分：10.0/10、query:rlaif
-   evidence：对GRPO及大模型推理后训练技术的分析
-7. [Automatic Configuration of LLM Post-Training Pipelines](/202603/20/2603.18773v1-automatic-configuration-of-llm-post-training-pipelines)  
-   标签：评分：10.0/10、query:rlaif
-   evidence：结合SFT和强化学习的LLM后训练流水线自动配置
-8. [ProRL Agent: Rollout-as-a-Service for RL Training of Multi-Turn LLM Agents](/202603/20/2603.18815v1-prorl-agent-rollout-as-a-service-for-rl-training-of-multi-turn-llm-agents)  
-   标签：评分：10.0/10、query:rlaif
-   evidence：用于多轮大模型智能体强化学习训练的基础设施
-9. [RewardFlow: Topology-Aware Reward Propagation on State Graphs for Agentic RL with Large Language Models](/202603/20/2603.18859v1-rewardflow-topology-aware-reward-propagation-on-state-graphs-for-agentic-rl-with-large-language-models)  
-   标签：评分：10.0/10、query:rlaif
-   evidence：利用强化学习提升大模型的智能体推理能力
-10. [Process Supervision for Chain-of-Thought Reasoning via Monte Carlo Net Information Gain](/202603/20/2603.17815v1-process-supervision-for-chain-of-thought-reasoning-via-monte-carlo-net-information-gain)  
+1. [SQL-ASTRA: Alleviating Sparse Feedback in Agentic SQL via Column-Set Matching and Trajectory Aggregation](/202603/21/2603.16161v1-sql-astra-alleviating-sparse-feedback-in-agentic-sql-via-column-set-matching-and-trajectory-aggregation)  
    标签：评分：9.0/10、query:rlaif
-   evidence：为多步推理过程监督自动生成步骤级标签
-11. [Enhancing Reinforcement Learning Fine-Tuning with an Online Refiner](/202603/20/2603.18088v1-enhancing-reinforcement-learning-fine-tuning-with-an-online-refiner)  
+   evidence：SQL智能体强化学习中的多轮信用分配
+2. [MHPO: Modulated Hazard-aware Policy Optimization for Stable Reinforcement Learning](/202603/21/2603.16929v1-mhpo-modulated-hazard-aware-policy-optimization-for-stable-reinforcement-learning)  
    标签：评分：9.0/10、query:rlaif
-   evidence：稳定大模型的强化学习微调(RFT)
-12. [Insight-V++: Towards Advanced Long-Chain Visual Reasoning with Multimodal Large Language Models](/202603/20/2603.18118v1-insight-v-towards-advanced-long-chain-visual-reasoning-with-multimodal-large-language-models)  
+   evidence：改进 GRPO 策略优化的稳定性和梯度保真度
+3. [Retrieval-Augmented LLM Agents: Learning to Learn from Experience](/202603/21/2603.18272v1-retrieval-augmented-llm-agents-learning-to-learn-from-experience)  
    标签：评分：9.0/10、query:rlaif
-   evidence：多模态大语言模型的多智能体视觉推理
-13. [PowerFlow: Unlocking the Dual Nature of LLMs via Principled Distribution Matching](/202603/20/2603.18363v1-powerflow-unlocking-the-dual-nature-of-llms-via-principled-distribution-matching)  
+   evidence：训练检索增强的大模型智能体
+4. [Learning to Reason with Curriculum I: Provable Benefits of Autocurriculum](/202603/21/2603.18325v1-learning-to-reason-with-curriculum-i-provable-benefits-of-autocurriculum)  
    标签：评分：9.0/10、query:rlaif
-   evidence：针对大语言模型的无监督内部反馈强化学习 (RLIF)
-14. [Learning to Self-Evolve](/202603/20/2603.18620v1-learning-to-self-evolve)  
+   evidence：大模型后训练与强化学习中的自动课程学习
+5. [Balanced Thinking: Improving Chain of Thought Training in Vision Language Models](/202603/21/2603.18656v1-balanced-thinking-improving-chain-of-thought-training-in-vision-language-models)  
    标签：评分：9.0/10、query:rlaif
-   evidence：用于LLM迭代上下文优化的强化学习框架
-15. [Context Bootstrapped Reinforcement Learning](/202603/20/2603.18953v1-context-bootstrapped-reinforcement-learning)  
+   evidence：视觉语言模型多模态推理的强化学习与微调
+6. [Memento-Skills: Let Agents Design Agents](/202603/21/2603.18743v1-memento-skills-let-agents-design-agents)  
    标签：评分：9.0/10、query:rlaif
-   evidence：用于推理任务的上下文引导强化学习
+   evidence：基于记忆强化学习的LLM智能体系统
+7. [VEPO: Variable Entropy Policy Optimization for Low-Resource Language Foundation Models](/202603/21/2603.19152v1-vepo-variable-entropy-policy-optimization-for-low-resource-language-foundation-models)  
+   标签：评分：9.0/10、query:rlaif
+   evidence：利用强化学习进行大语言模型对齐的策略优化
 
 ### 速读区论文标签
-1. [One Supervisor, Many Modalities: Adaptive Tool Orchestration for Autonomous Queries](/202603/20/2603.11545v1-one-supervisor-many-modalities-adaptive-tool-orchestration-for-autonomous-queries)  
+1. [A Robust and Efficient Multi-Agent Reinforcement Learning Framework for Traffic Signal Control](/202603/21/2603.12096v1-a-robust-and-efficient-multi-agent-reinforcement-learning-framework-for-traffic-signal-control)  
    标签：评分：8.0/10、query:rlaif
-   evidence：用于自主多模态查询处理的智能体框架
-2. [One Supervisor, Many Modalities: Adaptive Tool Orchestration for Autonomous Queries](/202603/20/2603.11545v2-one-supervisor-many-modalities-adaptive-tool-orchestration-for-autonomous-queries)  
+   evidence：用于自主交通智能体的多智能体强化学习
+2. [VLM4Rec: Multimodal Semantic Representation for Recommendation with Large Vision-Language Models](/202603/21/2603.12625v1-vlm4rec-multimodal-semantic-representation-for-recommendation-with-large-vision-language-models)  
    标签：评分：8.0/10、query:rlaif
-   evidence：用于自主多模态查询处理和工具编排的智能体框架
-3. [Tokenization Allows Multimodal Large Language Models to Understand, Generate and Edit Architectural Floor Plans](/202603/20/2603.11640v1-tokenization-allows-multimodal-large-language-models-to-understand-generate-and-edit-architectural-floor-plans)  
+   evidence：利用大视觉语言模型进行多模态语义表示
+3. [From Sparse to Dense: Multi-View GRPO for Flow Models via Augmented Condition Space](/202603/21/2603.12648v1-from-sparse-to-dense-multi-view-grpo-for-flow-models-via-augmented-condition-space)  
    标签：评分：8.0/10、query:rlaif
-   evidence：建筑平面图理解中的多模态对齐
-4. [XSkill: Continual Learning from Experience and Skills in Multimodal Agents](/202603/20/2603.12056v2-xskill-continual-learning-from-experience-and-skills-in-multimodal-agents)  
+   evidence：用于流模型偏好对齐的多视图GRPO算法
+4. [Continual Learning in Large Language Models: Methods, Challenges, and Opportunities](/202603/21/2603.12658v1-continual-learning-in-large-language-models-methods-challenges-and-opportunities)  
    标签：评分：8.0/10、query:rlaif
-   evidence：多模态智能体在复杂推理中的持续学习
-5. [NFPO: Stabilized Policy Optimization of Normalizing Flow for Robotic Policy Learning](/202603/20/2603.11470v1-nfpo-stabilized-policy-optimization-of-normalizing-flow-for-robotic-policy-learning)  
+   evidence：大语言模型持续对齐与微调的综述
+5. [RoboStereo: Dual-Tower 4D Embodied World Models for Unified Policy Optimization](/202603/21/2603.12639v1-robostereo-dual-tower-4d-embodied-world-models-for-unified-policy-optimization)  
    标签：评分：7.0/10、query:rlaif
-   evidence：使用深度强化学习的机器人策略学习
-6. [STAIRS-Former: Spatio-Temporal Attention with Interleaved Recursive Structure Transformer for Offline Multi-task Multi-agent Reinforcement Learning](/202603/20/2603.11691v1-stairs-former-spatio-temporal-attention-with-interleaved-recursive-structure-transformer-for-offline-multi-task-multi-agent-reinforcement-learning)  
+   evidence：用于统一策略优化的跨模态世界模型
+6. [MetaKE: Meta-learning Aligned Knowledge Editing via Bi-level Optimization](/202603/21/2603.12677v1-metake-meta-learning-aligned-knowledge-editing-via-bi-level-optimization)  
    标签：评分：7.0/10、query:rlaif
-   evidence：具有时空注意力的多智能体强化学习
-7. [Taming the Adversary: Stable Minimax Deep Deterministic Policy Gradient via Fractional Objectives](/202603/20/2603.12110v1-taming-the-adversary-stable-minimax-deep-deterministic-policy-gradient-via-fractional-objectives)  
+   evidence：大语言模型知识编辑的双层优化
+7. [MetaKE: Meta-learning Aligned Knowledge Editing via Bi-level Optimization](/202603/21/2603.12677v2-metake-meta-learning-aligned-knowledge-editing-via-bi-level-optimization)  
    标签：评分：7.0/10、query:rlaif
-   evidence：用于鲁棒自主智能体的极小极大深度确定性策略梯度
-8. [$Ψ_0$: An Open Foundation Model Towards Universal Humanoid Loco-Manipulation](/202603/20/2603.12263v1-0-an-open-foundation-model-towards-universal-humanoid-loco-manipulation)  
+   evidence：通过双层优化进行LLM知识编辑
+8. [AI Planning Framework for LLM-Based Web Agents](/202603/21/2603.12710v1-ai-planning-framework-for-llm-based-web-agents)  
    标签：评分：7.0/10、query:rlaif
-   evidence：为人型机器人运动控制预训练视觉语言模型骨干
-9. [Exploiting Expertise of Non-Expert and Diverse Agents in Social Bandit Learning: A Free Energy Approach](/202603/20/2603.11757v1-exploiting-expertise-of-non-expert-and-diverse-agents-in-social-bandit-learning-a-free-energy-approach)  
+   evidence：基于大语言模型的自主网络智能体规划框架
+9. [FastDSAC: Unlocking the Potential of Maximum Entropy RL in High-Dimensional Humanoid Control](/202603/21/2603.12612v1-fastdsac-unlocking-the-potential-of-maximum-entropy-rl-in-high-dimensional-humanoid-control)  
    标签：评分：6.0/10、query:rlaif
-   evidence：个体强化学习智能体的社会老虎机学习
-10. [Prototype-Based Knowledge Guidance for Fine-Grained Structured Radiology Reporting](/202603/20/2603.11938v1-prototype-based-knowledge-guidance-for-fine-grained-structured-radiology-reporting)  
+   evidence：最大熵强化学习与策略梯度控制
+10. [Beyond Imitation: Reinforcement Learning Fine-Tuning for Adaptive Diffusion Navigation Policies](/202603/21/2603.12868v1-beyond-imitation-reinforcement-learning-fine-tuning-for-adaptive-diffusion-navigation-policies)  
    标签：评分：6.0/10、query:rlaif
-   evidence：利用LLM构建与结构化报告对齐的多模态知识库
-11. [Automatic Generation of High-Performance RL Environments](/202603/20/2603.12145v1-automatic-generation-of-high-performance-rl-environments)  
+   evidence：导航智能体的强化学习微调
+11. [From Gradients to Riccati Geometry: Kalman World Models for Single-Pass Learning](/202603/21/2603.13423v1-from-gradients-to-riccati-geometry-kalman-world-models-for-single-pass-learning)  
    标签：评分：6.0/10、query:rlaif
-   evidence：自动生成强化学习环境
+   evidence：大语言模型的无梯度训练与自适应
 
 
 <div class="dpr-home-promo-card">

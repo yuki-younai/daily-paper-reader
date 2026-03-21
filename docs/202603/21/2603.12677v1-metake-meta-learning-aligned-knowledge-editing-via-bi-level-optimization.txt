@@ -1,0 +1,1181 @@
+Title: MetaKE: Meta-learning Aligned Knowledge Editing via Bi-level Optimization
+
+URL Source: https://arxiv.org/pdf/2603.12677v1
+
+Published Time: Mon, 16 Mar 2026 00:32:12 GMT
+
+Number of Pages: 17
+
+Markdown Content:
+# MetaKE: Meta-learning Aligned Knowledge Editing via Bi-level Optimization 
+
+Shuxin Liu 
+
+liushuxin25@mails.ucas.ac.cn 
+
+Ou Wu ∗
+
+wuou@ucas.ac.cn 
+
+Hangzhou Institute for Advanced Study University of Chinese Academy of Sciences Hangzhou 310024, China 
+
+## Abstract 
+
+Knowledge editing (KE) aims to precisely rectify specific knowledge in Large Language Models (LLMs) without disrupting general capabilities. State-of-the-art methods suffer from an open-loop control mismatch. We identify a critical 
+
+“Semantic-Execution Disconnect” : the semantic target is derived independently without feedback from the downstream’s feasible region. This misalignment of-ten causes valid semantic targets to fall within the prohibited space, resulting in gradient truncation and editing failure. To bridge this gap, we propose MetaKE 
+
+(Meta -learning Aligned Knowledge Editing), a new framework that reframes KE as a bi-level optimization problem. Departing from static calculation, MetaKE treats the edit target as a learnable meta-parameter: the upper-level optimizer seeks a feasible target to maximize post-edit performance, while the lower-level solver executes the editing. To address the challenge of differentiating through complex solvers, we derive a Structural Gradient Proxy , which explicitly backpropagates editability constraints to the target learning phase. Theoretical analysis demon-strates that MetaKE automatically aligns the edit direction with the model’s feasible manifold. Extensive experiments confirm that MetaKE significantly outperforms strong baselines, offering a new perspective on knowledge editing. 
+
+## 1 Introduction 
+
+Large language models (LLMs) have become a core substrate for modern NLP systems [ 1– 3], yet their parametric memory inevitably contains factual errors and outdated knowledge [ 4– 6]. Knowl-edge editing (KE) aims to rectify a set of targeted behaviors while preserving the model’s general capabilities [ 7 , 8]. Despite substantial progress, reliable editing under strong constraints remains elusive: edits that succeed semantically may still fail physically, and improvements in edit success often come at the expense of locality or stability [9, 10]. Dominant KE methods such as ROME [ 11 ], MEMIT [ 12 ], and AlphaEdit [ 13 ] follow a decoupled 
+
+Compute-then-Solve routine: a Semantic Planning stage first produces a semantic target v∗, and a 
+
+Editing Execution stage then solves a constrained least-squares update to realize this target in weights. We identify a fundamental limitation of this open-loop design, termed the Semantic-Execution Disconnect : v∗ is optimized without awareness of the preservation constraints enforced by the downstream [ 14 ]. Modern solvers preserve memories by suppressing sensitive update directions, e.g., via inverse-covariance regularization (MEMIT) or orthogonal projections (AlphaEdit). When the semantically ideal v∗ demands movement along these protected directions, the solver must dampen 
+
+> ∗
+
+Corresponding author. Preprint. 
+
+> arXiv:2603.12677v1 [cs.CL] 13 Mar 2026
+
+or truncate the effective update, causing the executed edit to deviate from v∗ and potentially fail. This reveals an implicit and often violated assumption: the semantically optimal direction lies within the solver’s feasible update set under preservation constraints, which can break down in dense, deep representations. While meta-editors (e.g., MEND [ 15 ], ENN [ 16 ]) and adaptive gradient guidance methods (e.g., AGRADE [ 17 ]) alleviate parts of this tension, reliably achieving strong edits under preservation constraints without sacrificing locality and stability remains challenging. To bridge this gap, we propose MetaKE ( Meta -learning Aligned Knowledge Editing), which recasts knowledge editing as a bi-level optimization problem. MetaKE treats the edit target v∗ as a learnable meta-parameter: the upper level optimizes v∗ for edit success, while the lower level enforces the solver’s preservation constraints, providing gradient feedback that aligns v∗ with the feasible update manifold. To avoid expensive multi-layer unrolling, we introduce a closed-form Structural Gradient Proxy based on the Structural Consistency Hypothesis , which retains key constraint operators and efficiently exposes the feasibility boundary to the meta-optimizer. Our contributions are summarized as follows: • We propose a Bi-Level optimization framework MetaKE, identifying the “Semantic-Execution Disconnect” in existing editing paradigms. MetaKE treats the semantic target as a learnable 
+
+meta-parameter , which enables the optimization process to proactively sense downstream physical constraints, resolving edit failures caused by conflict-induced signal attenuation. • We introduce the Structural Gradient Proxy. By distilling the closed-form solution of the constraints into a differentiable module, we convert physical barriers into a “Geometric Gating Gradient”. This mechanism efficiently filters out gradient components pointing towards the constraint space, automatically rectifying the optimization direction into the parameter’s feasible Range Space without the need for expensive full-solver unrolling. • We provide theoretical analysis demonstrating that the gradient flow guided by our structural proxy achieves asymptotic alignment with the Feasible Manifold of the parameter space, effectively mitigating the Information Truncation phenomenon observed in strong-constraint settings. Em-pirically, MetaKE significantly boosts editing success rates and generalization while maintaining preservation of unrelated knowledge. 
+
+## 2 Related Work 
+
+Locate-then-Edit and Mass-Editing Constraints The “Locate-then-Edit” paradigm remains the standard for KE [ 11 , 18 ]. ROME localizes factual recall to rank-one updates [ 11 ], while MEMIT scales least-squares editing across layers with inverse-covariance regularization to preserve general knowledge [ 12 ]. Beyond soft regularization, recent work increasingly imposes explicit geometric constraints: PMET and EMMET formulate equality-constrained solvers to reduce collateral damage and balance stability–plasticity [ 19 , 20 ], and AlphaEdit enforces orthogonality via null-space pro-jection [ 13 ]. Despite stronger constraints in Physical Execution , these methods remain open-loop: they accept an upstream semantic target without accounting for how constraints truncate semantically ideal updates, yielding Spectral Suppression .
+
+Meta-Learning and Objective-Driven Optimization Another line learns update mappings or improves objectives. Hypernetwork approaches (e.g., MEND; KE) predict weight updates from gradients [ 7, 15 ], and MALMEN approximates least-squares solutions under varying batch sizes [ 21 ]. More recently, target-centric methods optimize what to write: AdaEdit adds future sequence probability constraints [ 22 ], AnyEdit extends this to long-form autoregressive editing via iterative key-token updates [ 23 ], and REP dynamically optimizes robust editing keys to decouple edits from native representations [ 24 ]. In contrast, MetaKE is a meta-optimizer that closes the loop with the 
+
+analytical structure of constraint-based solvers. While AdaEdit/AnyEdit mainly optimize targets for linguistic coherence (Semantic Disconnect), MetaKE optimizes targets for physical realizability 
+
+under hard constraints (Physical Disconnect), aligning planned targets with the feasible geometry via gradient feedback through the solver. 23 Preliminaries 
+
+3.1 Knowledge Editing as Linear Associative Memory 
+
+We denote an LLM as f (·) : X → Y that associates an input x with its corresponding prediction y.KE typically treats Transformer FFNs as linear associative memories [ 25 – 27 ]. For a target layer l,the output mapping W l 
+
+> out
+
+∈ Rd1×d0 of FFNs retrieves information ml ∈ Rd1 via: 
+
+ml ≈ W l
+
+> out
+
+kl, where kl = σ
+
+
+
+W l 
+
+> in
+
+γ(·)
+
+
+
+, (1) where γ denotes the layer normalization, kl ∈ Rd0 (key) represents the subject-relation (s, r ) and 
+
+ml ∈ Rd1 (value) is the retrieved representation. Editing seeks a weight update ∆ such that 
+
+(W l 
+
+> out
+
++ ∆)kl aligns with a new desired object o∗.
+
+3.2 Locate-then-Edit as Compute-then-Solve 
+
+Before delving into the technical details, we establish a unified terminology. In this paper, we refer to the limitations imposed by the solver (e.g., preservation of pre-trained knowledge via covariance matrices) collectively as structural constraints . The ability of a semantic target to survive these constraints and manifest in the weight space is defined as its physical realizability .Most “Locate-then-Edit” methods [11, 12] decouple the process into a two-stage pipeline: 
+
+Stage I: Semantic Planning (Target Optimization). The goal is to find an ideal target v∗ that maximizes the likelihood P (o∗ | s, r ). Methods like MEMIT [ 12 ] and AlphaEdit [ 13 ] derive v∗ by optimizing: 
+
+v∗ = v + arg min 
+
+> δ
+
+  − log PfLout (mL+δ)[o∗ | s, r ]
+
+| {z }
+
+> Lsemantic (v+δ)
+
+, (2) where mL is the output of the FFN layer, and fLout (·) denotes the forward pass of the remaining layers. In this view, v∗ acts as an open-loop control signal: it specifies what to achieve semantically, strictly ignoring how structural constraints will limit its realization. 
+
+Stage II: Editing Execution (Solver Update). The update is realized by solving a constrained least-squares problem [28]: 
+
+∆∗ = arg min 
+
+> ∆∈F
+
+∥∆k − (v∗ − W k )∥22 + tr (∆C∆T ) + λridge ∥∆∥2 
+
+> F
+
+, (3) where C = P 
+
+> i
+
+kikTi represents the uncentered covariance matrix of keys, which represents the model’s pre-existing memory distribution and governs the preservation constraints. 
+
+The Semantic-Execution Disconnect: Crucially, the objective in Eq. 3 is heavily bottlenecked by the structural penalty tr (∆C∆T ), which protects the pre-trained historical subspace. If the semantic target v∗ (derived in Stage I) requires updating weights along directions associated with large eigenvalues of C, the downstream solver will aggressively penalize and truncate this update. This inevitably leads to what we term the Spectral Suppression effect (formalized in Sec. 4), rendering the carefully planned open-loop target physically unexecutable. 
+
+## 4 Methodology 
+
+We first analyze the structural failures of current methods and then describe our proposed method. 
+
+4.1 The Semantic–Execution Disconnect 
+
+We identify two structural defects that render the decoupled Compute-then-Solve paradigm unreliable: 
+
+Spectral Suppression and the Static Regularization Trap (Fig. 1). 3Optimize Semantic                
+
+> Targe Vector 𝒗 ∗
+> ℎ
+> Feasible Manifold
+> Ideal Target 𝒗 ∗
+> Prohibited Space
+> Representation Space  Constraints Boundary
+> Representation Space
+> 𝑎𝑟𝑔 min
+> ∆𝑾 +∆𝒌 !−𝒗 !"+ℛ∆
+
++ ∆                      
+
+> ∆=𝒗 "−𝑾 𝒌 "𝑴
+> 𝑃 𝑜 ∗𝑠 ,𝑟 Information
+> Truncation
+> 𝛿
+> (Ideal Semantic Update)
+> 𝛿 #$%&
+> (Executed Update )
+> Protected Subspace
+> (High Eigenvalues )
+> A
+> 𝛿 !"#$ =𝛽 $𝛿
+> 𝑤ℎ𝑒𝑟𝑒 𝛽 ≪1
+> B
+> Execute Constrained
+> Weight Update ∆
+> Feasible Manifold
+> (Anisotropic)
+> Upstream Trust
+> Region
+> (Isotropic)
+> 𝑣 %&%'
+> Required Progress 𝑚
+> Safety Limit
+> Target 𝑣 ∗
+> 𝑢 (
+> 𝑢 )
+
+Figure 1: The Semantic–Execution Disconnect: (A) Spectral Suppression attenuates the update signal; (B) The Static Regularization Trap shows the mismatch between isotropic trust regions and anisotropic feasibility. 
+
+Spectral Suppression. The semantic residual is δ = v∗ − W k . Stage II computes ∆∗ by minimizing ∥∆k − δ∥22 + tr( ∆C∆T ) + λridge ∥∆∥2 
+
+> F
+
+. The realized residual is δreal = ∆∗k.
+
+Theorem 1 (Spectral Suppression) . Assume C + λridge I ≻ 0. The realized residual is a scaled version of the target: δreal = β δ, where β = γ 
+
+> 1+ γ
+
+and γ = Pdj=1 (uTj k)2  
+
+> σ2
+> j+λridge
+
+. If k lies in the high-spectrum (protected) subspace of C (large σ2 
+
+> j
+
+), then β → 0, causing deterministic signal attenuation 
+
+∥δreal ∥ ≪ ∥ δ∥. The proof is provided in Appendix B.1. 
+
+Stage I optimizes v∗ assuming β ≈ 1, but Stage II enforces β ≪ 1 for protected keys (confirmed for projection-based editors like AlphaEdit where β = ∥P k ∥22 
+
+> ∥P k ∥22+λiso
+
+). This causes the edit to fail physically despite succeeding semantically. 
+
+The Static Regularization Trap. Stage I typically employs an isotropic penalty λup  
+
+> 2
+
+∥v − vinit ∥22,defining a spherical trust region. However, downstream feasibility F(τ ) = {u : uT Au ≤ τ } is inherently anisotropic with condition number κ ≫ 1.
+
+Theorem 2 (Static Regularization Trap) . If the downstream feasibility F(τ ) is sufficiently anisotropic (κ ≫ 1), no global scalar λup can simultaneously ensure safety for hard cases and allow sufficient progress ( |dT
+
+> good
+
+u| ≥ m) for easy cases. See Appendix B.2. 
+
+As shown in Appendix B.2, isotropic regularization restricts updates to a ball. For large κ, the radius required for progress exceeds the safety limit of protected directions. Notably, using KL-divergence does not resolve this, as the resulting semantic ellipsoid (Fisher Information) is generally misaligned with the execution constraint matrix A (activation covariance), leading to the same truncation phenomenon. 
+
+4.2 Bi-level Optimization for Feasibility-Aware Editing 
+
+To bridge the Semantic–Execution Disconnect identified above, we introduce MetaKE , a meta-optimizer that seamlessly aligns planned targets with the model’s feasible manifold. Unlike prior methods that strictly decouple semantic planning and physical execution, MetaKE introduces a 
+
+“look-ahead” meta-optimization paradigm . By anticipating how preservation constraints will truncate updates, MetaKE effectively circumvents spectral suppression and dynamically rotates the target gradient into the solver’s executable range space. Formally, we redefine KE as a Bi-level Optimization (BLO) problem. In this framework, the upstream target v∗ is a learnable meta-parameter that anticipates the downstream solver’s constraints. The global objective is to find an optimal target v∗ that minimizes the meta-loss evaluated on the edited model f (·; cW ):
+
+v∗ 
+
+> opt
+
+= arg min  
+
+> v∗
+
+Lmeta 
+
+ f (·; W + ∆W∗(v∗)) 
+
+s.t. ∆W∗(v∗) = arg min  
+
+> ∆W
+
+Jinner (∆W; v∗), (4) where cW = W + ∆W∗(v∗) is the virtual post-edit weights. This nested structure ensures that the chosen target v∗ is not just semantically ideal, but physically realizable by the weight-space solver. 4A. Semantic Input                             
+
+> & Initialization
+> Initialize
+> 𝑣 !"!#
+> C. Editing Execution
+> Multi -layer Solver
+> (e.g., AlphaEdit/MEMIT)
+> ∆∗=𝑎𝑟𝑔𝑚𝑖𝑛 …
+> Edited LLM
+> Model with
+> Updated Knowledge
+> B. Iterative Look -ahead & Correct Loop (MAKE Bi -level Optimization ）
+> User Prompts &
+> Knowledge Tuples
+> 𝑠 ,𝑟 →𝑜 ∗
+> 𝑠
+> 𝑟
+> 𝑜 ∗
+> Optimized
+> 𝑣 ∗
+> (Meta -Loss Evaluation)
+> Compute ℒ%&#' &∇ℒ%&#'
+> Structural Gate 𝑀 (
+> Physical Constraint
+> 𝑣 #)*
+> ∗←𝑣 #
+> ∗−𝜂 ∇ℒ%&#' 𝑀 (
+> (Structural Gradient Proxy)
+> ∆+,-./ 𝑣 #
+> ∗=𝑣 #
+> ∗−𝑊 0𝑘 0𝑀
+> Virtual Weights
+> 𝑊 80,#
+> Lower -level/Phase 1:
+> Virtual Look -ahead
+> Meta -parameter
+> 𝒗 ∗converges
+> Upper -level/Phase 2:
+> Feasibility -Aware Correction
+> Proxy
+> Backpropagation
+
+Figure 2: The architecture of proposed method MetaKE 
+
+Lower Level: Multi-layer Execution Solver. The inner objective Jinner simulates the editing execution (Stage II) across key layers L. Given v∗, the solver computes preservation-constrained updates ∆W∗(v∗) = {∆∗ 
+
+> l
+
+}l∈L :
+
+Jinner = X
+
+> l∈L
+
+
+
+∥(W l + ∆l)kl − tl(v∗)∥22 + tr( ∆lCl∆Tl ) + λridge ∥∆l∥2
+
+> F
+
+
+
+, (5) where tl(v∗) is the layer-specific target residual induced by v∗ (e.g., via residual allocation). Crucially, each ∆∗ 
+
+> l
+
+(v∗) is an implicit function of the meta-parameter v∗.
+
+Upper Level: Meta-Performance Optimization. The upper level optimizes v∗ by differentiating through the solver’s response. The meta-loss Lmeta balances three core signals: 
+
+Lmeta (v∗) = Ledit (xe, y e; cW )
+
+| {z }
+
+> Edit Success
+
++ Lloc (xloc ; cW , W )
+
+| {z }
+
+> Locality Preservation
+
++ ∥v∗ − vinit ∥22
+
+| {z }
+
+> Meta-Regularization
+
+. (6) By embedding the execution solver into the optimization loop, the target v∗ becomes feasibility-aware, proactively avoiding regions where semantic desires conflict with structural constraints (e.g., the spectral suppression or regularization traps in Sec. 4.1). 
+
+4.3 Structural Gradient Proxy 
+
+Directly differentiating through the multi-layer solver ∆W∗(v∗) in Eq. (4) is computationally prohibitive due to recursive residuals and matrix inversions. We thus introduce a Structural Gradient Proxy for efficient estimation. Based on the Structural Consistency Hypothesis —that dominant physical constraints share spectral consistency across layers—we posit that a target v∗ feasible for the final layer L is likely globally feasible. We define the proxy update via the closed-form solution of layer L:
+
+∆proxy (v∗) = ( v∗ − W LkL)M , where M = kTL (CL + λridge I + kLkTL )−1. (7) This proxy yields a tractable approximate gradient flow for the upper-level objective: 
+
+∇v∗ Lmeta = ∂Lmeta 
+
+∂f · ∂f ∂∆ · ∂∆
+
+∂v∗ = ∇∆proxy Lmeta 
+
+| {z }
+
+> Task Signal
+
+· M T
+
+|{z} 
+
+> Structural Gate
+
+, (8) restoring the “missing feedback channel” ignored by standard methods. Here, the Task Signal 
+
+represents the pure semantic demand for edit success and locality, while the multiplier M T acts as a 
+
+structural gate , filtering gradients to ensure updates to v∗ align with the feasible manifold induced by key statistics. 
+
+4.4 Optimization Algorithm: MetaKE 
+
+MetaKE refines the target v∗ via an iterative Look-ahead and Correct loop (Algorithm 1). 
+
+Phase 1: Virtual Look-ahead. At iteration t, we simulate the edit effect by forming virtual weights for the final layer: cW L,t = W L + ∆proxy (v∗ 
+
+> t
+
+). This allows MetaKE to probe the feasibility of 
+
+v∗ 
+
+> t
+
+through the proxy geometry, bypassing the need for expensive multi-layer unrolling during optimization. 5Algorithm 1 MetaKE 
+
+Require: LR η, iterations T , data (xe, y e, x loc ), initial target vinit 
+
+Ensure: Edited weights cW 
+
+> 1:
+
+Precompute structural gate M (Eq. 7) and initialize v∗ ← vinit  
+
+> 2:
+
+for t = 0 to T − 1 do  
+
+> 3:
+
+cW L,t ← W L + ( v∗ − W LkL)M ▷ Phase 1: Virtual Look-ahead  
+
+> 4:
+
+gt ← ∇ v∗ Lmeta ( cW L,t ) ▷ Phase 2: Gradient calculation via Eq. 8  
+
+> 5:
+
+v∗ ← v∗ − η · gt ▷ Align target with physical manifold  
+
+> 6:
+
+end for  
+
+> 7:
+
+cW ← MultiLayerSolver (v∗) ▷ Final execution (e.g., AlphaEdit)  
+
+> 8:
+
+return cW
+
+Phase 2: Feasibility-Aware Correction. We evaluate the meta-loss Lmeta under the virtual weights and backpropagate the signal through the structural gate M T to update the target: 
+
+v∗ 
+
+> t+1
+
+← v∗ 
+
+> t
+
+− η
+
+
+
+∇cW L,t Lmeta 
+
+
+
+M T . (9) This update pushes v∗ toward regions that are both semantically effective and physically realizable. Upon convergence, the optimized v∗ is passed to a standard multi-layer solver (e.g., MEMIT) to execute the final update across all target layers L.
+
+## 5 Theoretical Justification 
+
+Physical Realizability and Anisotropic Feasibility. Standard editing often fails when the required update lies in a protected subspace, leading to spectral suppression (attenuation factor β ≪ 1). MetaKE circumvents this by treating v∗ as a learnable parameter. The meta-gradient ∇v∗ Lmeta 
+
+pushes v∗ away from suppression-triggering directions toward regions where β ≈ 1 (Fig. 1A). Unlike static regularizers λ that create an “impossible gap” between hard and easy edits, MetaKE embeds feasibility into the gradient flow via the Structural Gate M T . Each edit is adapted to the anisotropic feasible manifold : hard edits (high spectral density) are tightly bounded by the safety limit to preserve locality, while easy edits can safely extend to achieve the required progress (Fig. 1B). This per-edit adaptation eliminates the need for a global compromise. 
+
+Proxy Fidelity. We justify using a single-layer proxy for the multi-layer objective F (v∗) = 
+
+Lmeta (f (·; W + ∆W∗(v∗))) . Let gtrue = P
+
+> l∈L
+
+(Jl)T sl be the true hypergradient, where sl =
+
+∇∆l Lmeta and Jl = ∂∆∗ 
+
+> l
+
+(v∗)/∂ v∗. We define the proxy gradient as gproxy = sLM TL , matching the Jacobian used in Sec. 4.3. 
+
+Theorem 3 (Dominance and Fidelity) . Assume: (i) last-layer dominance : ∥ P 
+
+> l̸=L
+
+(Jl)T sl∥ ≤ 
+
+ρ∥(JL)T sL∥ for ρ ∈ [0 , 1) ; (ii) structural consistency : ∥Cl − CL∥2 ≤ εC and ∥kl − kL∥2 ≤ εk
+
+across layers; (iii) allocation stability : the solver Jacobians ∂tl/∂ v∗ are bounded and slowly drifting. Then there exists K > 0 such that the proxy error is bounded: 
+
+∥gtrue − gproxy ∥ ≤ ρ∥gL∥ + K(εC + εk)∥sL∥F ∥M L∥2, where gL = ( JL)T sL. (10) 
+
+Further, if the non-degeneracy α(v∗) = ∥sLM TL ∥2   
+
+> ∥sL∥F∥ML∥2
+
+≥ α0 > 0 and ρ + eK(εC + εk) < 1, then 
+
+gproxy is a valid descent direction : ⟨gtrue , gproxy ⟩ > 0. The detailed proof is provided in Appendix B.3. 
+
+The proxy error is controlled by the tail-layer contribution ρ and cross-layer drift O(εC + εk).Empirically, we observe small drift and stable α, confirming that the single-layer proxy provides a reliable hypergradient without costly multi-layer unrolling. 
+
+## 6 Experiments 
+
+In this section, we evaluate MetaKE aiming to answer the following research questions: (1) Can MetaKE’s bi-level optimization resolve edit failures where traditional open-loop methods fail? (2) Does MetaKE improve the scalability and stability of mass editing? (3) Does the Structural Gradient Proxy effectively align the edit direction with the model’s feasible manifold as theoretically predicted? 6Table 1: Comparison of MetaKE with original locate-then-edit methods and AlphaEdit variants on the knowledge editing task. The best results are highlighted in bold , while the second-best results are underlined. 
+
+Model Method ZsRE Eff. ↑ Gen. ↑ Spe. ↑
+
+> LLaMA3 (8B)
+
+ROME 1.28 ±0.04 1.32 ±0.03 0.64 ±0.03 
+
+MEMIT 36 .15 ±0.31 31 .42 ±0.28 18 .57 ±0.25 
+
+PRUNE 0.52 ±0.05 0.58 ±0.07 1.34 ±0.04 
+
+RECT 87 .41 ±0.22 82 .35 ±0.24 32 .18 ±0.22 
+
+AlphaEdit 94 .27 ±0.15 88 .35 ±0.12 32 .65 ±0.14 
+
+AlphaEdit BLUE 95 .82 ±0.46 91 .85 ±0.42 32 .10 ±0.68 
+
+MetaKE 96.84 ±0.14 92.45 ±0.16 33.12 ±0.21 
+
+> GPT-J (6B)
+
+ROME 55 .62 ±0.24 52 .71 ±0.33 13 .34 ±0.26 
+
+MEMIT 96 .85 ±0.18 93 .52 ±0.25 31.42 ±0.29 
+
+PRUNE 25 .64 ±0.16 24 .08 ±0.22 20 .45 ±0.13 
+
+RECT 96 .18 ±0.24 91 .75 ±0.21 28 .25 ±0.26 
+
+AlphaEdit 99 .56 ±0.15 95 .84 ±0.26 28 .31 ±0.22 
+
+AlphaEdit BLUE 99 .45 ±0.25 93 .64 ±0.48 28 .41 ±0.72 
+
+MetaKE 99.82 ±0.12 97.37 ±0.15 29 .43 ±0.20 
+
+> GPT2-XL (1.5B)
+
+ROME 41 .25 ±0.45 37 .62 ±0.38 12 .35 ±0.22 
+
+MEMIT 79 .58 ±0.25 72 .45 ±0.31 26 .12 ±0.18 
+
+PRUNE 28 .42 ±0.26 25 .35 ±0.24 14 .52 ±0.18 
+
+RECT 83 .45 ±0.38 75 .28 ±0.35 24 .93 ±0.24 
+
+AlphaEdit 93 .52 ±0.28 83 .65 ±0.36 25 .85 ±0.22 
+
+AlphaEdit BLUE 97 .42 ±0.45 88 .75 ±0.82 26 .58 ±0.75 
+
+MetaKE 98.12 ±0.18 91.26 ±0.32 27.23 ±0.25 
+
+6.1 Experimental Setup Datasets & Evaluation Metrics. We evaluate our method on a benchmark datasets: ZsRE [ 29 ]. We report five key metrics: Efficacy (success rate), Generalization (paraphrase robustness) and Specificity (locality preservation) to comprehensively assess the performance of MetaKE. 
+
+Baselines & Implementation Details. We compare MetaKE against state-of-the-art KE methods: ROME [ 11 ], MEMIT [ 12 ], PRUNE [ 30 ], RECT [ 31 ], AlphaEdit [ 13 ], and BLUE [ 32 ]. Experiments are conducted on GPT2-XL (1.5B) [ 33 ], GPT-J (6B) [ 34 ], and LLaMA3 (8B) [ 35 ]. For the meta-optimizer, we use Adam with a look-ahead step T = 15 and meta-learning rate η = 5 × 10 −3. All experiments are executed on a single NVIDIA A100 GPU. 
+
+6.2 Main Results 
+
+We assess MetaKE’s performance under increasingly stringent preservation constraints, following the experimental protocol established by [ 13 ], randomly sampling 2,000 editing instances with a batch size of 100. As shown in Table 1, MetaKE outperforms existing methods across ZsRE for all three evaluated models. On ZsRE with GPT2-XL, MetaKE improves Generalization by 9.10% relative to AlphaEdit, indicating stronger robustness to paraphrased edit queries while maintaining competitive preservation performance. Compared to AlphaEdit BLUE , MetaKE attains notable gains on ZsRE with GPT-J, improving generalization by 3.98% while preserving a high efficacy of 99.82%. Overall, the results indicate that MetaKE consistently improves edit quality across model scales. By aligning planned targets with the model’s feasible manifold, MetaKE achieves stronger generalization 7while better preserving specificity, yielding a more favorable trade-off between edit success and preservation. 
+
+## 7 Conclusion 
+
+We identify the semantic-execution disconnect as a fundamental bottleneck in current knowledge editing, where upstream semantic planning is decoupled from downstream physical execution con-straints. To bridge this gap, we introduce MetaKE, a meta-optimizer that aligns planned targets with the model’s feasible manifold through a differentiable structural proxy. By anticipating how preservation constraints truncate updates, MetaKE effectively circumvents spectral suppression and the static regularization trap, achieving a superior Pareto frontier between editing efficacy and model stability across diverse benchmarks. Future work will explore the application of this meta-alignment principle to sequential editing under tighter memory constraints and non-linear layer architectures. 8References 
+
+[1] Y. Yao, P. Wang, B. Tian, S. Cheng, Z. Li, S. Deng, H. Chen, and N. Zhang, “Editing large language models: Problems, methods, and opportunities,” arXiv preprint arXiv:2305.13172 , 2023. [2] T. Brown, B. Mann, N. Ryder, M. Subbiah, J. D. Kaplan, P. Dhariwal, A. Neelakantan, P. Shyam, G. Sastry, A. Askell et al. , “Language models are few-shot learners,” Advances in neural information processing systems , vol. 33, pp. 1877–1901, 2020. [3] J. W. Rae, S. Borgeaud, T. Cai, K. Millican, J. Hoffmann, F. Song, J. Aslanides, S. Henderson, R. Ring, S. Young et al. , “Scaling language models: Methods, analysis & insights from training gopher,” arXiv preprint arXiv:2112.11446 , 2021. [4] N. Zhang, Y. Yao, B. Tian, P. Wang, S. Deng, M. Wang, Z. Xi, S. Mao, J. Zhang, Y. Ni et al. , “A comprehensive study of knowledge editing for large language models,” arXiv preprint arXiv:2401.01286 ,2024. [5] Z. Ji, N. Lee, R. Frieske, T. Yu, D. Su, Y. Xu, E. Ishii, Y. J. Bang, A. Madotto, and P. Fung, “Survey of hallucination in natural language generation,” ACM computing surveys , vol. 55, no. 12, pp. 1–38, 2023. [6] E. Ferrara, “Should chatgpt be biased? challenges and risks of bias in large language models,” Challenges and Risks of Bias in Large Language Models (October 26, 2023) , 2023. [7] N. De Cao, W. Aziz, and I. Titov, “Editing factual knowledge in language models,” in Proceedings of the 2021 Conference on Empirical Methods in Natural Language Processing , 2021, pp. 6491–6506. [8] T. Hartvigsen, S. Sankaranarayanan, H. Palangi, Y. Kim, and M. Ghassemi, “Aging with grace: Lifelong model editing with discrete key-value adaptors,” Advances in Neural Information Processing Systems ,vol. 36, pp. 47 934–47 959, 2023. [9] R. Cohen, E. Biran, O. Yoran, A. Globerson, and M. Geva, “Evaluating the ripple effects of knowledge editing in language models,” Transactions of the Association for Computational Linguistics , vol. 12, pp. 283–298, 2024. [10] P. Wang, Z. Li, N. Zhang, Z. Xu, Y. Yao, Y. Jiang, P. Xie, F. Huang, and H. Chen, “Wise: Rethinking the knowledge memory for lifelong model editing of large language models,” Advances in Neural Information Processing Systems , vol. 37, pp. 53 764–53 797, 2024. [11] K. Meng, D. Bau, A. Andonian, and Y. Belinkov, “Locating and editing factual associations in gpt,” 
+
+Advances in neural information processing systems , vol. 35, pp. 17 359–17 372, 2022. [12] K. Meng, A. S. Sharma, A. J. Andonian, Y. Belinkov, and D. Bau, “Mass-editing memory in a transformer,” in The Eleventh International Conference on Learning Representations , 2022. [13] J. Fang, H. Jiang, K. Wang, Y. Ma, J. Shi, X. Wang, X. He, and T.-S. Chua, “Alphaedit: Null-space constrained knowledge editing for language models,” in The Thirteenth International Conference on Learning Representations , 2024. [14] A. S. Rawat, C. Zhu, D. Li, F. Yu, M. Zaheer, S. Kumar, and S. Bhojanapalli, “Modifying memories in transformer models,” in International conference on machine learning (ICML) , vol. 2020, 2021. [15] E. Mitchell, C. Lin, A. Bosselut, C. Finn, and C. D. Manning, “Fast model editing at scale,” in International Conference on Learning Representations , 2021. [16] A. Sinitsin, V. Plokhotnyuk, D. Pyrkin, S. Popov, and A. Babenko, “Editable neural networks,” in 
+
+International Conference on Learning Representations , 2020. [17] X. Gu, G. Chen, S. Liu, J. Li, A. Liu, S. Tao, J. Zhang, and X. Hu, “Editing large language models via adaptive gradient guidance,” in AAAI 2025 Workshop on Preventing and Detecting LLM Misinformation (PDLM) , 2025. [18] D. Dai, L. Dong, Y. Hao, Z. Sui, B. Chang, and F. Wei, “Knowledge neurons in pretrained transformers,” in Proceedings of the 60th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , 2022, pp. 8493–8502. [19] X. Li, S. Li, S. Song, J. Yang, J. Ma, and J. Yu, “Pmet: Precise model editing in a transformer,” in 
+
+Proceedings of the AAAI Conference on Artificial Intelligence , vol. 38, no. 17, 2024, pp. 18 564–18 572. [20] A. Gupta, D. Sajnani, and G. Anumanchipalli, “A unified framework for model editing,” in Findings of the Association for Computational Linguistics: EMNLP 2024 , 2024, pp. 15 403–15 418. 
+
+9[21] C. Tan, G. Zhang, and J. Fu, “Massive editing for large language models via meta learning,” in ICLR , 2024. [22] Q. Li and X. Chu, “Adaedit: Advancing continuous knowledge editing for large language models,” in 
+
+Proceedings of the 63rd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , 2025, pp. 4127–4149. [23] H. Jiang, J. Fang, N. Zhang, M. Wan, G. Ma, X. Wang, X. He, and T.-S. Chua, “Anyedit: Edit any knowledge encoded in language models,” in Forty-second International Conference on Machine Learning ,2025. [24] J. Yan, F. Wang, Y. Luo, Y. Li, and Y. Zhang, “Keys to robust edits: From theoretical insights to practical advances,” in Proceedings of the 63rd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , 2025, pp. 22 545–22 560. [25] M. Geva, R. Schuster, J. Berant, and O. Levy, “Transformer feed-forward layers are key-value memories,” in Proceedings of the 2021 Conference on Empirical Methods in Natural Language Processing , 2021, pp. 5484–5495. [26] T. Kohonen, “Correlation matrix memories,” IEEE transactions on computers , vol. 100, no. 4, pp. 353–359, 2009. [27] J. A. Anderson, “A simple neural network generating an interactive memory,” Mathematical biosciences ,vol. 14, no. 3-4, pp. 197–220, 1972. [28] J.-C. Gu, H.-X. Xu, J.-Y. Ma, P. Lu, Z.-H. Ling, K.-W. Chang, and N. Peng, “Model editing harms general abilities of large language models: Regularization to the rescue,” in rae2021scalingEMNLP , 2024. [29] O. Levy, M. Seo, E. Choi, and L. Zettlemoyer, “Zero-shot relation extraction via reading comprehension,” in Proceedings of the 21st Conference on Computational Natural Language Learning (CoNLL 2017) ,R. Levy and L. Specia, Eds. Vancouver, Canada: Association for Computational Linguistics, Aug. 2017, pp. 333–342. [Online]. Available: https://aclanthology.org/K17-1034/ [30] J.-Y. Ma, H. Wang, H.-X. Xu, Z.-H. Ling, and J.-C. Gu, “Perturbation-restrained sequential model editing,” in The Thirteenth International Conference on Learning Representations , 2025. [Online]. Available: https://openreview.net/forum?id=bfI8cp8qmk [31] J.-C. Gu, H.-X. Xu, J.-Y. Ma, P. Lu, Z.-H. Ling, K.-W. Chang, and N. Peng, “Model editing harms general abilities of large language models: Regularization to the rescue,” in Proceedings of the 2024 Conference on Empirical Methods in Natural Language Processing , Y. Al-Onaizan, M. Bansal, and Y.-N. Chen, Eds. Miami, Florida, USA: Association for Computational Linguistics, Nov. 2024, pp. 16 801–16 819. [Online]. Available: https://aclanthology.org/2024.emnlp-main.934/ [32] X. Li, S. Wang, S. Li, S. Song, B. Ji, M. Jun, and J. Yu, “Rethinking residual distribution in locate-then-edit model editing,” in The Thirty-ninth Annual Conference on Neural Information Processing Systems , 2025. [Online]. Available: https://openreview.net/forum?id=P9gY05BDkW [33] A. Radford, J. Wu, R. Child, D. Luan, D. Amodei, I. Sutskever et al. , “Language models are unsupervised multitask learners,” OpenAI blog , vol. 1, no. 8, p. 9, 2019. [34] B. Wang and A. Komatsuzaki, “GPT-J-6B: A 6 billion parameter autoregressive language model,” May 2021. [35] Meta, “Llama 3,” 2024, large language model release. [Online]. Available: https://llama.meta.com/llama3/ 
+
+10 Appendix A Methodology Details 
+
+A.1 Target Optimization 
+
+(i) Edit success loss Ledit . This term enforces that the edited model produces the desired target output 
+
+ye given the edit input xe. Following the standard knowledge editing objective, we formulate the loss as the negative log-likelihood of the target prediction under the post-edit weights cW :
+
+Ledit (xe, y e; cW ) = − log PcW
+
+ye | xe
+
+. (11) (ii) Locality preservation loss Lloc . To prevent unintended drift on unrelated queries, we regularize the post-edit behavior on a locality set xloc by matching the output distributions of the pre-edit and post-edit models. 
+
+Lloc (xloc ; cW , W ) = DKL 
+
+ PW (y | xloc ) ∥ PcW (y | xloc ) . (12) (iii) Meta-regularization ∥v∗ − vinit ∥22, which constrains v∗ to stay close to the initial semantic plan 
+
+vinit , preventing excessive deviation that could destroy the intended meaning of the target. 
+
+## B Theoretical Analysis 
+
+B.1 Proofs for Spectral Suppression B.1.1 Closed-form solver map 
+
+We restate the Stage II objective: 
+
+∆∗ = arg min  
+
+> ∆
+
+J (∆) = ∥∆k − δ∥22 + tr( ∆C∆T ) + λridge ∥∆∥2 
+
+> F
+
+, (13) where C is the stored key covariance statistic and λridge ≥ 0 is the ridge coefficient. Define the effective geometry Ceff := C + λridge I. Using standard matrix calculus, 
+
+∇∆∥∆k − δ∥22 = 2( ∆k − δ)kT , (14) 
+
+∇∆tr( ∆C∆T ) = 2 ∆C, (15) 
+
+∇∆λridge ∥∆∥2 
+
+> F
+
+= 2 λridge ∆. (16) Setting the gradient to zero yields 
+
+(∆k − δ)kT + ∆C + λridge ∆ = 0 ⇐⇒ ∆(Ceff + kk T ) = δk T . (17) Since Ceff + kk T ≻ 0, it is invertible and we obtain 
+
+∆∗ = δk T (Ceff + kk T )−1. (18) 
+
+B.1.2 Realizability coefficient and attenuation law 
+
+Define the executed residual at the edited site: 
+
+δreal = ∆∗k. (19) Substituting (18) into (19) gives 
+
+δreal = δ · kT (Ceff + kk T )−1k
+
+| {z }
+
+> β
+
+. (20) Let γ = kT C−1eff k ≥ 0. Apply Sherman–Morrison: 
+
+(Ceff + kk T )−1 = C−1eff − C−1eff kk T C−1eff 
+
+1 + kT C−1eff k . (21) 11 Left- and right-multiplying by kT and k yields 
+
+β = γ − γ2
+
+1 + γ = γ
+
+1 + γ . (22) This proves the attenuation law 
+
+δreal = βδ, β = γ
+
+1 + γ , γ = kT C−1eff k. (23) 
+
+B.1.3 Spectral form and proof of Theorem 1 
+
+Let C = U ΛU T with Λ = diag( σ21 , . . . , σ 2
+
+> d
+
+). Then Ceff = U (Λ + λridge I)U T and 
+
+γ = kT C−1eff k =
+
+> d
+
+X
+
+> j=1
+
+(uTj k)2
+
+σ2 
+
+> j
+
++ λridge 
+
+. (24) 
+
+Quantitative suppression bound. Let S denote an index set corresponding to large eigenvalues, and suppose k concentrates on this protected subspace: P 
+
+> j∈S
+
+(uTj k)2 ≥ (1 − ρ)∥k∥22 for some 
+
+ρ ∈ [0 , 1) , and σ2 
+
+> j
+
+≥ σ2min ,S for all j ∈ S . Then by (24), 
+
+γ = X
+
+> j∈S
+
+(uTj k)2
+
+σ2 
+
+> j
+
++ λridge 
+
++ X
+
+> j / ∈S
+
+(uTj k)2
+
+σ2 
+
+> j
+
++ λridge 
+
+≤
+
+P 
+
+> j∈S
+
+(uTj k)2
+
+σ2min ,S + λridge 
+
++ X
+
+> j / ∈S
+
+(uTj k)2
+
+σ2 
+
+> j
+
++ λridge 
+
+. (25) In particular, in the idealized case ρ = 0 and k lies entirely in the protected subspace, 
+
+γ ≤ ∥k∥22
+
+σ2min ,S + λridge 
+
+, ⇒ β = γ
+
+1 + γ ≤ ∥k∥22
+
+∥k∥22 + σ2min ,S + λridge 
+
+. (26) As σ2min ,S → ∞ (increasing old-key density along the protected directions), β → 0, hence by (23) ,
+
+∥δreal ∥2 = β∥δ∥2 ≪ ∥ δ∥2. This completes the proof of Theorem 1. 
+
+B.1.4 AlphaEdit specialization 
+
+Let P ∈ Rd0×d0 be an orthogonal projector ( P T = P , P 2 = P ). AlphaEdit executes the update through right-multiplication, i.e., the applied map is ∆P . We consider the single-edit, single-key case and write the stage-II objective as 
+
+∆∗ = arg min  
+
+> ∆
+
+∥∆P k − δ∥22 + λiso ∥∆P ∥2 
+
+> F
+
+, (27) where λiso ≥ 0 is an isotropic coefficient. (When λiso = 1 , the normal equation contains the +I
+
+term as in the AlphaEdit derivation.) 
+
+Reduction to a ridge problem in the executed variable. Define the executed update variable 
+
+B := ∆P . (28) Then (27) depends on ∆ only through B, hence it is equivalent to 
+
+B∗ = arg min  
+
+> B
+
+∥Bk − δ∥22 + λiso ∥B∥2 
+
+> F
+
+. (29) Moreover, any ∆ satisfying ∆P = B∗ is optimal for (27). A canonical choice is ∆∗ = B∗P .Using standard matrix calculus, the gradient of (29) is 
+
+∇B
+
+
+
+∥Bk − δ∥22 + λiso ∥B∥2
+
+> F
+
+
+
+= 2( Bk − δ)kT + 2 λiso B.
+
+Setting it to zero yields the normal equation 
+
+(Bk − δ)kT + λiso B = 0 ⇐⇒ B(kk T + λiso I) = δk T . (30) 12 Since kk T + λiso I ≻ 0 for λiso > 0, it is invertible and 
+
+B∗ = δk T (kk T + λiso I)−1. (31) Define the executed residual at the edited site (using the executed update B∗ = ∆∗P ): 
+
+δreal := ( ∆∗P )k = B∗k. (32) Substituting (31) into (32) gives 
+
+δreal = δ · kT (kk T + λiso I)−1k
+
+| {z }
+
+> β
+
+. (33) Applying Sherman–Morrison to (λiso I + kk T )−1 yields 
+
+β = ∥k∥22
+
+∥k∥22 + λiso 
+
+. (34) 
+
+Appearance of the projected key in the fit term. Since P is a projector, 
+
+(∆P )k = ∆(P k ).
+
+Thus the data-fit term in (27) can be written as ∥∆(P k ) − δ∥22. Equivalently, defining ˜k := P k , the same attenuation coefficient can be expressed as 
+
+β = ∥˜k∥22
+
+∥˜k∥22 + λiso 
+
+= ∥P k ∥22
+
+∥P k ∥22 + λiso 
+
+, (35) when the regularization is isotropic on the executed channel. 
+
+B.2 Proof of Static Regularization Trap 
+
+We provide full proofs for Theorem 2. Throughout, u = v − vinit denotes the Stage I displacement, and downstream feasibility is the ellipsoid F(τ ) = {u : uT Au ≤ τ } with A ⪰ 0.
+
+B.2.1 From isotropic regularization to a spherical trust region 
+
+Consider the upstream objective 
+
+min  
+
+> v
+
+LNLL (v) + λup 
+
+2 ∥v − vinit ∥22 ⇐⇒ min  
+
+> u
+
+LNLL (vinit + u) + λup 
+
+2 ∥u∥22. (36) A local quadratic model around vinit yields 
+
+LNLL (vinit + u) ≈ L NLL (vinit ) + gT u + 12 uT Hu , g = ∇v LNLL (vinit ). (37) Ignoring the constant term gives the convex quadratic problem 
+
+u∗(λup ) = arg min  
+
+> u
+
+gT u + 12 uT (H + λup I)u, (38) whose unique minimizer is 
+
+u∗(λup ) = −(H + λup I)−1g. (39) The key point is that λup I is isotropic: it uniformly shrinks all directions, equivalently imposing a 
+
+spherical trust region in the upstream space. 
+
+PD regularization for feasibility geometry. When A ⪰ 0 is singular (e.g., near-free null-space), we use the standard ϵ-regularization Aϵ = A + ϵI ≻ 0 for any ϵ > 0, and all eigenvalue-based quantities (e.g., λmin , κ) are taken w.r.t. Aϵ.13 Lemma 1 (Penalty–trust-region KKT equivalence for the quadratic surrogate) . Consider the quadratic surrogate in (38) :
+
+min  
+
+> u
+
+gT u + 12 uT Hu + λ 
+
+> 2
+
+∥u∥22, H ⪰ 0, λ ≥ 0, (40) 
+
+whose unique minimizer is u∗(λ) = −(H + λI)−1g. Let r(λ) = ∥u∗(λ)∥2. Then u∗(λ) is also a solution to the spherical trust-region problem 
+
+min  
+
+> ∥u∥2≤r(λ)
+
+gT u + 12 uT Hu , (41) 
+
+with λ being the associated KKT multiplier. Moreover, r(λ) is non-increasing in λ.Proof. Write the trust-region Lagrangian J (u, μ ) = gT u + 12 uT Hu + μ 
+
+> 2
+
+(∥u∥22 − r2) with μ ≥
+
+0. The KKT stationarity condition gives (H + μI)u = −g, so any KKT point has the form 
+
+u = −(H + μI)−1g. Setting r = r(λ) and μ = λ satisfies primal feasibility by definition and complementary slackness ( ∥u∥2 = r when λ > 0 unless g = 0). Thus u∗(λ) is a trust-region solution with multiplier λ.For monotonicity, if λ2 > λ 1 ≥ 0, then H + λ2I ⪰ H + λ1I ≻ 0, hence (H + λ2I)−1 ⪯
+
+(H + λ1I)−1, which implies ∥u∗(λ2)∥2 ≤ ∥ u∗(λ1)∥2.Under the local quadratic model, a single scalar λup controls only an isotropic (spherical) notion of allowable displacement magnitude via r(λup ), and cannot encode the anisotropic downstream geometry captured by A (or Aϵ). 
+
+B.2.2 Ball–Ellipsoid mismatch 
+
+Let B(r) = {u : ∥u∥2 ≤ r} and F(τ ) = {u : uT Au ≤ τ } with A ⪰ 0. For eigenvalue-based bounds, we work with Aϵ = A + ϵI ≻ 0 for any ϵ > 0 and take λmin , λ max (and κ) w.r.t. Aϵ.
+
+Lemma 2 (inscribed/circumscribed ball bounds) . If B(r) ⊆ F (τ ), then r ≤ pτ /λ max . If F(τ ) ⊆B(r), then r ≥ pτ /λ min . Therefore the ratio between the smallest circumscribed ball and the largest inscribed ball is pτ /λ min 
+
+pτ /λ max 
+
+= √κ, κ = λmax /λ min (w.r.t. Aϵ). (42) 
+
+Proof. Let emax be a unit eigenvector of A associated with λmax . If B(r) ⊆ F (τ ), then remax ∈F(τ ), hence λmax r2 = ( remax )T A(remax ) ≤ τ , giving r ≤ pτ /λ max . Similarly, let emin be associated with λmin and consider the boundary point pτ /λ min emin ∈ ∂F(τ ). If F(τ ) ⊆ B (r),then its norm must be at most r, yielding r ≥ pτ /λ min .
+
+B.2.3 Proof of Theorem 2 
+
+We formalize the incompatibility between (i) isotropic upstream control (one scalar λup ) and (ii) anisotropic downstream feasibility. Assume the semantic objective requires a minimum displacement along some low-cost (safe) direction. Concretely, let dgood be a unit vector approximately aligned with emin , and require 
+
+|dT
+
+> good
+
+u| ≥ m. (43) Any isotropic control that restricts u inside B(r) can only satisfy this if r ≥ m.To guarantee feasibility for all upstream-allowed displacements, it suffices to require B(r) ⊆ F (τ ),which by Lemma 2 implies 
+
+r ≤ pτ /λ max . (44) 
+
+Non-overlap (impossibility) condition. Whenever 
+
+pτ /λ max < m ≤ pτ /λ min , (45) no radius r can satisfy both r ≥ m (progress) and r ≤ pτ /λ max (safety). Hence no one-size-fits-all isotropic control (in the form of a single ball radius r) can satisfy both requirements simultaneously. 14 Two-instance impossibility under a shared λup . The main-text statement concerns a single global 
+
+λup shared across requests. We formalize this by constructing two requests E (easy) and H (hard) that share the same downstream geometry Aϵ but require incompatible isotropic regularization strengths. Consider the local quadratic surrogate (38) and take the simplest admissible case H = 0 (locally linearized semantic loss), so the penalized solution becomes 
+
+u∗(λ) = −(λI)−1g = − 1
+
+λ g. (46) Let emin , emax be unit eigenvectors of Aϵ associated with λmin , λ max , respectively. Define two requests by choosing their gradients as 
+
+gE = −a emin , gH = −b emax , (47) for some a, b > 0. Then the resulting displacements are 
+
+uE(λ) = aλ emin , uH(λ) = bλ emax . (48) 
+
+Progress for the easy instance. Requiring |dT
+
+> good
+
+uE(λ)| ≥ m with dgood = emin implies 
+
+aλ ≥ m ⇐⇒ λ ≤ am . (49) 
+
+Feasibility for the hard instance. Requiring uH(λ) ∈ F (τ ) yields 
+
+uH(λ)T AϵuH(λ) = λmax 
+
+ bλ
+
+2
+
+≤ τ ⇐⇒ λ ≥ b
+
+r λmax 
+
+τ . (50) Choosing a, b such that bpλmax /τ > a/m makes the two requirements incompatible for any single shared λ. Therefore, no global scalar λup can simultaneously allow sufficient progress on E while ensuring feasibility on H, establishing the existence claim in Theorem 2. 
+
+B.2.4 Instantiating m from an NLL margin requirement (optional) 
+
+One can connect m to a concrete semantic requirement. Let zy (v) = wTy v be the target-token logit. Under first-order approximation, changing v by u changes the target logit by ∆zy∗ ≈ wTy∗ u. Thus requiring a minimum margin/logit increase ∆zy∗ ≥ ∆ implies |dT
+
+> good
+
+u| ≥ m with m = ∆ /∥wy∗ ∥2
+
+when dgood aligns with wy∗ , or more generally m = ∆ /∥P good wy∗ ∥2 under projection to the safe subspace. This provides an explicit semantic meaning of the progress threshold m.
+
+B.3 Proof of Theorem 3 B.3.1 Preliminaries and notation 
+
+We use ∥ · ∥ 2 for the spectral norm (matrices) / Euclidean norm (vectors), and ∥ · ∥ F for the Frobenius norm. For a linear operator J : Rd1 → Rd1×d0 , its adjoint JT : Rd1×d0 → Rd1 is defined under the Euclidean/Frobenius inner products: ⟨J[δv], S⟩F = ⟨δv, JT S⟩2.Recall from the main text the hypergradient channel decomposition: 
+
+gtrue = X
+
+> l∈L
+
+(Jl)T sl, sl := ∇∆l Lmeta , Jl := ∂∆∗ 
+
+> l
+
+(v∗)
+
+∂v∗ . (51) Define the effective geometry at layer l as Cl, eff := Cl + λridge I, and define the layer-wise closed-form channel matrix 
+
+M l = kTl
+
+
+
+Cl, eff + klkTl
+
+−1
+
+, μI ⪯ Cl, eff ⪯ ¯M I, (52) for some constants 0 < μ ≤ ¯M . Assume cross-layer drift (with εC < μ ): 
+
+∥Cl − CL∥2 ≤ εC , ∥kl − kL∥2 ≤ εk, ∀l ∈ L . (53) 15 Assume there exists ρ ∈ [0 , 1) such that 
+
+X 
+
+> l̸=L
+
+(Jl)T sl ≤ ρ∥(JL)T sL∥. (54) Multi-layer solvers allocate the meta-target into layer-wise targets tl(v∗) ∈ Rd1 . We assume: 
+
+Assumption 1 (Allocation Jacobian stability) . (i) Each allocation map is differentiable and uniformly bounded: ∂tl/∂ v∗ 
+
+> 2
+
+≤ Lt for all l ∈ L . (ii) Cross-layer Jacobian drift is small (“slow drift”): 
+
+∂tl
+
+∂v∗ − ∂tL
+
+∂v∗ 2
+
+≤ L′
+
+> t
+
+εk, ∀l ∈ L . (55) 
+
+(iii) Under feasibility consistency (53) , the last-layer allocation Jacobian is close to identity: 
+
+∂tL
+
+∂v∗ − I 2
+
+≤ Lid (εC + εk). (56) 
+
+Remark. (56) is empirically checkable (e.g., finite-difference estimates of ∂tL/∂ v∗). It is also satisfied by a broad class of linear(ized) allocation mechanisms where tL solves a perturbed identity system (I + G)tL = v∗ with ∥G∥2 = O(εC + εk), in which case (∂tL/∂ v∗) = ( I + G)−1 and 
+
+∥(I + G)−1 − I∥2 ≤ ∥ G∥2/(1 − ∥ G∥2).
+
+Lemma 3 (Inverse perturbation bound) . Let A ≻ 0 and B = A + E with ∥E∥2 ≤ ε and 
+
+λmin (A) ≥ μ > 0. If ε < μ , then B ≻ 0 and ∥B−1 − A−1∥2 ≤ εμ(μ−ε) .
+
+Proof. Use the resolvent identity: B−1 − A−1 = −B−1EA −1. Then ∥B−1 − A−1∥ ≤ ∥ B−1∥ · ∥E∥ · ∥ A−1∥. Since λmin (B) ≥ μ − ε, ∥B−1∥ ≤ 1/(μ − ε) and ∥A−1∥ ≤ 1/μ .
+
+Lemma 4 (Geometry discrepancy bound) . Assume ∥kl∥2 ≤ Bk for all l ∈ L and εC + 2 Bkεk < μ .Then there exists a constant KM > 0 such that for all l ∈ L ,
+
+∥M l − M L∥2 ≤ KM (εC + εk).
+
+Proof. Let Al := Cl, eff + klkTl , so that M l = kTl A−1 
+
+> l
+
+. M l − M L = ( kl − kL)T A−1 
+
+> l
+
++
+
+kTL (A−1 
+
+> l
+
+− A−1 
+
+> L
+
+). For the first term, ∥(kl − kL)T A−1 
+
+> l
+
+∥2 ≤ ∥ kl − kL∥2∥A−1 
+
+> l
+
+∥2 ≤ εk/μ since 
+
+Al ⪰ Cl, eff ⪰ μI. For the second term, note Al − AL = ( Cl − CL) + ( klkTl − kLkTL ), hence 
+
+∥Al −AL∥2 ≤ εC +∥klkTl −kLkTL ∥2 ≤ εC +( ∥kl∥2 +∥kL∥2)εk ≤ εC +2 Bkεk. Apply Lemma 3 with A = AL, B = Al and ε = εC + 2 Bkεk (requiring ε < μ ) to obtain 
+
+∥A−1 
+
+> l
+
+− A−1 
+
+> L
+
+∥2 ≤ εC + 2 Bkεk
+
+μ(μ − εC − 2Bkεk) . (57) Therefore 
+
+∥kTL (A−1 
+
+> l
+
+− A−1 
+
+> L
+
+)∥2 ≤ ∥ kL∥2 · ∥ A−1 
+
+> l
+
+− A−1 
+
+> L
+
+∥2 ≤ ∥kL∥2
+
+μ(μ − εC − 2Bkεk) (εC + 2 Bkεk). (58) Combining the two terms yields the stated O(εC + εk) discrepancy bound. 
+
+Lemma 5 (Proxy channel identity) . Let the proxy update be ∆proxy (v∗) = tproxy (v∗)M L with 
+
+∂tproxy /∂ v∗ = I (e.g., tproxy (v∗) = v∗ or the residual v∗ − W LkL). Then the proxy hypergradient equals 
+
+gproxy = ( Jproxy )T sL = sLM TL , (59) 
+
+and satisfies ∥gproxy ∥ ≤ ∥ sL∥F ∥M L∥2.Proof. For any perturbation δv ∈ Rd1 , Jproxy [δv] = ( ∂tproxy /∂ v∗)δv · M L = δvM L. Then 
+
+⟨Jproxy [δv], sL⟩F = ⟨δv, sLM TL ⟩2, so (Jproxy )T sL = sLM TL . The norm bound follows by submul-tiplicativity: ∥sLM TL ∥ ≤ ∥ sL∥F ∥M L∥2.16 B.3.2 Proof of Theorem 3 
+
+We restate the theorem in the main-text notation: define gL := ( JL)T sL. Under dominance (54) ,feasibility consistency (53), and allocation stability (Assumption 1), we show: 
+
+∥gtrue − gproxy ∥ ≤ ρ∥gL∥ + K(εC + εk)∥sL∥F ∥M L∥2, (60) and under non-degeneracy α(v∗) ≥ α0 > 0 we obtain a descent-direction guarantee. 
+
+Step 1: Dominance controls the tail layers From (51) , gtrue − gL = P 
+
+> l̸=L
+
+(Jl)T sl. Taking norms and applying (54) yields 
+
+∥gtrue − gL∥ ≤ ρ∥gL∥. (61) 
+
+Step 2: Allocation stability controls last-layer vs. proxy mismatch For the last layer, we assume the solver channel has the outer-product structure ∆∗
+
+> L
+
+(v∗) = tL(v∗)M L (standard in key-value editing channels). By the same adjoint argument as Lemma 5, the exact last-layer channel is 
+
+gL = ( JL)T sL =
+
+ ∂tL
+
+∂v∗
+
+T
+
+(sLM TL ). (62) Using Lemma 5, gproxy = sLM TL .
+
+gL − gproxy =
+
+ ∂tL
+
+∂v∗
+
+T
+
+− I
+
+
+
+(sLM TL ), (63) and therefore 
+
+∥gL − gproxy ∥ ≤ ∥ sLM TL ∥2 ≤ ∂tL
+
+∂v∗ − I 2
+
+· ∥ sL∥F ∥M L∥2. (64) By Assumption 1(iii), ∂tL 
+
+> ∂v∗
+
+− I 2 ≤ Lid (εC + εk). Substituting into (64) yields 
+
+∥gL − gproxy ∥ ≤ Lid (εC + εk)∥sL∥F ∥M L∥2. (65) 
+
+Step 3: Combine the two steps Triangle inequality gives ∥gtrue − gproxy ∥ ≤ ∥ gtrue − gL∥ + ∥gL −
+
+gproxy ∥. Apply (61) and (65) to obtain 
+
+∥gtrue − gproxy ∥ ≤ ρ∥gL∥ + Lid (εC + εk)∥sL∥F ∥M L∥2. (66) This proves the stated bound with K := Lid .
+
+Step 4: Descent-direction guarantee under non-degeneracy Define the measurable non-degeneracy coefficient α(v∗) := ∥sLM TL ∥2   
+
+> ∥sL∥F∥ML∥2
+
+= ∥gproxy ∥∥sL∥F ∥M L∥2 ∈ [0 , 1] . If α(v∗) ≥ α0 > 0,then 
+
+∥sL∥F ∥M L∥2 ≤ α−10 ∥gproxy ∥. (67) Moreover, from (62) and Assumption 1(iii), ∥∂tL/∂ v∗∥2 ≤ 1 + Lid (εC + εk), hence 
+
+∥gL∥ ≤ ∂tL
+
+∂v∗ 2
+
+∥gproxy ∥ ≤  1 + Lid (εC + εk)∥gproxy ∥. (68) Combine the main bound with (67) and (68): 
+
+∥gtrue − gproxy ∥ ≤ ρ∥gL∥ + K(εC + εk)∥sL∥F ∥M L∥2 ≤
+
+
+
+ρ + eK(εC + εk)
+
+
+
+∥gproxy ∥, (69) for some eK > 0 (absorbing ρL id and α−10 K into the constant). Finally, 
+
+⟨gtrue , gproxy ⟩ = ∥gproxy ∥2 + ⟨gtrue − gproxy , gproxy ⟩ ≥ ∥ gproxy ∥2 − ∥ gtrue − gproxy ∥ ∥ gproxy ∥. (70) Thus, if ρ + eK(εC + εk) < 1, we obtain ⟨gtrue , gproxy ⟩ > 0, i.e., gproxy is a valid descent direction. 17
