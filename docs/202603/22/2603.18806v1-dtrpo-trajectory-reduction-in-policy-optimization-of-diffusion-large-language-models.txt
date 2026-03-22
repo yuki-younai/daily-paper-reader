@@ -1,0 +1,1682 @@
+Title: dTRPO: Trajectory Reduction in Policy Optimization of Diffusion Large Language Models
+
+URL Source: https://arxiv.org/pdf/2603.18806v1
+
+Published Time: Fri, 20 Mar 2026 01:03:27 GMT
+
+Number of Pages: 29
+
+Markdown Content:
+# dTRPO: Trajectory Reduction in Policy Optimization of Diffusion Large Language Models 
+
+Wenxuan Zhang 1,2,∗, Lemeng Wu 1, Changsheng Zhao 1, Ernie Chang 1, Mingchen Zhuge 2, Zechun Liu 1,
+
+Andy Su 1, Hanxian Huang 1, Jun Chen 1, Chong Zhou 1, Raghuraman Krishnamoorthi 1, Vikas Chandra 1,
+
+Mohamed Elhoseiny 2,†, Wei Wen 1,†
+
+> 1
+
+Meta AI, 2KAUST 
+
+> ∗
+
+Work done at Meta , †Joint last author 
+
+Diffusion Large Language Models (dLLMs) introduce a new paradigm for language generation, which in turn presents new challenges for aligning them with human preferences. In this work, we aim to improve the policy optimization for dLLMs by reducing the cost of the trajectory probability calculation, thereby enabling scaled-up offline policy training. We prove that: (i) under reference policy regularization, the probability ratio of the newly unmasked tokens is an unbiased estimate of that of intermediate diffusion states, and (ii) the probability of the full trajectory can be effectively estimated with a single forward pass of a re-masked final state. By integrating these two trajectory reduction strategies into a policy optimization objective, we propose Trajectory Reduction Policy Optimization (dTRPO). We evaluate dTRPO on 7B dLLMs across instruction-following and reasoning benchmarks. Results show that it substantially improves the core performance of state-of-the-art dLLMs, achieving gains of up to 9.6% on STEM tasks, up to 4.3% on coding tasks, and up to 3.0% on instruction-following tasks. Moreover, dTRPO exhibits strong training efficiency due to its offline, single-forward nature, and achieves improved generation efficiency through high-quality outputs.  
+
+> Date:
+
+March 20, 2026  
+
+> Correspondence:
+
+Wei Wen at wewen@meta.com  
+
+> Code:
+
+https://github.com/facebookresearch/dllm_post_training 
+
+# 1 Introduction 8(1+N)× 6(1+N)× (4+N)×    
+
+> d1(MF)
+> d2
+> wd1
+> SPG
+> TraDO
+> 2
+> 0
+> 2
+> 4
+> 6
+> 8
+> Performance Gain
+> 32× 4× 1×
+> LLaDA 1.5
+> (VRPO)
+> SFT
+> (ELBO)
+> Ours
+> Normalized Cost
+> Use MATH Training Set
+> Use General Training Set
+> Figure 1
+
+Performance gains on MATH dataset v.s. normalized online (left) and offline (right) training cost. Online training requires hundrads more ( N ×) computation for the rollout stage, while our offline method requires only 4 forward passes per training example and achieves comparable performance. 
+
+Diffusion Large Language Models (dLLMs) have recently emerged as a promising lan-guage generation paradigm alongside Autore-gressive Large Language Models (ARMs). In-spired by discrete diffusion processes in com-puter vision (Song et al., 2021; Austin et al., 2021a), dLLMs formulate text generation as a discrete denoising process over a pre-defined sequence of masked tokens. This paradigm en-ables several distinctive capabilities, including bidirectional context awareness for tasks such as poem writing (Nie et al., 2025), controllable generation through in-place prompting (Jin et al., 2025), parallel decoding for tasks such as code generation (Xie et al., 2025), and so on. Despite these appealing characteristics, cur-rent dLLMs still lag behind state-of-the-art ARMs (Liu et al., 2025). Years of em-pirical refinement have resulted in a rela-1
+
+> arXiv:2603.18806v1 [cs.AI] 19 Mar 2026
+
+tively standardized post-training pipeline for ARMs (Bakouch et al., 2025; Olmo et al., 2025): supervised fine-tuning (SFT) as a cold start (Guo et al., 2025), followed by Direct Preference Optimization (DPO) (Rafailov et al., 2023) and online reinforcement learning (Bai et al., 2022) to bridge the gap between pre-training objectives and generation. Within this pipeline, the DPO stage plays an important role as an efficient and scalable intermediate step, equipping models with strong zero-shot instruction-following ability and providing a robust initialization for subsequent reinforcement learning. Transferring this post-training paradigm to dLLMs, however, is far from straightforward. A growing body of work explores adapting post-trained ARMs to dLLMs (Ye et al., 2025; Wu et al., 2025a; Gat et al., 2025; Cheng et al., 2025), as illustrated in figure 6. Nevertheless, fundamental challenges arise in further post-training dLLMs, where the target is to improve the probability of good generation. Unlike ARMs, whose probability of generation processes can be naturally factorized at the token level, dLLMs generate text through a multi-step diffusion process over partially masked states, and estimating the probability becomes more complex. In particular, naively measuring probability of each hidden states typically requires a large number of forward passes, leading to prohibitive training costs. While recent work (Wang et al., 2025c; Zhao et al., 2025b) has explored this problem in the online reinforcement learning stage, this inefficiency, together with the reliance on online training, limits the scalability of dLLMs training. In this work, we explore how to use less computation to estimate the generation probability in the dLLM policy optimization, which we denote as Trajectory Reduction. We develop a theoretical formulation of the dLLM generation process and perform the trajectory reduction in two ways. Firstly, under reference-policy regularization, we prove that each state probability ratio admits a factorization into probability ratios over newly unmasked tokens. We then show that the trajectory probabilities can be estimated using fewer states by a single forward pass with block attention, and the estimation can be guided by the inference-time decoding strategy. Applying these reductions to the DPO objective yields Trajectory Reduction Policy Optimization (dTRPO), which enables an efficient and stable post-training procedure for diffusion language models. We evaluate dTRPO on 7B dLLMs across instruction-following, STEM, and coding benchmarks in the zero-shot setting. Our results show that dTRPO substantially improves both instruction-following performance and reasoning capabilities, achieving gains of up to 9.6% on STEM tasks, up to 4.3% on coding tasks, and up to 3.0% on instruction-following tasks. We further analyze the effects of different implementation choices, including scheduler design, trajectory sampling strategies, and algorithm hyperparameters, and demonstrate that the proposed approach is compatible with both long-block dLLMs and block-wise dLLMs. Our contributions are 
+
+• We provide a theoretical formulation of the generation process of dLLMs and introduce dTRPO, which factorizes the required transition probability ratios into token-wise probability ratios and reduces the estimation cost to a single forward pass. 
+
+• We evaluate the proposed method on 7B dLLMs, demonstrating consistent gains in instruction-following performance of up to 10%. 
+
+# 2 Related Works 
+
+2.1 Large Language Model Alignment 
+
+Bridging the gap between pre-training objectives and generation process is a critical step in the development of large language models (LLMs), and has been extensively studied in the autoregressive model (ARM) setting. Early alignment approaches relied on Supervised Fine-Tuning (SFT) and Reinforcement Learning from Human Feedback (RLHF) (Ouyang et al., 2022; Bai et al., 2022). Subsequently, Direct Preference Optimization (DPO) was introduced to convert the computationally expensive RLHF objective into a more stable and efficient supervised learning formulation (Rafailov et al., 2023). More recently, driven by the success of models such as DeepSeek-R1 and improvements in hardware efficiency, online reinforcement learning has emerged as a popular paradigm for further enhancing reasoning capabilities (Shao et al., 2024; Guo et al., 2025). 2Contemporary post-training pipelines typically follow a three-stage curriculum: an initial SFT “cold start”, followed by high-quality SFT or DPO as an intermediate alignment stage, and finally online reinforcement learning to further refine performance (Bakouch et al., 2025; Lambert et al., 2024). This curriculum aims to produce a strong generic model that generalizes across diverse downstream tasks. 
+
+2.2 Diffusion Language Models 
+
+Diffusion Large Language Models (dLLMs) have attracted growing attention, with research spanning pre-training (Nie et al., 2025; Ye et al., 2025; Xie et al., 2025; Song et al., 2025; Wu et al., 2025a; Gat et al., 2025; Cheng et al., 2025), post-training (Zhu et al., 2025; Zhao et al., 2025b; Wang et al., 2025c,b; Chen et al., 2025a; Tang et al., 2025; Wang et al., 2025a), and sampling strategies (Chen et al., 2025b; Wu et al., 2025b; Huang et al., 2025b; Jin et al., 2025; Kim et al., 2025; Li et al., 2025a). Existing training paradigms generally fall into two categories: long-block diffusion models trained from scratch (Arriola et al., 2025; Nie et al., 2025), and block-wise approaches that adapt pre-trained autoregressive checkpoints to diffusion-style generation via masked prediction (Wu et al., 2025a; Gat et al., 2025; Cheng et al., 2025). Recent work converged toward the latter paradigm, as it achieves stronger performance with fewer training tokens by leveraging pre-trained knowledge. In the post-training regime, Zhu et al. (Zhu et al., 2025) adapted DPO to dLLMs to perform supervised prefer-ence optimization. However, the majority of work has focused on policy-gradient-based optimization (Sutton et al., 1999) to improve reasoning quality on task-specific benchmarks (Zhao et al., 2025b; Wang et al., 2025b,c; Tang et al., 2025; Zhao et al., 2025a; Chen et al., 2025a; Huang et al., 2025a). A central technical bottleneck underlying these approaches is the estimation of probability of generation process. In ARMs, this probability naturally factorizes via causal conditioning and can be computed with a single forward pass. In contrast, dLLMs generate text through a multi-step diffusion process over partially masked states; computing exact probability of generation process typically requires expensive forward passes over intermediate states. To address this challenge, LLaDA (Nie et al., 2025; Zhu et al., 2025) employs ELBO-based estimators with Monte Carlo sampling. d1 (Zhao et al., 2025b) adopts a mean-field approximation, while TRaDO (Wang et al., 2025c) and d2 (Wang et al., 2025b) reduce variance by aggregating predictions over a subset of intermediate diffusion steps. DiffPO (Zhao et al., 2025a) further introduces importance sampling by treating a reduced diffusion process as a surrogate policy. Despite these efforts, we argue that the theoretical formulation of discrete diffusion processes (Shi et al., 2024; Ou et al., 2025) is sufficient to support principled, rather than heuristic, derivations of efficient trajectory probability estimation. Building on this theoretical foundation, we present a simple and efficient approach and demonstrate its effectiveness in the following sections. 
+
+# 3 Algorithm 
+
+In this section, we first review preliminaries on dLLMs and policy optimization for ARMs in section 3.1. We then formulate the reverse diffusion process of dLLMs as a finite-horizon Markov Decision Process (MDP) in section 3.2, and introduce trajectory reduction in section 3.3.  
+
+> Notation.
+
+Let V be a finite vocabulary, and let [M] denote a special absorbing mask token. We define the extended alphabet as ¯V = V ∪ { [M]}. Let y ∈ V L denote an output token sequence of length L. The diffusion process operates on a sequence of latent states τt ∈ ¯VL, indexed by discrete time steps t ∈ { 0, 1, . . . , T }. We set τ0 = y as the clean (fully unmasked) state and τT = [[ M], . . . , [M]] as the pure-noise (fully masked) state. Throughout this section, all distributions and policies are implicitly conditioned on the prompt/context; for simplicity, we omit the prompt from the notation. Superscripts denote sequence positions, i.e., τ (i) 
+
+> t
+
+is the token at position i at diffusion step t.Many dLLMs perform diffusion block-wise, treating previously generated blocks as context. We denote NB as the number of blocks and TB as the number of steps in each block. We have T = NB × TB . We write a state at the s-th block and t-th step as τs,t , which equals the state at global time step sT B + t. In this state, all tokens before s-th block are unmasked and the tokens after s-th block are masked. 3ARM 
+
+dLLM 
+
+## (b) Trajectory Reduction   
+
+> Mask Prompt Response Generation Policy
+
+## (a) Generation Trajectory   
+
+> Block Figure 2 (a):
+
+Generation processes in ARMs and dLLMs. ARMs generate tokens via causal conditioning, whereas dLLMs generate sequences via a multi-step diffusion process. (b): dTRPO samples masked tokens for each block and estimates trajectory probability ratios using only the probabilities of newly unmasked tokens under πθ .
+
+3.1 Preliminaries 
+
+For this subsection, we consider a single coordinate τ (i) 
+
+> t
+
+∈ ¯V and a single block for simplicity. Assuming independence across positions, the derivations extend to the full sequence. 
+
+Diffusion Large Language Models. We follow the notation of (Shi et al., 2024) to introduce the diffusion process of dLLMs, which includes forward process and reverse process. The forward process progressively corrupts the data by replacing tokens with [M] under the transition kernel q,
+
+y = τ0
+
+> q
+
+−→ . . . q
+
+−→ τT .
+
+Our goal is to learn a reverse policy that approximates the true posterior at each step: 
+
+τtπθ
+
+−→ τt−1.
+
+Then learned reverse policy can be used for the language generation through gradually predicting multiple tokens, as illustrated in figure 2(a). 
+
+Forward Process. The transition kernel q(τ (i) 
+
+> t
+
+| τ (i)
+
+> t−1
+
+) in the forward process is 
+
+q(τ (i) 
+
+> t
+
+| τ (i)
+
+> t−1
+
+) = (1 − βt) 1{τ (i)   
+
+> t=τ(i)
+> t−1}
+
++ βt 1{τ (i) 
+
+> t=[ M]}
+
+, (1) where βt ∈ [0 , 1] is the masking schedule. This implies that, in the forward process, once a token is masked, it remains masked. If a token is unmasked at time t − 1, then with probability βt it becomes masked at time t.The marginal distribution at time t given the clean data τ0 is 
+
+q(τ (i) 
+
+> t
+
+| τ (i)0 ) = αt1{τ (i)    
+
+> t=τ(i)0}
+
++ (1 − αt)1{τ (i) 
+
+> t=[ M]}
+
+, (2) where αt = Qts=1 (1 − βs) is the cumulative retention rate. 
+
+Reverse Process. The reverse process learns to invert this corruption. Theoretically, the exact posterior 
+
+q(τ (i) 
+
+> t−1
+
+| τ (i) 
+
+> t
+
+, τ (i)0 ) is : 
+
+q(τ (i) 
+
+> t−1
+
+| τ (i) 
+
+> t
+
+, τ (i)0 ) = 
+
+
+
+1 if τ (i) 
+
+> t−1
+
+= τ (i) 
+
+> t
+
+= τ (i)0 , 
+
+> αt−1−αt
+> 1−αt
+
+if τ (i) 
+
+> t
+
+= [ M], τ (i) 
+
+> t−1
+
+= τ (i)0 , 
+
+> 1−αt−1
+> 1−αt
+
+if τ (i) 
+
+> t
+
+= [ M], τ (i) 
+
+> t−1
+
+= [ M],
+
+0 otherwise. (3) 4That is, conditioned on τ (i) 
+
+> t
+
+= [ M], with probability 1−αt−1 
+
+> 1−αt
+
+the token stays masked, and with probability  
+
+> αt−1−αt
+> 1−αt
+
+it is unmasked; once unmasked, it remains unmasked thereafter. To approximate the posterior, we parameterize a neural network fθ (τt) that predicts the clean-data distribution 
+
+y = τ0 given the current noisy state τt and a conditioning context (e.g., a prompt). Let μθ (· | τt) = 
+
+softmax (fθ (τt)) denote the predicted categorical distribution over V at each position. The parameterized reverse transition kernel pθ (τt−1 | τt) is typically constructed by marginalizing over the predicted ˆτ0 (Shi et al., 2024): 
+
+pθ (τ (i) 
+
+> t−1
+
+| τ (i) 
+
+> t
+
+, τt, μ θ ) = 
+
+ 
+
+> αt−1−αt
+> 1−αt
+
+μθ (τ (i) 
+
+> t−1
+
+| τt) τ (i) 
+
+> t
+
+= [ M], ˆτ (i)0 = τ (i)
+
+> t−1
+
+̸ = [ M] 
+
+> 1−αt−1
+> 1−αt
+
+τ (i) 
+
+> t
+
+= [ M], τ (i) 
+
+> t−1
+
+= [ M]1 τ (i)
+
+> t
+
+̸ = [ M], τ (i) 
+
+> t−1
+
+= τ (i)
+
+> t
+
+0 otherwise (4) 
+
+Alignment with Policy Optimization in ARMs. In the policy optimization based method, the goal of alignment is to maximize the probability of generating the completion y = ( y1, . . . , y L) ∈ V L. As shown in figure 2(a), given a prompt (context), an ARM defines a policy πθ (yt | y<t ) to generate the completions and induces an MDP, whose trajectory probability factorizes as 
+
+πθ (y) = 
+
+> L
+
+Y
+
+> t=1
+
+πθ (yt | y<t ), (5) where y<t = ( y1, . . . , y t−1). Thanks to the casual attention, πθ (yt | y<t ) can be simply computed by forwarding the final sequence y and taking the probability of the token yt, that is, πθ (yt | y<t ) = [ πθ (y)](t). Thus, the trajectory probability πθ (y) can be computed in a single forward pass. A class of offline alignment methods (Rafailov et al., 2023) optimizes the policy using preference data 
+
+D = {(y+, y−)}, where y+ is preferred over y− under the same prompt. The objective is 
+
+L(θ) = −E(y+,y−)∼D g
+
+
+
+λ
+
+
+
+log πθ (y+)
+
+πθ (y−) − log πref (y+)
+
+πref (y−)
+
+ 
+
+, (6) where g is a projection function (e.g., log-sigmoid in DPO (Rafailov et al., 2023) and ReLU in RSO (Liu et al., 2024)), and λ controls the KL scale. Next, we show that dLLMs do not admit the factorization as equation (5); consequently, the quantities needed for policy optimization must be computed over diffusion trajectories. 
+
+3.2 Formulation of dLLMs as MDP 
+
+Following the prior work in the field of vision diffusion models (Black et al., 2024), we cast reverse diffusion as a finite-horizon MDP. The state at reverse step t is st := ( τt, t ), where τt ∈ ¯VL is the partially masked sequence and t ∈ { T, T − 1, . . . , 1} is the remaining diffusion time. The initial state is deterministic with 
+
+τT = [[ M], . . . , [M]] . An action corresponds to selecting the next denoised sequence, at := τt−1, sampled from a parameterized reverse policy πθ :
+
+πθ (at | st) = πθ (τt−1 | τt, t ). (7) Under the reverse process in section 3.1, πθ is instantiated by the categorical distribution induced by equation (4). The environment transition is deterministic: τt−1 ← at. This MDP has a fixed horizon of length 
+
+T and terminates at t = 0 , yielding a completed output sequence τ0 = y.Given a prompt, generation proceeds by sampling a reverse diffusion trajectory, τ := ( τT , τT −1, . . . , τ0), where 
+
+τT = [[ M], . . . , [M]] and τ0 = y ∈ V L. Under πθ , the trajectory probability is 
+
+πθ (τ ) = 
+
+> T
+
+Y
+
+> t=1
+
+πθ (τt−1 | τt, t ) = 
+
+> T
+
+Y
+
+> t=1
+
+pθ (τt−1 | τt, t, μ θ ). (8) Since τT is always fully masked, the initial-state term is constant and omitted. 53.3 Trajectory Reduction 
+
+In contrast to ARMs, the trajectory probability in equation (8) does not admit a simple token-level factorization as in equation (5). For example, in figure 2(a), the generation of token y2 depends on a partially masked state (e.g., τ2). If we perform only a single forward pass on the fully unmasked output y (as in ARMs), the resulting conditional distribution corresponds to πθ (τ (2) 1 | τ0) rather than the required transition probability 
+
+πθ (τ (2) 1 | τ2). As a result, trajectory probability cannot be obtained from a single forward pass. This yields the first challenge: (i) efficiently estimating trajectory probability with a small number of forward passes. Beyond efficiency, computing the trajectory probability in equation (8) using the kernel in equation (4) can be numerically unstable. The schedule-dependent coefficients (involving αt) can differ in magnitude from the learned categorical terms μθ (·); with a large vocabulary, these coefficients may dominate and lead to unstable training. This yields the second challenge: (ii) handling schedule-dependent coefficients in pθ to ensure stable training.  
+
+> Table 1
+
+Directly optimizing masked token probability is not effective in dLLM post training.                 
+
+> Objective GSM8K LCBv6 IFEval
+> max θΠyi=[ M]πθ( ˜ y)(i)66.26 2.37 25.69
+> min θELBO( Πyi=[ M]πθ( ˜ y)(i))79.98 11.56 51.02 dTRPO 85.97 15.17 65.06
+
+Some existing work (Zhao et al., 2025b) estimates masked-token probabilities by randomly masking the final output sequence and directly optimizing the masked token probability. However, under the diffusion formulation in section 3.2, this is not a grounded estimator of the trajectory probability in equation (8). When used for training, other works (Ou et al., 2025) suggest it should be paired with an ELBO objective, and we show the perfor-mance in table 1. In practice, ELBO training can be noisy and often requires multiple corrupted inputs ˜y to obtain a low-variance estimate, which is still sub-optimal. 
+
+State Reduction. To address challenge (i), we estimate the trajectory probability in equation (8) with a subset of timesteps. With block attention (Wu et al., 2025a; Gat et al., 2025), the computation can be implemented in a single forward pass by sampling one time step t within each block, details in section B. 
+
+Theorem 3.1 (State Reduction) . The probability of the MDP process in dLLMs can be reduced to 
+
+log πθ (τ ) = 
+
+> NB
+
+X
+
+> s=1
+
+Et∼U (1 ,T B )TB log πθ (τs,t | τs,t −1, t ) (9) 
+
+where τs,t = τsT B +t denotes the state at block s and within-block step t.
+
+The proof is provided in section A.1. In block-wise diffusion models such as Fast-dLLM v2, NB is determined by the sequence length and block size; in long-block models such as LLaDA, one has NB = 1 . Globally, this estimator is unbiased and equals to using NB sampled diffusion steps. 
+
+Ratio Reduction. Although computing trajectory probability itself is difficult, policy optimization requires only ratios between the current policy and a reference policy. Crucially, when the two policies are evaluated on the same transition, the schedule-dependent coefficients cancel, yielding an expression depending only on the model-predicted categorical probabilities. 
+
+Theorem 3.2 (Ratio Reduction) . Assume the reverse kernel factorizes across coordinates as in equation (4) .Then for any (τt−1, τt),
+
+πθ (τt−1 | τt, t )
+
+πref (τt−1 | τt, t ) = Y
+
+> i∈I t(τt−1,τt)
+
+μθ
+
+
+
+τ (i) 
+
+> t−1
+
+| τt
+
+
+
+μref 
+
+
+
+τ (i) 
+
+> t−1
+
+| τt
+
+ , (10) 
+
+where It(τt−1, τt) is the set of newly unmasked coordinates at step t, defined by 
+
+It(τt−1, τt) := 
+
+n
+
+i ∈ [L] : τ (i) 
+
+> t
+
+= [ M], τ (i) 
+
+> t−1
+
+∈ V 
+
+o
+
+. (11) 6The proof is provided in section A.2. We emphasize that equation (10) holds only for ratios: neither 
+
+πθ (τt−1 | τt, t ) nor πref (τt−1 | τt, t ) alone reduces to a product of categorical terms due to the schedule coefficients and the unchanged coordinates. Therefore, it is not effective to optimize the trajectory by directly maximizing the probability of masked toknes, as the first row in table 1 A practical benefit of theorem 3.2 is that the ratio in equation (10) is independent of the masking schedule 
+
+{βt}Tt=1 : all schedule-dependent coefficients cancel between πθ and πref . Therefore, we may choose a scheduler that matches the base model’s inference-time decoding strategy without changing the form of the loss; equivalently, we define It according to the inference-time unmasking strategy. Here, the scheduler specifies (i) the number of reverse steps T and (ii) how tokens are unmasked at each step. We adopt an inference-aligned scheduler: at each reverse step, we unmask k = 0 .1 × (block size ) tokens by selecting the top-k masked coordinates according to the confidence scores. For example, in figure 2(b), if 
+
+It = {2, 4}, we use only these two categorical probabilities to form the trajectory ratio at that step. Although selecting top-k coordinates violates strict conditional independence, we empirically show in section 4.4 that the results are negligible impacted. 
+
+dTRPO Objective. Apply theorem 3.1 and theorem 3.2 in DPO (Rafailov et al., 2023), dTRPO is formulated as: 
+
+LdTRPO (θ) = −E(y+,y−)∼D log σ λT B
+
+
+
+S(y+
+
+> s,t
+
+; θ, ref ) − S(y−
+
+> s,t
+
+; θ, ref )
+
+!
+
+, (12) where the term S(y; θ, ref ) is the log of probability ratios over the newly unmasked tokens for summed over blocks 
+
+S(y; θ, ref ) = 
+
+> NB
+
+X
+
+> s=1
+
+Et∼U (1 ,T B ) log 
+
+ Y
+
+> i∈I t(τs,t −1,τs,t )
+
+μθ
+
+
+
+τ (i) 
+
+> s,t −1
+
+| τs,t 
+
+
+
+μref 
+
+
+
+τ (i) 
+
+> s,t −1
+
+| τs,t 
+
+
+
+. (13) and It(τs,t −1, τs,t ) is the set of newly unmasked coordinates at block s and within-block step t, selected by top-k confidence during the training. The derivation is provided in section A.4. We further provide a bias and variance analysis in section A.3. Algorithms can be found in algorithm 1. Moreover, our theorems also generalize to policy-gradient methods, as detailed in section A.5. 
+
+3.4 Relation to Early Works 
+
+Early work (Zhao et al., 2025b; Tang et al., 2025; Chen et al., 2025a; Wang et al., 2025b; Zhao et al., 2025a) commonly optimizes the KL-regularized objective using policy-gradient updates under a mean-field approximation. These methods typically construct a stochastic estimator by (i) sampling and forwarding several reverse steps and randomly masking tokens, and (ii) approximating the objective using the model predictions on the masked positions. In contrast, we estimate the required ratios using NB sampled steps (one per block) with one forward pass. Moreover, we do not use the probabilities of all masked tokens; instead, we use only the probabilities of newly unmasked tokens. The above procedure can be interpreted as a special case of our framework. For long-block models (where 
+
+NB = 1 ), it corresponds to a scheduler that, at the sampled step, unmasks all currently masked coordinates (i.e., k equals the number of masked tokens at that step). Since these works employ policy-gradient objectives that depend on policy ratios, our ratio-reduction theorem also provides a principled explanation of their estimators. In practice, such a scheduler is often suboptimal, both in optimization stability and in matching the model’s deployment-time generation dynamics, which we verify empirically in our experiments. 
+
+# 4 Experiments 
+
+4.1 Setup  
+
+> Backbone Model and Inference Strategy.
+
+We select Fast-dLLM-v2-7B as the backbone model due to its strong inference efficiency and native support for parallel decoding (Wu et al., 2025a). Fast-dLLM-v2-7B is adapted 7Table 2 Performance of dLLMs under zero-shot evaluation. dTRPO achieves overall best performance and close the gap to strong ARMs.                                                                                     
+
+> GPQA
+> (cot,diamond)
+> GSM8K
+> (cot) MATH LCB
+> (v6)
+> MBPP+
+> (extra)
+> HEval+
+> (extra)
+> IFEval
+> (prompt)
+> ArenaHard
+> (V2.0) MTBench
+> dLLM from Scratch
+> LLaDA Instruct 19.19 78.47 42.48 6.07 38.1 34.1 53.23 --LLaDA 1.5 19.19 79.45 43.64 6.54 37 39 59.52 --
+> Qwen 2.5 7B Instruct v.s. dLLM from Qwen2.5 7B Instruct
+> Qwen2.5 Instruct 36.36 87.87 73.06 24.42 67.5 74.4 71.38 10.43 8.08 Dream Instruct 28.79 75.36 50.22 12.61 54.5 53 50.65 6.79 3.88 Fast-dLLM-v2 20.71 82.34 60.26 11.56 51.6 59.1 62.11 1.26 3.17 Fast-dLLM-v2+ELBO 12.63 79.98 58.48 11.56 52.4 59.1 51.02 0.17 1.01 Fast-dLLM-v2+VRPO 24.24 83.17 63.32 12.89 50.5 57.3 65.06 7.32 6.37 Fast-dLLM-v2+DPO w/ MF 23.74 85.37 63.20 11.00 46.30 51.80 65.62 6.02 6.48
+> Fast-dLLM-v2+dTRPO 30.30 85.97 64.3 15.17 51.6 63.4 65.06 7.41 6.53
+
+from Qwen2.5-7B-Instruct (Qwen et al., 2025) and employs a block-wise diffusion process. At inference time, generation proceeds block by block (with size 32) in an autoregressive manner. We follow the official Fast-dLLM-v2 inference implementation, using greedy decoding with a batch size of 32 and a maximum generation length of 2048 tokens. 
+
+Training Data. Following SmolLM3, we primarily use the SmolTalk2 preference dataset to improve instruction-following capability (Bakouch et al., 2025). In addition, we mix it with a math preference dataset (Argilla, 2024) and a code preference dataset (Vezora, 2024) to enhance mathematical and code reasoning performance. The total number of preference pairs is 500K. 
+
+Training Details. We train the model for one epoch with a per-device batch size of 2 and a gradient accumulation factor of 8 across 64 NVIDIA A100 (80GB) GPUs; total training takes approximately 5 hours. Optimization is performed using AdamW (Loshchilov and Hutter, 2017) with a learning rate of 5 × 10 −7. We employ a cosine-annealing learning rate schedule with a warmup phase covering the first 10% of training steps. The context length during training is set to 4096 tokens. For the remaining hyperparameters, we follow the training script of SmolLM3 (Bakouch et al., 2025). For dTRPO, we use a top-k confidence scheduler with k = 0 .1. The training block size is 32, which corresponds to selecting 3 newly unmasked tokens per block to form probability ratios. For preference optimization, we use the DPO (Rafailov et al., 2023) objective with λ = 0 .05 . To reduce training cost, we follow BFPO (Zhang et al., 2025) and update only the MLP layers and the output projection layers, while keeping the remaining parameters frozen. 
+
+Evaluation Benchmarks. We evaluate models on instruction-following, math and STEM reasoning, and code generation benchmarks, following the evaluation protocols of SmolLM3 (Bakouch et al., 2025) and Fast-dLLM-v2 (Wu et al., 2025a). For math reasoning, we report results on GPQA (Rein et al., 2024), GSM8K (Cobbe et al., 2021), and MATH (Hendrycks et al., 2021). For code generation, we evaluate on MBPP (Austin et al., 2021b), LiveCodeBench v6 (LCBv6) (Jain et al., 2025), and HumanEval (Chen, 2021). For instruction following, we use IFEval (Zhou et al., 2023), Arena-Hard v2 (Li et al., 2025b), and MT-Bench (Zheng et al., 2023). All benchmarks are evaluated in the zero-shot setting. Detailed descriptions of datasets and evaluation metrics are provided in section E.3. 
+
+Comparison Baselines. We compare the following 7B diffusion language models initialized from Qwen2.5-7B-Instruct using their official checkpoints: LLaDA (Nie et al., 2025), Dream (Ye et al., 2025), and Fast-dLLM-v2 (Wu et al., 2025a). We additionally compare dTRPO against several alternative estimators, including ELBO-based supervised fine-tuning (Nie et al., 2025), VRPO (Zhu et al., 2025), and DPO with a block-wise mean-field approximation (DPO w/ MF) (Zhao et al., 2025b). All alternative estimators are trained with the same data and training configuration as dTRPO. Detailed information are in section E.4. 8MATH HumanEval+ IFEval 
+
+> 50
+> 60
+> 70
+> Accuracy (%)
+> RandomK
+> TopK
+> Gaussian Weighted TopK
+
+Ablation on unmask strategy MATH HumanEval+ IFEval 
+
+> 50
+> 60
+> 70
+> Accuracy (%)
+> DPO
+> IPO
+> RSO
+> APO
+
+Ablation on projection function MATH HumanEval+ IFEval 
+
+> 30
+> 40
+> 50
+> 60
+> Accuracy (%)
+> LLaDA
+> LLaDA + Ours
+
+Ablation on model backbone 1 2
+
+> 60
+> 62
+> 64
+> 66
+> 68
+> 70
+> Accuracy (%)
+> MATH
+> HumanEval+
+> IFEval
+
+Ablation on samples per block 10 1 10 0
+
+> 50
+> 55
+> 60
+> 65
+> 70
+> Accuracy (%)
+> MATH
+> HumanEval+
+> IFEval
+
+Ablation on k20 30  
+
+> Tokens per Second (TPS)
+> 6
+> 8
+> 10
+> 12
+> Accuracy (%)  Qwen2.5
+> FastDLLMv2
+> Ours
+> 2x
+> 25.0 27.5
+> Avg Response Time (s)
+> Qwen2.5
+> FastDLLMv2
+> Ours
+> -4.9s
+> Performance v.s. Inference Speed
+
+Figure 3 Ablation study of algorithm design and implementation choices; Inference speed comparison for ours and baseline models. 
+
+4.2 Results Overview 
+
+Evaluation results are summarized in table 2. Across all evaluated benchmarks, dTRPO delivers the most robust overall performance among the open-source dLLM baselines. Specifically, compared to the strongest dLLM baseline, Fast-dLLM-v2, dTRPO achieves significant performance gains: 9.59% on GPQA, 3.63% on GSM8K, 4.04% on MATH, and 3.61% on LCBv6. Furthermore, it enhances code generation capabilities (HumanEval+ by 4.3% ) and instruction-following proficiency (IFEval by 2.95% ). For open-ended benchmarks evaluated under the LLM-as-a-judge protocol, dTRPO outperforms Fast-dLLM-v2 by 6.15% on Arena-Hard and 3.36% on MT-Bench. Notably, we implemented several representative post-training strategies for comparison, and dTRPO consis-tently outperforms these alternatives in aggregate. While certain baselines achieve localized advantages on specific benchmarks—for instance, Dream leads on MBPP+ by 2.9% and DPO w/ MF slightly edges out on IFEval by 0.56% —these instances likely stem from a specialized focus within their respective training data distributions. However, these methods typically fall substantially behind on other critical benchmarks; for example, Dream lags behind dTRPO by 14 .08% on MATH. In contrast, dTRPO maintains a balanced and superior performance profile across the entire suite. Moreover, dTRPO effectively narrows the performance gap between dLLMs and strong ARMs, such as Qwen2.5-7B-Instruct. Since most dLLMs are adapted from ARMs, the ability to preserve the original pre-trained knowledge is paramount for maintaining complex reasoning tasks. While some performance degradation relative to the base ARM is an inherent trade-off for the significantly higher sampling efficiency of dLLMs (1.9 × in figure 5(d)), the drop exhibited by dTRPO is relatively marginal. This is especially evident in instruction-following tasks evaluated by LLM-as-a-judge, such as Arena-Hard and MT-Bench, where the performance gaps are narrowed to a nearly negligible 3.02% and 1.55% , respectively. We provide more comparisons with the Qwen3 series in section D.1 
+
+4.3 Training and Inference Efficiency 
+
+As shown in figure 1, our training cost matches that of DPO for ARMs while achieving comparable MATH performance to dLLM baselines that are trained with MATH-specific data. Concretely, for each training example, we forward the preferred and dispreferred completions once under the policy model and once under the reference model, for a total of 4 forward passes, which follows the DPO training paradigm for ARMs. For online methods such as TRaDO or d1, training additionally requires generating completions, which equals 9Table 3 Token per second (TPS) and average end to end inference time (seconds) comparison on GSM8K and Arena-Hard between dTRPO, Fast-dLLM-v2, and Qwen2.5-7B-Instruct.                          
+
+> Model GSM8K Arena-Hard
+> TPS Inference Time Accuracy TPS Inference Time Score Qwen2.5-7B-Instruct 38.9 7.17 87.87 16.20 26.66 10.43 Fast-dLLM-v2 38.84 7.83 82.34 19.55 28.92 6.79 dTRPO 38.80 8.52 85.97 29.87 23.98 7.41
+
+hundrads of forward passes (cost N ×), and for each completion, multiple forward passes are typically needed to estimate trajectory probability ratios. Overall, dTRPO is purely offline and requires training compute similarly to DPO for ARMs. To evaluate inference efficiency, we report tokens per second (TPS) and average end-to-end inference time (in seconds) on GSM8K and Arena-Hard. We compare dTRPO, Fast-dLLM-v2, and Qwen2.5-7B-Instruct in table 3 and figure 3. As shown in table 3, on easier benchmarks like GSM8K, dLLMs generally achieve higher TPS than ARMs. dTRPO attains efficiency comparable to Fast-dLLM-v2 while achieving substantial improvements in accuracy. On Arena-Hard, dLLMs still lag behind ARMs in overall performance. The weaker capabilities of dLLMs can lead to redundant generation, which may increase inference time. Nevertheless, dTRPO achieves the highest TPS and the lowest inference time, while narrowing the performance gap between dLLMs and ARMs. 
+
+4.4 Ablations and Discussion 
+
+Scheduling Strategy. Our method adopts a confidence-based scheduling strategy that unmasks tokens with the highest confidence at each diffusion step. However, the derivation in theorem 3.1 relies on an independence assumption across token positions. To examine sensitivity to this assumption, we also evaluate a random-k
+
+scheduler, which unmasks a randomly selected k% of masked tokens at each step, independent of confidence scores. We further design a Gaussian-weighted top-k scheduler, which reweights confidence scores by a Gaussian function over token indices, assigning higher weights to earlier tokens in the sequence. We use 
+
+k = 0 .1 for all schedulers. As shown in figure 3, the differences among scheduling strategies are generally small, and each strategy exhibits varying strengths across tasks. In particular, for instruction-following benchmarks, the Gaussian-weighted top-k scheduler outperforms the alternatives. This suggests that prioritizing earlier tokens when estimating 
+
+sequence probability ratios can be beneficial in instruction-following settings.  
+
+> Number of Time Steps per Block.
+
+In our experiments, we set k = 0 .1, which corresponds to TB = 10 time steps per block. We ablate the number of time steps per block by varying k. As shown in figure 3(f), larger 
+
+k implies fewer time steps per block and leads to worse performance. In practice, inference-time decoding typically unmasks only a small number of tokens per step (often starting from one token and increasing toward the end), which supports using small k. Overall, these results indicate that our estimator remains effective under inference-aligned unmasking schedules.  
+
+> Number of Samples per Block.
+
+Our method estimates the required trajectory probability ratios using a single sampled diffusion step per block. We ablate the number of sampled steps in figure 3(e). As shown, increasing the number of sampled steps yields comparable performance, indicating that the estimator remains stable even with a single sample.  
+
+> dTRPO on LLaDA.
+
+We further apply dTRPO to LLaDA, which employs a single long diffusion block where each token attends to all other tokens. As shown in figure 3(c), dTRPO yields a substantial improvement over the LLaDA backbone. This indicates that the proposed approach is not limited to block-wise diffusion architectures and also extends effectively to long-block dLLMs.  
+
+> Projection Function.
+
+We use the DPO (Rafailov et al., 2023) log-sigmoid projection function to map probability ratios into the loss. Given extensive work on projection functions for preference optimization, we evaluate several commonly used alternatives, including DPO, IPO (Azar et al., 2024), RSO (Liu et al., 2024), and 10 APO (D’Oosterlinck et al., 2024). As shown in figure 3(b), our estimator is robust to the choice of projection function. While different projections exhibit task-dependent differences, the log-sigmoid projection performs best on instruction-following benchmarks. See section D.2 for the ablations of DPO λ and parameter efficient training 
+
+# 5 Conclusion 
+
+We studied a problem in alignment for diffusion large language models (dLLMs): computing the trajectory probability is substantially more expensive and less stable than the token-factorized sequence probability used by autoregressive models. To address this, we introduced dTRPO, which combines state reduction 
+
+and ratio reduction to obtain an efficient estimator that uses only the probabilities of newly unmasked tokens and can be implemented with a single forward pass per block. Experiments on 7B dLLMs show that dTRPO consistently improve instruction-following, STEM reasoning, and coding performance, outperforming representative alternative estimators and other open-source dLLMs. We hope these findings motivate future work to scale up the post-training stage of dLLMs. 11 References 
+
+Argilla. argilla/distilabel-math-preference-dpo. https://huggingface.co/datasets/argilla/ distilabel-math-preference-dpo , 2024. Dataset, accessed: 2026-01-12. Marianne Arriola, Subham Sekhar Sahoo, Aaron Gokaslan, Zhihan Yang, Zhixuan Qi, Jiaqi Han, Justin T Chiu, and Volodymyr Kuleshov. Block diffusion: Interpolating between autoregressive and diffusion language models. In 
+
+The Thirteenth International Conference on Learning Representations , 2025. https://openreview.net/forum?id= tyEyYT267x .Jacob Austin, Daniel D Johnson, Jonathan Ho, Daniel Tarlow, and Rianne Van Den Berg. Structured denoising diffusion models in discrete state-spaces. Advances in neural information processing systems , 34:17981–17993, 2021a. Jacob Austin, Augustus Odena, Maxwell Nye, Maarten Bosma, Henryk Michalewski, David Dohan, Ellen Jiang, Carrie Cai, Michael Terry, Quoc Le, et al. Program synthesis with large language models. arXiv preprint arXiv:2108.07732 ,2021b. Mohammad Gheshlaghi Azar, Zhaohan Daniel Guo, Bilal Piot, Remi Munos, Mark Rowland, Michal Valko, and Daniele Calandriello. A general theoretical paradigm to understand learning from human preferences. In International Conference on Artificial Intelligence and Statistics , pages 4447–4455. PMLR, 2024. Yuntao Bai, Andy Jones, Kamal Ndousse, Amanda Askell, Anna Chen, Nova DasSarma, Dawn Drain, Stanislav Fort, Deep Ganguli, Tom Henighan, et al. Training a helpful and harmless assistant with reinforcement learning from human feedback. arXiv preprint arXiv:2204.05862 , 2022. Elie Bakouch, Loubna Ben Allal, Anton Lozhkov, Nouamane Tazi, Lewis Tunstall, Carlos Miguel Patiño, Edward Beeching, Aymeric Roucher, Aksel Joonas Reedi, Quentin Gallouédec, Kashif Rasul, Nathan Habib, Clémentine Fourrier, Hynek Kydlicek, Guilherme Penedo, Hugo Larcher, Mathieu Morlon, Vaibhav Srivastav, Joshua Lochner, Xuan-Son Nguyen, Colin Raffel, Leandro von Werra, and Thomas Wolf. SmolLM3: smol, multilingual, long-context reasoner. https://huggingface.co/blog/smollm3 , 2025. Kevin Black, Michael Janner, Yilun Du, Ilya Kostrikov, and Sergey Levine. Training diffusion models with reinforcement learning. In The Twelfth International Conference on Learning Representations , 2024. Mark Chen. Evaluating large language models trained on code. arXiv preprint arXiv:2107.03374 , 2021. Shirui Chen, Jiantao Jiao, Lillian J. Ratliff, and Banghua Zhu. dultra: Ultra-fast diffusion language models via reinforcement learning. arXiv preprint arXiv:2512.21446 , 2025a. Xinhua Chen, Sitao Huang, Cong Guo, Chiyue Wei, Yintao He, Jianyi Zhang, Hai Li, Yiran Chen, et al. Dpad: Efficient diffusion language models with suffix dropout. arXiv preprint arXiv:2508.14148 , 2025b. Shuang Cheng, Yihan Bian, Dawei Liu, Linfeng Zhang, Qian Yao, Zhongbo Tian, Wenhai Wang, Qipeng Guo, Kai Chen, Biqing Qi, et al. Sdar: A synergistic diffusion-autoregression paradigm for scalable sequence generation. arXiv preprint arXiv:2510.06303 , 2025. Karl Cobbe, Vineet Kosaraju, Mohammad Bavarian, Jacob Hilton, Reiichiro Nakano, Christopher Hesse, and John Schulman. Training verifiers to solve math word problems, 2021. LMDeploy Contributors. Lmdeploy: A toolkit for compressing, deploying, and serving llm. https://github.com/ InternLM/lmdeploy , 2023. Karel D’Oosterlinck, Winnie Xu, Chris Develder, Thomas Demeester, Amanpreet Singh, Christopher Potts, Douwe Kiela, and Shikib Mehri. Anchored preference optimization and contrastive revisions: Addressing underspecification in alignment. arXiv preprint arXiv:2408.06266 , 2024. Leo Gao, Jonathan Tow, Baber Abbasi, Stella Biderman, Sid Black, Anthony DiPofi, Charles Foster, Laurence Golding, Jeffrey Hsu, Alain Le Noac’h, Haonan Li, Kyle McDonell, Niklas Muennighoff, Chris Ociepa, Jason Phang, Laria Reynolds, Hailey Schoelkopf, Aviya Skowron, Lintang Sutawika, Eric Tang, Anish Thite, Ben Wang, Kevin Wang, and Andy Zou. The language model evaluation harness, 07 2024. https://zenodo.org/records/12608602 .Itai Gat, Heli Ben-Hamu, Marton Havasi, Daniel Haziza, Jeremy Reizenstein, Gabriel Synnaeve, David Lopez-Paz, Brian Karrer, and Yaron Lipman. Set block decoding is a language model inference accelerator. arXiv preprint arXiv:2509.04185 , 2025. 
+
+12 Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song, Ruoyu Zhang, Runxin Xu, Qihao Zhu, Shirong Ma, Peiyi Wang, Xiao Bi, et al. Deepseek-r1: Incentivizing reasoning capability in llms via reinforcement learning. arXiv preprint arXiv:2501.12948 , 2025. Dan Hendrycks, Collin Burns, Saurav Kadavath, Akul Arora, Steven Basart, Eric Tang, Dawn Song, and Jacob Steinhardt. Measuring mathematical problem solving with the MATH dataset. In Thirty-fifth Conference on Neural Information Processing Systems Datasets and Benchmarks Track (Round 2) , 2021. https://openreview.net/forum? id=7Bywt2mQsCe .Zemin Huang, Zhiyang Chen, Zijun Wang, Tiancheng Li, and Guo-Jun Qi. Reinforcing the diffusion chain of lateral thought with diffusion language models. In Advances in Neural Information Processing Systems (NeurIPS) , 2025a. Zemin Huang, Zhiyang Chen, Zijun Wang, Tiancheng Li, and Guo-Jun Qi. Reinforcing the diffusion chain of lateral thought with diffusion language models. arXiv preprint arXiv:2505.10446 , 2025b. Naman Jain, King Han, Alex Gu, Wen-Ding Li, Fanjia Yan, Tianjun Zhang, Sida Wang, Armando Solar-Lezama, Koushik Sen, and Ion Stoica. Livecodebench: Holistic and contamination free evaluation of large language models for code. In The Thirteenth International Conference on Learning Representations , 2025. https://openreview.net/ forum?id=chfJJYC3iL .Xiangqi Jin, Yuxuan Wang, Yifeng Gao, Zichen Wen, Biqing Qi, Dongrui Liu, and Linfeng Zhang. Thinking inside the mask: In-place prompting in diffusion llms. arXiv preprint arXiv:2508.10736 , 2025. Jaeyeon Kim, Kulin Shah, Vasilis Kontonis, Sham M. Kakade, and Sitan Chen. Train for the worst, plan for the best: Understanding token ordering in masked diffusions. In Forty-second International Conference on Machine Learning ,2025. Nathan Lambert, Jacob Morrison, Valentina Pyatkin, Shengyi Huang, Hamish Ivison, Faeze Brahman, Lester James V Miranda, Alisa Liu, Nouha Dziri, Shane Lyu, et al. Tulu 3: Pushing frontiers in open language model post-training. 
+
+arXiv preprint arXiv:2411.15124 , 2024. Jinsong Li, Xiaoyi Dong, Yuhang Zang, Yuhang Cao, Jiaqi Wang, and Dahua Lin. Beyond fixed: Training-free variable-length denoising for diffusion large language models. arXiv preprint arXiv:2508.00819 , 2025a. Tianle Li, Wei-Lin Chiang, Evan Frick, Lisa Dunlap, Tianhao Wu, Banghua Zhu, Joseph E. Gonzalez, and Ion Stoica. From crowdsourced data to high-quality benchmarks: Arena-hard and benchbuilder pipeline. In Forty-second International Conference on Machine Learning , 2025b. https://openreview.net/forum?id=KfTf9vFvSn .Jiawei Liu, Chunqiu Steven Xia, Yuyao Wang, and Lingming Zhang. Is your code generated by chatGPT really correct? rigorous evaluation of large language models for code generation. In Thirty-seventh Conference on Neural Information Processing Systems , 2023. https://openreview.net/forum?id=1qvx610Cu7 .Jingyu Liu, Xin Dong, Zhifan Ye, Rishabh Mehta, Yonggan Fu, Vartika Singh, Jan Kautz, Ce Zhang, and Pavlo Molchanov. Tidar: Think in diffusion, talk in autoregression. arXiv preprint arXiv:2511.08923 , 2025. Tianqi Liu, Yao Zhao, Rishabh Joshi, Misha Khalman, Mohammad Saleh, Peter J Liu, and Jialu Liu. Statistical rejection sampling improves preference optimization. In The Twelfth International Conference on Learning Representations ,2024. https://openreview.net/forum?id=xbjSwwrQOe .Ilya Loshchilov and Frank Hutter. Decoupled weight decay regularization. arXiv preprint arXiv:1711.05101 , 2017. Shen Nie, Fengqi Zhu, Zebin You, Xiaolu Zhang, Jingyang Ou, Jun Hu, Jun Zhou, Yankai Lin, Ji-Rong Wen, and Chongxuan Li. Large language diffusion models. In Advances in Neural Information Processing Systems (NeurIPS) ,2025. Team Olmo, Allyson Ettinger, Amanda Bertsch, Bailey Kuehl, David Graham, David Heineman, Dirk Groeneveld, Faeze Brahman, Finbarr Timbers, Hamish Ivison, Jacob Morrison, Jake Poznanski, Kyle Lo, Luca Soldaini, Matt Jordan, Mayee Chen, Michael Noukhovitch, Nathan Lambert, Pete Walsh, Pradeep Dasigi, Robert Berry, Saumya Malik, Saurabh Shah, Scott Geng, Shane Arora, Shashank Gupta, Taira Anderson, Teng Xiao, Tyler Murray, Tyler Romero, Victoria Graf, Akari Asai, Akshita Bhagia, Alexander Wettig, Alisa Liu, Aman Rangapur, Chloe Anastasiades, Costa Huang, Dustin Schwenk, Harsh Trivedi, Ian Magnusson, Jaron Lochner, Jiacheng Liu, Lester James V. Miranda, Maarten Sap, Malia Morgan, Michael Schmitz, Michal Guerquin, Michael Wilson, Regan Huff, Ronan Le Bras, Rui Xin, Rulin Shao, Sam Skjonsberg, Shannon Zejiang Shen, Shuyue Stella Li, Tucker Wilde, Valentina Pyatkin, Will Merrill, Yapei Chang, Yuling Gu, Zhiyuan Zeng, Ashish Sabharwal, Luke Zettlemoyer, Pang Wei Koh, Ali Farhadi, Noah A. Smith, and Hannaneh Hajishirzi. Olmo 3, 2025. https://arxiv.org/abs/2512.13961 .
+
+13 Jingyang Ou, Shen Nie, Kaiwen Xue, Fengqi Zhu, Jiacheng Sun, Zhenguo Li, and Chongxuan Li. Your absorbing discrete diffusion secretly models the conditional distributions of clean data. In The Thirteenth International Conference on Learning Representations , 2025. Long Ouyang, Jeffrey Wu, Xu Jiang, Diogo Almeida, Carroll Wainwright, Pamela Mishkin, Chong Zhang, Sandhini Agarwal, Katarina Slama, Alex Ray, et al. Training language models to follow instructions with human feedback. 
+
+Advances in neural information processing systems , 35:27730–27744, 2022. Qwen, :, An Yang, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo Zheng, Bowen Yu, Chengyuan Li, Dayiheng Liu, Fei Huang, Haoran Wei, Huan Lin, Jian Yang, Jianhong Tu, Jianwei Zhang, Jianxin Yang, Jiaxi Yang, Jingren Zhou, Junyang Lin, Kai Dang, Keming Lu, Keqin Bao, Kexin Yang, Le Yu, Mei Li, Mingfeng Xue, Pei Zhang, Qin Zhu, Rui Men, Runji Lin, Tianhao Li, Tianyi Tang, Tingyu Xia, Xingzhang Ren, Xuancheng Ren, Yang Fan, Yang Su, Yichang Zhang, Yu Wan, Yuqiong Liu, Zeyu Cui, Zhenru Zhang, and Zihan Qiu. Qwen2.5 technical report, 2025. 
+
+https://arxiv.org/abs/2412.15115 .Rafael Rafailov, Archit Sharma, Eric Mitchell, Christopher D Manning, Stefano Ermon, and Chelsea Finn. Direct preference optimization: Your language model is secretly a reward model. Advances in neural information processing systems , 36:53728–53741, 2023. David Rein, Betty Li Hou, Asa Cooper Stickland, Jackson Petty, Richard Yuanzhe Pang, Julien Dirani, Julian Michael, and Samuel R. Bowman. GPQA: A graduate-level google-proof q&a benchmark. In First Conference on Language Modeling , 2024. https://openreview.net/forum?id=Ti67584b98 .Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, YK Li, et al. Deepseekmath: Pushing the limits of mathematical reasoning in open language models. arXiv preprint arXiv:2402.03300 , 2024. Jiaxin Shi, Kehang Han, Zhe Wang, Arnaud Doucet, and Michalis Titsias. Simplified and generalized masked diffusion for discrete data. Advances in neural information processing systems , 37:103131–103167, 2024. Jiaming Song, Chenlin Meng, and Stefano Ermon. Denoising diffusion implicit models. In International Conference on Learning Representations , 2021. Yuxuan Song, Zheng Zhang, Cheng Luo, Pengyang Gao, Fan Xia, Hao Luo, Zheng Li, Yuehang Yang, Hongli Yu, Xingwei Qu, et al. Seed diffusion: A large-scale diffusion language model with high-speed inference. arXiv preprint arXiv:2508.02193 , 2025. Richard S Sutton, David McAllester, Satinder Singh, and Yishay Mansour. Policy gradient methods for reinforcement learning with function approximation. In S. Solla, T. Leen, and K. Müller, editors, Advances in Neural Information Processing Systems , volume 12. MIT Press, 1999. https://proceedings.neurips.cc/paper_files/paper/1999/file/ 464d828b85b0bed98e80ade0a5c43b0f-Paper.pdf .Xiaohang Tang, Rares Dolga, Sangwoong Yoon, and Ilija Bogunovic. wd1: Weighted policy optimization for reasoning in diffusion language models. arXiv preprint arXiv:2507.08838 , 2025. Vezora. Vezora/code-preference-pairs. https://huggingface.co/datasets/Vezora/Code-Preference-Pairs , 2024. Dataset, accessed: 2026-01-12. Chenyu Wang, Paria Rashidinejad, DiJia Su, Song Jiang, Sid Wang, Siyan Zhao, Cai Zhou, Shannon Zejiang Shen, Feiyu Chen, Tommi Jaakkola, Yuandong Tian, and Bo Liu. Spg: Sandwiched policy gradient for masked diffusion language models. arXiv preprint arXiv:2510.09541 , 2025a. Guanghan Wang, Yair Schiff, Gilad Turok, and Volodymyr Kuleshov. d2: Improved techniques for training reasoning diffusion language models. arXiv preprint arXiv:2509.21474 , 2025b. Yinjie Wang, Ling Yang, Bowen Li, Ye Tian, Ke Shen, and Mengdi Wang. Revolutionizing reinforcement learning framework for diffusion large language models. arXiv preprint arXiv:2509.06949 , 2025c. Chengyue Wu, Hao Zhang, Shuchen Xue, Shizhe Diao, Yonggan Fu, Zhijian Liu, Pavlo Molchanov, Ping Luo, Song Han, and Enze Xie. Fast-dllm v2: Efficient block-diffusion llm. arXiv preprint arXiv:2509.26328 , 2025a. Chengyue Wu, Hao Zhang, Shuchen Xue, Zhijian Liu, Shizhe Diao, Ligeng Zhu, Ping Luo, Song Han, and Enze Xie. Fast-dllm: Training-free acceleration of diffusion llm by enabling kv cache and parallel decoding, 2025b. 
+
+https://arxiv.org/abs/2505.22618 .
+
+14 Zhihui Xie, Jiacheng Ye, Lin Zheng, Jiahui Gao, Jingwei Dong, Zirui Wu, Xueliang Zhao, Shansan Gong, Xin Jiang, Zhenguo Li, et al. Dream-coder 7b: An open diffusion language model for code. arXiv preprint arXiv:2509.01142 ,2025. An Yang, Anfeng Li, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo Zheng, Bowen Yu, Chang Gao, Chengen Huang, Chenxu Lv, Chujie Zheng, Dayiheng Liu, Fan Zhou, Fei Huang, Feng Hu, Hao Ge, Haoran Wei, Huan Lin, Jialong Tang, Jian Yang, Jianhong Tu, Jianwei Zhang, Jianxin Yang, Jiaxi Yang, Jing Zhou, Jingren Zhou, Junyang Lin, Kai Dang, Keqin Bao, Kexin Yang, Le Yu, Lianghao Deng, Mei Li, Mingfeng Xue, Mingze Li, Pei Zhang, Peng Wang, Qin Zhu, Rui Men, Ruize Gao, Shixuan Liu, Shuang Luo, Tianhao Li, Tianyi Tang, Wenbiao Yin, Xingzhang Ren, Xinyu Wang, Xinyu Zhang, Xuancheng Ren, Yang Fan, Yang Su, Yichang Zhang, Yinger Zhang, Yu Wan, Yuqiong Liu, Zekun Wang, Zeyu Cui, Zhenru Zhang, Zhipeng Zhou, and Zihan Qiu. Qwen3 technical report. arXiv preprint arXiv:2505.09388 , 2025. Jiacheng Ye, Zhihui Xie, Lin Zheng, Jiahui Gao, Zirui Wu, Xin Jiang, Zhenguo Li, and Lingpeng Kong. Dream 7b: Diffusion large language models. arXiv preprint arXiv:2508.15487 , 2025. Wenxuan Zhang, Philip Torr, Mohamed Elhoseiny, and Adel Bibi. Bi-factorial preference optimization: Balancing safety-helpfulness in language models. In The Thirteenth International Conference on Learning Representations ,2025. https://openreview.net/forum?id=GjM61KRiTG .Hanyang Zhao, Dawen Liang, Wenpin Tang, David Yao, and Nathan Kallus. Diffpo: Training diffusion llms to reason fast and furious via reinforcement learning. arXiv preprint arXiv:2510.02212 , 2025a. Siyan Zhao, Devaansh Gupta, Qinqing Zheng, and Aditya Grover. d1: Scaling reasoning in diffusion large language models via reinforcement learning. arXiv preprint arXiv:2504.12216 , 2025b. Lianmin Zheng, Wei-Lin Chiang, Ying Sheng, Siyuan Zhuang, Zhanghao Wu, Yonghao Zhuang, Zi Lin, Zhuohan Li, Dacheng Li, Eric Xing, et al. Judging llm-as-a-judge with mt-bench and chatbot arena. Advances in neural information processing systems , 36:46595–46623, 2023. Jeffrey Zhou, Tianjian Lu, Swaroop Mishra, Siddhartha Brahma, Sujoy Basu, Yi Luan, Denny Zhou, and Le Hou. Instruction-following evaluation for large language models. arXiv preprint arXiv:2311.07911 , 2023. Fengqi Zhu, Rongzhen Wang, Shen Nie, Xiaolu Zhang, Chunwei Wu, Jun Hu, Jun Zhou, Jianfei Chen, Yankai Lin, Ji-Rong Wen, and Chongxuan Li. Llada 1.5: Variance-reduced preference optimization for large language diffusion models. arXiv preprint arXiv:2505.19223 , 2025. 
+
+15 Appendix 
+
+# A Theorem 
+
+A.1 Proof of Theorem 3.1 (State Reduction) 
+
+Proof. By the definition of the MDP trajectory probability in equation (8), the log-probability of a reverse diffusion trajectory τ is a sum over transition log-probabilities: 
+
+log πθ (τ ) = 
+
+> T
+
+X
+
+> t=1
+
+log πθ (τt−1 | τt, t ). (14) We partition the horizon into NB blocks of equal length TB such that T = NB TB . Let τs,t denote the state at block s ∈ { 1, . . . , N B } and within-block step t ∈ { 1, . . . , T B } (i.e., global time index sT B + t). Then we can re-index the sum as 
+
+log πθ (τ ) = 
+
+> NB
+
+X
+
+> s=1
+> TB
+
+X
+
+> t=1
+
+log πθ (τs,t −1 | τs,t , t ). (15) For any function f (t) over {1, . . . , T B }, we have the identity PTB 
+
+> t=1
+
+f (t) = TB Et∼U (1 ,T B )[f (t)] . Applying this to the inner sum yields 
+
+log πθ (τ ) = 
+
+> NB
+
+X
+
+> s=1
+
+TB Et∼U (1 ,T B )
+
+h
+
+log πθ (τs,t −1 | τs,t , t )
+
+i
+
+. (16) Therefore, sampling a single time step within each block provides an unbiased estimator of the full-horizon log-probability, while reducing the number of required evaluations from T to NB .
+
+A.2 Proof of Theorem 3.2 (Ratio Reduction) 
+
+Proof. Assume the reverse kernel factorizes across coordinates as in equation (4). Then 
+
+πθ (τt−1 | τt, t ) = 
+
+> L
+
+Y
+
+> i=1
+
+pθ (τ (i) 
+
+> t−1
+
+| τ (i) 
+
+> t
+
+, τt, μ θ ). (17) Fix a transition (τt−1, τt). Partition indices i ∈ [L] into three disjoint sets: 1. Unmasked/Context positions: U := {i : τ (i) 
+
+> t
+
+∈ V} . By equation (4), such positions are deterministic and contribute a factor 1.2. Newly unmasked positions: It := {i : τ (i) 
+
+> t
+
+= [ M], τ (i) 
+
+> t−1
+
+∈ V} . By equation (4), 
+
+pθ = αt−1 − αt
+
+1 − αt
+
+μθ (τ (i) 
+
+> t−1
+
+| τt).
+
+3. Still masked positions: M := {i : τ (i) 
+
+> t
+
+= [ M], τ (i) 
+
+> t−1
+
+= [ M]}. By equation (4), 
+
+pθ = 1 − αt−1
+
+1 − αt
+
+,
+
+which is schedule-dependent but model-independent. Now consider the ratio between the current policy and the reference policy, evaluated on the same transition 
+
+(τt−1, τt):
+
+πθ (τt−1 | τt, t )
+
+πref (τt−1 | τt, t ) = Y
+
+> i∈U
+
+11 · Y 
+
+> i∈I t
+> αt−1−αt
+> 1−αt
+
+μθ (τ (i) 
+
+> t−1
+
+| τt) 
+
+> αt−1−αt
+> 1−αt
+
+μref (τ (i) 
+
+> t−1
+
+| τt) · Y
+
+> i∈M
+> 1−αt−1
+> 1−αt
+> 1−αt−1
+> 1−αt
+
+. (18) 16 All schedule-dependent coefficients cancel, leaving 
+
+πθ (τt−1 | τt, t )
+
+πref (τt−1 | τt, t ) = Y
+
+> i∈I t
+
+μθ (τ (i) 
+
+> t−1
+
+| τt)
+
+μref (τ (i) 
+
+> t−1
+
+| τt) . (19) Thus, the transition-level policy ratio depends only on categorical probabilities at newly unmasked positions and is independent of the masking schedule. 
+
+A.3 Bias and Variance Analysis of State Reduction 
+
+We analyze the bias and variance introduced by the block-wise estimator when approximating the sum of transition log-ratios along a fixed trajectory. Let ∆s,t denote the transition log-ratio at block s and within-block step t:
+
+∆s,t := log πθ (τs,t −1 | τs,t , t )
+
+πref (τs,t −1 | τs,t , t ) . (20) By Theorem 3.2, this quantity is schedule-independent and can be written as 
+
+∆s,t = X
+
+> i∈I t(τs,t −1,τs,t )
+
+log μθ (τ (i) 
+
+> s,t −1
+
+| τs,t )
+
+μref (τ (i) 
+
+> s,t −1
+
+| τs,t ) . (21) Define the full trajectory objective (sum over all blocks and steps) as 
+
+L := 
+
+> NB
+
+X
+
+> s=1
+> TB
+
+X
+
+> t=1
+
+∆s,t . (22) Our estimator samples one step ts ∼ U (1 , T B ) independently for each block s and uses 
+
+ˆL := 
+
+> NB
+
+X
+
+> s=1
+
+ˆℓs, ˆℓs := TB · ∆s,t s . (23) 
+
+Proposition A.1 (Unbiasedness) . ˆL is an unbiased estimator of L, i.e., E[ ˆL] = L.Proof. By linearity of expectation, 
+
+E[ ˆL] = 
+
+> NB
+
+X
+
+> s=1
+
+Ets∼U (1 ,T B )[TB ∆s,t s ] = 
+
+> NB
+
+X
+
+> s=1
+> TB
+
+X
+
+> t=1
+
+∆s,t = L. 
+
+Proposition A.2 (Variance) . Let σ2 
+
+> s
+
+:= Var t∼U (1 ,T B )(∆ s,t ). Then 
+
+Var( ˆL) = 
+
+> NB
+
+X
+
+> s=1
+
+T 2 
+
+> B
+
+σ2 
+
+> s
+
+. (24) 
+
+Proof. Independence across blocks implies Var ( ˆL) = PNB 
+
+> s=1
+
+Var ( ˆℓs). For each block, Var ( ˆℓs) = Var (TB ∆s,t s ) = 
+
+T 2 
+
+> B
+
+Var(∆ s,t s ) = T 2 
+
+> B
+
+σ2 
+
+> s
+
+. Summing over s yields the claim. This result highlights a compute–variance trade-off: the estimator remains unbiased while its variance scales as T 2 
+
+> B
+
+. In practice, block-wise dLLMs typically use small block sizes (e.g., up to 32 tokens) (Wu et al., 2025a; Cheng et al., 2025), which keeps the variance moderate while enabling substantial compute savings. 17 A.4 Derivation of the dTRPO Objective 
+
+To derive the dTRPO objective, we start with the Bradley-Terry preference model and the standard DPO framework (Rafailov et al., 2023). For a diffusion trajectory τ , the relationship between the optimal reverse policy πθ and the underlying reward r(y) is given by log πθ (τ )  
+
+> πref (τ)
+
+= 1 
+
+> λ
+
+r(y) − log Z, where Z is the partition function, only depends on the context. Substituting this into the preference probability 
+
+P (y+ ≻ y−) = σ(r(y+) − r(y−)) yields the trajectory-based DPO objective: 
+
+−E(y+,y−)∼D log σ
+
+
+
+λ log πθ (τ +)
+
+πref (τ +) − λ log πθ (τ −)
+
+πref (τ −)
+
+
+
+. (25) Using theorem 3.1, we decompose the global trajectory log-ratio into a sum of block-wise expectations over the NB blocks: 
+
+log πθ (τ )
+
+πref (τ ) =
+
+> NB
+
+X
+
+> s=1
+
+Et∼U (1 ,T B )TB [log πθ (τs,t −1 | τs,t , t ) − log πref (τs,t −1 | τs,t , t )] . (26) Here we sample the same time step t within each block for both the policy and reference policy. By substituting this estimation into the trajectory-based objective, the loss becomes: 
+
+−ED log σ
+
+> NB
+
+X
+
+> s=1
+
+λT B Et∼U (1 ,T B ) log πθ (τ + 
+
+> s,t −1
+
+| τ +
+
+> s,t
+
+, t )
+
+πref (τ + 
+
+> s,t −1
+
+| τ +
+
+> s,t
+
+, t ) −
+
+> NB
+
+X
+
+> s=1
+
+λT B Et∼U (1 ,T B ) log πθ (τ − 
+
+> s,t −1
+
+| τ −
+
+> s,t
+
+, t )
+
+πref (τ − 
+
+> s,t −1
+
+| τ −
+
+> s,t
+
+, t )
+
+!
+
+. (27) On this basis, we leverage the Ratio Reduction property derived in theorem 3.2. As shown in (10) , for any single transition (τs,t −1, τs,t ), all schedule-dependent coefficients cancel out in the ratio, simplifying the transition-level log-ratio to: 
+
+log πθ (τs,t −1 | τs,t , t )
+
+πref (τs,t −1 | τs,t , t ) = X
+
+> i∈I t(τs,t −1,τs,t )
+
+log μθ (τ (i) 
+
+> s,t −1
+
+| τs,t )
+
+μref (τ (i) 
+
+> s,t −1
+
+| τs,t ) . (28) Finally, by substituting this simplified ratio back into (26) , we arrive at the dTRPO objective presented in section 3.3: 
+
+LdTRPO (θ) = −ED log σ
+
+> NB
+
+X
+
+> s=1
+
+Et∼U (1 ,T B )λT B
+
+X
+
+> i∈I +
+> t
+
+log μθ (τ +,(i) 
+
+> s,t −1
+
+| τ +
+
+> s,t
+
+)
+
+μref (τ +,(i) 
+
+> s,t −1
+
+| τ +
+
+> s,t
+
+) −
+
+> NB
+
+X
+
+> s=1
+
+Et∼U (1 ,T B )λT B
+
+X
+
+> i∈I −
+> t
+
+log μθ (τ −,(i) 
+
+> s,t −1
+
+| τ −
+
+> s,t
+
+)
+
+μref (τ −,(i) 
+
+> s,t −1
+
+| τ −
+
+> s,t
+
+)
+
+!
+
+.
+
+(29) where It denotes the set of newly unmasked coordinates in each trajectory, and t is a randomly sampled time step within each block. 
+
+A.5 Generalization to Policy Gradient Methods 
+
+The reduction properties in Theorems 3.1 and 3.2 also apply to policy-gradient-style objectives that depend on likelihood ratios between the current policy and a reference (or old) policy. Consider a KL-regularized RL objective of the form 
+
+J(θ) = Eτ ∼πθ
+
+h
+
+R(τ ) − λ KL  πθ (τ ) ∥ πref (τ )i
+
+, (30) where R(τ ) is a trajectory-level reward and πref is a fixed reference policy. A standard score-function (REINFORCE) gradient estimator is 
+
+∇θ J(θ) = Eτ ∼πθ
+
+h
+
+∇θ log πθ (τ ) · A(τ )
+
+i
+
+, (31) where A(τ ) is an advantage estimate. 18 In PPO-style surrogates, one typically uses a likelihood ratio r(τ ) := πθ (τ )[πref (τ )] sg (with stop-gradient on the denominator) and optimizes objectives of the form 
+
+LPG (θ) = Eτ ∼πθ
+
+h
+
+r(τ ) · A(τ )
+
+i
+
+. (32) For dLLMs, πθ (τ ) decomposes over reverse diffusion transitions as in equation (8), and direct evaluation of 
+
+r(τ ) is expensive. By Theorem 3.1, the trajectory-level log-ratio can be estimated block-wise by sampling one step per block, and by Theorem 3.2, each sampled transition ratio cancels all schedule-dependent coefficients. Therefore, the same reductions can be used to compute PPO/DPO-style ratios with substantially fewer forward passes. 
+
+# B Block Attention  
+
+> (a) Causal Attention
+> Trajectory
+> Trajectory
+> reduction
+> reduction
+> in
+> in
+> dLLM
+> dLLM
+> policy
+> policy
+> optimization
+> optimization
+> (b) Block Attention
+> [M]
+> [M]
+> reduction
+> reduction
+> in
+> in
+> [M]
+> [M]
+> policy
+> policy
+> [M]
+> [M]
+> Trajectory
+> Trajectory
+> reduction
+> reduction
+> in
+> in
+> dLLM
+> dLLM
+> policy
+> policy
+> optimization
+> optimization
+> Figure 4
+
+Causal attention and block attention in the training time. In (b), each row represents the tokens that an input token attends to. For a masked token, it attends to the masked input of the same block and clean tokens in the previous blocks. 
+
+This section explains how the expectation in equation (9) can be computed with a single forward pass. The key is a customized training-time attention mask that allows different tokens within the same packed sequence to observe different contexts, effectively simulating multiple partially masked states (one per block) in parallel. 
+
+Causal attention in ARMs. As shown in figure 4(a), autoregressive (ARM) training uses a causal mask so that token i attends only to tokens < i (and the prompt). Consequently, a single forward pass on the full sequence yields token-wise probabilities πθ (yi | y<i ), matching the factorization in equation (5). 
+
+Why this fails for dLLMs. For dLLMs, the relevant quantity in equation (8) is the transition probability conditioned on a partially masked state. At training time, for token positions in block s, we need probabilities conditioned on: (i) all previous blocks being clean, and (ii) the current block being partially masked. A single standard forward pass on one corrupted sequence cannot simultaneously provide the correct conditioning for all blocks. 
+
+Block attention mask. In figure 4(b), we show a packed sequence that concatenates partially masked tokens with the corresponding clean tokens, and define a block attention mask such that: (i) each token in a block attends to clean tokens from previous blocks, and (ii) masked tokens in the current block attend to the 19 Algorithm 1 dTRPO: Block-wise Ratio Reduction for Preference Optimization. 
+
+Require: Preference dataset D with triples (x, y +, y −); policy model μθ ; reference model μref ; block count NB ;within-block steps TB ; scheduler Select( ·) (e.g., top-k by confidence); scale λ.
+
+1: for each (x, y +, y −) ∈ D do 
+
+2: Sample one time step per block: ts ∼ U (1 , T B ) for s = 1 , . . . , N B
+
+3: for each completion y ∈ { y+, y −} do 
+
+4: Construct a packed, partially masked input ˜τ (y) using {ts}NB 
+
+> s=1
+
+and the block-attention mask (sec-tion B) 
+
+5: Run one forward pass to obtain categorical predictions: 
+
+μθ (· | ˜τ (y)) , μref (· | ˜τ (y)) 
+
+6: For each block s, use the scheduler to select newly-unmasked indices 
+
+Is ← Select   ˜τ (y), s 
+
+7: Compute the block-wise log-ratio score 
+
+S(y) ←
+
+> NB
+
+X
+
+> s=1
+
+X
+
+> i∈I s
+
+h
+
+log μθ (y(i) | ˜τ (y)) − log μref (y(i) | ˜τ (y)) 
+
+i
+
+8: end for 
+
+9: z ← λT B ·  S(y+) − S(y−)
+
+10: LdTRPO ← − log σ(z)
+
+11: end for 
+
+partially masked tokens within the same block. This design ensures that the logits for masked positions are conditioned on the desired “middle state” for each block. With this mask, a single forward pass is equivalent to forwarding NB separate partially masked sequences (one per block state). By extracting logits from the masked half, we obtain exactly the per-block sampled transition terms required by equation (9). If multiple time steps per block are needed, we can resample masks and repeat the forward pass accordingly. 
+
+# C Pseudocode for dTRPO D More Comparisons 
+
+D.1 Comparison with Qwen3 Series 
+
+Table 4 Performance Gain of our method with those dLLMs trained from QWen3.                                                                      
+
+> Model GPQA GSM8K MATH LCBv6 MBPP+ HumanEval+ IFEval Avg. Gain Qwen3-8B 51.52 89.61 82.98 42.18 66.40 80.50 82.99 -SDAR 28.28 (–23.24) 91.28 (+1.67) 74.22 (–8.76) 20.57 (–21.61) 66.40 (0.0) 65.90 (–14.6) 63.03 (–19.96) -12.36 TraDO 38.89 (–12.63) 91.05 (+1.44) 78.74 (–4.24) 29.00 (–13.1) 66.40 (0.0) 67.10 (–13.4) 62.85 (–20.14) -8.88 Qwen2.5-7B 36.36 87.87 73.06 24.42 67.50 74.40 71.38 -dTRPO 30.30 (–6.06) 85.97 (-1.90) 64.30 (–8.76) 15.17 (–9.25) 51.60 (–15.9) 63.40 (–11.0) 65.06 (–6.32) -8.46
+
+A key motivation for diffusion LLMs is to inherit capabilities from strong ARMs through initialization and then perform post-training under the diffusion policy, as illustrated in figure 6. We further compare our method with SDAR (Cheng et al., 2025) and TraDO (Wang et al., 2025c), two state-of-the-art dLLMs initialized from Qwen3 (Yang et al., 2025) in table 4. Here we omit benchmarks evaluated via LLM-as-a-judge. 20 SDAR and TraDO exhibit less stable adaptation: they can be strong on some benchmarks (e.g., MBPP, GSM8K) but degrade substantially on others (e.g., GPQA, IFEval). In contrast, our method achieves a more consistent performance profile. Importantly, as discussed in figure 1 and section 4.3, our training is purely offline, does not require on-policy generation, and does not rely on benchmark-specific training sets. 
+
+D.2 Ablation on the Parameter Efficient Finetuning MATH HumanEval+ IFEval 
+
+> 50
+> 60
+> 70
+> Accuracy (%)
+> Full Training
+> Training only MLP Layers
+
+Ablation on training strategy 10 2 10 1 10 0
+
+> 60
+> 62
+> 64
+> 66
+> 68
+> 70
+> Accuracy (%)
+> MATH
+> HumanEval+
+> IFEval
+
+(b) Ablation on  
+
+> Figure 5 Ablation on the parameter efficient finetuning and DPO hyperparameters.
+
+In our training setup, we selectively update only the MLP layers and the output projection layers. Given that Fast-dLLM-v2 is initialized from the Qwen2.5, such parameter-efficient training is crucial for preserving the pre-trained knowledge and preventing catastrophic forgetting. As illustrated in figure 5(a), restricting the optimization to MLP layers not only significantly reduces the computational overhead but also leads to superior performance across benchmarks compared to full-parameter fine-tuning. The most critical hyperparameter in our DPO-style objective is the KL-divergence regularization coefficient, 
+
+λ, which balances the sequence probability maximization and the divergence from the reference model. We conduct an ablation on λ in figure 5(b). The results show that the model performance remains stable across a wide range of λ values, indicating that our proposed method is robust and not overly sensitive to the precise choice of regularization strength. 
+
+# E Experiment Details 
+
+E.1 Training Pipeline 
+
+As illustrated in figure 6, dTRPO follows a structured post-training workflow for dLLMs. Our base model, Fast-dLLM-v2-7B, is derived from Qwen2.5-7B-Instruct via diffusion pre-training. This initial training stage is functionally analogous to the Supervised Fine-Tuning (SFT) phase of Autoregressive Models (ARMs); however, notably, the dLLM is initialized from a well-trained ARM checkpoint rather than starting from scratch. Subsequently, we execute the Direct Preference Optimization (DPO) stage leveraging our proposed method on the preference dataset. This phase serves as the counterpart to the offline Reinforcement Learning (RL) stage in traditional ARM pipelines, aimed at further refining the sequence probability distribution. The competitive baselines evaluated in table 2 all focus on this specific alignment stage to ensure a fair and consistent comparison with dTRPO. 
+
+E.2 Generation Protocol 
+
+For LLaDA and Dream, we adopt the Fast-dLLM generation protocol enhanced with prefix caching (Wu et al., 2025b), which we further adapt for batch generation 1. For Fast-dLLM-v2, we utilize the official batch 
+
+> 1https://github.com/NVlabs/Fast-dLLM
+
+21 Pre-trained ARM     
+
+> (QWen 2.5 Base) SFT ARM DPO ARM
+> Offline RL
+> (DPO, ...)
+> Aligned ARM
+> (QWen 2.5 Instruct) Online RL
+> (GRPO,...)
+> Base dLLM
+> (Fast-dLLM-v2)
+> Diffusion Pretraining
+> Aligned dLLM
+> (dTRPO)
+> High Quality QA
+> Preference Data Prompt
+> Supervised Finetuning
+> High Quality QA
+> Preference Data
+> Offline RL
+> (dTRPO , VRPO ...) Figure 6
+
+The post-training pipeline comparison between ARMs and dLLMs. 
+
+generation framework (Wu et al., 2025a). Specifically, we employ greedy decoding with a threshold of ϵ = 1 .0,which corresponds to generating one token per time step, supported by block-level caching 2.For the additional evaluations involving the Qwen3 series, we leverage the LMDeploy (Contributors, 2023) framework as implemented by SDAR to facilitate efficient batch generation 3.
+
+E.3 Evaluation Dataset Details 
+
+All tasks are evaluated in a zero-shot setting, with the maximum generation length capped at 2048 tokens and the decoding temperature set to 0 to ensure deterministic output. Specifically, we employ the lm-eval-harness framework (Gao et al., 2024) 4 to evaluate performance on GSM8K (Cobbe et al., 2021), GPQA (Rein et al., 2024), MATH (Hendrycks et al., 2021), and IFEval (Zhou et al., 2023). For coding benchmarks, we utilize the official LiveCodeBench evaluation protocol for LCBv6 (Jain et al., 2025) 5, while MBPP (Austin et al., 2021b) and HumanEval (Chen, 2021) are evaluated using the EvalPlus framework (Liu et al., 2023) 6. 
+
+> Table 5
+
+Prompts used for different evaluation datasets. 
+
+Role Prompt Template 
+
+GSM8K (CoT): 
+
+User Question: {question} Please reason step by step, and put your final answer within \boxed{ }. 
+
+MATH: 
+
+User Problem: {question} Please reason step by step, and put your final answer within \boxed{ }. 
+
+GPQA (Generative, CoT, Diamond): 
+
+User What is the correct answer to this question: {question} Choices: (A) {choice1} (B) {choice2} (C) {choice3} (D) {choice4} Let’s think step by step: 
+
+LiveCodeBench (v6): Continued on next page 
+
+> 2https://github.com/NVlabs/Fast-dLLM/tree/main/v2
+> 3https://github.com/JetAstra/SDAR
+> 4https://github.com/EleutherAI/lm-evaluation-harness
+> 5https://github.com/LiveCodeBench/LiveCodeBench
+> 6https://github.com/evalplus/evalplus
+
+22 Role Prompt Template (Continued) System You are a helpful assistant.  
+
+> User
+
+You will be given a question (problem specification) and will generate a correct Python program that matches the specification and passes all tests... Enclose your code within delimiters as follows: 
+
+“ ‘python # YOUR CODE HERE “ ‘ 
+
+MBPP+ & HumanEval+ (extra test):  
+
+> User
+
+Please provide a self-contained Python script... {Prompt}  
+
+> Assistant
+
+Below is a Python script with a self-contained function... 
+
+“ ‘python 
+
+E.4 Baseline Models and Comparison 
+
+We evaluate our method against state-of-the-art open-source dLLMs and several reproduced baselines built upon the Fast-dLLM-v2-7B architecture. The open-source dLLMs include LLaDA-Instruct (Nie et al., 2025) 7,LLaDA 1.5 (Zhu et al., 2025) 8, Dream-Instruct (Ye et al., 2025) 9, and Fast-dLLM-v2 (Wu et al., 2025a) 10 .For a fair comparison, all models are evaluated using our unified evaluation protocol. To further validate our approach, we reproduce several training methodologies—including SFT, VRPO, and DPO with mean-field probability estimation—and adapt them for the block-wise dLLM framework. To ensure consistency, these baselines utilize the same training data and configurations as dTRPO. While the forward pass remains identical across these models, the primary distinction lies in the loss computation from the logits: 
+
+• SFT : Following Wu et al. (2025a), we compute the loss for masked tokens using the ELBO-based objective (Ou et al., 2025). 
+
+• VRPO : The trajectory probability is derived from the ELBO over the masked tokens, which is subsequently optimized using the DPO objective. 
+
+• DPO with Mean-field : The trajectory probability is estimated by averaging the log-likelihoods over the masked tokens. 
+
+# F Qualitative Analysis 
+
+We provide some qualitative examples of dTRPO and Qwen2.5-Instruct on coding and instruction following tasks. From our observations, dTRPO can generate correct answers with faster speed and follow the instructions more closely. 
+
+Math Question 
+
+Jen enters a lottery by picking 4 distinct numbers from S = {1, 2, 3, · · · , 9, 10 }. 4 numbers are randomly chosen from S. She wins a prize if at least two of her numbers were 2 of the randomly chosen numbers, and wins the grand prize if all four of her numbers were the randomly chosen numbers. The probability of her winning the grand prize given that she won a prize is 
+
+tf racmn where m and n are relatively prime positive integers. Find m + n. 
+
+> Qwen2.5-Instruct:
+
+992 tokens, 137.00s 
+
+> 7https://huggingface.co/GSAI-ML/LLaDA-7B-Instruct
+> 8https://huggingface.co/GSAI-ML/LLaDA-1.5
+> 9https://huggingface.co/Dream-org/Dream-v0-Instruct-7B
+> 10 https://huggingface.co/Efficient-Large-Model/Fast_dLLM_v2_7B
+
+23 To solve this problem, we need to calculate the probability of Jen winning the grand prize given that she has won a prize. We will use conditional probability for this purpose. First, let’s define the events: - A: Jen wins the grand prize. - B: Jen wins a prize (at least 2 of her numbers match the 4 randomly chosen numbers). We need to find P (A | B), which is the probability of Jen winning the grand prize given that she has won a prize. By the definition of conditional probability, we have: 
+
+P (A | B) = P (A ∩ B)
+
+P (B) .
+
+Since event A (winning the grand prize) is a subset of event B (winning a prize), A ∩ B = A. Therefore, we have: 
+
+P (A | B) = P (A)
+
+P (B) .
+
+Now, let’s calculate P (A) and P (B).Step 1: Calculate P (A) The probability of Jen winning the grand prize is the probability that all 4 of her chosen numbers match the 4 randomly chosen numbers. Since there is only one way to choose 4 specific numbers out of 10, and Jen’s choice must be exactly these 4 numbers, we have: 
+
+P (A) = 1
+
+ 10 4
+
+ = 1210 .
+
+Step 2: Calculate P (B) The probability of Jen winning a prize means that at least 2 of her chosen numbers match the 4 randomly chosen numbers. We can use complementary counting to find this probability. First, we calculate the probability of the complementary event, which is that Jen wins no prize or wins exactly 1 prize. Complementary Event 1: No Prize The number of ways to choose 4 numbers such that none of Jen’s 4 numbers are included is: 64
+
+
+
+= 15 .
+
+So, the probability of this event is:  64
+
+ 10 4
+
+ = 15 210 = 114 .
+
+Complementary Event 2: Exactly 1 Prize The number of ways to choose 4 numbers such that exactly 1 of Jen’s 4 numbers is included is: 
+
+41
+
+
+
+·
+
+63
+
+
+
+= 4 · 20 = 80 .
+
+So, the probability of this event is: 80 210 = 821 .
+
+Therefore, the probability of the complementary event (no prize or exactly 1 prize) is: 
+
+114 + 821 = 342 + 16 42 = 19 42 .
+
+Thus, the probability of Jen winning a prize is: 
+
+P (B) = 1 − 19 42 = 23 42 .
+
+Step 3: Calculate P (A | B) Now we can find the conditional probability: 
+
+P (A | B) = P (A)
+
+P (B) =
+
+> 1210 23 42
+
+= 1210 · 42 23 = 42 4830 = 1115 .5 = 1115 .5 = 1115 .5 = 1115 .5 = ... 
+
+24 dTRPO: 422 tokens, 13.53s 
+
+To determine the probability that Jen wins the grand prize given that she won a prize, we need to use conditional probability. Let’s define the events as follows: - A: Jen wins a prize. - B: Jen wins the grand prize. We need to find P (B | A), the probability that Jen wins the grand prize given that she won a prize. By the definition of conditional probability, we have: 
+
+P (B | A) = P (A ∩ B)
+
+P (A)
+
+First, we calculate P (A), the probability that Jen wins a prize. Jen wins a prize if at least two of her numbers match the randomly chosen numbers. We will use the complementary probability approach to find P (A). This involves calculating the probability that Jen has fewer than 2 matches and subtracting it from 1. 1. **Calculate the total number of ways to choose 4 numbers from S:** 
+
+10 4
+
+
+
+= 10! 4!6! = 210 
+
+2. **Calculate the number of ways to choose fewer than 2 matches:** - **Case 1: 0 matches** Jen chooses 4 numbers from the 6 numbers not chosen by the lottery. 
+
+64
+
+
+
+=
+
+62
+
+
+
+= 15 
+
+- **Case 2: 1 match** Jen chooses 1 match from the 4 numbers chosen by the lottery and 3 non-matches from the 6 numbers not chosen. 41
+
+
+
+×
+
+63
+
+
+
+= 4 × 20 = 80 
+
+Adding these cases together gives the total number of ways to choose fewer than 2 matches: 
+
+15 + 80 = 95 
+
+Therefore, the number of ways to choose at least 2 matches is: 
+
+210 − 95 = 115 
+
+The probability that Jen wins a prize is: 
+
+P (A) = 115 210 = 23 42 
+
+3. **Calculate P (A ∩ B), the probability that Jen wins the grand prize:** Jen wins the grand prize if all 4 numbers she picks match the 4 numbers chosen by the lottery. There is only 1 way for this this: 
+
+P (A ∩ B) = 1210 
+
+4. **Calculate P (B | A):** 
+
+P (B | A) = P (A ∩ B)
+
+P (A) =
+
+> 1210 23 42
+
+= 1210 × 42 23 = 42 4830 = 1115 
+
+The probability that Jen wins the grand prize given that she won a prize is 1115 . Since m = 1 and 
+
+n = 115 , we have m + n = 1 + 115 = 116 .Thus, the final answer is: 
+
+116 
+
+25 Coding Question 
+
+fix the error in this prgram in js 
+
+<p>Write a program to find the largest number among 3 numbers.</p> <input type="text" placeholder="Enter 1st number" id="t1"> <br> <input type="text" placeholder="Enter 2nd number" id="t2"> <br> <input type="text" placeholder="Enter 3rd number" id="t3"> <button onclick="check()">Check</button> <h3 id="ans">The largest number is</h3> <script> function check(){ let n1 = document.getElementById( "t1" ).value; let n2 =document.getElementById("t2").value; let n3 = document.getAnimations("t3").value; if (n1>n2 && n1>n3) { document.getElementById( "ans" ).innerHTML ="The largest is "+num1; } else if (n2 > n3) { document.getElementById( "ans" ).innerHTML ="The largest is " +num2; }else{ document.getElementById("ans").innerHTML = "The largest is" + num3; }}</script>  
+
+> Qwen2.5-Instruct:
+
+187 tokens, 11.65s 
+
+There are several issues with your JavaScript code that need to be fixed: 
+
+• 1. The getAnimations method does not exist in JavaScript. It should be getElementById .
+
+• 2. The variables num1 , num2 , and num3 are used instead of n1 , n2 , and n3 .
+
+• 3. The comparison logic can be simplified. Here is the corrected version of your code: 
+
+<p>Write a program to find the largest number among 3 numbers.</p> <input type="text" placeholder="Enter 1st number" id="t1"> <br> <input type="text" placeholder="Enter 2nd number" id="t2"> <br> <input type="text" placeholder="Enter 3rd number" id="t3"> <button onclick="check()">Check</button> <h3 id="ans">The largest number is</h3> <script> function check() { let n1 = parseFloat(document.getElementById("t1").value); let n2 = parseFloat(document.getElementById("t2").value); let n3 = parseFloat(document.getElementById("t3").value); let largest = Math.max(n1, n2, n3); document.getElementById("ans").innerHTML = "The largest is " + largest; }</script> 
+
+> Explanation:
+
+1. Corrected Method Name : Changed getAnimations to getElementById .2. Variable Names : Used n1 , n2 , and n3 instead of num1 , num2 , and num3 .
+
+26 3. Simplified Logic : Used Math.max to find the largest number among the three inputs. 4. Parsed Input as Float : Used parseFloat to convert the input values from strings to numbers. This should work correctly now.  
+
+> dTRPO:
+
+195 tokens, 6.75s 
+
+The error in your JavaScript code is in the line where you’re trying to get the value of the third input field. Instead of document.getAnimations("t3").value , you should use docu-ment.getElementById("t3").value . Also, you need to declare num1 , num2 , and num3 as variables before using them in the comparison. Here’s the corrected code: 
+
+> <p>Write a program to find the largest number among 3 numbers.</p> <input type="text" placeholder="Enter 1st number" id="t1"> <br> <input type="text" placeholder="Enter 2nd number" id="t2"> <br> <input type="text" placeholder="Enter 3rd number" id="t3"> <button onclick="check()">Check</button> <h3 id="ans">The largest number is</h3> <script> function check() { let n1 = document.getElementById("t1").value; let n2 = document.getElementById("t2").value; let n3 = document.getElementById("t3").value; // Convert inputs to numbers n1 = Number(n1); n2 = Number(n2); n3 = Number(n3); if (n1 > n2 && n1 > n3) { document.getElementById("ans").innerHTML = "The largest is " + n1; } else if (n2 > n3) { document.getElementById("ans").innerHTML = "The largest is " + n2; } else { document.getElementById("ans").innerHTML = "The largest is " + n3; }}</script>
+
+Additionally, I added Number() to convert the input values to numbers before comparing them, as the input values are initially strings. This will ensure that the comparison works correctly. 
+
+Instruction Following Question 
+
+write an upbeat scifi short story  
+
+> Qwen2.5-Instruct:
+
+817 tokens, 34.06s 
+
+The Last Frontier In the year 2145, humanity had spread across the stars, but the final frontier remained: the uncharted planet of Zephyria. It was a world of perpetual twilight, with vast oceans that shimmered like liquid silver under the dim light of its twin suns. The planet’s atmosphere was rich in oxygen and nitrogen, making it a prime candidate for terraforming. However, the harsh conditions and unknown dangers had deterred all previous attempts. 
+
+27 Captain Elara Myles stood at the helm of the starship *Aurora*, her eyes fixed on the holographic map of Zephyria. She had been chosen to lead the first expedition to Zephyria, a mission that could either mark the beginning of a new era or end in disaster. Her crew consisted of the best and brightest from Earth’s most advanced space agencies—engineers, scientists, and explorers. As they approached the planet, the *Aurora* encountered a strange phenomenon. A series of lights began to dance around them, pulsating in a pattern that seemed almost... intelligent. Elara’s heart raced as she ordered the ship to slow down. The lights grew closer, forming a shape that resembled a giant eye, its iris a swirling mass of colors. “Captain, we’re receiving a signal,” said Lieutenant Kael, the communications officer, his voice tinged with excitement. Elara nodded, her fingers dancing over the control panel. “Acknowledge the signal and prepare to receive data.” The ship’s systems processed the incoming information, and a detailed map of Zephyria appeared on the main screen. But there was something else—a message, written in a language that none of them could understand. It was a warning, a plea for help, and a promise of knowledge. “Captain, we need to land,” said Dr. Lena Chen, the chief scientist, her voice filled with urgency. “This is our chance to make contact with whatever is out there.” Elara hesitated for a moment, then gave the order. The *Aurora* descended through the clouds, its engines humming softly as it touched down on a vast, open plain. The crew stepped out onto the alien soil, their boots sinking slightly into the soft, nutrient-rich ground. As they set up their base camp, the lights reappeared, this time forming a structure that looked like a giant dome. The crew gathered around it, their hearts pounding with anticipation. “Are you ready?” Elara asked, her voice steady despite the thrill of the moment. “Always, Captain,” replied Kael, his eyes gleaming with determination. With a collective nod, the team approached the dome. As they reached it, the structure opened, revealing a chamber filled with bioluminescent plants and floating crystals that emitted a soothing light. In the center of the room, a figure materialized—a being of pure energy, its form shifting and changing before their eyes. “Welcome, travelers,” the entity said, its voice resonating through the chamber. “I am Zephyrion, guardian of this world. You have come at a time of great need. We have faced threats that even your advanced technology cannot comprehend. We seek allies who can help us protect our home.” Elara stepped forward, her hand outstretched. “We are here to learn and to help. What can we do?” Zephyrion smiled, its form stabilizing into a humanoid shape. “Together, we can unlock the secrets of Zephyria and perhaps find a way to bridge the gap between our worlds. But first, you must prove your worth.” With that, Zephyrion led the team through a series of challenges, each one testing their skills and resolve. They learned to harness the planet’s unique energy sources, discovered new forms of life, and even uncovered hidden treasures that could change the course of human history. By the time the *Aurora* prepared to leave, the crew had formed a deep bond with their new allies. Zephyrion had given them a gift—a device that would allow them to communicate with the planet’s inhabitants and share their knowledge. As they lifted off, Elara turned to her crew, her face alight with hope. “We’ve just begun. There’s so much more to explore, to learn, and to share.” Kael grinned, his eyes shining. “And we’ll do it together, Captain.” The *Aurora* soared into the sky, leaving behind a world that had once seemed unreachable. But now, with the promise of a new alliance and the potential for endless discovery, Zephyria was no longer a distant dream—it was a new beginning. —The journey back to Earth was filled with wonder and excitement. The crew shared their experiences with the world, inspiring a new generation of explorers and scientists. And though Zephyria remained a distant world, its spirit lived on in the hearts of those who had answered the call. For in the vast expanse of the universe, there were always new frontiers to conquer, new mysteries to uncover, and new friends to make. And sometimes, the greatest discoveries were not found in the 
+
+28 stars, but in the bonds we forge along the way.  
+
+> dTRPO:
+
+338 tokens, 7.02s 
+
+Title: The Quantum Quants and the Quantum Quirk In the bustling city of Harmonia, where science and art intertwine, a group of quantum physicists, known as the "Quantum Quants," had just made a groundbreaking discovery. Led by the brilliant and enthusiastic Dr. Ada Quantum, their team had developed a new technology that could manipulate quantum entanglement for practical applications. One day, while conducting an experiment in their quantum computing lab, they stumbled upon an unexpected phenomenon. A minor glitch in their quantum computer caused particles to become entangled in a way that defied all known physics. The team dubbed this peculiar occurrence the "Quantum Quirk." Excited by the possibilities, the Quantum Quants decided to harness this newfound power for good. They devised a device, the "Quantum Compass," which could teleport small objects across vast distances with unparalleled precision. The implications were staggering - instantaneous communication, global transportation, and even the potential to solve some of the world’s most pressing problems. The Quantum Quants embarked on a mission to share their invention with the world. They traveled to cities across Harmonia, demonstrating the Quantum Compass’s capabilities and sparking a wave of optimism and innovation. People were amazed as they watched objects teleport through their fingertips, and the potential applications were endless. However, the Quantum Quants faced unexpected challenges. Some governments and corporations sought to control the technology for their own gain, while others feared the potential misuse of such advanced power. But the team remained steadfast in their commitment to ethical use. They established a global network of quantum researchers and engineers, ensuring that the Quantum Compass was used responsibly and equitably. As the Quantum Quants continued to spread their message of unity and progress, the world became a brighter, more connected place. The Quantum Compass brought people together, bridging gaps between nations and fostering a sense of shared humanity. And all thanks to a quantum glitch, the Quantum Quirk, that had once been a minor setback became the catalyst for a new era of scientific exploration and cooperation. 
+
+29

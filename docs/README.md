@@ -6,76 +6,81 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-03-21
-- 运行时间：2026-03-21 19:05:53 UTC
+- 最新运行日期：2026-03-22
+- 运行时间：2026-03-22 19:31:04 UTC
 - 运行状态：成功
-- 本次总论文数：18
-- 精读区：7
+- 本次总论文数：20
+- 精读区：9
 - 速读区：11
 
 ### 今日简报（AI）
-今日精选 18 篇前沿论文，重点聚焦 SQL 智能体反馈优化与强化学习的稳定性提升。
-SQL-ASTRA 通过列集匹配解决数据库交互中的反馈稀疏难题，而 MHPO 则为复杂环境下的策略优化提供了风险感知保障。
-建议关注多模态 VLM 在推荐领域的语义表达，以及 GRPO 算法如何实现从稀疏到稠密的反馈演进。
-- 详情：[/202603/21/README](/202603/21/README)
+今日深挖 20 篇前沿成果，聚焦扩散大语言模型优化与智能体统一视觉环境的重大突破。
+满分论文 dTRPO 通过轨迹缩减革新了扩散 LLM
+- 详情：[/202603/22/README](/202603/22/README)
 
 ### 精读区论文标签
-1. [SQL-ASTRA: Alleviating Sparse Feedback in Agentic SQL via Column-Set Matching and Trajectory Aggregation](/202603/21/2603.16161v1-sql-astra-alleviating-sparse-feedback-in-agentic-sql-via-column-set-matching-and-trajectory-aggregation)  
+1. [dTRPO: Trajectory Reduction in Policy Optimization of Diffusion Large Language Models](/202603/22/2603.18806v1-dtrpo-trajectory-reduction-in-policy-optimization-of-diffusion-large-language-models)  
+   标签：评分：10.0/10、query:rlaif
+   evidence：扩散语言模型的策略优化与对齐
+2. [Gym-V: A Unified Vision Environment System for Agentic Vision Research](/202603/22/2603.15432v1-gym-v-a-unified-vision-environment-system-for-agentic-vision-research)  
    标签：评分：9.0/10、query:rlaif
-   evidence：SQL智能体强化学习中的多轮信用分配
-2. [MHPO: Modulated Hazard-aware Policy Optimization for Stable Reinforcement Learning](/202603/21/2603.16929v1-mhpo-modulated-hazard-aware-policy-optimization-for-stable-reinforcement-learning)  
+   evidence：用于智能体强化学习的统一视觉环境
+3. [From Passive Observer to Active Critic: Reinforcement Learning Elicits Process Reasoning for Robotic Manipulation](/202603/22/2603.15600v1-from-passive-observer-to-active-critic-reinforcement-learning-elicits-process-reasoning-for-robotic-manipulation)  
    标签：评分：9.0/10、query:rlaif
-   evidence：改进 GRPO 策略优化的稳定性和梯度保真度
-3. [Retrieval-Augmented LLM Agents: Learning to Learn from Experience](/202603/21/2603.18272v1-retrieval-augmented-llm-agents-learning-to-learn-from-experience)  
+   evidence：用于机器人操作的视频多模态大模型强化学习
+4. [TRUST-SQL: Tool-Integrated Multi-Turn Reinforcement Learning for Text-to-SQL over Unknown Schemas](/202603/22/2603.16448v1-trust-sql-tool-integrated-multi-turn-reinforcement-learning-for-text-to-sql-over-unknown-schemas)  
    标签：评分：9.0/10、query:rlaif
-   evidence：训练检索增强的大模型智能体
-4. [Learning to Reason with Curriculum I: Provable Benefits of Autocurriculum](/202603/21/2603.18325v1-learning-to-reason-with-curriculum-i-provable-benefits-of-autocurriculum)  
+   evidence：用于Text-to-SQL自主智能体的多轮强化学习
+5. [Interpreting Context-Aware Human Preferences for Multi-Objective Robot Navigation](/202603/22/2603.17510v1-interpreting-context-aware-human-preferences-for-multi-objective-robot-navigation)  
    标签：评分：9.0/10、query:rlaif
-   evidence：大模型后训练与强化学习中的自动课程学习
-5. [Balanced Thinking: Improving Chain of Thought Training in Vision Language Models](/202603/21/2603.18656v1-balanced-thinking-improving-chain-of-thought-training-in-vision-language-models)  
+   evidence：基于视觉语言模型的机器人智能体多目标强化学习
+6. [VC-Soup: Value-Consistency Guided Multi-Value Alignment for Large Language Models](/202603/22/2603.18113v1-vc-soup-value-consistency-guided-multi-value-alignment-for-large-language-models)  
    标签：评分：9.0/10、query:rlaif
-   evidence：视觉语言模型多模态推理的强化学习与微调
-6. [Memento-Skills: Let Agents Design Agents](/202603/21/2603.18743v1-memento-skills-let-agents-design-agents)  
+   evidence：利用奖励重加权和模型合并进行大语言模型多价值对齐
+7. [VLM-AutoDrive: Post-Training Vision-Language Models for Safety-Critical Autonomous Driving Events](/202603/22/2603.18178v1-vlm-autodrive-post-training-vision-language-models-for-safety-critical-autonomous-driving-events)  
    标签：评分：9.0/10、query:rlaif
-   evidence：基于记忆强化学习的LLM智能体系统
-7. [VEPO: Variable Entropy Policy Optimization for Low-Resource Language Foundation Models](/202603/21/2603.19152v1-vepo-variable-entropy-policy-optimization-for-low-resource-language-foundation-models)  
+   evidence：视觉语言模型的后训练领域对齐
+8. [Balancing the Reasoning Load: Difficulty-Differentiated Policy Optimization with Length Redistribution for Efficient and Robust Reinforcement Learning](/202603/22/2603.18533v1-balancing-the-reasoning-load-difficulty-differentiated-policy-optimization-with-length-redistribution-for-efficient-and-robust-reinforcement-learning)  
    标签：评分：9.0/10、query:rlaif
-   evidence：利用强化学习进行大语言模型对齐的策略优化
+   evidence：推理模型高效强化学习的策略优化
+9. [OS-Themis: A Scalable Critic Framework for Generalist GUI Rewards](/202603/22/2603.19191v1-os-themis-a-scalable-critic-framework-for-generalist-gui-rewards)  
+   标签：评分：9.0/10、query:rlaif
+   evidence：随机环境下使用强化学习的GUI智能体评论家框架
 
 ### 速读区论文标签
-1. [A Robust and Efficient Multi-Agent Reinforcement Learning Framework for Traffic Signal Control](/202603/21/2603.12096v1-a-robust-and-efficient-multi-agent-reinforcement-learning-framework-for-traffic-signal-control)  
+1. [ToolTree: Efficient LLM Agent Tool Planning via Dual-Feedback Monte Carlo Tree Search and Bidirectional Pruning](/202603/22/2603.12740v1-tooltree-efficient-llm-agent-tool-planning-via-dual-feedback-monte-carlo-tree-search-and-bidirectional-pruning)  
    标签：评分：8.0/10、query:rlaif
-   evidence：用于自主交通智能体的多智能体强化学习
-2. [VLM4Rec: Multimodal Semantic Representation for Recommendation with Large Vision-Language Models](/202603/21/2603.12625v1-vlm4rec-multimodal-semantic-representation-for-recommendation-with-large-vision-language-models)  
+   evidence：大模型智能体工具规划与多步任务交互
+2. [OARS: Process-Aware Online Alignment for Generative Real-World Image Super-Resolution](/202603/22/2603.12811v1-oars-process-aware-online-alignment-for-generative-real-world-image-super-resolution)  
    标签：评分：8.0/10、query:rlaif
-   evidence：利用大视觉语言模型进行多模态语义表示
-3. [From Sparse to Dense: Multi-View GRPO for Flow Models via Augmented Condition Space](/202603/21/2603.12648v1-from-sparse-to-dense-multi-view-grpo-for-flow-models-via-augmented-condition-space)  
+   evidence：基于多模态大模型的跨模态对齐奖励
+3. [Fine-tuning is Not Enough: A Parallel Framework for Collaborative Imitation and Reinforcement Learning in End-to-end Autonomous Driving](/202603/22/2603.13842v1-fine-tuning-is-not-enough-a-parallel-framework-for-collaborative-imitation-and-reinforcement-learning-in-end-to-end-autonomous-driving)  
    标签：评分：8.0/10、query:rlaif
-   evidence：用于流模型偏好对齐的多视图GRPO算法
-4. [Continual Learning in Large Language Models: Methods, Challenges, and Opportunities](/202603/21/2603.12658v1-continual-learning-in-large-language-models-methods-challenges-and-opportunities)  
+   evidence：用于自动驾驶智能体的协作强化学习
+4. [Fine-tuning MLLMs Without Forgetting Is Easier Than You Think](/202603/22/2603.14493v1-fine-tuning-mllms-without-forgetting-is-easier-than-you-think)  
    标签：评分：8.0/10、query:rlaif
-   evidence：大语言模型持续对齐与微调的综述
-5. [RoboStereo: Dual-Tower 4D Embodied World Models for Unified Policy Optimization](/202603/21/2603.12639v1-robostereo-dual-tower-4d-embodied-world-models-for-unified-policy-optimization)  
+   evidence：多模态大语言模型微调方案以减轻遗忘
+5. [Chunk-Guided Q-Learning](/202603/22/2603.13971v1-chunk-guided-q-learning)  
    标签：评分：7.0/10、query:rlaif
-   evidence：用于统一策略优化的跨模态世界模型
-6. [MetaKE: Meta-learning Aligned Knowledge Editing via Bi-level Optimization](/202603/21/2603.12677v1-metake-meta-learning-aligned-knowledge-editing-via-bi-level-optimization)  
+   evidence：用于序列决策的离线强化学习
+6. [Exposing Long-Tail Safety Failures in Large Language Models through Efficient Diverse Response Sampling](/202603/22/2603.14355v1-exposing-long-tail-safety-failures-in-large-language-models-through-efficient-diverse-response-sampling)  
    标签：评分：7.0/10、query:rlaif
-   evidence：大语言模型知识编辑的双层优化
-7. [MetaKE: Meta-learning Aligned Knowledge Editing via Bi-level Optimization](/202603/21/2603.12677v2-metake-meta-learning-aligned-knowledge-editing-via-bi-level-optimization)  
+   evidence：通过人类反馈强化学习进行安全微调
+7. [POLCA: Stochastic Generative Optimization with LLM](/202603/22/2603.14769v1-polca-stochastic-generative-optimization-with-llm)  
    标签：评分：7.0/10、query:rlaif
-   evidence：通过双层优化进行LLM知识编辑
-8. [AI Planning Framework for LLM-Based Web Agents](/202603/21/2603.12710v1-ai-planning-framework-for-llm-based-web-agents)  
+   evidence：针对大模型提示词和多轮智能体的随机生成优化
+8. [Brain-Inspired Graph Multi-Agent Systems for LLM Reasoning](/202603/22/2603.15371v1-brain-inspired-graph-multi-agent-systems-for-llm-reasoning)  
    标签：评分：7.0/10、query:rlaif
-   evidence：基于大语言模型的自主网络智能体规划框架
-9. [FastDSAC: Unlocking the Potential of Maximum Entropy RL in High-Dimensional Humanoid Control](/202603/21/2603.12612v1-fastdsac-unlocking-the-potential-of-maximum-entropy-rl-in-high-dimensional-humanoid-control)  
+   evidence：用于大语言模型推理的多智能体系统
+9. [GoldenStart: Q-Guided Priors and Entropy Control for Distilling Flow Policies](/202603/22/2603.14245v1-goldenstart-q-guided-priors-and-entropy-control-for-distilling-flow-policies)  
    标签：评分：6.0/10、query:rlaif
-   evidence：最大熵强化学习与策略梯度控制
-10. [Beyond Imitation: Reinforcement Learning Fine-Tuning for Adaptive Diffusion Navigation Policies](/202603/21/2603.12868v1-beyond-imitation-reinforcement-learning-fine-tuning-for-adaptive-diffusion-navigation-policies)  
+   evidence：强化学习中的策略蒸馏与熵控制
+10. [Enhancing LLM Training via Spectral Clipping](/202603/22/2603.14315v1-enhancing-llm-training-via-spectral-clipping)  
    标签：评分：6.0/10、query:rlaif
-   evidence：导航智能体的强化学习微调
-11. [From Gradients to Riccati Geometry: Kalman World Models for Single-Pass Learning](/202603/21/2603.13423v1-from-gradients-to-riccati-geometry-kalman-world-models-for-single-pass-learning)  
+   evidence：大语言模型训练稳定性的优化技术
+11. [Towards Next-Generation LLM Training: From the Data-Centric Perspective](/202603/22/2603.14712v1-towards-next-generation-llm-training-from-the-data-centric-perspective)  
    标签：评分：6.0/10、query:rlaif
-   evidence：大语言模型的无梯度训练与自适应
+   evidence：基于智能体的大模型训练数据准备
 
 
 <div class="dpr-home-promo-card">

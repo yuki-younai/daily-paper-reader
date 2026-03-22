@@ -1,0 +1,8123 @@
+Title: Enhancing LLM Training via Spectral Clipping
+
+URL Source: https://arxiv.org/pdf/2603.14315v1
+
+Published Time: Tue, 17 Mar 2026 03:36:29 GMT
+
+Number of Pages: 54
+
+Markdown Content:
+# Enhancing LLM Training via Spectral Clipping 
+
+Xiaowen Jiang CISPA ∗
+
+xiaowen.jiang@cispa.de 
+
+Andrei Semenov EPFL 
+
+andrii.semenov@epfl.ch 
+
+Sebastian U. Stich CISPA ∗
+
+stich@cispa.de 
+
+https://github .com/mlolab/llm-spectral-clipping 
+
+Abstract 
+
+While spectral-based optimizers like Muon operate directly on the spectrum of updates, standard adaptive methods such as AdamW do not account for the global spectral structure of weights and gra-dients, leaving them vulnerable to two empirical issues in large language model (LLM) training: (i) the optimizer updates can have large spectral norms, potentially destabilizing training and degrading gener-alization; (ii) stochastic gradient noise can exhibit sparse spectral spikes, with a few dominant singular values much larger than the rest. We propose SPECTRA , a general framework addressing these by (i) post -spectral clipping of updates to enforce spectral-norm constraints (ii) optional pre -spectral clip-ping of gradients to suppress spectral noise spikes. We prove that post-clipping constitutes a Composite Frank-Wolfe method with spectral-norm constraints and weight regularization, recovering Frobenius and 
+
+ℓ∞-norm regularization with SGD-based and sign-based methods. We further analyze how pre-clipping mitigates sparse spectral spikes. We propose efficient soft spectral clipping via Newton-Schulz iterations, avoiding expensive SVD. Experiments on LLM pretraining show SPECTRA uniformly improves valida-tion loss for various optimizers, including AdamW, Signum, and AdEMAMix, with the best-performing variants achieving state-of-the-art results. Models trained with SPECTRA exhibit smaller weight norms, confirming the link between spectral clipping and regularization. 
+
+## 1 Introduction 
+
+The optimization of Large Language Models (LLMs) has increasingly shifted focus from simple gradient-based updates to more advanced preconditioning and normalization techniques. While standard optimizers like AdamW (Loshchilov and Hutter, 2019) rely on coordinate-wise normalization to handle ill-conditioned curvature, a growing body of work suggests that controlling the spectral properties of weight matrices and updates can be beneficial for training stability and generalization (Miyato et al., 2018; Bartlett et al., 2017; Pethick et al., 2025; Davis and Drusvyatskiy, 2025). Consequently, spectral-based optimizers such as Shampoo (Gupta et al., 2018), Spectral Descent (Carlson et al., 2015b) and Muon (Jordan et al., 2024; Liu et al., 2025)—which operate directly on the spectrum of update matrices—have emerged as theoretically grounded paths toward faster convergence. However, the transition to purely spectral optimizers is not yet ubiquitous. Recent optimizer benchmarks reveal that advanced coordinate-wise methods, such as AdEMAMix (Pagliardini et al., 2025) and Mars (Yuan et al., 2025), often match or exceed the performance of current spectral approaches (Semenov et al., 2025). Despite their effectiveness, these coordinate-wise algorithms do not account for the global spectral structure of weights and gradients, leaving them vulnerable to two fundamental issues. First, the spectral norms of optimizer updates are often uncontrolled. As detailed in Section 2, popular optimizers like Signum (Bernstein et al., 2018) or AdamW (Loshchilov and Hutter, 2019) can produce update 
+
+> ∗CISPA Helmholtz Center for Information Security, Saarbr¨ ucken, Germany.
+
+1
+
+> arXiv:2603.14315v1 [cs.LG] 15 Mar 2026
+
+directions with excessive spectral norms, potentially destabilizing training and degrading generalization. Second, stochastic gradient noise frequently exhibits “sparse spectral spikes”, by which we mean low-rank components with singular values orders of magnitude larger than the signal. Standard global or coordinate-wise clipping fails to distinguish these artifacts, often suppressing the informative signal alongside the noise. 
+
+Contributions. To bridge the gap between the empirical strength of coordinate-wise methods and the theoretical benefits of spectral control, we introduce SPECTRA (SPEctral Clipping for TRaining Acceler-ation). SPECTRA is a general, optimizer-agnostic framework that: (i) applies post-spectral clipping to the update matrix to strictly enforce spectral constraints, and (ii) optionally applies pre-spectral clipping to raw gradients to filter spectral noise spikes. Our main contributions are as follows: 
+
+• Algorithmic Framework. We propose SPECTRA, a flexible wrapper applicable to any base opti-mizer with decoupled weight decay (e.g., AdamW, Signum, AdEMAMix). We develop a GPU-efficient approximation of spectral clipping via Newton-Schulz iterations based solely on fast matrix–matrix multiplications. 
+
+• Implicit Regularization & Spectral Norm Constraints. We prove that applying post-spectral clipping to the standard update rule with decoupled weight decay is equivalent to a Composite Frank-Wolfe algorithm. This reformulation reveals that SPECTRA minimizes a spectral-norm constrained objective with implicit weight regularization, simultaneously enhancing stability and promoting low-complexity solutions. Furthermore, we provide an explicit geometric interpretation of the hyperparam-eters, showing how they directly control the radius of the spectral constraint ball and the strength of the regularization. 
+
+• Robustness to Spectral Spikes. We empirically demonstrate the existence of spectral noise spikes in stochastic gradients during LLM training. We then provide theoretical insights on why spectral clipping can help mitigate the adverse effects of such noise structures during optimization and can be significantly better than global norm clipping. 
+
+• Empirical SOTA. We evaluate SPECTRA on both synthetic and LLM pretraining tasks ranging from 124M to 820M parameters. We demonstrate that SPECTRA consistently improves the validation loss of base optimizers and enables the use of larger learning rates. Applying SPECTRA to coordinate-wise methods achieves the best performance among state-of-the-art methods. Additionally, models trained with SPECTRA exhibit smaller weight norms, confirming the theoretical link to weight regularization. 
+
+Notations. We denote the set of integers {1, . . . , n } by [ n]. For a matrix X, we let σi(X) be its i-th largest singular value. We use ∥X∥2 and ∥X∥F to denote the spectral and Frobenius norms of X, respectively, and 
+
+∥x∥2 for the Euclidean norm of a vector x. For both matrices and vectors, we use ∥X∥∞ = max i,j {| Xi,j |} 
+
+to denote the ℓ∞ norm. Other notations are discussed as needed within the context. We discuss the closely related work in the main text and defer the reader to Appendix A for additional references and broader context. 
+
+## 2 Preliminaries and Setup 
+
+The architecture of transformer-based LLMs consists of a large number of linear transformations, parameter-ized by weight matrices such as the query, key, value, and output projections in attention modules, as well as matrices in feed-forward layers. Without loss of generality, we focus on the training of a single such weight matrix, denoted by X ∈ Rm×n and initialized at X0, using stochastic gradient methods. The widely-used update rule with decoupled weight decay is given by: 
+
+Xk+1 = (1 − λη k)Xk − ηkUk, k = 0 , 1, 2 . . . , (1) 2where λ ≥ 0 is the weight decay factor, ηk > 0 is the learning rate, and Uk denotes the update matrix computed by the specific optimizer using the stochastic gradient. This formulation contains various popular optimizers used in LLM training, including AdamW (Loshchilov and Hutter, 2019), AdEMAMix (Pagliardini et al., 2025), Signum (Bernstein et al., 2018), Mars (Yuan et al., 2025) and Muon (Jordan et al., 2024; Liu et al., 2025). The distinction lies in the computation of the update matrix Uk. For instance, SGD-M uses UK = Mk where Mk is a momentum buffer accumulated via Polyak momentum (Polyak, 1964), or Nesterov meomentum (Nesterov, 2018), or other recursive variants (Cutkosky and Orabona, 2019; Jiang et al., 2025). Signum (Sign-SGD with momentum) sets Uk = sign( Mk) where sign is the entry-wise sign operator. For AdamW, the update is the momentum normalized by the square root of the second-moment estimates. 
+
+Phenomenon I: Excessive Spectral Norm of Update Matrices. Controlling the spectral norm of weight matrices is known to be crucial for both stable training (Miyato et al., 2018) and improvement of generalization (Bartlett et al., 2017), particularly for long runs (Pethick et al., 2025). Specifically, for any input z ∈ Rn with bounded norm, the Euclidean norm of the output after the linear transformation is controlled by the spectral norm of the weight matrix, effectively limiting the propagation of perturbations through the network. On the other hand, the weight norm is determinined by the accumulated updates during training. Using update rule (1) with ηk ≡ η, we have for any k ≥ 1: 
+
+∥Xk∥2 ≤ (1 − λη )k∥X0∥2 + 1 − (1 − λη )k
+
+λ max  
+
+> i<k
+
+{∥ Ui∥2} .
+
+This exposes a vulnerability: if the spectral norms of the updates ∥Ui∥2 are not controlled, the weight matrix can grow rapidly. It has been observed that standard adaptive optimizers like AdamW can produce updates with excessive magnitudes, particularly in the early phases of training (Liu et al., 2019) or prior to loss spikes (Wortsman et al., 2024). For sign-based methods (e.g., Signum), the spectral norm of the update Uk = sign( Mk) is at least pmax( m, n ) and can be as large as √mn (since for any X ∈ Rm×n, we have ∥ sign( X)∥F
+
+√min( m,n ) ≤ ∥ sign( X)∥2 ≤ ∥ sign( X)∥F ). Consequently, there exists risks of training instability and excessive final weight norms. Mitigating this risk often requires the use of small learning rates or extended warm-up periods to prevent divergence (You et al., 2019; Gilmer et al., 2022), which might slow down the convergence. 
+
+Phenomenon II: Sparse Spectral Spikes in Stochastic Gradients. Recent studies identify gradient and loss spikes as a predominant source of training instability (Huang et al., 2025). In this work, we deepen this understanding by analyzing LLM training dynamics, revealing that the singular value spectrum of raw stochastic gradients is often heavy-tailed—specifically, a few singular values (“spectral outliers”) are orders of magnitude larger than the rest. This aligns with findings characterizing Transformer gradient noise as highly non-Gaussian (Simsekli et al., 2019; Zhang et al., 2020). By decomposing the stochastic gradient into a signal component (approximated by large-batch gradients) and a residual noise component, we trace this phenomenon primarily to the noise. We observe that the noise often contains low-rank structures— sparse spectral spikes —whose magnitudes far exceed that of the signal. Furthermore, the subspace spanned by these spikes is typically nearly orthogonal to the principal signal directions, suggesting these high-magnitude components represent pure noise. Detailed empirical evidence is provided in Section 4.1. 
+
+Remedy: Spectral Clipping Operator. To mitigate the phenomena of excessive update norms and sparse noise spikes, we propose to apply a spectral clipping operator to the update matrices Uk (and optionally to the raw stochastic gradients). Formally, let X ∈ Rm×n be a fixed matrix with compact SVD decomposition 
+
+X = USV T , where U ∈ Rm×q , S ∈ Rq×q and V ∈ Rq×n with q := min( m, n ). We define the spectral clipping operator as: clip sp  
+
+> c
+
+(X) := U diag  clip c(S11 ), . . . , clip c(Sqq )VT ,
+
+where c > 0 is the clipping threshold, and clip c(x) := sign( x) min( |x|, c ) is the standard scalar clipping function. 32.56     
+
+> 2.57
+> 2.58
+> 2.59
+> 2.60
+> 2.61
+> Validation Loss
+> 2.573 2.574
+> 2.582
+> 2.590
+> 2.595 2.597
+> 2.600
+> 2.611
+> (Thin and Deep) Llama Large (780 M)
+> 2.58
+> 2.59
+> 2.60
+> 2.61
+> 2.62
+> 2.63
+> Validation Loss
+> 2.593 2.594
+> 2.600 2.600
+> 2.610
+> 2.614
+> 2.622
+> 2.629
+> (Wide and Shallow) Llama Large (820 M)
+
+FineWeb-Edu. Batch size 1M tokens. Trained on 16.6B tokens. Untied embeds. WSD. 
+
+> Spectra-Signum
+> D-Muon
+> Spectra-AdEMAMix
+> Mars
+> Spectra-AdamW
+> Signum
+> AdEMAMix
+> AdamW
+
+Figure 1: Final validation loss comparison for large Llama-style models trained for the Chinchilla optimal horizon. ’Thin and deep’ models have smaller embedding dimensions but have more layers than ’wide and shallow’ ones. The corresponding validation perplexities and running time comparisons w/wo using SPECTRA are provided in Figure F.9 and F.7. We use a total batchsize of 1012 and 992 for 780M and 820M model respectively with 1024 sequence length. The hyperparameters such as learning rate used for each method are reported in the tables in Section F.3. By construction, this operator ensures ∥ clip sp  
+
+> c
+
+(U)∥2 ≤ c, which strictly controls the spectral norm of the updates. (The update norm comparisons between AdamW and Spectra-AdamW are shown in Figure F.11 and F.13.) In the presence of sparse spike noise, spectral clipping can effectively removes those large noise spikes while preserving the scale and structure of the remaining signal components. (Rigorous arguments can be found in Section 4.2.) Another two commonly used clipping operators are coordinate-wise clipping: clip cw  
+
+> c
+
+(X)i,j := clip c(Xi,j ) and global clipping: clip g 
+
+> c
+
+(X) := min(1 , c/ ∥X∥F )X. Coordinate-wise clipping ignores correlations between entries and fails to effectively limit the spectral norm, as discussed earlier. While global clipping can control the spectral norm, it achieves this by simultaneously suppressing the useful signal components along with the noise. We discuss the theoretical advantages of spectral clipping over global clipping in Section 4.2. 
+
+## 3 Post-Spectral Clipping: Spectral Norm Constrained Optimiza-tion with Implicit Weight Regularization 
+
+In this section, we formally introduce Post-Spectral Clipping and provide its theoretical justification. We show that adding this simple operation to the update can be mathematically equivalent to a Composite Frank-Wolfe algorithm solving a spectral-norm constrained optimization problem with weight norm regularization. This dual nature ensures that the optimizer simultaneously enforces strict spectral norm constraints while promoting low-complexity solutions (via the regularization), thereby potentially enhancing both training stability and generalization performance. Specifically, we propose to use the following modified update rule. For k = 0 , 1, 2, . . . ,
+
+Xk+1 = (1 − λη k)Xk − αη k clip sp  
+
+> ck
+
+(Uk) , (2) where α > 0 is a scaling factor. Compared to (1), the effective update direction α clip sp  
+
+> ck
+
+(Uk) has spectral norm bounded by αc k.4We now discuss its connection to the composite Frank-Wolfe method (Harchaoui et al., 2015; Yurtsever et al., 2018). Consider the following general composite constrained optimization problem: min 
+
+> X∈Q
+
+F (X) := f (X) + ψ(X) , (3) where f : Rm×n → R is the loss function (e.g. cross-entropy loss), ψ : Rm×n → R ∪ { +∞} is a proper closed convex function and Q ⊆ Rm×n is a compact convex set. We now analyze the instantiation of (2) using the standard polyak momentum update: 
+
+Xk+1 = (1 − λη k)Xk − αη k clip sp  
+
+> ck
+
+(Mk) , (4) where Mk+1 = (1 − βk)Mk + βkg(Xk+1 ), βk ∈ (0 , 1] is the momentum parameter, and g(Xk+1 ) is the stochastic gradient of f at Xk+1 . In what follows, we denote the spectral norm ball with radius D2 > 0 as: 
+
+Q2 := {X ∈ Rm×n : ∥X∥2 ≤ D2} .
+
+Proposition 1. The update rule (4) can be equivalently reformulated as the following stochastic composite Frank-Wolfe method: 
+
+Vk+1 ≈ arg min 
+
+> X∈Q
+
+{⟨ Mk, X⟩ + ψ(X)}
+
+Xk+1 = (1 − γk) Xk + γk Vk+1 
+
+, (5) 
+
+by choosing γk = λη k, ck ≡ λD 2 
+
+> α
+
+and ψ(X) = λ 
+
+> 2α
+
+∥X∥2 
+
+> F
+
+, provided that Q = Q2 and each subproblem for computing Vk+1 is solved exactly. Proof. According to Lemma 15, we have: 
+
+Vk+1 = arg min 
+
+> X∈Q2
+
+n
+
+⟨Mk , X⟩ + λ
+
+2α ∥X∥2
+
+> F
+
+o
+
+= arg min 
+
+> X∈Q2
+
+ λ
+
+2α ∥X + αλ Mk ∥2
+
+> F
+
+
+
+= proj Q2
+
+n
+
+− αλ Mk
+
+o
+
+= clip sp 
+
+> D2
+
+
+
+− αλ Mk
+
+
+
+= − αλ clip sp 
+
+> λD 2
+> α
+
+(Mk ) .
+
+Substituting Vk+1 and the choices of γk and ck into the equation of Xk+1 gives the desired update. From the equivalent formulation, we can immediately derive standard convergence guarantees for (4). 
+
+Assumption 1. At any point X ∈ Rm×n, the stochastic gradient oracle returns an independent estimator 
+
+g(X) such that E[g(X)] = ∇f (X) and E[∥g(X) − ∇ f (X)∥2 
+
+> F
+
+] ≤ σ2.
+
+Assumption 2. There exists LF > 0 such that for any X, Y ∈ Rm×n, ∥∇ f (X)−∇ f (Y)∥F ≤ LF ∥X−Y∥F .
+
+Theorem 1. Let SGD-M with spectral clipping (4) be applied to problem (3) with Q = Q2 and ψ(X) :=  
+
+> b
+> 2
+
+∥X∥2 
+
+> F
+
+under convexity of f and Assumption 1. Suppose we use a batch size of B for computing the stochastic gradient g(Xk). By choosing ck ≡ bD 2, λη k = 2 
+
+> k+2
+
+, α = λb , and βk ≡ 1, we have for any K ≥ 1:
+
+E[F (XK ) − F ⋆] ≤ 2Cf
+
+K + 1 + DF σ
+
+√B ,
+
+where Cf := sup X,S∈Q2,γ ∈[0 ,1] ,Y=X+γ(S−X){ 2 
+
+> γ2
+
+(f (Y)−f (X)−⟨∇ f (X), Y−X⟩)} and DF := sup X,Y∈Q{∥ X−
+
+Y∥F }. If Assumption 2 additionaly holds, then by choosing βk = 1(k+1) 2/3 and M0 = g(X0), we have for any K ≥ 1:
+
+E[F (XK ) − F ⋆] ≤ 2Cf
+
+K + 1 + 12 .4LF D2 
+
+> F
+
++ 6 .2DF σ/ √BK1/3 .
+
+5The curvature constant Cf is the standard quantity in Frank-Wolfe analysis (Jaggi, 2013), which measures the maximum non-linearity within the set Q. In the presence of noise, the rate of 1 /K 1/3 matches the standard stochastic Frank-Wolfe with momentum on a single function (Mokhtari et al., 2020). 
+
+Remark 2. In Theorem 1, we first fix the problem constraints (D2, b ) and then set the parameters (c, λ, α ).In practice, one can choose c, α and λ to determine the size of D2 and the level of regularization. Then the resulting algorithm is implicitly solving problem (3) with ψ(X) := λ 
+
+> 2α
+
+∥X∥2 
+
+> F
+
+and Q := {X : ∥X∥2 ≤ αc λ }.
+
+Connection to Muon. Muon (Jordan et al., 2024) applies the orthogonalization operator to the momentum by normalizing all the singular values to 1. Clearly, 1 
+
+> c
+
+clip sp  
+
+> c
+
+(X) = orth( X) := UX VTX for any c ≤ σmin (X). Thus, if we let α → ∞ and choose c = 1 
+
+> α
+
+, then method (4) recovers Muon (Jordan et al., 2024) as a special case, which solves the constrained problem without regularization ( b = 0). 
+
+3.1 Extensions: A Family of Spectral Optimizers 
+
+Previously, we have focused on the quadratic regularizer ψ(X) = b 
+
+> 2
+
+∥X∥2 
+
+> F
+
+which leads to a simple spectral clipping operation. However, our framework is flexible: Different choices of the regularizer yield different algorithmic update rules. This allows us to characterize a broad family of spectral optimizers . Consider the general subproblem: 
+
+X⋆ = arg min 
+
+> X∈Q2
+
+⟨G, X⟩ + ψ(X) , (6) 
+
+Rotational Invariant Regularizers. Consider the case where ψ is separable and acts solely on the singular values of X. In this setting, the optimal update takes the form X⋆ = −UGS⋆VTG, where UG and VG are the left and right singular vectors of G, and S⋆ is a diagonal matrix with entries S⋆ii = σ⋆i ≥ 0. (See Section E.2 for full derivations for general unitarily invariant ψ.) This recovers several known operators as special cases. 1) Nuclear Norm: ψ(X) = b Pqi=1 σi(X). This acts as a soft-thresholding operator: σ⋆i =
+
+(
+
+0 if σi(G) ≤ bD2 if σi(G) > b .2)Schatten p-norm ( p > 1): ψ(X) = bp ∥X∥pp = bp
+
+Pqi=1 σi(X)p and σ⋆i = min  ( σi(G) 
+
+> b
+
+) 1 
+
+> p−1
+
+, D 2
+
+.3) Unnormalized Matrix Entropy (Tsuda et al., 2005): ψ(X) = b Pqi=1 σi(X) log( σi(X)) − σi(X). Let 
+
+ψi(x) = bx log( x) − bx in (E.3). We have: σ⋆i = min  exp( σi(G) 
+
+> b
+
+), D 2
+
+.
+
+ℓ∞-norm Regularization and its Connection to Spectrally Clipped Signum. We next discuss the choice of ψ(X) = b 
+
+> 2
+
+∥X∥2 
+
+> ∞
+
+:= b 
+
+> 2
+
+max i,j {| Xi,j |} 2. For the original constrained problem (6), there exists an optimal dual variable μ⋆ such that: X⋆ = arg min X{⟨ G, X⟩+ b 
+
+> 2
+
+∥X∥2 
+
+> ∞
+
++μ⋆(∥X∥2 −D2)}. Using the first-order optimality condition, we have: 0 ∈ G + b∥X⋆∥∞∂(∥X⋆∥∞) + μ⋆∂(∥X⋆∥2) . If μ⋆ = 0, then X⋆ is equal to the unconstrained solution: ˜X⋆ := − ∥G∥1
+
+b sign( G) ∈ arg min 
+
+> X∈Rm×n
+
+⟨G, X⟩ + b
+
+2 ∥X∥2 
+
+> ∞
+
+,
+
+where ∥X∥1 = P 
+
+> i,j
+
+|Xi,j | denote the entrywise ℓ1 -norm. Otherwise, it does not admit a simple closed-form solution. We can try to solve it by using standard convex optimization methods such as projected gradient descent. On the other hand, a natural approximation is to project the unconstrained solution onto the feasible set: ˜U := proj Q2 ( ˜X⋆) = − ∥G∥1
+
+b clip sp 
+
+> bD 2
+> ∥G∥1
+
+ sign( G) .
+
+When ∥ sign( G)∥2 ≤ bD 2 
+
+> ∥G∥1
+
+, then X⋆ = ˜U. If we substitute this approximate solution into our update rule (2) with G chosen as the momentum, we recover Signum with post-spectral clipping . This suggests that spectrally clipped Signum can be viewed as an approximate Frank-Wolfe step for minimizing a spectrally constrained loss regularized by the ℓ∞-norm (limiting the magnitude of each coordinate). 64 Robustness to Sparse Spectral Spikes 
+
+In this section, we first provide empirical evidence of the existence of sparse spectral spikes in LLM training. Then we give some theoretical insights on why spectral clipping can help mitigate the adverse effects of such noise structures during optimization. 
+
+4.1 Empirical Observations 
+
+We first record the singular value distributions of stochastic gradients and update directions in a 124M parameter LLaMA-style transformer trained with AdamW/Signum. We observe from Figure F.10 that raw stochastic gradients exhibit heavy-tailed spectrum with high condition numbers across layers. While the AdamW/Signum updates show a more uniform spectral distribution, they fail to impose a hard ceiling (Figure F.11 and F.12). We next investigate the noise structure by decomposing gradients into signal and noise components ( N = g − G). We observe that stochastic noise manifests as “spectral spikes” whose top singular values frequently exceed the signal norm. Moreover, the dominant noise spikes are nearly orthogonal to the principal directions of the signal (Figure F.15). The detailed setup and results can be found in Section F.2. These findings provide a empirical justification for spectral clipping. Since high-magnitude noise components are geometrically separated from the signal, spectral clipping effectively truncates the noise spikes without significantly distorting the underlying signal direction. 
+
+4.2 Theoretical Insights 
+
+Let G ∈ Rm×n be the ‘true’ signal. Suppose we receive a stochastic signal g = G + N where N = ℓUN VTN
+
+is a low-rank noise with zero-mean such that ℓ ≫ ∥ G∥2 (spike). We show that the spectrally clipped matrix largely preserves the signal with controlled variance. 
+
+Definition 1. Let U ∈ Rd×r be a zero-mean random matrix with orthonormal column, i.e., E[U] = 0 and 
+
+UT U = Ir . We say that U has bounded anisotropy with parameter κ > 0, if E[UU T ] ⪯ κr d Id , where Id is the identity matrix in Rd×d.
+
+Lemma 3. Let G ∈ Rm×n be a fixed matrix with q := min( m, n ) ≫ r. Let g = G + N where N = ℓUN VTN ,
+
+ℓ > 0, and UN ∈ Rm×r and VN ∈ Rn×r satisfy Definition 1 with parameter κ ≤ q 
+
+> 25 r2
+
+. Let ˜g = clip sp  
+
+> c
+
+(g).Suppose that ℓ ≥ 9√r∥G∥2. Then for any c ≥ ∥ G∥2, it holds that: EN[⟨G, ˜g⟩] ≥ 13 ∥G∥2 
+
+> F
+
+and EN[∥˜g∥2 
+
+> F
+
+] ≤
+
+r min( c, ℓ + ∥G∥2)2 + ∥G∥2 
+
+> F
+
+.
+
+Intuitively, we can treat G as a perturbation to the large spike noise N. By the standard matrix perturbation theory, the top singular values of g are close to those of N (dominated by ℓ), and the remaining singular values are close to those of G. Thus, we have clip sp  
+
+> c
+
+(G + ℓUN VTN ) ≈ G + cUN VTN . The proof can be found in Section D.1. 
+
+Comparisons. Compared with the raw stochastic signal g which satisfies E[∥g∥2 
+
+> F
+
+] = ∥G∥2 
+
+> F
+
++ rℓ 2. Spectral clipping effectively reduces the variance term from rℓ 2 to rc 2. We next show that global clipping cannot preserve the signal as effectively as spectral clipping. 
+
+Lemma 4. Consider the same setting as in Lemma 3. Let ˜g = clip g 
+
+> c
+
+(g). Suppose that ℓ ≥ 3∥G∥F . If 
+
+c ≤ √r(ℓ − ∥ G∥2), then it holds that: 4c 
+
+> 5√rℓ
+
+∥G∥2 
+
+> F
+
+≤ EN[⟨G, ˜g⟩] ≤ c√rℓ ∥G∥2 
+
+> F
+
+and EN[∥˜g∥2 
+
+> F
+
+] = c2. If 
+
+√r(ℓ − ∥ G∥2) ≤ c ≤ ℓ + ∥G∥2, then we have: EN[⟨G, ˜g⟩] ≤ ∥ G∥2 
+
+> F
+
+and 49 rℓ 2 ≤ EN[∥˜g∥2 
+
+> F
+
+] ≤ c2. Finally, if 
+
+c ≥ ℓ + ∥G∥2, then it holds that: EN[⟨G, ˜g⟩] = ∥G∥2 
+
+> F
+
+and EN[∥˜g∥2 
+
+> F
+
+] = ∥G∥2 
+
+> F
+
++ rℓ 2.
+
+7The previous lemma shows that for any c > 0, global clipping either have small signal preservation, 
+
+E[⟨G, ˜g⟩] ≃ cℓ ∥G∥2 
+
+> F
+
+which decreases linearly as ℓ increases, or have large variance scaling as ℓ2. This is because global clipping scales down the entire matrix uniformly, including the useful signal components. From the previous lemmas, we can immediately derive convergence guarantees for SGD with spectral clipping in the presence of sparse spectral spikes. Consider the minimization problem: min  
+
+> X∈Rm×n
+
+f (X) . (7) We assume that the objective function f is L∥·∥ F -smooth and has bounded gradient. 
+
+Assumption 3. There exists M, B > 0 such that for any X ∈ Rm×n, we have: 
+
+∥∇ f (X)∥2 ≤ M, ∥∇ f (X)∥F ≤ B . (8) 
+
+Assumption 4. At any point X ∈ Rm×n, the stochastic gradient oracle returns g(X) = ∇f (X) + N (X),where N (X) = ℓUX VTX , ℓ > 0, and UX ∈ Rm×r and VX ∈ Rn×r are independent random matrices that satisfy Definition 1 with parameter r2κ ≪ q := min( m, n ).
+
+Assumption 4 implies that for any X ∈ Rm×n. the stochastic gradient is unbiased: E[g(X)] = ∇f (X), and its variance is bounded: E[∥g(X) − ∇ f (X)∥2 
+
+> F
+
+] = rℓ 2. Therefore, to reach E[∥∇ f ( ˆXK )∥F ]2 ≤ ϵ2, Vanilla SGD requires at most K = O  LF F 0 
+
+> ϵ2
+
++ rℓ 2 LF F 0
+
+> ϵ4
+
+ iterations, where F 0 = f (X0) − f ∗ and ˆXK is uniformly sampled from {X0, . . . , XK−1}. We next compare the convergence rates of the following two methods: 
+
+Xk+1 = Xk − η clip sp  
+
+> c
+
+(g(Xk)) , (9) 
+
+Xk+1 = Xk − η clip g 
+
+> c
+
+(g(Xk)) , (10) 
+
+Theorem 5. Let SGD with spectral clipping (9) be applied to problem (7) under Assumptions 2, 3, and 4 with 
+
+25 κr 2 ≤ q := min( m, n ). For any ℓ > 0, by choosing η = 1 /( 6rL F min(10 √rM, 10 ℓ/ 9) 2 
+
+> ϵ2
+
++ 3 LF ) and c = 10 √rM ,to reach E[∥∇ f ( ˆXK )∥2 
+
+> F
+
+] ≤ ϵ2, we need at most 
+
+K ≤ 36 LF F 0
+
+ϵ2 + 72 min(10 √rM, 10 ℓ/ 9) 2 rL F F 0
+
+ϵ4
+
+≃ LF F 0
+
+ϵ2 + min( √rM, ℓ )2 rL F F 0
+
+ϵ4
+
+iterations, where F 0 := f (X0) − f ∗ and ˆXK is uniformly sampled from {X0, . . . , XK−1}.
+
+Theorem 6. Consider SGD with global clipping (10) under the same setting and notations as in Theorem 5. For any ℓ ≥ 3B, by choosing c ≤ 23
+
+√rℓ and η =
+
+q 2F 0  
+
+> LFKc 2
+
+, to reach E[∥∇ f ( ˆXK )∥2 
+
+> F
+
+] ≤ ϵ2, we need at most 
+
+K ≤ 4rℓ 2LF F 0 
+
+> ϵ4
+
+iterations. 
+
+From Theorem 5, we see that SGD with spectral clipping achieves an improvement of dependence from rℓ 2
+
+to r min( √rM, ℓ )2. Meanwhile, it is robust to any spike noise level ℓ by choosing the clipping threshold c ≃√rM . We discuss the performance of SGD-M with both pre and post-spectral clipping under Assumption 4 in Section E.1. 
+
+## 5 SPECTRA : SPEctral Clipping for LLM TRaining Acceleration 
+
+In this section, we formally present SPECTRA , a new broad class of optimizers that leverage spectral clipping to enhance the training of LLMs. 8Algorithm 1 Soft Spectral Clipping ≈ clip sp  
+
+> c
+
+(X) 
+
+> 1:
+
+Input: X ∈ Rm×n, c > 0, Ns > 0.  
+
+> 2:
+
+Signature: SSC c(X, N s).  
+
+> 3:
+
+Set s2max = min( ∥XX T ∥F , max i
+
+Pnj=1 |(XX T )ij |). 1 
+
+> 4:
+
+if smax ≤ c then  
+
+> 5:
+
+Return X  
+
+> 6:
+
+else  
+
+> 7:
+
+Set α = 1 + ( smax /c )2. 
+
+> 8:
+
+Compute A = MISR( I + XX T /c 2, α, N s).  
+
+> 9:
+
+Return: AX . 
+
+> 10:
+
+end if      
+
+> 1s2max is an upper bound on the largest singular value of XX T.By the Gershgorin circle theorem, σ1(XX T) is bounded by the largest 1-norm of any of its rows.
+
+Algorithm 2 Matrix Inverse Square Root  
+
+> 1:
+
+Input: P.D. X ∈ Rm×m, α ≥ σmax (X) > 0, 
+
+K > 0.  
+
+> 2:
+
+Signature: MISR( X, α, K ).  
+
+> 3:
+
+Set ˆX = X/α and initialize Y0 = ˆX and Z0 =
+
+I. 
+
+> 4:
+
+for k = 0 , 1, 2 . . . , K − 1 do  
+
+> 5:
+
+Tk = 12 (3 I − ZkYk).  
+
+> 6:
+
+Yk+1 = YkTk. 
+
+> 7:
+
+Zk+1 = TkZk. 
+
+> 8:
+
+end for  
+
+> 9:
+
+Return: Z K /α 1/2.
+
+5.1 Soft Spectral Clipping 
+
+The computation of the exact spectral clipping is costly as it requires full SVD decomposition. To overcome this bottleneck, we propose Soft Spectral Clipping (SSC), a new simple approximation of the spectral clipping operator, which only requires matrix–matrix multiplications, making it efficient on GPU hardware. Let clip c(x) := sign( x) min( |x|, c ) be the scalar clipping function. Consider the smooth approximation of clip c(x): 
+
+hc(x) = x√1+ x2/c 2 . As illustrated in Figure E.1, hc(x) behaves linearly for small |x| < c and saturates smoothly to sign( x)c for large |x| > c . For any x, it satisfies |hc(x)| ≤ | clip c(x)|. The error bound can be found in Lemma 20. Similarly, for any matrix X ∈ Rm×n (assuming m ≤ n w.l.o.g.), applying hc to the singular values of X yields the soft spectral clipping operator (which is easy to be verified): 
+
+Hc(X) := ( I + XX T /c 2)− 12 X .
+
+To compute the term ( I+XX T /c 2)− 12 efficiently, we utilize the classic Newton-Schulz iteration (Algorithm 2), a well-established method for finding the inverse square root of a positive definite matrix (Schulz, 1933; Higham, 2008; Song et al., 2022). Since I + XX T /c 2 has eigenvalues strictly bounded below by 1, it is well-conditioned, ensuring the fast convergence of the Newton method. The full procedure is detailed in Algorithm 1. As shown in Figure E.2, the computational overhead is moderate—typically 2-10% of the total runtime—making it comparable to other scalable operations like those in Muon (Jordan et al., 2024). 
+
+5.2 Algorithm Description 
+
+We provide the complete pseudocode for SPECTRA in Algorithm 3. The framework is designed to be optimizer-agnostic, accepting any base optimizer that follows rule (1). While we discuss X mostly as a matrix, it naturally extends to 1D parameters ( n = 1). The key components are the same as discussed before: 1) Post-Spectral Clipping applied to the update and 2) An optional preprocessing step for raw gradients, which is effective for removing ’sparse spike’ noise before it corrupts the momentum buffer states, typically useful with small batchsize. 
+
+Recommended Hyperparameter Configurations. 
+
+1. Scaling Factor α. To ensure consistent optimization behavior across layers with varying dimensions, we align our spectral constraint with the RMS norm, defined as ∥A∥rms →rms = sup ∥z∥rms =1 ∥Az∥rms =
+
+p nm ∥A∥2, for A ∈ Rm×n, where ∥x∥rms = 1√d ∥x∥2 for x ∈ Rn. A good practical is to allow Drms ∝
+
+9Algorithm 3 SPECTRA 
+
+1: Input: Base optimizer: BO , learning rate schedule Slr , clipping schedule Sc, Pre-SPC ∈ { True , False },
+
+cpre > 0, c, η, λ, α, N s > 0, X0 ∈ Rm×n.
+
+2: for k = 0 , 1, 2 . . . , K − 1 do 
+
+3: Compute stochastic gradient g(Xk). 
+
+4: if Pre-SPC = True then 
+
+5: ˜gk = SSC cpre (g(Xk), N s). 
+
+6: else 
+
+7: ˜gk = g(Xk). 
+
+8: end if 
+
+9: Compute ck = Sc(c, k ) and ηk = Slr (η, k ). 
+
+10: Compute Uk using ˜ gk according to BO .
+
+11: Xk+1 = (1 − λη k)Xk − αη k SSC ck (Uk, N s). 
+
+12: end for 0 20000 40000 60000 80000 100000 120000  
+
+> Iterations
+> 3
+> 4
+> 5
+> 6
+> 7
+> 8
+> 9
+> 10
+> 11
+> Validation Loss
+> Spectra-Signum (lr 1e-3, post-clip)
+> Spectra-Signum (lr 1e-3, pre-post-clip)
+> Signum (lr 1e-3)
+> Signum (lr 5e-4)
+> Signum (lr 2e-4)
+> Methods
+> 3.25
+> 3.50
+> 3.75
+> 4.00
+> 4.25
+> 4.50
+> 4.75
+> 5.00
+> Final Validation Loss
+> 3.191 3.196
+> 3.284
+> 4.578
+> 4.964
+> Spectra-Signum (lr 1e-3, pre-post-clip)
+> Spectra-Signum (lr 1e-3, post-clip)
+> Signum (lr 2e-4)
+> Signum (lr 5e-4)
+> Signum (lr 1e-3)
+
+160M model. Batch size 16K. Trained on 2B tokens. 
+
+Figure 2: Validation loss comparison under small batch size training. Spectra-Signum maintains stability at the large learning rate, whereas Signum exhibits training instability (Signum typically prefers smaller LR than Adam-ish methods (Semenov et al., 2025)). Spectra-Signum with both pre and post clipping almost overlap with Spectra-Signum with post clipping. max(1 , pn/m ) to have conservative capacity scaling (Jordan et al., 2024; Pethick et al., 2025). If we target a constraint radius Drms , the equivalent spectral radius is D2 = p mn Drms . According to Theorem 1, we get 
+
+α = λb = λD 2 
+
+> c
+
+. By choosing D2 = max( p mn , 1) cλ , we obtain Drms = max( p nm , 1) cλ and α = max( p mn , 1). 2. c, λ and Ns. With α fixed, the ratio cλ controls the radius of the spectral norm ball ( D2 ∝ cλ ) and λ
+
+determines the regularization level b = λ/α . A common and robust choice is λ ≈ 0.1 and c ≈ 10. Finally, we find that Ns = 10 provides a consistent performance for all the experiments. 3. Dynamic Clipping Schedules. During the initial learning rate warm-up phase ( k < K warm ), we recommend maintaining a constant effective update capacity. Since the update magnitude is bounded ckηk,simply using a fixed small c with a small ηk would overly restrict the training. Instead, we scale inversely 
+
+ck = cη ηk . For k ≥ Kwarm , we can set ck ≡ c by default. For WSD (Hu et al., 2024) schedule, it can be 10 3.05         
+
+> 3.06
+> 3.07
+> 3.08
+> 3.09
+> 3.10
+> 3.11
+> 3.12
+> Validation Loss
+> 3.066
+> 3.081 3.084
+> 3.091
+> 3.098
+> 3.104
+> 3.108
+> 3.112
+> 3.120
+> 22.4K iterations (wsd). 3.2B tokens.
+> 2.90
+> 2.92
+> 2.94
+> 2.96
+> 2.98
+> Validation Loss
+> 2.918
+> 2.936 2.940 2.940 2.944 2.945
+> 2.958
+> 2.966
+> 2.984
+> 128K iterations (wsd). 16.8B tokens.
+> 2.88
+> 2.89
+> 2.90
+> 2.91
+> 2.92
+> 2.93
+> 2.94
+> 2.95
+> 2.96
+> Validation Loss
+> 2.900
+> 2.913
+> 2.922 2.922
+> 2.929 2.932
+> 2.944
+> 2.958 2.960
+> 128K iterations (cos). 16.8B tokens.
+
+FineWeb-Edu. Llama 160M. Untied embeds. Batch size 131k tokens. 
+
+> Spectra-AdEMAMix
+> D-Muon
+> Spectra-Signum
+> Signum
+> Spectra-AdamW
+> AdamW
+> AdEMAMix
+> Mars
+> SOAP
+
+Figure 3: Final validation loss comparison for a small size Llama model trained with both cos and wsd learning rate schedule. The run time comparisons w/wo using SPECTRA are provided in Figure F.8. We use a total batchsize of 256 with 512 sequence length. The hyperparameters such as learning rate used for each method are reported in the tables in Section F.3. beneficial to decay ck alongside ηk in the final phase for models with deep layers. 
+
+ck =
+
+( cη ηk k ≤ Kwarmup ,c otherwise . (standard) 
+
+
+
+ck = cη ηk k ≤ Kwarmup 
+
+ck = c Kwarmup ≤ k ≤ Kend-stable 
+
+ck = c
+
+
+
+1 −
+
+q k−Kend-stable 
+
+Ktotal −Kend-stable 
+
+
+
+Kend-stable ≤ k ≤ Ktotal 
+
+, (wsd-sqrt) where in this work, Kend-stable is set to be 0 .8Ktotal recommended by H¨ agele et al. (2024). 
+
+## 6 Experiments 
+
+6.1 Synthetic Experiments. 
+
+We validate our theory on a synthetic matrix logistic regression task. Using the update rule (4) with hyper-parameters from Theorem 1, Figure F.1 and F.4 confirm that our method correctly minimizes the composite objective F (X) within the spectral norm ball, where appropriate regularization improves generalization (details in Section F.1.1). Next, we test robustness against rank-r spectral spike noise N = ℓUV ⊤. As shown in Figure F.5, spectral clipping maintains fast convergence regardless of the noise scale ℓ using fixed hyperparameters. In contrast, vanilla and globally clipped SGD require significantly reduced learning rates to prevent divergence. These benefits also extend to momentum-based updates (Figure F.6; see Section F.1.2). 11 0 5000 10000 15000                
+
+> Iterations
+> 0
+> 10
+> 20
+> 30
+> 40
+> 50
+> 60
+> 70
+> 80
+> Sum of  norms of all matrices  Signum
+> Spectra-Signum
+> 05000 10000 15000
+> Iterations
+> 500
+> 1000
+> 1500
+> 2000
+> 2500
+> 3000
+> 3500
+> Sum of Frobenius norms of all matrices
+> Signum
+> Spectra-Signum
+> 05000 10000 15000
+> Iterations
+> 10
+> 20
+> 30
+> 40
+> 50
+> 60
+> Sum of  norms of all matrices  AdamW
+> Spectra-AdamW
+> 05000 10000 15000
+> Iterations
+> 600
+> 800
+> 1000
+> 1200
+> 1400
+> 1600
+> 1800
+> 2000
+> Sum of Frobenius norms of all matrices
+> AdamW
+> Spectra-AdamW
+> 05000 10000 15000
+> Iterations
+> 0
+> 50
+> 100
+> 150
+> 200
+> Sum of  norms of all matrices  AdEMAMix
+> Spectra-AdEMAMix
+> 05000 10000 15000
+> Iterations
+> 1000
+> 2000
+> 3000
+> 4000
+> 5000
+> 6000
+> 7000
+> 8000
+> Sum of Frobenius norms of all matrices
+> AdEMAMix
+> Spectra-AdEMAMix
+> FineWeb-Edu. Batch size 1M tokens. (Wide and Shallow) Llama 820M. Trained on 16.6B tokens. WSD.
+
+Figure 4: Evolution of the aggregated ℓ∞ and Frobenius norms of all weight matrices during training. SPECTRA consistently maintains a lower ℓ∞ norm compared to the base optimizer. 0 500 1000 1500 2000                     
+
+> Iterations
+> 4
+> 5
+> 6
+> 7
+> 8
+> 9
+> 10
+> 11
+> Validation Loss
+> 160M model
+> Signum
+> Spectra-Signum
+> 0500 1000 1500 2000
+> Iterations
+> 3
+> 4
+> 5
+> 6
+> 7
+> 8
+> 9
+> 10
+> 11
+> Validation Loss
+> 820M model
+> Signum
+> Spectra-Signum
+> 0500 1000 1500 2000
+> Iterations
+> 4
+> 5
+> 6
+> 7
+> 8
+> 9
+> 10
+> 11
+> Validation Loss
+> 160M model
+> AdamW
+> Spectra-AdamW
+> 0500 1000 1500 2000
+> Iterations
+> 3
+> 4
+> 5
+> 6
+> 7
+> 8
+> 9
+> 10
+> 11
+> Validation Loss
+> 820M model
+> AdamW
+> Spectra-AdamW
+> 0500 1000 1500 2000
+> Iterations
+> 4
+> 5
+> 6
+> 7
+> 8
+> 9
+> 10
+> 11
+> Validation Loss
+> 160M model
+> AdEMAMix
+> Spectra-AdEMAMix
+> 0500 1000 1500 2000
+> Iterations
+> 3
+> 4
+> 5
+> 6
+> 7
+> 8
+> 9
+> 10
+> 11
+> Validation Loss
+> 820M model
+> AdEMAMix
+> Spectra-AdEMAMix
+
+Figure 5: Comparison of different methods with or without using SPECTRA during the warm-up phase. SPECTRA improves convergence across three methods. (AdamW exhibits training instability during warm-up phase due to the use of a large step size required to achieve a low final validation loss.) 
+
+6.2 LLM Pretraining Tasks. 
+
+We compare SPECTRA against state-of-the-art optimizers, including AdEMAMix (Pagliardini et al., 2025), AdamW (Loshchilov and Hutter, 2019), Signum (Bernstein et al., 2018), D-Muon (Liu et al., 2025), Mars (Yuan et al., 2025), and SOAP (Vyas et al., 2024), following the benchmark protocol in (Semenov et al., 2025). We apply SPECTRA to the first three optimizers to demonstrate its versatility across methods with different 
+
+memory requirements (see Table F.2). We employ LLaMA3-based architectures (Grattafiori et al., 2024) with untied embeddings (details in Table F.1) trained on FineWeb-Edu dataset (Lozhkov et al., 2024). Hy-perparameter choices are reported in Section F.3. Unless otherwise stated, we disable pre-spectral clipping for SPECTRA because the marginal performance gain does not justify the added computational cost. We mostly use the WSD schedule H¨ agele et al. (2024) for its practical advantage of enabling resumption from any checkpoint during the stable phase (constant learning rate). 
+
+SPECTRA Enables Large Learning Rate. We begin by demonstrating the stability of SPECTRA under large learning rates. We train a 124M-parameter transformer using Signum with a small batch size of 16 k tokens. Previous studies note that Signum is sensitive to gradient noise, often performing poorly in small-batch regimes (Kornilov et al., 2025; Tomihari and Sato, 2025). Consistent with this, Figure 2 shows that standard Signum exhibits training instability and poor validation loss when the learning rate is increased. In contrast, Spectra-Signum maintains stable convergence at a high learning rate, significantly outperforming the best Signum baseline (improving validation perplexity by 2.5). These results highlight the efficiency of SPECTRA in mitigating instability caused by gradient noise. 
+
+160M-parameter Model. We use a sequence length of 512 tokens and batch size of 256. We first consider the Chinchilla optimal duration (Hoffmann et al., 2022) for this scale (3.2B tokens, approx. 24.4K iterations). As shown in the leftmost plot of Figure 3, the three SPECTRA variants achieve the lowest validation losses. When increasing the training budget to 16B tokens (testing both WSD and Cosine schedules), Spectra-AdEMAMix consistently outperforms other methods by a large margin. The run time comparison with and 12 without SPECTRA is presented in Figure F.8. We also evaluate the post-orthogonalization operator; results in Table F.4 indicate that post-spectral clipping yields superior performance. 
+
+820M Wide and Shallow Model. Following Semenov et al. (2025), we scale the model to 820M by increasing the embedding dimension while maintaining the number of layers. The Chinchilla optimal duration for this size is approximately 16.4B tokens. We increase the sequence length from 512 to 1K and batch size from 256 to 992 (1M tokens per batch). We run each method for 16K iterations; final validation losses are reported in the right plot of Figure 1. SPECTRA consistently improves upon the base optimizers. Training curves with respect to both iterations and runtime are presented in Figure F.7. Figure 4 plots the summation of the ℓ∞ and Frobenius norms of all weight matrices during training; all three SPECTRA variants exhibit smaller ℓ∞ norms, confirming the implicit ℓ∞-regularization effect of sign-based methods. We next evaluate the downstream performances of the pretrained models on 10 standard in-context learning tasks. Details are provided in Section F.4 and the results are reported in Table 1. All three SPECTRA variants improve average accuracy over the baselines, with Spectra-Signum achieving the best. 
+
+780M Deep and Thin Model. We next consider a modern deep architecture by increasing the number of layers and reducing the embedding dimension, a configuration known to be harder to optimize. The left plot in Figure 1 shows that the three SPECTRA variants rank top 3. Notably, Spectra-Signum performs best while requiring the least memory. Table 1: The evaluation results (accuracy ×100%) of the 820M model pretrained on Fineweb-Edu with 16.8B tokens (5-shot with lm-evaluation-harness (Gao et al., 2024)).                                                                                                    
+
+> Optimizer ARC-c ARC-e BoolQ PIQA HellaSwag WinoGrande OBQA λ-OpenAI Sciq MMLU Average
+> Mars 34 .98 67 .80 57 .25 70 .08 46 .87 52 .17 34 .20 29.38 89 .60 25 .37 50 .77 D-Muon 36 .60 67 .47 53 .73 69 .31 46 .69 52 .72 34 .60 28 .84 90.90 25 .08 50 .59 Signum 34 .56 65 .66 56 .02 69 .64 45 .01 52 .25 34 .20 28 .04 87 .30 25 .75 49 .84 Spectra-Signum 35 .58 68.81 58.10 70.46 47 .04 54.46 35 .60 29 .36 90 .30 26.44 51.62
+> AdamW 33 .45 66 .84 56 .09 69 .21 45 .65 50 .99 35 .20 25 .54 90 .80 23 .86 49 .76 Spectra-AdamW 35 .67 66 .96 55 .41 68 .82 46 .57 52 .09 36.40 26 .74 89 .20 25 .14 50 .30 AdEMAMix 35 .41 65 .95 43 .43 70 .08 46 .43 53 .20 34 .40 28 .51 88 .30 24 .84 49 .05 Spectra-AdEMAMix 36.86 68 .81 53 .94 69 .48 47.09 53 .43 36 .40 28 .26 89 .40 26 .23 50 .99
+
+Summary and Discussion. In general, Spectra-AdEMAMix consistently achieves the best validation losses across varying training durations and model sizes, while Spectra-Signum excels with large batch sizes and demonstrates strong performance on downstream tasks. For all SPECTRA variants, we use fixed hyperparameters η = 10 −3, c = 10 and the fixed clipping schedule discussed previously across all experiments without tuning. The only exception is the 780M deep model, where we found it beneficial to decay c alongside 
+
+η during the final decay phase of the WSD schedule. Overall, we recommend Spectra-Signum as a strong and memory-efficient optimizer for standard LLm pretraining when the batchsize is sufficiently large. 
+
+## 7 Conclusion. 
+
+We proposed SPECTRA, a novel spectral optimization framework designed for efficient LLM training. By explicitly constraining the spectral norm of the update matrix, SPECTRA enhances convergence stability and final validation performance compared to standard baselines, while avoiding additional memory over-head. Future directions include: 1) scaling the experiments up to models of larger sizes, extending training durations, and evaluating performance on broad downstream tasks; 2) theoretical analysis of spectral clipping under more general noise assumptions; 3) empirical comparions of using other spectral clipping implemen-tations such as Cesista (2025) and the currently used soft spectral clipping; 4) exploring efficient distributed implementations of spectral clipping for multi-gpu training; 5) investigating the effect of explicitly using vari-ous weight regularization techniques, and 6) exploring the potential of spectral clipping in other optimization contexts, such as reinforcement learning. 13 Acknowledgments 
+
+The authors thank Anton Rodomanov and Nikita Doikov for helpful discussions regarding the paper. This work was supported by the Helmholtz Association’s Initiative and Networking Fund on the HAICORE@FZJ partition. 
+
+## References 
+
+Winogrande: An adversarial winograd schema challenge at scale. 2019. Kwangjun Ahn, Byron Xu, Natalie Abreu, Ying Fan, Gagik Magakyan, Pratyusha Sharma, Zheng Zhan, and John Langford. Dion: Distributed orthonormalized updates. arXiv preprint arXiv:2504.05295 , 2025. Dan Alistarh, Zeyuan Allen-Zhu, and Jerry Li. Byzantine stochastic gradient descent. Advances in neural information processing systems , 31, 2018. Noah Amsel, David Persson, Christopher Musco, and Robert M Gower. The polar express: Optimal matrix sign methods and their application to the muon algorithm. arXiv preprint arXiv:2505.16932 , 2025. Kang An, Yuxing Liu, Rui Pan, Yi Ren, Shiqian Ma, Donald Goldfarb, and Tong Zhang. Asgo: Adaptive structured gradient optimization. arXiv preprint arXiv:2503.20762 , 2025. Peter L Bartlett, Dylan J Foster, and Matus J Telgarsky. Spectrally-normalized margin bounds for neural networks. Advances in neural information processing systems , 30, 2017. Jeremy Bernstein and Laker Newhouse. Old optimizer, new norm: An anthology. arXiv preprint arXiv:2409.20325 , 2024. Jeremy Bernstein, Yu-Xiang Wang, Kamyar Azizzadenesheli, and Animashree Anandkumar. signsgd: Com-pressed optimisation for non-convex problems. In International conference on machine learning , pages 560–569. PMLR, 2018. Yonatan Bisk, Rowan Zellers, Ronan Le Bras, Jianfeng Gao, and Yejin Choi. Piqa: Reasoning about physical commonsense in natural language. In Thirty-Fourth AAAI Conference on Artificial Intelligence , 2020. Ali Ebrahimpour Boroojeny, Matus Telgarsky, and Hari Sundaram. Spectrum extraction and clipping for implicitly linear layers. In International Conference on Artificial Intelligence and Statistics , pages 2971– 2979. PMLR, 2024. Nicolas Boumal and Antoine Gonon. Designing polynomials for Muon’s polar factorization: Focus on quintics. URL www .racetothebottom .xyz/posts/polar-poly/ .David Carlson, Volkan Cevher, and Lawrence Carin. Stochastic Spectral Descent for Restricted Boltz-mann Machines. In Guy Lebanon and S. V. N. Vishwanathan, editors, Proceedings of the Eighteenth International Conference on Artificial Intelligence and Statistics , volume 38 of Proceedings of Ma-chine Learning Research , pages 111–119, San Diego, California, USA, 09–12 May 2015a. PMLR. URL 
+
+https://proceedings .mlr .press/v38/carlson15 .html .David Carlson, Ya-Ping Hsieh, Edo Collins, Lawrence Carin, and Volkan Cevher. Stochastic spectral descent for discrete graphical models. IEEE Journal of Selected Topics in Signal Processing , 10(2):296–311, 2016. doi: 10 .1109/JSTSP .2015 .2505684. David E Carlson, Edo Collins, Ya-Ping Hsieh, Lawrence Carin, and Volkan Cevher. Preconditioned spectral descent for deep learning. Advances in neural information processing systems , 28, 2015b. 14 Franz Louis Cesista. Fast, numerically stable, and auto-differentiable Spectral Clipping via Newton-Schulz iteration, June 2025. URL https://leloykun .github .io/ponder/spectral-clipping/ .Savelii Chezhegov, Klyukin Yaroslav, Andrei Semenov, Aleksandr Beznosikov, Alexander Gasnikov, Samuel Horv´ ath, Martin Tak´ aˇ c, and Eduard Gorbunov. Clipping improves Adam-norm and AdaGrad-norm when the noise is heavy-tailed. In Aarti Singh, Maryam Fazel, Daniel Hsu, Simon Lacoste-Julien, Felix Berkenkamp, Tegan Maharaj, Kiri Wagstaff, and Jerry Zhu, editors, Proceedings of the 42nd Interna-tional Conference on Machine Learning , volume 267 of Proceedings of Machine Learning Research , pages 10269–10333. PMLR, 13–19 Jul 2025. URL https://proceedings .mlr .press/v267/chezhegov25a .html .Yasuko Chikuse. Statistics on special manifolds / Yasuko Chikuse . Lecture notes in statistics 174. Springer, New York [u.a, 2003. ISBN 0387001603. URL https://digitale-objekte .hbz-nrw .de/storage2/2018/ 06/15/file 159/7908270 .pdf .Clark Christopher, Lee Kenton, Ming-Wei Chang, Kwiatkowski Tom, Collins Michael, and Toutanova Kristina. Boolq: Exploring the surprising difficulty of natural yes/no questions. In NAACL , 2019. Peter Clark, Isaac Cowhey, Oren Etzioni, Tushar Khot, Ashish Sabharwal, Carissa Schoenick, and Oyvind Tafjord. Think you have solved question answering? try arc, the ai2 reasoning challenge. 
+
+arXiv:1803.05457v1 , 2018. Michael Crawshaw, Chirag Modi, Mingrui Liu, and Robert M Gower. An exploration of non-euclidean gradient descent: Muon and its many variants. arXiv preprint arXiv:2510.09827 , 2025. Ashok Cutkosky and Francesco Orabona. Momentum-based variance reduction in non-convex sgd. Advances in neural information processing systems , 32, 2019. Damek Davis and Dmitriy Drusvyatskiy. When do spectral gradient updates help in deep learning? arXiv preprint arXiv:2512.04299 , 2025. John Duchi, Elad Hazan, and Yoram Singer. Adaptive subgradient methods for online learning and stochastic optimization. Journal of Machine Learning Research , 12(61):2121–2159, 2011. URL http://jmlr .org/ papers/v12/duchi11a .html .Leo Gao, Jonathan Tow, Baber Abbasi, Stella Biderman, Sid Black, Anthony DiPofi, Charles Foster, Lau-rence Golding, Jeffrey Hsu, Alain Le Noac’h, Haonan Li, Kyle McDonell, Niklas Muennighoff, Chris Ociepa, Jason Phang, Laria Reynolds, Hailey Schoelkopf, Aviya Skowron, Lintang Sutawika, Eric Tang, Anish Thite, Ben Wang, Kevin Wang, and Andy Zou. The language model evaluation harness, 07 2024. URL https://zenodo .org/records/12608602 .Justin Gilmer, Behrooz Ghorbani, Ankush Garg, Sneha Kudugunta, Behnam Neyshabur, David Cardoze, George Edward Dahl, Zachary Nado, and Orhan Firat. A loss curvature perspective on training instabilities of deep learning models. In International Conference on Learning Representations , 2022. URL https: //openreview .net/forum?id=OcKMT-36vUs .Gene H. Golub and Charles F. van Loan. Matrix Computations . JHU Press, fourth edition, 2013. ISBN 1421407949 9781421407944. URL http://www .cs .cornell .edu/cv/GVL4/golubandvanloan .htm .Antoine Gonon, Andreea-Alexandra Mu¸ sat, and Nicolas Boumal. Insights on muon from simple quadratics. 
+
+arXiv preprint arXiv:2602.11948 , 2026. Eduard Gorbunov, Marina Danilova, and Alexander Gasnikov. Stochastic optimization with heavy-tailed noise via accelerated gradient clipping. Advances in Neural Information Processing Systems , 33:15042– 15053, 2020. 15 Eduard Gorbunov, Nazarii Tupitsa, Sayantan Choudhury, Alen Aliev, Peter Richt´ arik, Samuel Horv´ ath, and Martin Tak´ aˇ c. Methods for convex ( l 0, l 1)-smooth optimization: Clipping, acceleration, and adaptivity. 
+
+arXiv preprint arXiv:2409.14989 , 2024. Aaron Grattafiori, Abhimanyu Dubey, Abhinav Jauhri, Abhinav Pandey, Abhishek Kadian, Ahmad Al-Dahle, Aiesha Letman, Akhil Mathur, Alan Schelten, Alex Vaughan, et al. The llama 3 herd of models. 
+
+arXiv preprint arXiv:2407.21783 , 2024. Kaja Gruntkowska, Yassine Maziane, Zheng Qu, and Peter Richt´ arik. Drop-muon: Update less, converge faster. arXiv preprint arXiv:2510.02239 , 2025. Hanyao Guo, Yunhai Han, and Harish Ravichandar. On the surprising effectiveness of spectrum clipping in learning stable linear dynamics. arXiv preprint arXiv:2412.01168 , 2024. Vineet Gupta, Tomer Koren, and Yoram Singer. Shampoo: Preconditioned stochastic tensor optimization. In International Conference on Machine Learning , pages 1842–1850. PMLR, 2018. Alexander H¨ agele, Elie Bakouch, Atli Kosson, Loubna Ben Allal, Leandro Von Werra, and Martin Jaggi. Scaling laws and compute-optimal training beyond fixed training durations. In A. Glober-son, L. Mackey, D. Belgrave, A. Fan, U. Paquet, J. Tomczak, and C. Zhang, editors, Advances in Neural Information Processing Systems , volume 37, pages 76232–76264. Curran Associates, Inc., 2024. doi: 10 .52202/079017-2427. URL https://proceedings .neurips .cc/paper files/paper/2024/file/ 8b970e15a89bf5d12542810df8eae8fc-Paper-Conference .pdf .Zaid Harchaoui, Anatoli Juditsky, and Arkadi Nemirovski. Conditional gradient algorithms for norm-regularized smooth convex optimization. Mathematical Programming , 152(1):75–112, 2015. Dan Hendrycks, Collin Burns, Steven Basart, Andrew Critch, Jerry Li, Dawn Song, and Jacob Steinhardt. Aligning ai with shared human values. Proceedings of the International Conference on Learning Repre-sentations (ICLR) , 2021a. Dan Hendrycks, Collin Burns, Steven Basart, Andy Zou, Mantas Mazeika, Dawn Song, and Jacob Steinhardt. Measuring massive multitask language understanding. Proceedings of the International Conference on Learning Representations (ICLR) , 2021b. Nicholas J. Higham. Functions of Matrices . Society for Industrial and Applied Mathematics, 2008. doi: 10 .1137/1 .9780898717778. URL https://epubs .siam .org/doi/abs/10 .1137/1 .9780898717778 .Jordan Hoffmann, Sebastian Borgeaud, Arthur Mensch, Elena Buchatskaya, Trevor Cai, Eliza Rutherford, Diego de Las Casas, Lisa Anne Hendricks, Johannes Welbl, Aidan Clark, et al. Training compute-optimal large language models. arXiv preprint arXiv:2203.15556 , 2022. Roger A. Horn and Charles R. Johnson. Matrix Analysis . Cambridge University Press, Cambridge; New York, 2nd edition, 2013. ISBN 9780521839402. Shengding Hu, Yuge Tu, Xu Han, Chaoqun He, Ganqu Cui, Xiang Long, Zhi Zheng, Yewei Fang, Yuxiang Huang, Weilin Zhao, et al. Minicpm: Unveiling the potential of small language models with scalable training strategies. arXiv preprint arXiv:2404.06395 , 2024. Tianjin Huang, Ziquan Zhu, Gaojie Jin, Lu Liu, Zhangyang Wang, and Shiwei Liu. SPAM: Spike-aware adam with momentum reset for stable LLM training. In The Thirteenth International Conference on Learning Representations , 2025. URL https://openreview .net/forum?id=L9eBxTCpQG .Martin Jaggi. Revisiting Frank-Wolfe: Projection-free sparse convex optimization. In Sanjoy Dasgupta and David McAllester, editors, Proceedings of the 30th International Conference on Machine Learning ,volume 28 of Proceedings of Machine Learning Research , pages 427–435, Atlanta, Georgia, USA, 17–19 Jun 2013. PMLR. URL https://proceedings .mlr .press/v28/jaggi13 .html .16 Xiaowen Jiang, Anton Rodomanov, and Sebastian U Stich. Non-convex federated optimization under cost-aware client selection. arXiv preprint arXiv:2512.05327 , 2025. Matt Gardner Johannes Welbl, Nelson F. Liu. Crowdsourcing multiple choice science questions. 2017. Keller Jordan, Yuchen Jin, Vlado Boza, Jiacheng You, Franz Cesista, Laker Newhouse, and Jeremy Bernstein. Muon: An optimizer for hidden layers in neural networks, 2024. URL https://kellerjordan .github .io/ posts/muon/ .Sai Praneeth Karimireddy, Lie He, and Martin Jaggi. Learning from history for byzantine robust optimiza-tion. In International conference on machine learning , pages 5311–5319. PMLR, 2021. Anastasia Koloskova, Hadrien Hendrikx, and Sebastian U Stich. Revisiting gradient clipping: Stochastic bias and tight convergence guarantees. In Andreas Krause, Emma Brunskill, Kyunghyun Cho, Barbara Engelhardt, Sivan Sabato, and Jonathan Scarlett, editors, Proceedings of the 40th International Conference on Machine Learning , volume 202 of Proceedings of Machine Learning Research , pages 17343–17363. PMLR, 23–29 Jul 2023. URL https://proceedings .mlr .press/v202/koloskova23a .html .Nikita Kornilov, Philip Zmushko, Andrei Semenov, Mark Ikonnikov, Alexander Gasnikov, and Alexander Beznosikov. Sign operator for coping with heavy-tailed noise in non-convex optimization: High probability bounds under ( l 0, l 1)-smoothness. arXiv preprint arXiv:2502.07923 , 2025. Jingyuan Liu, Jianlin Su, Xingcheng Yao, Zhejun Jiang, Guokun Lai, Yulun Du, Yidao Qin, Weixin Xu, Enzhe Lu, Junjie Yan, et al. Muon is scalable for llm training. arXiv preprint arXiv:2502.16982 , 2025. Liyuan Liu, Haoming Jiang, Pengcheng He, Weizhu Chen, Xiaodong Liu, Jianfeng Gao, and Jiawei Han. On the variance of the adaptive learning rate and beyond. arXiv preprint arXiv:1908.03265 , 2019. Ilya Loshchilov and Frank Hutter. Decoupled weight decay regularization. In International Conference on Learning Representations , 2019. URL https://openreview .net/forum?id=Bkg6RiCqY7 .Anton Lozhkov, Loubna Ben Allal, Leandro von Werra, and Thomas Wolf. Fineweb-edu: the finest collection of educational content, 2024. URL https://huggingface .co/datasets/HuggingFaceFW/fineweb-edu .Chao Ma, Wenbo Gong, Meyer Scetbon, and Edward Meeds. SWAN: SGD with normalization and whitening enables stateless LLM training. In Aarti Singh, Maryam Fazel, Daniel Hsu, Simon Lacoste-Julien, Felix Berkenkamp, Tegan Maharaj, Kiri Wagstaff, and Jerry Zhu, editors, Proceedings of the 42nd International Conference on Machine Learning , volume 267 of Proceedings of Machine Learning Research , pages 41907– 41942. PMLR, 13–19 Jul 2025. URL https://proceedings .mlr .press/v267/ma25g .html .Grigory Malinovsky, Peter Richt´ arik, Samuel Horv´ ath, and Eduard Gorbunov. Byzantine robustness and partial participation can be achieved at once: Just clip gradient differences. Advances in Neural Informa-tion Processing Systems , 37:34900–34979, 2024. Todor Mihaylov, Peter Clark, Tushar Khot, and Ashish Sabharwal. Can a suit of armor conduct electricity? a new dataset for open book question answering. In EMNLP , 2018. Takeru Miyato, Toshiki Kataoka, Masanori Koyama, and Yuichi Yoshida. Spectral normalization for gener-ative adversarial networks. arXiv preprint arXiv:1802.05957 , 2018. Aryan Mokhtari, Hamed Hassani, and Amin Karbasi. Stochastic conditional gradient methods: From convex minimization to submodular maximization. Journal of machine learning research , 21(105):1–49, 2020. Yurii Nesterov. Lectures on Convex Optimization . Springer Publishing Company, Incorporated, 2nd edition, 2018. ISBN 3319915770. 17 Matteo Pagliardini, Pierre Ablin, and David Grangier. The adEMAMix optimizer: Better, faster, older. In The Thirteenth International Conference on Learning Representations , 2025. URL https: //openreview .net/forum?id=jj7b3p5kLY .Yan Pan and Yuanzhi Li. Toward understanding why adam converges faster than sgd for transformers. arXiv preprint arXiv:2306.00204 , 2023. Razvan Pascanu, Tomas Mikolov, and Yoshua Bengio. On the difficulty of training recurrent neural networks. In International conference on machine learning , pages 1310–1318. Pmlr, 2013. Thomas Pethick, Wanyun Xie, Kimon Antonakopoulos, Zhenyu Zhu, Antonio Silveti-Falls, and Volkan Cevher. Training deep learning models with norm-constrained LMOs. In Forty-second International Conference on Machine Learning , 2025. URL https://openreview .net/forum?id=2Oqm2IzTy9 .B.T. Polyak. Some methods of speeding up the convergence of iteration methods. USSR Computational Math-ematics and Mathematical Physics , 4(5):1–17, 1964. ISSN 0041-5553. doi: https://doi .org/10 .1016/0041-5553(64)90137-5. URL https://www .sciencedirect .com/science/article/pii/0041555364901375 .Ofir Press and Lior Wolf. Using the output embedding to improve language models. In Proceedings of the 15th Conference of the European Chapter of the Association for Computational Linguistics: Volume 2, Short Papers , pages 157–163, 2017. Alec Radford, Jeff Wu, Rewon Child, David Luan, Dario Amodei, and Ilya Sutskever. Language models are unsupervised multitask learners. 2019a. URL https://api .semanticscholar .org/CorpusID:160025533 .Alec Radford, Jeff Wu, Rewon Child, David Luan, Dario Amodei, and Ilya Sutskever. Language models are unsupervised multitask learners. 2019b. Artem Riabinin, Egor Shulgin, Kaja Gruntkowska, and Peter Richt´ arik. Gluon: Making muon & scion great again!(bridging theory and practice of lmo-based optimizers for llms). arXiv preprint arXiv:2505.13416 ,2025. G¨ unther Schulz. Iterative Berechung der reziproken Matrix. Zeitschrift Angewandte Mathematik und Mechanik , 13(1):57–59, January 1933. doi: 10 .1002/zamm .19330130111. Andrei Semenov, Matteo Pagliardini, and Martin Jaggi. Benchmarking optimizers for large language model pretraining. arXiv preprint arXiv:2509.01440 , 2025. Noam Shazeer. Glu variants improve transformer. arXiv preprint arXiv:2002.05202 , 2020. Wei Shen, Ruichuan Huang, Minhui Huang, Cong Shen, and Jiawei Zhang. On the convergence analysis of muon. arXiv preprint arXiv:2505.23737 , 2025. Chongjie Si, Debing Zhang, and Wei Shen. Adamuon: Adaptive muon optimizer. arXiv preprint arXiv:2507.11005 , 2025. Umut Simsekli, Levent Sagun, and Mert Gurbuzbalaban. A tail-index analysis of stochastic gradient noise in deep neural networks. In International Conference on Machine Learning , pages 5827–5837. PMLR, 2019. Daria Soboleva, Faisal Al-Khateeb, Robert Myers, Jacob R Steeves, Joel Hestness, and Nolan Dey. SlimPa-jama: A 627B token cleaned and deduplicated version of RedPajama. https://www .cerebras .net/blog/ slimpajama-a-627b-token-cleaned-and-deduplicated-version-of-redpajama , 2023. URL https: //huggingface .co/datasets/cerebras/SlimPajama-627B .Yue Song, Nicu Sebe, and Wei Wang. Fast differentiable matrix square root. In International Conference on Learning Representations , 2022. URL https://openreview .net/forum?id=-AOEi-5VTU8 .18 G. W. Stewart and Ji guang Sun. Matrix perturbation theory. 1990. URL https:// api .semanticscholar .org/CorpusID:265829890 .Jianlin Su, Murtadha Ahmed, Yu Lu, Shengfeng Pan, Wen Bo, and Yunfeng Liu. Roformer: Enhanced transformer with rotary position embedding. Neurocomputing , 568:127063, 2024. Akiyoshi Tomihari and Issei Sato. Understanding why adam outperforms sgd: Gradient heterogeneity in transformers. arXiv preprint arXiv:2502.00213 , 2025. Koji Tsuda, Gunnar R¨ atsch, and Manfred K. Warmuth. Matrix exponentiated gradient updates for on-line learning and bregman projection. Journal of Machine Learning Research , 6(34):995–1018, 2005. URL 
+
+http://jmlr .org/papers/v6/tsuda05a .html .Roman Vershynin. High-dimensional probability. 2018. URL https://api .semanticscholar .org/ CorpusID:196128750 .Nikhil Vyas, Depen Morwani, Rosie Zhao, Mujin Kwun, Itai Shapira, David Brandfonbrener, Lucas Janson, and Sham Kakade. Soap: Improving and stabilizing shampoo using adam. arXiv preprint arXiv:2409.11321 , 2024. Junjie Wang, Pan Zhou, Yiming Dong, Huan Li, Jia Li, Xun Zhou, Qicheng Lao, Cong Fang, and Zhouchen Lin. Conda: Column-normalized adam for training large language models faster. arXiv preprint arXiv:2509.24218 , 2025. Per-˚ Ake Wedin. Perturbation bounds in connection with singular value decomposition. BIT Numerical Mathematics , 12:99–111, 1972. URL https://api .semanticscholar .org/CorpusID:122277492 .Mitchell Wortsman, Peter J Liu, Lechao Xiao, Katie E Everett, Alexander A Alemi, Ben Adlam, John D Co-Reyes, Izzeddin Gur, Abhishek Kumar, Roman Novak, Jeffrey Pennington, Jascha Sohl-Dickstein, Kelvin Xu, Jaehoon Lee, Justin Gilmer, and Simon Kornblith. Small-scale proxies for large-scale transformer training instabilities. In The Twelfth International Conference on Learning Representations , 2024. URL 
+
+https://openreview .net/forum?id=d8w0pmvXbZ .Shuo Xie, Mohamad Amin Mohamadi, and Zhiyuan Li. Adam exploits ℓ∞-geometry of loss landscape via coordinate-wise adaptivity. arXiv preprint arXiv:2410.08198 , 2024. Shuo Xie, Tianhao Wang, Sashank Reddi, Sanjiv Kumar, and Zhiyuan Li. Structured preconditioners in adaptive optimization: A unified analysis. arXiv preprint arXiv:2503.10537 , 2025. Robin Yadav, Shuo Xie, Tianhao Wang, and Zhiyuan Li. Provable benefit of sign descent: A minimal model under heavy-tailed class imbalance. arXiv preprint arXiv:2512.00763 , 2025. Yang You, Jing Li, Sashank Reddi, Jonathan Hseu, Sanjiv Kumar, Srinadh Bhojanapalli, Xiaodan Song, James Demmel, Kurt Keutzer, and Cho-Jui Hsieh. Large batch optimization for deep learning: Training bert in 76 minutes. arXiv preprint arXiv:1904.00962 , 2019. Huizhuo Yuan, Yifeng Liu, Shuang Wu, zhou Xun, and Quanquan Gu. MARS: Unleashing the power of variance reduction for training large models. In Forty-second International Conference on Machine Learning , 2025. URL https://openreview .net/forum?id=NrcKQ3ASLZ .Alp Yurtsever, Olivier Fercoq, Francesco Locatello, and Volkan Cevher. A conditional gradient framework for composite convex minimization with applications to semidefinite programming. In International conference on machine learning , pages 5727–5736. PMLR, 2018. Rowan Zellers, Ari Holtzman, Yonatan Bisk, Ali Farhadi, and Yejin Choi. Hellaswag: Can a machine really finish your sentence? In Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics , 2019. 19 Biao Zhang and Rico Sennrich. Root mean square layer normalization. Advances in neural information processing systems , 32, 2019. Jingzhao Zhang, Tianxing He, Suvrit Sra, and Ali Jadbabaie. Why gradient clipping accelerates training: A theoretical justification for adaptivity. arXiv preprint arXiv:1905.11881 , 2019. Jingzhao Zhang, Sai Praneeth Karimireddy, Andreas Veit, Seungyeon Kim, Sashank Reddi, Sanjiv Kumar, and Suvrit Sra. Why are adaptive methods good for attention models? Advances in Neural Information Processing Systems , 33:15383–15393, 2020. Minxin Zhang, Yuxuan Liu, and Hayden Schaeffer. Adagrad meets muon: Adaptive stepsizes for orthogonal updates. arXiv preprint arXiv:2509.02981 , 2025. ˚Ake Bj¨ orck and Gene H. Golub. Numerical methods for computing angles between linear subspaces. Mathe-matics of Computation , 27(123):579–594, 1973. ISSN 00255718, 10886842. URL http://www .jstor .org/ stable/2005662 .20 Appendix 
+
+## Contents 
+
+A More Related Work 22 B Basic Definitions 23 C Useful Lemmas 23 D Analysis of SGD under Sparse Noise with Spectral Spikes 27 
+
+D.1 Proof of Lemma 3 . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 28 D.2 Proof of Theorem 5 . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 30 D.3 Proof of Lemma 4 . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 31 D.4 Proof of Theorem 6 . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 32 
+
+E Analysis of Reformulation as Composite Frank-Wolfe 33 
+
+E.1 Discussion of CFW under Sparse Noise with Spikes . . . . . . . . . . . . . . . . . . . . . . . . 35 E.2 Solution of the Subproblem with Other Regularizers . . . . . . . . . . . . . . . . . . . . . . . 36 
+
+F Additional Experiment Results and Detailed Setup 36 
+
+F.1 Synthetic Experiments . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 36 F.1.1 Validation of Constrained Optimization with Weight Regularization . . . . . . . . . . 37 F.1.2 Validation of Robustness to Sparse Spectral Spikes . . . . . . . . . . . . . . . . . . . . 38 F.2 Recording Singular Value Distribution of Stochastic Gradients and Updates & Noise Structure 39 F.2.1 Singular Value Distribution of Stochastic Gradients and Updates. . . . . . . . . . . . . 40 F.2.2 Noise Structure Analysis. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 41 F.3 LLM Pretraining Tasks. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 42 F.4 Evaluation of downstream Tasks. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 44 21 A More Related Work 
+
+Clipping and Optimization. Gradient clipping has evolved from a heuristic to prevent exploding gradients in recurrent networks (Pascanu et al., 2013) into a critical component of modern optimizer design. Broadly, global and coordinate-wise clipping are the most widely studied variants due to their computational efficiency. Recent theoretical analyses have rigorously justified the benefits of clipping beyond simple stability. Pan and Li (2023) demonstrate the effect of coordinate-wise clipping on sharpness reduction and speeding up the convergence. Zhang et al. (2019) highlight the advantages of global clipping and normalization under the generalized smoothness assumptions which appears in training deep neural networks. Furthermore, Zhang et al. (2020) establish that clipping significantly improves robustness to heavy-tailed noise, effectively mimicking the behavior of adaptive methods. Subsequently, more advanced theoretical results are established with refined convergence guarantees under various assumptions Gorbunov et al. (2020, 2024); Koloskova et al. (2023) Recently, Chezhegov et al. (2025) further demonstrated the improvement of Adam-Norm and AdaGrad-Norm under heavy-tailed noise with global clipping. 
+
+Connection to Robust and Byzantine Optimization . The mechanics of gradient clipping share a strong theoretical foundation with robust statistics and Byzantine-tolerant optimization (Alistarh et al., 2018). In distributed learning scenarios where a subset of workers may be malicious, robust aggregation rules often employ clipping-like operations to filter out outliers (Karimireddy et al., 2021; Malinovsky et al., 2024). In this view, gradient clipping in standard training can be seen as a robust estimator that filters out ”stochastic outliers” in the gradient estimation, thereby stabilizing the learning process. 
+
+Spectral Clipping . Global and coordinate-wise clipping treat all gradients as flat vectors, ignoring the structural information inherent in matrix parameters. Spectral clipping has recently emerged as a more principled alternative for matrix-based models. For instance, Guo et al. (2024) show that post-hoc spectral clipping can enforce stability in linear dynamical systems more effectively than constrained optimization. Boroojeny et al. (2024) apply spectral constraints to implicitly linear layers to improve generalization and adversarial robustness. Most recently, Cesista (2025) proposed efficient algorithms for computing exact spectral clipping using block-matrix iterations, framing the method as steepest descent on the spectral ball. We leave the detailed comparisons between these techniques and our currently used soft spectral clipping as interesting future explorations. 
+
+Spectral Optimizer & Normalization. The concept of optimizing in the spectral domain traces back to early works by Carlson et al. (2015b), who proposed stochastic spectral descent—performing steepest descent in the spectral norm—to accelerate the training of Restricted Boltzmann Machines and deep net-works (Carlson et al., 2015a, 2016). Later, the Shampoo optimizer (Gupta et al., 2018) bridged the gap between spectral methods and adaptive preconditioning. Operating as a matrix-valued version of Ada-Grad (Duchi et al., 2011), Shampoo approximates second-order information via Kronecker structures; recent analysis suggests it can be viewed as a form of spectral descent when the preconditioner accumulation is removed (Bernstein and Newhouse, 2024). More recently, Muon (Jordan et al., 2024) has popularized spectral optimization by combining momentum with orthogonalized updates computed via Newton-Schultz (NS) iterations, achieving remarkable efficiency in nanoGPT benchmarks. Theoretical foundations for these methods have since emerged: Pethick et al. (2025) demonstrate that Muon with decoupled weight decay effectively performs Frank-Wolfe optimization within a spectral-norm ball. By generalizing the underlying norms, they proposed the Stochastic Conditional Gradient (SCG) framework, which exhibits favorable hyperparameter transfer properties. Further theoretical analyses regarding convergence and structural benefits have been established (Xie et al., 2025; Riabinin et al., 2025; Shen et al., 2025; Crawshaw et al., 2025). Geometric interpretations also link these methods to steepest descent in specific norms: just as sign-based methods exploit ℓ∞ geometry (Xie et al., 2024; Yadav et al., 2025), removing weight decay from Muon corresponds to steepest descent in the spectral norm space. Recent work by Gonon et al. (2026) provides novel theoretical insights into the Muon optimizer by studying its behavior on simple quadratics, revealing that polar-factor approximation errors can qualitatively change 22 discrete-time optimization dynamics and improve finite-time performance — a phenomenon not captured by existing worst-case or single-step analyses. Building on the success of Muon, numerous variants have been proposed to improve adaptivity and efficiency. These include hybrids like AdaMuon (Si et al., 2025) and AdaGrad-Muon (Zhang et al., 2025), as well as efficiency-focused methods like Drop-Muon (Gruntkowska et al., 2025) and ASGO (An et al., 2025). Parallel efforts have optimized the core orthogonalization operation itself: Dion (Ahn et al., 2025) introduces a distributed algorithm using amortized power iterations to avoid full-matrix reconstruction, while Amsel et al. (2025) and Boumal and Gonon propose refined iterative schemes to better approximate the orthogonalization operator. Beyond matrix methods, normalization techniques have also been applied to coordinate-wise optimizers (Wang et al., 2025) and standard SGD (Ma et al., 2025). Most recently, Davis and Drusvyatskiy (2025) provided rigorous justifications for the conditions under which spectral gradient updates help in DL. 
+
+## B Basic Definitions 
+
+Definition 2. A differentiable function f : Rm×n → R is called L∥·∥ -smooth for some L ≥ 0 if for all 
+
+X, Y ∈ Rm×n,
+
+∥∇ f (X) − ∇ f (Y)∥∗ ≤ L∥X − Y∥ ,
+
+where ∥ · ∥ ∗ is the dual norm of ∥ · ∥ . If f is L∥·∥ -smooth, then for any X, Y ∈ Rm×n, we have (Nesterov (2018), Lemma 1.2.3): 
+
+f (Y) ≤ f (X) + ⟨∇ f (X), Y − X⟩ + L
+
+2 ∥Y − X∥2 . (B.1) 
+
+Definition 3 ((Golub and van Loan, 2013, Section 2.5.3)) . Let X, Y ∈ Rm×r be two matrices with orthonor-mal columns. The distance between the subspaces spanned by those columns is defined as: 
+
+dist( X, Y) := ∥XX T − YY T ∥2 .
+
+Definition 4 (˚ Ake Bj¨ orck and Golub (1973); Golub and van Loan (2013)) . Let X, Y ∈ Rm×r be two matrices with orthonormal columns. Let U diag(cos( θ1), . . . , cos( θr )) VT be the singular value decomposition of XT Y.Then θ1, . . . , θ r ∈ [0 , π/ 2] are called the principal angles between the subspaces spanned by the columns of X
+
+and Y.
+
+## C Useful Lemmas 
+
+Lemma 7. For any two matrices X, Y ∈ Rm×n and any γ > 0, we have: 
+
+|⟨ X, Y⟩| ≤ γ
+
+2 ∥X∥2 
+
+> F
+
++ 12γ ∥Y∥2 
+
+> F
+
+, (C.1) 
+
+∥X + Y∥2 
+
+> F
+
+≤ (1 + γ) ∥X∥2 
+
+> F
+
++
+
+
+
+1 + 1
+
+γ
+
+
+
+∥Y∥2 
+
+> F
+
+. (C.2) 
+
+Lemma 8. Let (Ak)+∞
+
+> k=0
+
+, (Bk)+∞ 
+
+> k=0
+
+and be two sequences in Rm×n and (ak)+∞ 
+
+> k=0
+
+be a non-negative sequence such that Ak+1 = akAk + Bk for any k ≥ 0. Then it holds that, for any K ≥ 1,
+
+AK = Π K−1 
+
+> k=0
+
+akA0 +
+
+> K
+
+X
+
+> k=1
+
+(Π K−1 
+
+> i=k
+
+ai)Bk−1 ,
+
+where we define Πk2 
+
+> i=k1
+
+ai = 1 for any k1 > k 2.
+
+23 Proof. If there exists i such that ai = 0, then the claim clearly holds. Now suppose ai > 0 for any i ≥ 0. Let Ak = Π k−1 
+
+> i=0
+
+ai for k ≥ 1 and A0 = 1. Dividing the main recurrence by Ak+1 , we have for any k ≥ 0: 
+
+Ak+1 
+
+Ak+1 
+
+= Ak
+
+Ak
+
++ Bk
+
+Ak+1 
+
+.
+
+Summing up from k = 0 to k = K − 1, we get, for any K ≥ 1: 
+
+AK
+
+AK
+
+= A0
+
+A0
+
++
+
+> K−1
+
+X
+
+> k=0
+
+Bk
+
+Ak+1 
+
+.
+
+Rearranging, we get the claim. 
+
+Lemma 9. Let γk = 2 
+
+> k+2
+
+and βk = 1(k+1) 2/3 for k ≥ 0. Let Sk = Pki=1 
+
+ Πk−1 
+
+> j=i
+
+(1 − βj )γi−1 (S1 = γ0 = 1 )and Bk = Pki=1 
+
+ Πk−1 
+
+> j=i
+
+(1 − βj )2β2 
+
+> i−1
+
+(B1 = β20 = 1 ) for k ≥ 1. Then for any k ∈ N+, it holds that: 
+
+Sk ≤ 3
+
+k1/3 and Bk ≤ 1
+
+k2/3 .
+
+Proof. We prove both claims by induction. For any k ≥ 2, we have: 
+
+Sk = γk−1 +
+
+> k−1
+
+X
+
+> i=1
+
+ Πk−1 
+
+> j=i
+
+(1 − βj )γi−1 = γk−1 + (1 − βk−1)Sk−1 =
+
+
+
+1 − 1
+
+k2/3
+
+
+
+Sk−1 + 2
+
+k + 1 .
+
+For k = 1, we have S1 = 1 ≤ 3. For k ≥ 2, suppose the claim holds for k − 1. Then we have Sk−1 ≤ 3(k−1) 1/3
+
+and we need to show that: Sk ≤ 3 1 − k−2/3(k − 1) −1/3 + 2 
+
+> k+1
+
+≤ 3k−1/3. Note that (k − 1) −1/3 = k−1/3(1 − 1/k )−1/3 = k−1/3
+
+
+
+1 + 1
+
+k − 1
+
+1/3
+
+≤ k−1/3
+
+
+
+1 + 13( k − 1) 
+
+
+
+,
+
+where the last inequality follows from the concavity of the function (1 + x)1/3. Therefore, it suffices to show that: 3(1 − k−2/3)
+
+
+
+k−1/3 + k−1/3
+
+3( k − 1) 
+
+
+
++ 2
+
+k + 1 ≤ 3k−1/3 .
+
+The left hand side can be simplified as 3 k−1/3 + k−1/3/(k − 1) − 3k−1 − k−1/(k − 1) + 2 /(k + 1). Dropping the term − 1 
+
+> k(k−1)
+
+, it is sufficient to show that k−1/3 
+
+> k−1
+
++ 2 
+
+> k+1
+
+≤ 3k−1 or equivalently, k2/3 
+
+> k−1
+
++ 2kk+1 ≤ 3. The inequality holds for k = 2 and k = 3. For k ≥ 4, we have 2kk+1 = 2(1 − 1 
+
+> k+1
+
+) ≤ 2 and h(k) := k2/3 
+
+> k−1
+
+= 1 
+
+> k1/3−k−2/3
+
+is decreasing over k > 1 and h(4) < 1, which concludes the proof for the first claim. For the second claim, we have for any k ≥ 2: 
+
+Bk = β2 
+
+> k−1
+
++
+
+> k−1
+
+X
+
+> i=1
+
+ Πk−1 
+
+> j=i
+
+(1 − βj )2β2 
+
+> i−1
+
+= β2 
+
+> k−1
+
++ (1 − βk−1)2Bk−1 = (1 − k−2/3)2Bk−1 + k−4/3 .
+
+For k = 1, we have B1 = β20 = 1 ≤ 1. For k ≥ 2, suppose the claim holds for k − 1. Then we have 
+
+Bk−1 ≤ (k −1) −2/3 and we need to show that: Bk ≤ (1 −k−2/3)2(k −1) −2/3 +k−4/3 ≤ k−2/3, or equivalently, (1 − k−2/3) k/ (k − 1) 2/3 ≤ 1. Note that  k/ (k − 1) 2/3 = (1 + 1 
+
+> k−1
+
+)2/3 ≤ 1 + 23( k−1) , it is sufficient to show that: (1 − k−2/3) 1 + 23( k−1) 
+
+ ≤ 1. Expanding the left hand side, we need to prove that 23 ≤ k−1 
+
+> k2/3
+
++ 23k2/3 .This holds for k = 2. For k ≥ 3, since h(k) := k−1 
+
+> k2/3
+
+is increasing over k ≥ 1 and h(3) > 23 , the inequality holds and the claim follows. 24 Lemma 10. Let Sk = Pk−1  
+
+> i=1 i+1
+> i1/3
+
+for k ≥ 2. Then it holds that Sk ≤ 0.6k5/3 + 1 .5k2/3 − 2.1 ≤ 2.1k5/3.Proof. Let h(i) := i+1  
+
+> i1/3
+
+= i2/3 + i−1/3. We have h′(i) = 23 i−1/3 − 13 i−4/3 = 13 i−4/3(2 i − 1) > 0 for any i ≥ 1. Thus, h is increasing over [1 , +∞) and we have: h(i) ≤ R i+1  
+
+> i
+
+h(i)di . Summing up from i = 1 to i = k − 1, we get: 
+
+Sk =
+
+> k−1
+
+X
+
+> i=1
+
+h(i) ≤
+
+> k−1
+
+X
+
+> i=1
+
+Z i+1 
+
+> i
+
+h(i)di =
+
+Z k
+
+> 1
+
+i2/3 + i−1/3di = 35 (k5/3 − 1) + 32 (k2/3 − 1) .
+
+Lemma 11 ((Golub and van Loan, 2013, Algorithm 6.4.3)) . Let X, Y ∈ Rm×r be two matrices with or-thonormal columns. Then it holds that: 
+
+dist( X, Y) = max {sin θi : i = 1 , . . . , r } ,
+
+where θ1, . . . , θ r are the principal angles between the subspaces spanned by the columns of X and Y.
+
+Lemma 12 (Weyl’s inequality (Horn and Johnson, 2013, Chapter 7)) . Let A, B ∈ Rm×n be two matrices and let q = min( m, n ). Let σ1(A) ≥ . . . ≥ σq (A) and σ1(B) ≥ . . . ≥ σq (B) denote the singular values of A
+
+and B, respectively. Then for any indices 1 ≤ i, j ≤ q and i + j ≤ q + 1 , we have: 
+
+σi+j−1(A + B) ≤ σi(A) + σj (B) .
+
+Consequently, for any 1 ≤ i ≤ q, it holds that: 
+
+|σi(A + B) − σi(A)| ≤ σ1(B) = ∥B∥2, . 
+
+Lemma 13. Let A, B ∈ Rm×m be two symmetric matrices and suppose A is positive semidefinite. Then it holds that: trace( AB ) ≤ trace( A)λmax (B).Proof. Let A = Pmi=1 λi(A)uiuTi be the eigenvalue decomposition of A. Then we have: trace( AB ) = 
+
+> n
+
+X
+
+> i=1
+
+λi(A) trace( uiuTi B) = 
+
+> n
+
+X
+
+> i=1
+
+λi(A)uTi Bu i ≤
+
+> n
+
+X
+
+> i=1
+
+λi(A)λmax (B) = trace( A)λmax (B) .
+
+Lemma 14 (Wedin sin Θ Theorem (Wedin, 1972; Stewart and guang Sun, 1990)) . Let A, E ∈ Rm×n be two matrices and let ˆA = A + E. Let q = min( m, n ). Let σ1(A) ≥ . . . ≥ σq (A) and σ1( ˆA) ≥ . . . ≥ σq ( ˆA)
+
+denote the singular values of A and ˆA, respectively. Suppose that there exists an index r ∈ [1 , q ) such that 
+
+σr (A) − σr+1 ( ˆA) > 0. Then, it holds that: 
+
+max dist( U, ˆU), dist( V, ˆV) ≤ max {∥ EV ∥2, ∥ET U∥2}
+
+σr (A) − σr+1 ( ˆA) ≤ ∥E∥2
+
+σr (A) − σr+1 ( ˆA) ,
+
+where U, ˆU ∈ Rm×r , V, ˆV ∈ Rn×r are the matrices consisting of the top r left and right singular vectors of 
+
+A and ˆA, respectively. Consequently, if σr (A) > σ r+1 (A) + ∥E∥2, then by Weyl’s inequality, we have: 
+
+max dist( U, ˆU), dist( V, ˆV) ≤ ∥E∥2
+
+σr (A) − σr+1 (A) − ∥ E∥2
+
+.
+
+Lemma 15. Let A ∈ Rm×n be a matrix. Then for any D > 0, it holds that: 
+
+arg min 
+
+> ∥X∥2≤D
+
+{∥ X − A∥2 
+
+> F
+
+} = Proj ∥X∥2≤D (A) = clip sp  
+
+> D
+
+(A) .
+
+25 Proof. Since the objective function is continous and the set is compact, the optimal solution exists. Let 
+
+A = USV T be the full singular value decomposition of A, where S ∈ Rm×n is a rectangular diagonal matrix with Sii = σi for i = 1 , . . . , q and q := min( m, n ), and U ∈ Rm×m, V ∈ Rn×n are orthogonal matrices. Then, by the unitary invariance of the Frobenius norm, we have: arg min ∥X∥2≤D {∥ X − A∥2 
+
+> F
+
+} =arg min ∥X∥2≤D {∥ UT XV − S∥2 
+
+> F
+
+}. Let Y = UT XV . Since ∥Y∥2 = ∥X∥2 and X = UYV T , the transforma-tion is bijective. Thus, the previous optimization problem is equivalent to arg min ∥Y∥2≤D {∥ Y − S∥2 
+
+> F
+
+}. It is clear that the optimal solution is Y⋆ is a rectangular diagonal matrix with Y⋆ii = min( σi, D ) for i = 1 , . . . , q .It follows that X⋆ = UY ⋆VT = clip sp  
+
+> D
+
+(A). Finally, since the objective is strictly convex and the feasible set is convex, the optimal solution is unique. 
+
+Lemma 16. Let G ∈ Rm×n be a fixed matrix. Let U ∈ Rm×r , V ∈ Rn×r be two independent random matrices that satisfy Definition 1 with parameter κ. Then, it holds that: 
+
+E[∥UT GV ∥F ] ≤ κr 
+
+√mn ∥G∥F , E[∥GT U∥F ] ≤
+
+r κr m ∥G∥F , and E[∥GV ∥F ] ≤
+
+r κr n ∥G∥F .
+
+Proof. By Jensen’s inequality, we have: 
+
+E[∥UT GV ∥F ] ≤
+
+q
+
+E[∥UT GV ∥2 
+
+> F
+
+] = 
+
+q
+
+E[trace( VT GT UU T GV )] = 
+
+q
+
+E[trace( GVV T GT UU T )] =
+
+q
+
+trace( G E[VV T ]GT E[UU T ]) ≤
+
+r κr nκr m trace( GG T )) = κr 
+
+√mn ∥G∥F ,
+
+where in the last inequality, we used Lemma 13 twice. We next show the second inequality: 
+
+E[∥GT U∥F ] ≤
+
+q
+
+E[∥GT U∥2 
+
+> F
+
+] = 
+
+q
+
+E[trace( UT GG T U)] = 
+
+q
+
+trace( GG T E[UU T ]) 
+
+≤
+
+r κr m trace( GG T ) = 
+
+r κr m ∥G∥F .
+
+The third inequality can be proved similarly. 
+
+Lemma 17. Let U, V ∈ Rm×r be two matrices with orthonormal columns. Consider any decomposition of the form: V = UC + U⊥S where C = UT V, S ∈ Rr×r and U⊥ ∈ Rm×r has orthonormal columns and satisfies (U⊥)T U = 0 . It holds that: ∥S∥2 = dist( U, V) and CT C + ST S = Ir .Proof. The decomposition always exists since V = IV = UU T V + ( I − UU T )V. Let C = P cos(Θ) QT be the SVD of C where cos(Θ) := diag(cos( θ1), . . . , cos( θr )). By Definition 4, {θi}ri=1 are the principal angles between the subspaces spanned by U and V. Let ˆU := UP and ˆV := VQ . It holds that ˆUT ˆV = cos(Θ). Let R = ˆV − ˆU cos(Θ). Then RT R = sin 2(Θ) and thus there exists ˆU⊥ ∈ Rm×r such that: ˆV = ˆU cos(Θ) + ˆU⊥ sin(Θ) ,
+
+where the i-th column ˆU⊥ 
+
+> i
+
+= Ri 
+
+> sin( θi)
+
+and sin(Θ) := diag(sin( θ1), . . . , sin( θr )). It follows that: 
+
+∥S∥2 = ∥U⊥S∥2 = ∥V − UC ∥2 = ∥V − UP cos(Θ) QT ∥2 = ∥VQ − UP cos(Θ) ∥2 = ∥ ˆV − ˆU cos(Θ) ∥2
+
+= ∥ ˆU⊥ sin(Θ) ∥2 = ∥ sin(Θ) ∥2 = max  
+
+> i
+
+{sin( θi)} = dist( U, V) ,
+
+where the last equality follows from Lemma 11. For the second claim, we have: 
+
+Ir = VT V = ( UC + U⊥S)T (UC + U⊥S) = CT C + ST S .
+
+26 Lemma 18 (Chebyshev’s sum inequality) . Let f : R → R and h : R → R be two functions and let X ∈ R
+
+be a random variable. If f is non-increasing and h is non-decreasing, then it holds that: 
+
+E[f (X)h(X)] ≤ E[f (X)] E[h(X)] .
+
+Proof. Let X and Y be two independent random variables with the same distribution. Then we always have 
+
+Q(X, Y ) = ( f (X)−f (Y ))( h(X)−h(Y )) ≤ 0 by the assumptions on f and h. It follows that: E[Q(X, Y )] ≤ 0. Substituting the definition of Q(X, Y ) and using 
+
+E[f (X)h(Y )] = E[f (Y )h(X)] = E[f (X)] E[h(X)] and E[f (Y )h(Y )] = E[f (X)h(X)] ,
+
+we get the claim. 
+
+Lemma 19. Let f (x) = a2+x√2x+a2+b2 where 0 < a ≤ b. Then f is concave over x ∈ [−ab, ab ].Proof. Indeed, the first and second derivatives of f are: 
+
+f ′(x) = x + b2
+
+(2 x + a2 + b2)3/2 , and f ′′ (x) = a2 − 2b2 − x
+
+(2 x + a2 + b2)5/2 .
+
+For any x ∈ [−ab, ab ], we have a2 − 2b2 − x ≤ a2 − 2b2 + ab ≤ 0 and thus f ′′ (x) ≤ 0. 
+
+Lemma 20. Let c(x) := sign( x) min( |x|, c ) and let hc(x) := x√1+ x2/c 2 . For any c > 0 and x ∈ R, it holds that: 
+
+|hc(x) − c(x)| ≤ 
+
+( |x|3 
+
+> 2c2
+
+, |x| ≤ c 
+
+> c3
+> 2x2
+
+|x| ≥ c .
+
+Proof. W.l.o.g., let x ≥ 0. If x ≥ c, then |hc(x) − c(x)| = x√1+ x2/c 2 − c = 1√c2/x 2+1 − 1 c ≤ c3 
+
+> 2x2
+
+where we used 1 − 1√1+ y ≤ y 
+
+> 2
+
+for any y ∈ [0 , 1]. Similarly, if x ≤ c, then we have |hc(x) − c(x)| = 1√1+ x2/c 2 − 1 x ≤ x3
+
+> 2c2
+
+The maximum of the error is attained at x = c.
+
+## D Analysis of SGD under Sparse Noise with Spectral Spikes 
+
+Lemma 21 (Rotation alignment) . Let G ∈ Rm×n be a fixed matrix and let g = G + N where N = ℓUN VTN ,
+
+ℓ > 0, and UN ∈ Rm×r and VN ∈ Rn×r are matrices with orthonormal columns. Let Ug and Vg be the top 
+
+r left and right singular vectors of g. Suppose ℓ > ∥G∥2, Then, it holds that: 
+
+∥CU − CV ∥F ≤ ∥UTN G∥F + ∥VTN GT ∥F
+
+2ℓ − ∥ G∥2
+
+,
+
+where CU := UTN Ug and CV := VTN Vg .Proof. By definition, we have gV g = Ug Σg where Σ g ∈ Rr×r is the diagonal matrix of the top r singular values of g. Substituting g = G + ℓUN VTN gives: (G + ℓUN VTN )Vg = Ug Σg .
+
+Multiplying UTN on both sides gives: 
+
+UTN (G + ℓUN VTN )Vg = UTN Ug Σg , ⇒ ℓCV = CU Σg − UTN GV g .
+
+27 Similarly using gT Ug = Vg Σg , we have: ℓCU = CV Σg − VTN GT Ug . Subtracting these two equations gives: 
+
+CU − CV = (Σ g + ℓI)−1(UTN GV g + VTN GT Ug ) .
+
+By Lemma 12, we have σr (g) ≥ ℓ − ∥ G∥2. It follows that: 
+
+∥CU − CV ∥F ≤ ∥ (Σ g + ℓI)−1∥2(∥UTN GV g ∥F + ∥VTN GT Ug ∥F ) ≤ ∥UTN G∥F + ∥VTN GT ∥F
+
+2ℓ − ∥ G∥2
+
+.
+
+D.1 Proof of Lemma 3 
+
+Proof. Let R = g − ˜g be the residual matrix after spectral clipping. By Lemma 12, we have: σr+1 (g) ≤
+
+σ1(G) + σr+1 (N) = ∥G∥2 ≤ c. Therefore, by the definition of spectral clipping, we have R = Ug D(Vg )T ,
+
+where D is a diagonal matrix with element Dii = max( σi(g), c ) − c and Ug and Vg are the top left and right r singular vectors of g. It follows that: 
+
+EN[⟨G, ˜g⟩] = EN[⟨G, g − R⟩] = ∥G∥2 
+
+> F
+
+− EN
+
+⟨G, Ug D(Vg )T ⟩ .
+
+We next upper bound the second error term. By Lemma 12, we have for any i ∈ [r], σi(g) ≥ σi(N)−σ1(G) = 
+
+ℓ − ∥ G∥2 and σi(g) ≤ ℓ + ∥G∥2. If c ≥ ℓ + ∥G∥2, then max( σi(g), c ) − c = 0 and thus D is zero. In what follows, we consider the case when c ≤ ℓ + ∥G∥2. Using max( σi(g), c ) − c = ℓ − c + max( σi(g), c ) − ℓ, we have: 
+
+EN
+
+⟨G, Ug D(Vg )T ⟩
+
+= ( ℓ − c) EN
+
+⟨G, Ug (Vg )T ⟩ + EN
+
+⟨UTg GV g , ˜D⟩
+
+≤ (ℓ − c) EN
+
+⟨G, Ug (Vg )T ⟩ + EN
+
+∥UTg GV g ∥F ∥ ˜D∥F
+
+ .
+
+where ˜D is a diagonal matrix with ˜Dii = max( σi(g), c ) − ℓ. We first bound | max( σi(g), c ) − ℓ| for any i ∈ [r]. If ℓ − ∥ G∥2 ≥ c, then max( σi(g), c ) = σi(g) since σi(g) ≥ ℓ − ∥ G∥2 ≥ c. We then have |σi(g) − ℓ| ≤ ∥ G∥2. If 
+
+ℓ − ∥ G∥2 ≤ c ≤ ℓ + ∥G∥2 and σi(g) ≥ c, then it holds that |σi(g) − ℓ| ≤ ∥ G∥2. It remains to consider the case when ℓ − ∥ G∥2 ≤ c ≤ ℓ + ∥G∥2 and σi(g) < c . Note that | max( σi(g), c ) − ℓ| = |c − ℓ| ≤ ∥ G∥2. Therefore, in all cases, we have for any i ∈ [r], | max( σi(g), c ) − ℓ| ≤ ∥ G∥2 and thus ∥ ˜D∥F ≤ √r∥G∥2. We next study the terms involving Ug and Vg . Since Ug , UN , Vg and VN are matrices with orthonormal columns, according to Lemma 17, we can decompose them as: 
+
+(
+
+Ug = UN CU + U⊥ 
+
+> N
+
+SU , CU = UTN Ug , U⊥ 
+
+> N
+
+∈ Rm×r , (U⊥ 
+
+> N
+
+)T UN = 0 ,
+
+Vg = VN CV + V⊥ 
+
+> N
+
+SV , CV = VTN Vg , V⊥ 
+
+> N
+
+∈ Rn×r , (V⊥ 
+
+> N
+
+)T VN = 0 , (D.1) where ∥SU ∥2 = dist( UN , Ug ) and ∥SV ∥2 = dist( VN , Vg ). Applying Lemma 11 and Lemma 14 (with A = N,
+
+E = G, ˆA = g), we have: max {∥ SU ∥2, ∥SV ∥2} = max {dist( UN , Ug), dist( VN , Vg)} ≤ ∥G∥2
+
+σ1(N) − σr+1 (N) − ∥ G∥2
+
+= ∥G∥2
+
+ℓ − ∥ G∥2
+
+.
+
+(D.2) Substituting the above decompositions into ⟨G, Ug (Vg )T ⟩ and using EN[⟨G, UN VTN ⟩] = 0, we get: 
+
+EN[⟨G, Ug (Vg )T ⟩]= EN[⟨G, (UN CU + U⊥ 
+
+> N
+
+SU )( VN CV + V⊥ 
+
+> N
+
+SV )T ⟩]= EN[⟨G, UN (I − CU CTV )VTN ⟩] + EN[⟨G, UN CU STV (V⊥ 
+
+> N
+
+)T ⟩] + EN[⟨G, U⊥ 
+
+> N
+
+SU CTV VTN ⟩]+ EN[⟨G, U⊥ 
+
+> N
+
+SU STV (V⊥ 
+
+> N
+
+)T ⟩]28 ≤ EN[∥UTN GV N ∥F ∥I − CU CTV ∥F ] + EN[√r∥UTN G∥F ∥SV ∥2∥V⊥ 
+
+> N
+
+∥2∥CU ∥2]+ EN[√r∥GV N ∥F ∥SU ∥2∥U⊥ 
+
+> N
+
+∥2∥CV ∥2] + EN[√r∥G∥F ∥SU ∥2∥SV ∥2∥U⊥ 
+
+> N
+
+∥2∥V⊥ 
+
+> N
+
+∥2]
+
+≤ EN[∥UTN GV N ∥F ∥I − CU CTV ∥F ] + 
+
+√r∥G∥2
+
+ℓ − ∥ G∥2
+
+
+
+EN[∥UTN G∥F ] + EN[∥GV N ∥F ]
+
+
+
++
+
+√r∥G∥22
+
+(ℓ − ∥ G∥2)2 ∥G∥F .
+
+Let CU = PU cos(Θ U )QTU be the SVD of CU where cos(Θ U ) := diag(cos( θU, 1), . . . , cos( θU,r )) and {θU,i } are the principal angles between the subspaces spanned by UN and Ug (according to Definition 4). Applying Lemma 21, we have: 
+
+∥I − CU CTV ∥F = ∥I − CU CTU + CU (CTU − CTV )∥F
+
+≤ ∥ I − cos 2(Θ U )∥F + ∥CU (CTU − CTV )∥F
+
+≤ √r max  
+
+> i
+
+{sin 2 θU,i } + ∥CU ∥2∥CU − CV ∥F
+
+≤ √r ∥G∥22
+
+(ℓ − ∥ G∥2)2 + ∥UTN G∥F + ∥VTN GT ∥F
+
+2ℓ − ∥ G∥2
+
+≤√r∥G∥22
+
+(ℓ − ∥ G∥2)2 + 2∥G∥F
+
+2ℓ − ∥ G∥2
+
+.
+
+It follows that: 
+
+EN[⟨G, Ug (Vg )T ⟩]
+
+≤
+
+ √r∥G∥22
+
+(ℓ − ∥ G∥2)2 + 2∥G∥F
+
+2ℓ − ∥ G∥2
+
+
+
+EN[∥UTN GV N ∥F ] + 
+
+√r∥G∥2
+
+ℓ − ∥ G∥2
+
+
+
+EN[∥UTN G∥F ] + EN[∥GV N ∥F ]
+
+
+
++
+
+√r∥G∥22
+
+(ℓ − ∥ G∥2)2 ∥G∥F .
+
+Applying Lemma 16, we have: 
+
+EN[⟨G, Ug (Vg )T ⟩]
+
+≤
+
+ √r∥G∥22
+
+(ℓ − ∥ G∥2)2 + 2∥G∥F
+
+2ℓ − ∥ G∥2
+
+ κr 
+
+√mn ∥G∥F + 2√r∥G∥2
+
+ℓ − ∥ G∥2
+
+r κr q ∥G∥F +
+
+√r∥G∥22
+
+(ℓ − ∥ G∥2)2 ∥G∥F .
+
+We next bound EN[∥UTg GV g ∥F ] in a similar way: 
+
+EN[∥UTg GV g ∥F ] ≤ EN[∥CTU UTN GV N CV ∥F ] + EN[∥CTU UTN GV ⊥ 
+
+> N
+
+STV ∥F ]+ EN[∥STU (U⊥ 
+
+> N
+
+)T GV N CV ∥F ] + EN[∥STU (U⊥ 
+
+> N
+
+)T GV ⊥ 
+
+> N
+
+STV ∥F ]
+
+≤ EN[∥UTN GV N ∥F ] + ∥G∥2
+
+ℓ − ∥ G∥2
+
+
+
+EN[∥UTN G∥F ] + EN[∥GV N ∥F ]
+
+
+
++ ∥G∥22
+
+(ℓ − ∥ G∥2)2 ∥G∥F
+
+≤ κr 
+
+√mn ∥G∥F + 2pκr/q ∥G∥2
+
+ℓ − ∥ G∥2
+
+∥G∥F + ∥G∥22
+
+(ℓ − ∥ G∥2)2 ∥G∥F .
+
+Substituting the above two bounds back gives: 
+
+EN
+
+⟨G, Ug D(Vg )T ⟩
+
+≤ (ℓ − c)
+
+( √r∥G∥22
+
+(ℓ − ∥ G∥2)2 + 2∥G∥F
+
+2ℓ − ∥ G∥2
+
+ κr q ∥G∥F + 2√r∥G∥2
+
+ℓ − ∥ G∥2
+
+r κr q ∥G∥F +
+
+√r∥G∥22
+
+(ℓ − ∥ G∥2)2 ∥G∥F
+
+)
+
++ √r∥G∥2
+
+(
+
+κr q ∥G∥F + 2pκr/q ∥G∥2
+
+ℓ − ∥ G∥2
+
+∥G∥F + ∥G∥22
+
+(ℓ − ∥ G∥2)2 ∥G∥F
+
+)
+
+≤
+
+ r3/2κ∥G∥2
+
+(ℓ − ∥ G∥2)q + κr q + 2r√κ
+
+√q +
+
+√r∥G∥2
+
+ℓ − ∥ G∥2
+
++ κr 3/2
+
+q + 2√κr ∥G∥2
+
+(ℓ − ∥ G∥2)√q +
+
+√r∥G∥22
+
+(ℓ − ∥ G∥2)2
+
+
+
+∥G∥2 
+
+> F
+
+.
+
+29 Using the assumption that ℓ ≥ 9√r∥G∥2 and 25 r2κ ≤ q, we get: 
+
+r3/2κ∥G∥2
+
+(ℓ − ∥ G∥2)q ≤ rκ 
+
+8q ≤ 1200 , κr q + 2r√k
+
+√q ≤ 125 + 25 = 11 25 ,
+
+√r∥G∥2
+
+ℓ − ∥ G∥2
+
+≤ 18 ,
+
+2√κr ∥G∥2
+
+(ℓ − ∥ G∥2)√q ≤√κr 
+
+4√q ≤ 120 ,
+
+√r∥G∥22
+
+(ℓ − ∥ G∥2)2 ≤ 164 , and EN
+
+⟨G, Ug D(Vg )T ⟩ ≤ 23 ∥G∥2 
+
+> F
+
+.
+
+For the second claim, recall that σr+1 (g) ≤ c and σi(g) ≤ ℓ + ∥G∥2 for i ∈ [r]. It follows that: 
+
+∥˜g∥2 
+
+> F
+
+=
+
+> r
+
+X
+
+> i=1
+
+min( c, σ i(g)) 2 +
+
+> q
+
+X
+
+> i=r+1
+
+σ2 
+
+> i
+
+(g)
+
+≤ r min( c, ℓ + ∥G∥2)2 + ∥g∥2 
+
+> F
+
+−
+
+> r
+
+X
+
+> i=1
+
+σ2 
+
+> i
+
+(g)= r min( c, ℓ + ∥G∥2)2 + ∥G∥2 
+
+> F
+
++ ∥N∥2 
+
+> F
+
++ 2 ⟨G, N⟩ − 
+
+> r
+
+X
+
+> i=1
+
+σ2 
+
+> i
+
+(g) .
+
+Taking expectation with respect to N gives: 
+
+EN[∥˜g∥2 
+
+> F
+
+] ≤ r min( c, ℓ + ∥G∥2)2 + ∥G∥2 
+
+> F
+
++ rℓ 2 − EN
+
+h rX
+
+> i=1
+
+σ2 
+
+> i
+
+(g)
+
+i
+
+.
+
+Meanwhile, note that 
+
+> r
+
+X
+
+> i=1
+
+σ2 
+
+> i
+
+(g) = max  
+
+> VTV=Ir
+
+∥gV ∥2 
+
+> F
+
+≥ ∥ gV N ∥2 
+
+> F
+
+= ∥GV N + ℓUN VTN VN ∥2 
+
+> F
+
+= ∥GV N ∥2 
+
+> F
+
++ 2 ℓ⟨GV N , UN ⟩ + rℓ 2 .
+
+We thus have EN
+
+P ri=1 σ2 
+
+> i
+
+(g) ≥ EN[∥GV N ∥2 
+
+> F
+
+] + rℓ 2 ≥ rℓ 2. Substituting it into the previous display gives the second claim. 
+
+D.2 Proof of Theorem 5 
+
+Proof. According to Assumption 2, we have for any k ≥ 0, 
+
+f (Xk+1 ) (B.1) 
+
+≤ f (Xk) − η⟨∇ f (Xk), clip sp  
+
+> c
+
+(g(Xk)) ⟩ + LF η2
+
+2 ∥ clip sp  
+
+> c
+
+(g(Xk)) ∥2 
+
+> F
+
+.
+
+We first consider the case when ℓ ≥ 9√rM . Since c ≥ M ≥ ∥∇ f (Xk)∥2, we can apply Lemma 3 with 
+
+G = ∇f (Xk) and obtain: 
+
+ENk [⟨∇ f (Xk), clip sp  
+
+> c
+
+(g(Xk)) ⟩] ≥ 13 ∥∇ f (Xk)∥2 
+
+> F
+
+and ENk [∥ clip sp  
+
+> c
+
+(g(Xk)) ∥2 
+
+> F
+
+] ≤ rc 2 + ∥∇ f (Xk)∥2 
+
+> F
+
+,
+
+where Nk denotes the noise at iteration k. We next consider the case when ℓ ≤ 9√rM . By lemma 12, we have σ1(g(Xk)) ≤ ℓ + ∥∇ f (Xk)∥2 ≤ 10 √rM . We thus have clip sp  
+
+> c
+
+(g(Xk)) = g(Xk) since c ≥ 10 √rM . It follows that: 
+
+ENk [⟨∇ f (Xk), clip sp  
+
+> c
+
+(g(Xk)) ⟩] = ∥∇ f (Xk)∥2 
+
+> F
+
+and ENk [∥ clip sp  
+
+> c
+
+(g(Xk)) ∥2 
+
+> F
+
+] ≤ rℓ 2 + ∥∇ f (Xk)∥2 
+
+> F
+
+,
+
+since clip sp  
+
+> c
+
+(g(Xk)) = g(Xk). Combining both cases and taking expectation with respect to Nk on both sides of the first display, we have for any k ≥ 0: 
+
+ENk [f (Xk+1 )] ≤ f (Xk) − η
+
+3 ∥∇ f (Xk)∥2 
+
+> F
+
++ LF η2
+
+2 (r min( c, 10 ℓ/ 9) 2 + ∥∇ f (Xk)∥2 
+
+> F
+
+) .
+
+30 Using LF η2 
+
+> 2
+
+≤ η 
+
+> 6
+
+, taking the full expectation and rearranging, we obtain: 
+
+η
+
+6 E[∥∇ f (Xk)∥2 
+
+> F
+
+] ≤ E[f (Xk)] − E[f (Xk+1 )] + LF rη 2 min( c, 10 ℓ/ 9) 2
+
+2 .
+
+Summing up from k = 0 to K − 1 and dividing both sides by K, we have: 1
+
+K
+
+> K−1
+
+X
+
+> k=0
+
+E[∥∇ f (Xk)∥2 
+
+> F
+
+] ≤ 6F 0
+
+ηK + 3 LF rη min(10 √rM, 10 ℓ/ 9) 2 .
+
+To get the final iteration complexity, it is sufficient to let each term of the right-hand side be at most ϵ2 
+
+> 2
+
+and substituting 1 
+
+> η
+
+= 6rL F min(10 √rM, 10 ℓ/ 9) 2 
+
+> ϵ2
+
++ 3 LF .
+
+D.3 Proof of Lemma 4 
+
+Proof. When ∥G∥F = 0, the claim holds clearly. We assume ∥G∥F > 0 in what follows. Let us first consider the case when c ≤ √r(ℓ − ∥ G∥2). By Lemma 12, we have 
+
+∥g∥F ≥
+
+vuut rX
+
+> i=1
+
+σi(g)2 ≥
+
+vuut rX
+
+> i=1
+
+(σi(N) − σi(G)) 2 ≥ √r(ℓ − ∥ G∥2) ≥ c . 
+
+Therefore, the global clipping is always active and we have ˜ g = c 
+
+> ∥g∥F
+
+g. It follows that: 
+
+EN[⟨G, ˜g⟩] = EN
+
+ c
+
+∥G + N∥F
+
+⟨G, G + N⟩
+
+
+
+= EN
+
+ c(G2 + ZN)
+
+√G2 + 2 ZN + rℓ 2
+
+
+
+:= EN[h(ZN)] ,
+
+where G := ∥G∥F and ZN := ⟨G, N⟩. Applying Lemma 19 (with a = G and b = √rℓ ), h is concave in ZN
+
+since √rℓ ≥ G. We thus have: 
+
+EN[h(ZN)] ≤ h(EN[ZN]) = h(0) = cG 2
+
+√G2 + rℓ 2 ≤ c
+
+√rℓ ∥G∥2 
+
+> F
+
+.
+
+We next prove the lower bound. Using taylor expansion, we have: 
+
+h(ZN) = h(0) + h′(0) ZN + 12 h′′ (ξ)Z2 
+
+> N
+
+,
+
+where ξ ∈ [−√rGℓ, √rGℓ ]. It follows that: 
+
+EN[h(ZN)] = h(0) + h′(0) EN[ZN] + 12 EN[h′′ (ξ)Z2
+
+> N
+
+] ≥ h(0) − max 
+
+> ξ∈[−√rGℓ, √rGℓ ]
+
+[h′′ (ξ)] 12 EN[Z2
+
+> N
+
+] .
+
+Applying Lemma 19, we have: max 
+
+> ξ∈[−√rGℓ, √rGℓ ]
+
+|h′′ (ξ)| ≤ max 
+
+> ξ∈[−√rGℓ, √rGℓ ]
+
+c G2 + 2 rℓ 2 + |ξ|
+
+(G2 + rℓ 2 − 2|ξ|)5/2 ≤ c ∥G∥2 
+
+> F
+
++ 2 rℓ 2 + √r∥G∥F ℓ
+
+(rℓ 2 + ∥G∥2 
+
+> F
+
+− 2√r∥G∥F ℓ)5/2 .
+
+By Lemma 16, we obtain: 
+
+EN[Z2
+
+> N
+
+] = ℓ2 EN[⟨G, UN VTN ⟩2] ≤ ℓ2 EN[∥UTN GV N ∥2 
+
+> F
+
+∥Ir ∥2 
+
+> F
+
+] ≤ r2ℓ2 κ2r2∥G∥2
+
+> F
+
+mn ≤ ℓ2
+
+25 2 ∥G∥2 
+
+> F
+
+.
+
+31 Combining the above inequalities yields: 
+
+EN[h(ZN)] ≥ c∥G∥2
+
+> F
+
+prℓ 2 + ∥G∥2
+
+> F
+
+− c ∥G∥2 
+
+> F
+
++ 2 rℓ 2 + √r∥G∥F ℓ
+
+(rℓ 2 + ∥G∥2 
+
+> F
+
+− 2√rℓ ∥G∥F )5/2
+
+ℓ2
+
+2 · 25 2 ∥G∥2
+
+> F
+
+= c∥G∥2
+
+> F
+
+prℓ 2 + ∥G∥2
+
+> F
+
+
+
+1 − (∥G∥2 
+
+> F
+
++ 2 rℓ 2 + √r∥G∥F ℓ)ℓ2prℓ 2 + ∥G∥2
+
+> F
+
+2 · 25 2(rℓ 2 + ∥G∥2 
+
+> F
+
+− 2√rℓ ∥G∥F )5/2
+
+
+
+≥ c∥G∥2
+
+> F
+
+prℓ 2 + ∥G∥2
+
+> F
+
+
+
+1 − (1 /9 + 2 + 1 /3) rℓ 4p10 /9rℓ 2
+
+2 · 25 2(1 /3) 5/2r2.5ℓ5
+
+
+
+≥ 910 
+
+c∥G∥2
+
+> F
+
+prℓ 2 + ∥G∥2
+
+> F
+
+≥ 4c
+
+5√rℓ ∥G∥2 
+
+> F
+
+.
+
+Finally, since clipping is always active, we have: EN[∥˜g∥2 
+
+> F
+
+] = EN
+
+h c2
+
+> ∥g∥2
+> F
+
+∥g∥2
+
+> F
+
+i
+
+= c2. We next consider the case when √r(ℓ − ∥ G∥2) ≤ c ≤ ℓ + ∥G∥2. Let the clipping factor αN := min(1 , c 
+
+> ∥g∥F
+
+). The upper bound of the inner product can be derived as follows: 
+
+EN[⟨G, ˜g⟩] = EN[αN⟨G, g⟩] = EN[αN]∥G∥2 
+
+> F
+
++ EN[αN⟨G, N⟩] ≤ ∥ G∥2 
+
+> F
+
++ EN[αN⟨G, N⟩] .
+
+Since ∥g∥F = p∥G∥2 
+
+> F
+
++ rℓ 2 + 2 ⟨G, N⟩ is increasing in ⟨G, N⟩, αN is non-increasing in ⟨G, N⟩. Using Lemma 18, we obtain: 
+
+EN[⟨G, ˜g⟩] ≤ ∥ G∥2 
+
+> F
+
++ EN[αN] EN[⟨G, N⟩] = ∥G∥2 
+
+> F
+
+.
+
+Next recall that ∥g∥F ≥ √r(ℓ − ∥ G∥2) and c ≥ √r(ℓ − ∥ G∥2), we get: 
+
+c2 ≥ EN[∥˜g∥2 
+
+> F
+
+] = EN[α2
+
+> N
+
+∥g∥2 
+
+> F
+
+] = EN[min( c2, ∥g∥2 
+
+> F
+
+)] ≥ r(ℓ − ∥ G∥2)2 ≥ 4rℓ 2
+
+9 .
+
+Finally, if c ≥ ℓ + ∥G∥2, then clipping is never active and we have ˜ g = g and the claims follows. 
+
+D.4 Proof of Theorem 6 
+
+Proof. According to Assumption 2, we have for any k ≥ 0, 
+
+f (Xk+1 ) (B.1) 
+
+≤ f (Xk) − η⟨∇ f (Xk), clip g 
+
+> c
+
+(g(Xk)) ⟩ + LF η2
+
+2 ∥ clip g 
+
+> c
+
+(g(Xk)) ∥2 
+
+> F
+
+.
+
+According to Lemma 4 (with G = ∇f (Xk)), if c ≥ √r(ℓ−∥∇ f (Xk)∥2), then ENk [⟨∇ f (Xk), clip g 
+
+> c
+
+(g(Xk)) ⟩] ≲
+
+∥∇ f (Xk)∥2 
+
+> F
+
+and ENk [∥ clip g 
+
+> c
+
+(g(Xk)) ∥2 
+
+> F
+
+] ≳ rℓ 2, where Nk denotes the noise at iteration k. The bounds are not better than the ones for vanilla SGD without clipping. Let us next consider the case when c ≤ 23
+
+√rℓ ≤√r(ℓ − ∥∇ f (Xk)∥2). We obtain: 
+
+ENk [⟨∇ f (Xk), clip g 
+
+> c
+
+(g(Xk)) ⟩] ≥ 4c
+
+5√rℓ ∥∇ f (Xk)∥2 
+
+> F
+
+and ENk [∥ clip g 
+
+> c
+
+(g(Xk)) ∥2 
+
+> F
+
+] = c2 .
+
+Taking the expectation with respect to Nk on both sides of the first display and substituting the above two bounds, we have for any k ≥ 0: 
+
+ENk [f (Xk+1 )] ≤ f (Xk) − η 4c
+
+5√rℓ ∥∇ f (Xk)∥2 
+
+> F
+
++ LF η2
+
+2 c2 .
+
+Rearranging and taking the full expectation gives: 
+
+η 4c
+
+5√rℓ E[∥∇ f (Xk)∥2 
+
+> F
+
+] ≤ E[f (Xk)] − E[f (Xk+1 )] + LF η2
+
+2 c2 .
+
+32 Summing up from k = 0 to K − 1 and dividing both sides by K, we have: 1
+
+K
+
+> K−1
+
+X
+
+> k=0
+
+E[∥∇ f (Xk)∥2 
+
+> F
+
+] ≤ 5√rℓF 0
+
+4cηK + 5√rℓL F ηc 
+
+8 = 5 √rℓ 
+
+ F 0
+
+4cηK + LF ηc 
+
+8
+
+
+
+.
+
+Let F 0 
+
+> 4cηK
+
+= LF ηc  
+
+> 8
+
+. We have η =
+
+q 2F 0  
+
+> LFKc 2
+
+and 1
+
+K
+
+> K−1
+
+X
+
+> k=0
+
+E[∥∇ f (Xk)∥2 
+
+> F
+
+] ≤ 5√rℓ 
+
+2
+
+r LF F 0
+
+2K ≤ ϵ2 .
+
+Rearranging concludes the proof. 
+
+## E Analysis of Reformulation as Composite Frank-Wolfe 
+
+Lemma 22. Let CFW (5) be applied to problem (3) under Assumption 1 and 2. Then for any k ≥ 1, it holds that: 
+
+E[∥Ek∥F ] ≤ Πk−1 
+
+> i=0
+
+(1 − βi)∥E0∥F + LD FkX
+
+> i=1
+
+ Πk−1 
+
+> j=i
+
+(1 − βj )γi−1 +
+
+vuut kX
+
+> i=1
+
+ Πk−1 
+
+> j=i
+
+(1 − βj )2β2
+
+> i−1
+
+σ . 
+
+where Ek := Mk − ∇ f (Xk) and DF := sup X,Y∈Q{∥ X − Y∥F }.Proof. The proof is standard. By the definition of Mi+1 , we have for any i ≥ 0: 
+
+Ei+1 = (1 − βi)Ei + βi
+
+ g(Xi) − ∇ f (Xi) + ∇f (Xi) − ∇ f (Xi+1 ) .
+
+Applying Lemma 8, we have for any k ≥ 1: 
+
+Ek = Π k−1 
+
+> i=0
+
+(1 −βi)E0+
+
+> k
+
+X
+
+> i=1
+
+ Πk−1 
+
+> j=i
+
+(1 −βj )  ∇f (Xi−1)−∇ f (Xi)+
+
+> k
+
+X
+
+> i=1
+
+ Πk−1 
+
+> j=i
+
+(1 −βj )βi−1
+
+ g(Xi−1)−∇ f (Xi−1) .
+
+Taking the norm on both sides, we get: 
+
+∥Ek∥F ≤ Πk−1 
+
+> i=0
+
+(1 − βi)∥E0∥F +
+
+> k
+
+X
+
+> i=1
+
+ Πk−1 
+
+> j=i
+
+(1 − βj )∥∇ f (Xi−1) − ∇ f (Xi)∥F
+
++
+
+> k
+
+X
+
+> i=1
+
+ Πk−1 
+
+> j=i
+
+(1 − βj )βi−1
+
+ g(Xi−1) − ∇ f (Xi−1)
+
+> F
+
+.
+
+Using Assumption 2, ∥Xi − Xi−1∥F = γi−1∥Vi − Xi−1∥F ≤ γi−1DF , taking expectation on both sides and applying the Jensen inequality, we have for any k ≥ 1: 
+
+E[∥Ek∥F ] ≤ Πk−1 
+
+> i=0
+
+(1 − βi)∥E0∥F + LF DFkX
+
+> i=1
+
+ Πk−1 
+
+> j=i
+
+(1 − βj )γi−1
+
++
+
+vuutE
+
+h kX
+
+> i=1
+
+ Πk−1 
+
+> j=i
+
+(1 − βj )βi−1
+
+ g(Xi−1) − ∇ f (Xi−1) 2
+
+> F
+
+i
+
+≤ Πk−1 
+
+> i=0
+
+(1 − βi)∥E0∥F + LF DFkX
+
+> i=1
+
+ Πk−1 
+
+> j=i
+
+(1 − βj )γi−1 +
+
+vuut kX
+
+> i=1
+
+ Πk−1 
+
+> j=i
+
+(1 − βj )2β2
+
+> i−1
+
+σ2 .
+
+33 Theorem 23. Let CFW (5) be applied to problem (3) under convexity of f and Assumption 1. Suppose that for any k ≥ 0, Vk+1 satisfies: 
+
+Fk(Vk+1 ) ≤ Fk(V⋆k+1 ) + ek+1 , (E.1) 
+
+where V⋆k+1 = arg min X∈Q{Fk(X)} and ek ≤ q1 
+
+> k
+
++ q2 for some q1, q 2 ≥ 0. Let γk = 2 
+
+> k+2
+
+. If we choose βk ≡ 1
+
+and use a batchsize of B for computing g(Xk), then we have for any K ≥ 1:
+
+F (XK ) − F ⋆ ≤ 2( Cf + q1)
+
+K + 1 + q2 + + DF σ
+
+√B ,
+
+where 
+
+Cf := sup 
+
+> X,S∈Q,γ ∈[0 ,1] ,Y=X+γ(S−X)
+
+2
+
+γ2 (f (Y) − f (X) − ⟨∇ f (X), Y − X⟩) .
+
+If Assumption 2 additionally holds, then by choosing βk = 1(k+1) 2/3 and M0 = g(X0) with batch size B, we have for any K ≥ 1:
+
+E[F (XK ) − F ⋆] ≤ 2( Cf + q1)
+
+K + 1 + 12 .4LF D2 
+
+> F
+
++ 6 .2DF σ/ √BK1/3 + q2 ,
+
+where DF := sup X,Y∈Q{∥ X − Y∥F }.Proof. Let γk = ak+1  
+
+> Ak+1
+
+where Ak+1 = Ak + ak+1 for k ≥ 0 and A0 = 0. Using convexity of f , we have: 
+
+AkF (Xk) + ak+1 F (X⋆)
+
+≥ AkF (Xk) + ak+1 
+
+ f (Xk) + ⟨∇ f (Xk), X⋆ − Xk⟩ + ψ(X⋆)
+
+= AkF (Xk) + ak+1 
+
+ f (Xk) + ⟨Mk, X⋆⟩ + ψ(X⋆) + ⟨∇ f (Xk) − Mk, X⋆⟩ − ⟨∇ f (Xk), Xk⟩ .
+
+Let Ek := Mk − ∇ f (Xk). Using Fk(X⋆) ≥ Fk(V⋆) ≥ Fk(Vk+1 ) − ek+1 , we get: 
+
+AkF (Xk) + ak+1 F (X⋆)
+
+≥ AkF (Xk) + ak+1 
+
+ f (Xk) + ⟨Mk, Vk+1 ⟩ + ψ(Vk+1 ) − ek+1 + ⟨∇ f (Xk) − Mk, X⋆⟩ − ⟨∇ f (Xk), Xk⟩
+
+= AkF (Xk) + ak+1 
+
+ f (Xk) + ⟨∇ f (Xk), Vk+1 − Xk⟩ + ψ(Vk+1 ) − ek+1 − ⟨ Ek, X⋆ − Vk+1 ⟩
+
+= Ak+1 f (Xk) + ak+1 ⟨∇ f (Xk), Vk+1 − Xk⟩ + Akψ(Xk) + ak+1 ψ(Vk+1 ) − ak+1 ek+1 − ak+1 ⟨Ek, X⋆ − Vk+1 ⟩≥ Ak+1 f (Xk) + Ak+1 ⟨∇ f (Xk), Xk+1 − Xk⟩ + Ak+1 ψ((1 − γk)Xk + γkVk+1 ) − ak+1 ek+1 − ak+1 DF ∥Ek∥F
+
+= Ak+1 F (Xk+1 ) − Ak+1 (f (Xk+1 ) − f (Xk) − ⟨∇ f (Xk), Xk+1 − Xk⟩) − ak+1 ek+1 − ak+1 DF ∥Ek∥F
+
+≥ Ak+1 F (Xk+1 ) − γ2 
+
+> k
+
+Ak+1 
+
+2 Cf − ak+1 ek+1 − ak+1 DF ∥Ek∥F ,
+
+where the second inequality follows from the convexity of ψ and the third inequality follows from the definition of Cf . Substracting Ak+1 F (X⋆) from both sides gives: 
+
+Ak+1 (F (Xk+1 ) − F ⋆) ≤ Ak(F (Xk) − F ⋆) + a2
+
+> k+1
+
+2Ak+1 
+
+Cf + ak+1 ek+1 + ak+1 DF ∥Ek∥F .
+
+Summing up from k = 0 to k = K − 1, we have for any K ≥ 1: 
+
+AK (F (XK ) − F ⋆) ≤ A0(F (X0) − F ⋆) + Cf
+
+2
+
+> K−1
+
+X
+
+> k=0
+
+a2
+
+> k+1
+
+Ak+1 
+
++
+
+> K−1
+
+X
+
+> k=0
+
+ak+1 ek+1 + DFK−1X
+
+> k=0
+
+ak+1 ∥Ek∥F .
+
+34 Dividing both sides by AK and substituting A0 = 0, we get: 
+
+F (XK ) − F ⋆ ≤ 1
+
+AK
+
+Cf
+
+2
+
+> K−1
+
+X
+
+> k=0
+
+a2
+
+> k+1
+
+Ak+1 
+
++ 1
+
+AKK−1X
+
+> k=0
+
+ak+1 ek+1 + DF
+
+AKK−1X
+
+> k=0
+
+ak+1 ∥Ek∥F .
+
+Let ak = k for k ≥ 1. Then we have Ak = k(k+1) 2 and γk = ak+1  
+
+> Ak+1
+
+= 2 
+
+> k+2
+
+. Consider mini-batch SGD with 
+
+βk ≡ 1 and Mk = g(Xk) using a batch size of B. Then E[∥Ek∥F ] ≤ E[∥Ek∥2 
+
+> F
+
+]1/2 ≤ σ√B for any k ≥ 0. It follows that: 
+
+E[F (XK ) − F ⋆] ≤ 2
+
+K(K + 1) 
+
+Cf
+
+2
+
+> K−1
+
+X
+
+> k=0
+
+2( k + 1) 
+
+k + 2 + 2
+
+K(K + 1) 
+
+> K−1
+
+X
+
+> k=0
+
+(k + 1) 
+
+ q1
+
+k + 1 + q2
+
+
+
++ DF σ
+
+√B
+
+≤ 2Cf KK(K + 1) + 2q1KK(K + 1) + 2q2
+
+K(K + 1) (K + 1) K
+
+2 + DF σ
+
+√B = 2( Cf + q1)
+
+K + 1 + q2 + DF σ
+
+√B .
+
+Suppose now Assumption 2 holds and βk = 1(k+1) 2/3 . Applying Lemma 22 and substituting the bounds from Lemma 9, we have for any k ≥ 1: 
+
+E[∥Ek∥F ] ≤ LF DF
+
+3
+
+k1/3 + 1
+
+k1/3 σ = 3LF DF + σk1/3 ,
+
+where we used Π k−1 
+
+> i=0
+
+(1 − βi) = 0 since β0 = 1. If follows that for any K ≥ 2, 
+
+DF
+
+AKK−1X
+
+> k=0
+
+ak+1 E[∥Ek∥F ] ≤ DF
+
+AKK−1X
+
+> k=1
+
+(k+1) 3LF DF + σk1/3 + DF
+
+AK
+
+E[∥E0∥F ] ≤ 3LF D2 
+
+> F
+
++ σD F
+
+AK
+
+2.1K5/3+ DF
+
+AK
+
+E[∥E0∥F ] ,
+
+where we used Lemma 10. (For K = 1, DF
+
+> AK
+
+PK−1 
+
+> k=0
+
+ak+1 E[∥Ek∥F ] = DF 
+
+> AK
+
+E[∥E0∥F ].) Substituting the previous display and AK = K(K+1) 2 ≥ K2 
+
+> 2
+
+into the main recurrence and using E[∥E0∥F ] = E[∥M0 − ∇ f (X0)∥F ] = 
+
+E[∥g(X0) − ∇ f (X0)∥F ] ≤ σ/ √B, we conclude the proof. 
+
+E.1 Discussion of CFW under Sparse Noise with Spikes 
+
+Suppose the stochastic gradient is corrupted by sparse noise with spikes as described in Assumption 4. Recall the definition of the noise N (X) = ℓUX VTX which satisfies E[∥N (X)∥2 
+
+> F
+
+] = rℓ 2. According to Theorem 23, the convergence rate of standard CFW (5) under this assumption is of order K = O( L3D6   
+
+> F+D3
+> Fr3/2ℓ3
+> ϵ3
+
+) (to reach E[F (XK ) − F ⋆] ≤ ϵ). We next consider the variant of CFW (5) with pre-spectral clipping: 
+
+Mk+1 = (1 − βk)Mk + βk ˜g(Xk+1 ), ˜g(Xk+1 ) = clip sp  
+
+> ck
+
+(g(Xk+1 )) . (E.2) Recall that at any point X, g(X) = ∇f (X) + ℓUX VTX . Intuivitively, we have clip sp  
+
+> c
+
+(g(X)) ≈ ∇ f (X) + 
+
+cUX VTX for large ℓ. The clipped stochastic gradient has noise level controlled by c instead of ℓ. On the other hand, the estimator becomes biased, i.e., E[clip sp  
+
+> c
+
+(g(X))] ̸ = ∇f (X). In certain cases, however, the bias can be negligible with high probability. For instance, suppose ∇f (X) has rank much smaller compared to q := min( m, n ). Then the injected low-rank noise component are likely orthogonal to the singular vectors of ∇f (X), which implies clip sp  
+
+> c
+
+(g(Xk)) = ∇f (X) + cUX VTX with high probability. In general, let 
+
+R := g(X) − clip sp  
+
+> c
+
+(g(X)). Suppose ∥∇ f (X)∥2 ≤ c ≤ ℓ − ∥∇ f (X)∥2, then the bias can be written as: bias = E[clip sp  
+
+> c
+
+(g(X))] − ∇ f (X) = − E[R] = − E[UgDV T 
+
+> g
+
+]where D is a diagonal matrix with element Dii = σi(g) − c and Ug and Vg are the top left and right r
+
+singular vectors of g. From the perturbation theory of singular vectors, Ug and Vg are close to UN and 
+
+VN which have zero mean (when ℓ is large enough). We leave the rigorous theoretical analysis of the bias error to future work. We provide empirical performance of using momentum with and without pre-spectral clipping under spectral spike noise in Figure F.6. 35 Figure E.1: The plot of clip c(x) := sign( x) min( |x|, c ) and hc(x) := x√1+ x2/c 2 .
+
+E.2 Solution of the Subproblem with Other Regularizers 
+
+Consider subproblem (6). Suppose that ψ acts only on the singular values of X, i.e., ψ(X) = ˜ψ(σ(X)) for some ˜ψ : Rq → R where σ(X) denotes the vector of singular values with q := min( m, n ). Then ψ is unitarily invariant, i.e., for any orthogonal matrices U and V of appropriate dimensions, we have ψ(X) = 
+
+ψ(UXV T ). Let G = UGSGVTG and X = UX SX VTX be the SVD of G and X, respectively. Then we can first minimize ⟨G, X⟩ over the choices of UX and VX . By Von Neumann’s Trace Inequality, we have: ⟨G, X⟩ ≥ − Pqi=1 σi(G)σi(X). Choosing UX = −UG and VX = VG, we have: ⟨G, X⟩ = − Pqi=1 σi(G)σi(SX ). Then the original problem is reduced to: min  
+
+> x∈Rq,xi∈[0 ,D 2]
+
+
+
+−
+
+> q
+
+X
+
+> i=1
+
+σi(G)xi + ˜ψ(x)
+
+
+
+.
+
+If ˜ψ is separable, i.e., ˜ψ(x) = Pqi=1 ψi(xi) for some ψi : R≥0 → R, then the problem further decomposes into 
+
+q independent one-dimensional problems: 
+
+σ⋆i = arg min 
+
+> x∈[0 ,D 2]
+
+{− σi(G) · x + ψi(x)}, , i = 1 , . . . , q . (E.3) Then X⋆ = −UGS⋆VTG where S⋆ is the diagonal rectangular matrix with S⋆ii = σ⋆i . For non-separable ˜ψ,one can still use standard convex optimization methods to solve the reduced q-dimensional problem, e.g. when ˜ψ(x) = b 
+
+> 2
+
+(Pqi=1 xi)2, which we leave as future explorations. 
+
+## F Additional Experiment Results and Detailed Setup 
+
+F.1 Synthetic Experiments 
+
+We consider the binary classification task of minimizing the logistic loss: f (X) = 1
+
+> n
+
+Pni=1 log(1+exp( −yi⟨Ai, X⟩)), where Ai ∈ Rd×d are data matrices and yi ∈ {− 1, 1} are labels from the training dataset. Let x = vec( X)and ai = vec( Ai). The gradients and the Hessians are: 
+
+∇f (X) = 1
+
+n
+
+> n
+
+X
+
+> i=1
+
+ −yi
+
+1 + exp( yi⟨Ai, X⟩)
+
+
+
+Ai, ∇2f (x) = 1
+
+n
+
+> n
+
+X
+
+> i=1
+
+ exp( yiaTi x)(1 + exp( yiaTi x)) 2
+
+
+
+aiaTi ,
+
+36 5 10 15 20                
+
+> Newton-Schulz iterations
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> Time (ms)
+> 160M attn
+> (768 x 2304)
+> soft spectral clipping (SSC)
+> orthogonalization (Muon)
+> 510 15 20
+> Newton-Schulz iterations
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> 0.8
+> 0.9
+> 1.0
+> Time (ms)
+> 160M mlp
+> (768 x 3072)
+> soft spectral clipping (SSC)
+> orthogonalization (Muon)
+> 510 15 20
+> Newton-Schulz iterations
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> Time (ms)
+> 250M attn
+> (1024 x 3072)
+> soft spectral clipping (SSC)
+> orthogonalization (Muon)
+> 510 15 20
+> Newton-Schulz iterations
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> 1.2
+> Time (ms)
+> 250M mlp
+> (1024 x 4096)
+> soft spectral clipping (SSC)
+> orthogonalization (Muon)
+> 510 15 20
+> Newton-Schulz iterations
+> 0.5
+> 1.0
+> 1.5
+> 2.0
+> 2.5
+> Time (ms)
+> 720M attn
+> (1536 x 4608)
+> soft spectral clipping (SSC)
+> orthogonalization (Muon)
+> 510 15 20
+> Newton-Schulz iterations
+> 0.5
+> 1.0
+> 1.5
+> 2.0
+> 2.5
+> Time (ms)
+> 720M mlp
+> (1536 x 6144)
+> soft spectral clipping (SSC)
+> orthogonalization (Muon)
+
+Figure E.2: Runtime comparison between Soft Spectral Clipping (SSC) and the orthogonalization operator on matrices with various sizes. By default, we use 10 Newton-Schulz iterations for SSC and 5 iterations for the latter for running the corresponding optimizers. Therefore, the loss f satisfies Assumption 3 and 2 with M ≤ 1
+
+n
+
+Pni=1 ∥Ai∥2 and LF ≤ 14n ∥ Pni=1 aiaTi ∥2 =
+
+14n σmax ( ˜A)2 where ˜A ∈ Rn×d2
+
+is the matrix whose rows are aTi .
+
+F.1.1 Validation of Constrained Optimization with Weight Regularization Data generation. We examine a standard over-parameterized regime with label noise, a setting where unregularized optimization is typically prone to overfitting. We use d = 10 and generate n = 80 < 100 training samples and ntest = 200 test samples ( Dtest ) as follows. First, a weight matrix ˜X is sampled entry-wise from a standard normal distribution N (0 , 1). The feature matrices Ai are similarly sampled with entries from N (0 , 1). The labels are then generated via: yi = sign( ⟨Ai, X⋆⟩ + ξi), where ξi ∼ N (0 , σ 2noise ). We set the noise level σnoise = 5 .0. 
+
+Configuration. Let F (X) = min X∈Q2 {f (X) + b
+
+2 ∥X∥2
+
+F }. We evaluate the update rule (4) to verify its convergence properties on the function F . We vary the regularization coefficient b ∈ { 0, 0.1, 1.0} and D2 ∈{0.2, 1, 5}. We note that the unconstrained solution of f (X) has spectral norm close to 1; thus, these three choices of D2 correspond to the situations where the solution is outside, close to and inside the spectral ball,respectively. We adopt the same choice of hyper-parameters suggested by Theorem 1: 1
+
+λ = D2, α = λb , ck ≡ bD 2, λη k = 2
+
+k + 2 .
+
+Results. For each pair of b and D2, we report four metrics: 1) Function residual F (Xk)−F ⋆ where F ⋆ is the optimal value. 2) Test loss: ftest (Xk) = 1
+
+ntest 
+
+P
+
+i∈Dtest log(1 + exp( −yi⟨Ai, Xk⟩)). 3) Spectral norm of Xk.4) Frobenius norm of Xk. Figures F.1, F.2, and F.3 display results using full-batch gradient descent with 
+
+bk ≡ 1, while Figure F.4 utilizes a batch size of 20 and βk = 1(k+1) 2/3 . These figures demonstrate that update 37 0 100 200 300 400 500 
+
+Iterations        
+
+> 10 14
+> 10 12
+> 10 10
+> 10 8
+> 10 6
+> 10 4
+> 10 2
+> 10 0
+
+Composite Function Residual F(Xk) F *     
+
+> b=0.0
+> b=0.1
+> b=1.0
+> 0100 200 300 400 500
+
+Iterations 
+
+> 0.60
+> 0.65
+> 0.70
+> 0.75
+> 0.80
+> 0.85
+> 0.90
+> 0.95
+
+Test Loss ftest (X)     
+
+> b=0.0
+> b=0.1
+> b=1.0
+> 0100 200 300 400 500
+
+Iterations 
+
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> 0.8
+> 0.9
+> 1.0
+
+Spectral Norm X 2      
+
+> b=0.0
+> b=0.1
+> b=1.0
+> Constraint D2
+> 0100 200 300 400 500
+
+Iterations 
+
+> 0.5
+> 1.0
+> 1.5
+> 2.0
+> 2.5
+> 3.0
+
+Frobenius Norm X F
+
+> b=0.0
+> b=0.1
+> b=1.0
+
+Figure F.1: Convergence dynamics of update rule (4) using full-batch gradient. We report the function resid-ual of the constrained composite logistic loss F (X) with D2 = 1 .0 under different regularization coefficient 
+
+b. The unconstrained solution of f (X) has spectral norm close to 1. 0 50 100 150 200 250 300 350 
+
+Iterations      
+
+> 10 14
+> 10 11
+> 10 8
+> 10 5
+> 10 2
+> 10 1
+
+Composite Function Residual F(Xk) F *       
+
+> b=0.0
+> b=0.1
+> b=1.0
+> 050 100 150 200 250 300 350
+
+Iterations 
+
+> 0.5
+> 1.0
+> 1.5
+> 2.0
+> 2.5
+> 3.0
+> 3.5
+> 4.0
+
+Test Loss ftest (X)       
+
+> b=0.0
+> b=0.1
+> b=1.0
+> 050 100 150 200 250 300 350
+
+Iterations 
+
+> 1
+> 2
+> 3
+> 4
+> 5
+
+Spectral Norm X 2        
+
+> b=0.0
+> b=0.1
+> b=1.0
+> Constraint D2
+> 050 100 150 200 250 300 350
+
+Iterations 
+
+> 0
+> 2
+> 4
+> 6
+> 8
+> 10
+> 12
+> 14
+> 16
+
+Frobenius Norm X F
+
+> b=0.0
+> b=0.1
+> b=1.0
+
+Figure F.2: Convergence dynamics of update rule (4) using full-batch gradient. We report the function resid-ual of the constrained composite logistic loss F (X) with D2 = 5 .0 under different regularization coefficient 
+
+b. The unconstrained solution of f (X) has spectral norm close to 1. 0 100 200 300 400 500 
+
+Iterations        
+
+> 10 8
+> 10 7
+> 10 6
+> 10 5
+> 10 4
+> 10 3
+> 10 2
+
+Composite Function Residual F(Xk) F *     
+
+> b=0.0
+> b=0.1
+> b=1.0
+> 0100 200 300 400 500
+
+Iterations 
+
+> 0.625
+> 0.630
+> 0.635
+> 0.640
+> 0.645
+
+Test Loss ftest (X)     
+
+> b=0.0
+> b=0.1
+> b=1.0
+> 0100 200 300 400 500
+
+Iterations 
+
+> 0.20
+
+Spectral Norm X 2      
+
+> b=0.0
+> b=0.1
+> b=1.0
+> Constraint D2
+> 0100 200 300 400 500
+
+Iterations 
+
+> 0.40
+> 0.45
+> 0.50
+> 0.55
+> 0.60
+
+Frobenius Norm X F
+
+> b=0.0
+> b=0.1
+> b=1.0
+
+Figure F.3: Convergence dynamics of update rule (4) using full-batch gradient. We report the function resid-ual of the constrained composite logistic loss F (X) with D2 = 0 .2 under different regularization coefficient 
+
+b. The unconstrained solution of f (X) has spectral norm close to 1. rule (4) exactly minimizes the composite function F within the spectral ball of radius D2 using the prescribed parameters. Furthermore, we observe that appropriate regularization ( b > 0) improves generalization (lower test loss) compared to the unregularized case ( b = 0), and that larger values of b result in solutions with smaller Frobenius norms, consistent with theoretical expectations. 
+
+F.1.2 Validation of Robustness to Sparse Spectral Spikes Data generation. We now investigate the robustness of spectral clipping against sparse spectral noise with spikes. We consider the same matrix logistic regression as described previously with d = 50 , n =100. We simulate the stochastic gradient oracle of the form g(X) = ∇f (X) + N where N = ℓUV T .Here, ℓ represents the noise magnitude, and the matrices U, V ∈ Rd×r are sampled independently from 38 0 2500 5000 7500 10000 12500 15000 17500 20000                                       
+
+> Iterations
+> 10 5
+> 10 4
+> 10 3
+> 10 2
+> 10 1
+> 10 0
+> Composite Function Residual F(Xk)F*
+> b=0.0
+> b=0.1
+> b=1.0
+> 02500 5000 7500 10000 12500 15000 17500 20000
+> Iterations
+> 0.6
+> 0.7
+> 0.8
+> 0.9
+> 1.0
+> 1.1
+> 1.2
+> Test Loss ftest (X)
+> b=0.0
+> b=0.1
+> b=1.0
+> 02500 5000 7500 10000 12500 15000 17500 20000
+> Iterations
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> 0.8
+> 0.9
+> 1.0
+> Spectral Norm X2
+> b=0.0
+> b=0.1
+> b=1.0
+> Constraint D2
+> 02500 5000 7500 10000 12500 15000 17500 20000
+> Iterations
+> 0.5
+> 1.0
+> 1.5
+> 2.0
+> 2.5
+> 3.0
+> Frobenius Norm XF
+> b=0.0
+> b=0.1
+> b=1.0
+
+Figure F.4: Convergence dynamics of update rule (4) using stochastic gradient. We report the function residual of the constrained composite logistic loss F (X) with D2 = 1 .0 under different regularization coeffi-cient b. The unconstrained solution of f (X) has spectral norm close to 1. the uniform distribution on the Stiefel manifold. We construct these matrices using the standard polar decomposition method (Chikuse, 2003). Specifically, let A ∈ Rd×r be a random matrix with independent entries Aij ∼ N (0 , 1). We compute U = A(AT A)−1/2 (and similarly for V). By construction, U has orthonormal columns ( UT U = Ir ). Moreover, due to the symmetry of the standard normal distribution, we have E[U] = 0 (Theorem 2.2.1, (Chikuse, 2003)). We next show that U satisfies Definition 1 with κ = 1. Let P := UU T = A(AT A)−1AT be the projection matrix. Since A has rank r with probability 1, we have trace( P) = r. Consider any fixed orthogonal matrix Q ∈ Rd×d. By the rotational invariance of the Gaussian distribution, QA has the same distribution as A (Vershynin, 2018). Consequently, the projection matrix constructed from QA , QPQ T = ( QA )(( QA )T (QA )) −1(QA )T , shares the distribution of P. Taking the expectation yields E[P] = Q E[P]QT . Since this holds for any orthogonal Q, Schur’s Lemma implies that 
+
+E[P] = λId for some scalar λ ≥ 0. Using the linearity of the trace, we have: 
+
+r = E[trace( P)] = trace( E[P]) = trace( λId) = λd =⇒ λ = rd =⇒ E[UU T ] = rd Id .
+
+Results. For the problem instance, the gradient spectral norm is bounded by M ≈ 15. We evaluate the algorithms under varying noise scales ℓ ∈ { 10 , 100 , 1000 }. We compare three update rules: 1) Vanilla SGD, 2) SGD with global clipping, and 3) SGD with spectral clipping. We employ a decay schedule ηk = η0√k+1 
+
+for all methods. We tune the initial learning rate η0 individually for each method to maximize performance. For spectral clipping, we fix the threshold c = 15 across all noise levels, matching the theory. Figure F.5 illustrates the convergence behavior (training loss). In the low-noise regime ( ℓ = 10), all three methods perform comparably. As the noise scale ℓ increases, the performance of spectral clipping remains robust, maintaining fast convergence. In contrast, Vanilla SGD and SGD with global clipping require signifi-cantly reduced learning rates η0 to prevent divergence, resulting in slower convergence. We observe a similar phenomenon in the momentum setting. Figure F.6 compares Momentum SGD with and without spectral clipping (applied to the raw stochastic gradient). The results confirm that spectral clipping effectively filters sparse spectral spikes, enabling the momentum buffer to accumulate valid signal directions. 
+
+F.2 Recording Singular Value Distribution of Stochastic Gradients and Updates & Noise Structure 
+
+We conduct our analysis on a LLaMA-style transformer model with 12 layers, 12 attention heads, and embedding dimension 768 (approximately 124M parameters). The model is pretrained on the SlimPajama dataset (Soboleva et al., 2023) using a sequence length of 512 tokens and the batch size of 256. We use AdamW with the standard configuration: η = 10 −3, β 1 = 0 .8, β 2 = 0 .999 , λ = 0 .1 and we run 16000 iterations with a cosine learning rate schedule and 2000 warmup steps. 39 0 2000 4000 6000 8000 10000  
+
+> Iterations
+> 10 1
+> 10 0
+> Gradient Norm  f(X) F
+
+Noise magnitude = 10          
+
+> No clip ( 0=0.02)
+> Global Clipping ( 0=0.02, c=30)
+> Spectral Clipping ( 0=0.02, c=15)
+> 02000 4000 6000 8000 10000
+> Iterations
+> 10 1
+> 10 0
+
+Noise magnitude = 100          
+
+> No clip ( 0=0.004)
+> Global Clipping ( 0=0.02, c=30)
+> Spectral Clipping ( 0=0.02, c=15)
+> 02000 4000 6000 8000 10000
+> Iterations
+> 10 1
+> 10 0
+
+Noise magnitude = 1000    
+
+> No clip ( 0=0.0002)
+> Global Clipping ( 0=0.005, c=30)
+> Spectral Clipping ( 0=0.02, c=15)
+
+Figure F.5: Convergence comparison of Vanilla SGD, SGD with Global Clipping, and SGD with Spectral Clipping under low-rank spectral noise. We vary the noise spike magnitude ℓ ∈ { 10 , 100 , 1000 } relative to the gradient spectral norm bound M ≈ 15. 0 2000 4000 6000 8000 10000  
+
+> Iterations
+> 10 1
+> 10 0
+> Gradient Norm  f(X) F
+
+Noise Magnitude = 10         
+
+> SGD-M ( 0=0.02)
+> SGD-M + Pre-Clip ( 0=0.02)
+> 02000 4000 6000 8000 10000
+> Iterations
+> 10 1
+> 10 0
+
+Noise Magnitude = 100         
+
+> SGD-M ( 0=0.002)
+> SGD-M + Pre-Clip ( 0=0.02)
+> 02000 4000 6000 8000 10000
+> Iterations
+> 10 1
+> 10 0
+
+Noise Magnitude = 1000   
+
+> SGD-M ( 0=0.0002)
+> SGD-M + Pre-Clip ( 0=0.02)
+
+Figure F.6: Convergence comparison of Vanilla SGD-M and SGD-M with Spectral Clipping under low-rank spectral noise. We vary the noise spike magnitude ℓ ∈ { 10 , 100 , 1000 } relative to the gradient spectral norm bound M ≈ 15. 
+
+F.2.1 Singular Value Distribution of Stochastic Gradients and Updates. 
+
+We record the full singular value distributions of both the raw stochastic gradient gk and the optimizer update direction Uk at selected checkpoints: 0%, 5%, 50%, and 99% of training (corresponding to iterations 1, 800, 8000, and 15840). We record these quantities for representative weight matrices across the network depth: the token embedding matrix, the attention and MLP weights from early (layer 0), middle (layer 6), and late (layer 11) transformer blocks. 
+
+Heavy-tailed stochastic gradient spectrum . Figure F.10 illustrates the singular value distributions of the raw stochastic gradients and the ratio of σmax /σ min for each weight matrix. We observe the a small number of singular values are orders of magnitude larger than the rest, leading to high condition numbers. This phenomenon persists throughout the training trajectory and is ubiquitous across the recorded layers. 
+
+Comparisons of update norms. As shown in Figure F.11, the AdamW update shows a more uniform spectral distribution compared to the raw gradient, suggesting that coordinate-wise normalization partially mitigates the spectral imbalance. However, they fail to impose a hard ceiling. In contrast, Figure F.13 demonstrates that SPECTRA-AdamW maintains a rigorously controlled bound on the spectral norm and exhibits a balanced spectral distribution. (The comparisons between Signum and Spectra-Signum can be 40 found in Figure F.12 and F.14.) 
+
+F.2.2 Noise Structure Analysis. 
+
+We next investigate the structure of stochastic gradient noise. Let G ∈ Rm×n denote the ‘true’ gradient signal, approximated by averaging gradients over a large batch of samples. Let g denote a single-sample stochastic gradient. The stochastic noise is defined as N := g − G. Our goal is to determine the magnitude of the noise and how these directions align with the signal. To measure the alignment, we use the following two standard subspace distance metrics. For two orthonormal matrices U1, U2 ∈ Rm×r , we consider both the spectral distance (worst-case misalign-ment) and the chordal distance (average-case misalignment): 
+
+dspec (U1, U2) := dist( U1, U2) = ∥U1UT 
+
+> 1
+
+− U2UT 
+
+> 2
+
+∥2 = max  
+
+> i∈[r]
+
+{sin θi},
+
+and 
+
+dchord (U1, U2) := 1
+
+√r ∥U1UT 
+
+> 1
+
+− U2UT 
+
+> 2
+
+∥F =
+
+vuut 1
+
+r
+
+> r
+
+X
+
+> i=1
+
+sin 2 θi ,
+
+where θ1, . . . , θ k are the principal angles between the subspaces (Definition 4). These two distances can be efficiently computed by: 
+
+dspec (U1, U2) = pλmax (B), dchord (U1, U2) = 
+
+r trace( B)
+
+r ,
+
+where A = UT 
+
+> 1
+
+U2 ∈ Rr×r and B = Ir − AA T . Both metrics range from 0 (identical subspaces) to 1 (orthogonal subspaces). The total distance dr (N, G) is defined as the maximum distance between the top-r
+
+left subspaces and top-r right subspaces: 
+
+dr (N, G) = max d(UN , UG), d (VN , VG) .
+
+At each checkpoint, we perform the following steps: 1. Compute G using a large batch-size of B = 4096. Compute its top-r left and right singular vectors 
+
+UG ∈ Rm×r and VG ∈ Rn×r with r = 5. 2. For each of b = 50 independent noise samples: (a) Compute a single sample stochastic gradient g.(b) Compute the noise matrix N = g − G.(c) Compute and record the top-r singular values and vectors ( UN and VN ) of N.(d) Compute and record the subspace distance dr (N, G). The results are shown in Figure F.15 and F.16. We observe two consistent phenomena: 1) The top singular values of the noise frequently exceed the signal norm ∥G∥2 by a large margin. This confirms the presence of ”spectral spikes” in the noise. Moreover, since the bulk of the singular values of stochastic gradient is small, the high-magnitude components in the noise should be low-rank (according to 12). 2) The subspace distances between the noise and signal principal directions are consistently close to 1. This indicates that the dominant noise spikes are nearly orthogonal to the principal directions of the true signal. 41 F.3 LLM Pretraining Tasks. 
+
+Hardware. All experiments were conducted on a computation node equipped with 4 × NVIDIA H100 (96GB) GPUs. 
+
+Dataset. We use a subset of the FineWeb-Edu dataset (Lozhkov et al., 2024), partitioned into training and validation sequences. After completion of training, we report the full validation loss and perplexity. 
+
+Model architecture . We adopt the standard decoder-only transformer following Semenov et al. (2025). Key components include SwiGLU activation functions (Shazeer, 2020), Rotary Positional Embeddings (RoPE) (Su et al., 2024) RMSNorm (Zhang and Sennrich, 2019) with ϵ = 10 −5. We utilize the GPT-2 tokenizer (Radford et al., 2019a) with a vocabulary size of 50,304. Unless otherwise specified, we employ untied embeddings (i.e., do not use weight tying (Press and Wolf, 2017)). Detailed configurations for all considered model architectures are presented in Table F.1. Table F.1: Configuration of the considered model architecture.                     
+
+> Parameters 124M 160M 780M 820M
+> Embed dimension 768 768 1280 2048 # Attention heads 12 12 20 16 # Layers 12 12 32 12 Untied embed False True True True
+
+Optimizers. As detailed in the main text, we benchmark SPECTRA against state-of-the-art optimizers, including AdEMAMix Pagliardini et al. (2025), AdamW Loshchilov and Hutter (2019), Signum Bernstein et al. (2018), D-Muon Liu et al. (2025), Mars (AdamW) Yuan et al. (2025), and SOAP Vyas et al. (2024). We follow the evaluation protocol of Semenov et al. (2025), which provides comprehensive descriptions of these baselines. The memory footprint of each optimizer is reported in Table F.2; notably, SOAP, Mars, and AdEMAMix incur the highest memory overhead. Finally, applying SPECTRA does not increase memory requirements. 
+
+Hyperparameters. We report the specific hyperparameter settings used across all experiments in the following tables (the row ’Gradient Clipping’ means the pre global Frobenius clipping threshold applied to all the parameters.). We adopt the majority of configurations directly from the benchmark protocol (Semenov et al., 2025), while additionally tuning the learning rate, as it generally has the most significant influence on performance. For the WSD learning rate schedule, we consistently adopt the recommended square root decay to zero, initiating at 80% of the total training steps. For the spectral clipping schedule, as discussed in Section 5.2, we use one of the two in the paper: 
+
+Comparison with Post-Orthogonalization. A natural alternative to spectral clipping is to apply explicit post-orthogonalization to the update matrix. This update rule is given by: 
+
+Xk+1 = (1 − λη k)Xk − αη k orth( Uk); ,
+
+where α = max( p mn , 1) scales the update as before, and the operator orth( ·) normalizes all singular values to 1. We implement orth( ·) using the same Newton-Schultz iterations employed by Muon Jordan et al. (2024). We compare Spectra-AdamW against this AdamW-Post-Orth method on the 160M-parameter task trained for 16.8B tokens. The results, summarized in Table F.4, show the final validation loss across various learn-ing rates. We observe that Spectra-AdamW outperforms the best-performing post-orthogonalized AdamW baseline in both schedule configurations. 42 0 2500 5000 7500 10000 12500 15000 
+
+Iterations 
+
+2.6 
+
+2.8 
+
+3.0 
+
+3.2 
+
+3.4 
+
+3.6 
+
+3.8 
+
+4.0 
+
+> Validation Loss
+
+Signum 
+
+Spectra-Signum 
+
+0 2500 5000 7500 10000 12500 15000 
+
+Iterations 
+
+2.6 
+
+2.8 
+
+3.0 
+
+3.2 
+
+3.4 
+
+3.6 
+
+3.8 
+
+> Validation Loss
+
+AdamW 
+
+Spectra-AdamW 
+
+0 2500 5000 7500 10000 12500 15000 
+
+Iterations 
+
+2.6 
+
+2.8 
+
+3.0 
+
+3.2 
+
+3.4 
+
+3.6 
+
+3.8 
+
+> Validation Loss
+
+AdEMAMix 
+
+Spectra-AdEMAMix 
+
+0 200 400 600 800 1000 1200 
+
+Run time (minutes) 
+
+2.6 
+
+2.8 
+
+3.0 
+
+3.2 
+
+3.4 
+
+3.6 
+
+3.8 
+
+4.0 
+
+> Validation Loss
+
+Signum 
+
+Spectra-Signum 
+
+0 200 400 600 800 1000 1200 
+
+Run time (minutes) 
+
+2.6 
+
+2.8 
+
+3.0 
+
+3.2 
+
+3.4 
+
+3.6 
+
+3.8 
+
+> Validation Loss
+
+AdamW 
+
+Spectra-AdamW 
+
+0 200 400 600 800 1000 1200 
+
+Run time (minutes) 
+
+2.6 
+
+2.8 
+
+3.0 
+
+3.2 
+
+3.4 
+
+3.6 
+
+3.8 
+
+> Validation Loss
+
+AdEMAMix 
+
+Spectra-AdEMAMix 
+
+FineWeb-Edu. Batch size 1M tokens. (Wide and Shallow) Llama 820M. Trained on 16.6B tokens. WSD. Figure F.7: Training dynamics of the 820M-parameter model. The plots display validation loss with respect to training iterations (up) and wall-clock time (down), conducted on 4 H100 GPUs. We use a micro batchsize of 31 with 8 accumulation steps on each machine. The hyperparameters such as learning rate used for each method are reported in the tables in Section F.3. 0 25000 50000 75000 100000 125000 
+
+Iterations 
+
+3.0 
+
+3.5 
+
+4.0 
+
+4.5 
+
+5.0 
+
+> Validation Loss
+
+Signum 
+
+Spectra-Signum 
+
+0 25000 50000 75000 100000 125000 
+
+Iterations 
+
+3.00 
+
+3.25 
+
+3.50 
+
+3.75 
+
+4.00 
+
+4.25 
+
+4.50 
+
+4.75 
+
+> Validation Loss
+
+AdamW 
+
+Spectra-AdamW 
+
+0 25000 50000 75000 100000 125000 
+
+Iterations 
+
+3.00 
+
+3.25 
+
+3.50 
+
+3.75 
+
+4.00 
+
+4.25 
+
+4.50 
+
+4.75 
+
+> Validation Loss
+
+AdEMAMix 
+
+Spectra-AdEMAMix 
+
+0 100 200 300 400 500 600 
+
+Run time (minutes) 
+
+3.0 
+
+3.5 
+
+4.0 
+
+4.5 
+
+5.0 
+
+> Validation Loss
+
+Signum 
+
+Spectra-Signum 
+
+0 100 200 300 400 500 600 
+
+Run time (minutes) 
+
+3.00 
+
+3.25 
+
+3.50 
+
+3.75 
+
+4.00 
+
+4.25 
+
+4.50 
+
+4.75 
+
+> Validation Loss
+
+AdamW 
+
+Spectra-AdamW 
+
+0 100 200 300 400 500 600 
+
+Run time (minutes) 
+
+3.00 
+
+3.25 
+
+3.50 
+
+3.75 
+
+4.00 
+
+4.25 
+
+4.50 
+
+4.75 
+
+> Validation Loss
+
+AdEMAMix 
+
+Spectra-AdEMAMix 
+
+FineWeb-Edu. Batch size 131K tokens. Llama 160M. Trained on 16B tokens. WSD. 
+
+Figure F.8: Training dynamics of the 160M-parameter model. The plots display validation loss with respect to training iterations (up) and wall-clock time (down), conducted on 4 H100 GPUs. We use a micro batchsize of 64 with 1 accumulation step on each machine. The hyperparameters such as learning rate used for each method are reported in the tables in Section F.3. 43 Table F.2: Memory requirements of different optimizers. M denotes total model parameters, M2d and M1d
+
+denote 2D and 1D parameters respectively, m and v denote the first and second momentum buffer, and di
+
+represents the size of each dimension of a parameter tensor (e.g., for a matrix of shape ( d1, d 2), both d1 and 
+
+d2 are considered) 
+
+Optimizer State Buffers Memory Factor 
+
+AdamW m, v 2M 2×
+
+AdEMAMix mfast , m slow , v 3M 3×
+
+D-Muon 1 m (2D), m, v (1D) M2d + 2 M1d < 2×
+
+Signum m (momentum) M 1×
+
+SOAP 2 m, v, GG , Q 2M + P 
+
+> di≤D
+
+2d2 
+
+> i
+
+≈ 4×
+
+MARS (AdamW) 3 m, v, g prev (2D) ≈ 3M ≈ 3×              
+
+> 1D-Muon uses momentum-only updates for 2D matrices (with rows <10000) and AdamW for others including embed-dings/biases.
+> 2SOAP stores preconditioner matrices for any parameters with di≤D(default D= 10000). For typical LLM architectures with di∼4096, preconditioner overhead is approximately 2 M.
+> 3MARS stores gradient history for variance reduction where gprev represents the previous gradient.
+
+F.4 Evaluation of downstream Tasks. 
+
+We evaluate the pretrained models on in-context learning tasks using the lm-evaluation-harness pack-age (Gao et al., 2024). We benchmark on the following standard datasets: ARC (Clark et al., 2018), BoolQ (Christopher et al., 2019), PIQA (Bisk et al., 2020), HellaSwag (Zellers et al., 2019), WinoGrande (win, 2019), OpenBookQA (Mihaylov et al., 2018), LambdaOpenAI (Radford et al., 2019b), SciQ (Johannes Welbl, 2017), and MMLU (Hendrycks et al., 2021b,a). All tasks are evaluated in a 5-shot setting, where the model is provided with five complete question-answer examples before the test question. For each task, the model scores each candidate answer by computing the log-probability of the answer text conditioned on the question, and predicts the choice with the highest log-probability. We report two accuracy metrics: the raw accuracy based on total log-probability, and the length-normalized accuracy, which divides each log-probability by the number of tokens in the corresponding choice to mitigate bias toward shorter answers. Following standard practice, we report length-normalized accuracy for HellaSwag, ARC, PIQA, OpenBookQA, and SciQ, and the standard accuracy for the remaining tasks. Table F.3: Hyperparameter configurations for Spectra-AdamW .
+
+Hyperparameter 160M (wsd) 160M (cos) 780M (wsd) 820M (wsd) 
+
+Learning Rate η 5e-4, 1e-3 , 2e-3 1e-3, 2e-3 , 3e-3 1e-3 1e-3 Clipping Threshold c 5.0, 10.0 5.0 10.0 10.0 Clipping Schedule standard standard wsd-sqrt , standard wsd-sqrt, standard 
+
+Others Same as in Table F.5 44 Table F.4: Final validation loss comparison for the 160M Llama model trained on 16.8B tokens. Best results are bolded .
+
+Schedule Method Learning Rate Final Val. Loss 
+
+wsd AdamW-Post-Orth 1e-3 2.988 AdamW-Post-Orth 2e-3 2.973 AdamW-Post-Orth 3e-3 2.974 
+
+Spectra-AdamW 1e-3 2.936 
+
+cos AdamW-Post-Orth 1e-3 3.009 AdamW-Post-Orth 2e-3 2.966 AdamW-Post-Orth 3e-3 2.955 AdamW-Post-Orth 4e-3 2.953 AdamW-Post-Orth 5e-3 2.956 
+
+Spectra-AdamW 2e-3 2.922 
+
+Table F.5: Hyperparameter configurations for AdamW .
+
+Hyperparameter 160M (wsd) 160M (cos) 780M (wsd) 820M (wsd) 
+
+Batch Size 256 256 1012 992 Sequence Length 512 512 1024 1024 Warmup Steps 2000 2000 2000 2000 Weight Decay λ 0.1 0.1 0.1 0.1 Gradient Clipping 0.5 0.5 0.1 0.1 Momentum β1 0.8 0.8 0.9 0.9 Momentum β2 0.999 0.999 0.999 0.999 Learning Rate η 5e-4, 1e-3 , 2e-3 5e-4, 1e-3, 2e-3 , 3e-3 5e-4, 1e-3 , 2e-3 5e-4, 1e-3 , 2e-3 Final Learning Rate 0 0.01 η 0 013.0     
+
+> 13.1
+> 13.2
+> 13.3
+> 13.4
+> 13.5
+> 13.6
+> Validation Perplexity
+> 13.105 13.113
+> 13.231
+> 13.335
+> 13.399 13.428
+> 13.466
+> 13.610
+> (Thin and Deep) Llama Large (780 M)
+> 13.3
+> 13.4
+> 13.5
+> 13.6
+> 13.7
+> 13.8
+> 13.9
+> Validation Perplexity
+> 13.374 13.390
+> 13.467 13.472
+> 13.592
+> 13.627
+> 13.766
+> 13.856
+> (Wide and Shallow) Llama Large (820 M)
+
+FineWeb-Edu. Batch size 1M tokens. Trained on 16.6B tokens. Untied embeds. WSD. 
+
+> Spectra-Signum
+> D-Muon
+> Spectra-AdEMAMix
+> Mars
+> Spectra-AdamW
+> Signum
+> AdEMAMix
+> AdamW
+
+Figure F.9: Final validation perplexity comparison for large Llama-style models trained for the Chinchilla optimal duration. ’Thin and deep’ models have smaller embedding dimensions but have more layers than ’wide and shallow’ ones. The hyperparameters such as learning rate used for each method are reported in the tables in Section F.3. Spectra enhances the final validation perplexity across all three methods. 45 Table F.6: Hyperparameter configurations for AdEMAMix .
+
+Hyperparameter 160M (wsd) 160M (cos) 780M (wsd) 820M (wsd) 
+
+Batch Size 256 256 1012 992 Sequence Length 512 512 1024 1024 Warmup Steps 2000 2000 2000 2000 Weight Decay λ 0.1 0.1 0.1 0.1 Gradient Clipping 0.5 0.5 0.1 0.1 Momentum β1 0.9 0.9 0.9 0.9 Momentum β2 0.999 0.999 0.999 0.999 Momentum β3 0.999 0.999 0.999 0.999 Coefficient α 8 8 8 8Learning Rate η 5e-4, 1e-3 , 2e-3 1e-3, 2e-3 , 3e-3 2e-4, 5e-4 , 1e-3 5e-4, 1e-3 , 2e-3 Final Learning Rate 0 0.01 η 0 0Table F.7: Hyperparameter configurations for Spectra-AdEMAMix .
+
+Hyperparameter 160M (wsd) 160M (cos) 780M (wsd) 820M (wsd) 
+
+Learning Rate η 5e-4, 1e-3 , 2e-3 1e-3, 2e-3 , 3e-3 5e-4, 1e-3 1e-3 Clipping Threshold c 5.0, 10.0 5.0 10.0 10.0 Clipping Schedule standard standard wsd-sqrt , standard wsd-sqrt, standard 
+
+Others Same as in Table F.6 Table F.8: Hyperparameter configurations for Signum .
+
+Hyperparameter 160M (wsd) 160M (cos) 780M (wsd) 820M (wsd) 
+
+Batch Size 256 256 1012 992 Sequence Length 512 512 1024 1024 Warmup Steps 8000 8000 2000 2000 Weight Decay λ 0.1 0.1 0.1 0.1 Gradient Clipping 0.5 0.5 0.1 0.1 Momentum β 0.95 0.95 0.95 0.95 Nesterov momentum True True True True Learning Rate η 2e-4, 5e-4 , 1e-3 5e-4, 1e-3 , 2e-3 2e-4 , 5e-4 2e-4 Final Learning Rate 0 0.01 η 0 0Table F.9: Hyperparameter configurations for Spectra-Signum .
+
+Hyperparameter 160M (wsd) 160M (cos) 780M (wsd) 820M (wsd) 
+
+Warmup Steps 2000 2000 2000 2000 Learning Rate η 5e-4, 1e-3 , 2e-3 1e-3, 2e-3 , 3e-3 1e-3 1e-3 Clipping Threshold c 10.0 5.0 10.0 10.0 Clipping Schedule standard standard wsd-sqrt , standard wsd-sqrt, standard 
+
+Others Same as in Table F.8 46 Table F.10: Hyperparameter configurations for D-Muon .
+
+Hyperparameter 160M (wsd) 160M (cos) 780M (wsd) 820M (wsd) 
+
+Batch Size 256 256 1012 992 Sequence Length 512 512 1024 1024 Warmup Steps 2000 2000 2000 2000 Weight Decay λ 0.1 0.1 0.1 0.1 Gradient Clipping 0.5 0.5 0.1 0.1 Momentum β 0.95 0.95 0.95 0.95 AdamW β1 (1D) 0.8 0.8 0.9 0.9 AdamW β2 (1D) 0.999 0.999 0.99 0.99 Nesterov momentum True True True True Learning Rate η 5e-4, 1e-3 , 2e-3 5e-4, 1e-3 , 2e-3 5e-4, 1e-3 1e-3 Final Learning Rate 0 0.01 η 0 0Table F.11: Hyperparameter configurations for Mars (AdamW) .
+
+Hyperparameter 160M (wsd) 160M (cos) 780M (wsd) 820M (wsd) 
+
+Batch Size 256 256 1012 992 Sequence Length 512 512 1024 1024 Warmup Steps 2000 2000 2000 2000 Weight Decay λ 0.1 0.1 0.1 0.1 Gradient Clipping 0.5 0.5 0.1 0.1 Learning Rate AdamW 5e-4, 1e-3 1e-3 1e-3 1e-3 Learning Rate Mars 3e-3 3e-3 1e-3, 3e-3 3e-3 AdamW β1 (1D) 0.8 0.8 0.8 0.9 AdamW β2 (1D) 0.999 0.999 0.999 0.999 Mars β1 0.95 0.95 0.95 0.95 Mars β2 0.99 0.99 0.99 0.99 VR Scaling Factor η 0.025 0.025 0.025 0.025 Final Learning Rate 0 0.01 η 0 0Table F.12: Hyperparameter configurations for SOAP . (Due to the large memory footprint of SOAP, we need larger gradient accumulation steps to fit the model in memory, which largely extended the training runtime. Consequently, experiments for the larger model sizes are currently in progress.) 
+
+Hyperparameter 160M (wsd) 160M (cos) 
+
+Batch Size 256 256 Sequence Length 512 512 Warmup Steps 2000 2000 Weight Decay λ 0.1 0.1 Gradient Clipping 0.5 0.5 Preconditioner dimension 10000 10000 Preconditioning frequency 10 10 SOAP β1 0.9 0.9 SOAP β2 0.999 0.999 Learning Rate η 5e-4, 1e-3 , 2e-3 1e-3, 2e-3 , 3e-3 Final Learning Rate 0 0.01 η
+
+47 0.01 0.10 1
+
+15 
+
+30 
+
+45 
+
+60 
+
+> embedding
+
+max: 1 
+
+min: 0.002 
+
+ratio: 553.9 
+
+Step 1 
+
+0.01 0.10 
+
+15 
+
+30 
+
+45 
+
+60 
+
+max: 0.17 
+
+min: 0.001 
+
+ratio: 127.3 
+
+Step 800 
+
+0.001 0.01 
+
+15 
+
+30 
+
+45 
+
+60 max: 0.03 
+
+min: 0.0005 
+
+ratio: 54.5 
+
+Step 8000 
+
+0.001 0.01 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 
+
+max: 0.02 
+
+min: 0.0005 
+
+ratio: 31.5 
+
+Step 15840 
+
+0.001 0.01 0.10 1
+
+8
+
+16 
+
+24 
+
+32 
+
+40 
+
+> early_attn
+
+max: 0.78 
+
+min: 0.0003 
+
+ratio: 2.4K 
+
+0.0001 0.001 0.01 0.10 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 
+
+max: 0.24 
+
+min: 0.0001 
+
+ratio: 2.1K 
+
+0.00001 0.0001 0.001 0.01 
+
+6
+
+12 
+
+18 
+
+24 
+
+30 
+
+max: 0.02 
+
+min: 0.000007 
+
+ratio: 2.4K 
+
+0.00001 0.0001 0.001 0.01 
+
+6
+
+12 
+
+18 
+
+24 
+
+30 
+
+max: 0.01 
+
+min: 0.000007 
+
+ratio: 1.5K 
+
+0.001 0.01 0.10 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 
+
+> early_mlp
+
+max: 0.39 
+
+min: 0.0008 
+
+ratio: 504.3 
+
+0.001 0.01 
+
+8
+
+16 
+
+24 
+
+32 
+
+40 
+
+max: 0.03 
+
+min: 0.0005 
+
+ratio: 63.2 
+
+0.001 
+
+8
+
+16 
+
+24 
+
+32 
+
+max: 0.004 
+
+min: 0.0001 
+
+ratio: 33 
+
+0.001 
+
+8
+
+16 
+
+24 
+
+32 
+
+max: 0.004 
+
+min: 0.0001 
+
+ratio: 28.5 
+
+0.0001 0.001 0.01 0.10 
+
+8
+
+16 
+
+24 
+
+32 
+
+40 
+
+> middle_attn
+
+max: 0.24 
+
+min: 0.00002 
+
+ratio: 10.3K 
+
+0.0001 0.001 0.01 
+
+8
+
+16 
+
+24 
+
+32 
+
+40 max: 0.03 
+
+min: 0.00003 
+
+ratio: 972.1 
+
+0.0001 0.001 0.01 
+
+8
+
+16 
+
+24 
+
+32 
+
+40 
+
+max: 0.01 
+
+min: 0.00006 
+
+ratio: 194.6 
+
+0.0001 0.001 0.01 
+
+8
+
+16 
+
+24 
+
+32 
+
+40 max: 0.010 
+
+min: 0.00007 
+
+ratio: 142.9 
+
+0.001 0.01 0.10 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 
+
+> middle_mlp
+
+max: 0.11 
+
+min: 0.0002 
+
+ratio: 690.6 
+
+0.0001 0.001 0.01 
+
+8
+
+16 
+
+24 
+
+32 
+
+max: 0.008 
+
+min: 0.00009 
+
+ratio: 91.9 
+
+0.0001 0.001 
+
+8
+
+16 
+
+24 
+
+32 
+
+40 
+
+max: 0.002 
+
+min: 0.00004 
+
+ratio: 61.5 
+
+0.0001 0.001 
+
+10 
+
+20 
+
+30 
+
+40 
+
+max: 0.003 
+
+min: 0.00004 
+
+ratio: 69.6 
+
+0.00001 0.0001 0.001 0.01 0.10 
+
+8
+
+16 
+
+24 
+
+32 
+
+40 
+
+> late_attn
+
+max: 0.17 
+
+min: 0.00001 
+
+ratio: 13.9K 
+
+0.0001 0.001 0.01 
+
+10 
+
+20 
+
+30 
+
+40 
+
+max: 0.03 
+
+min: 0.00002 
+
+ratio: 1.7K 
+
+0.0001 0.001 
+
+8
+
+16 
+
+24 
+
+32 
+
+40 
+
+max: 0.007 
+
+min: 0.00006 
+
+ratio: 124 
+
+0.0001 0.001 
+
+8
+
+16 
+
+24 
+
+32 
+
+40 max: 0.006 
+
+min: 0.00008 
+
+ratio: 80.3 
+
+0.0001 0.001 0.01 0.10 
+
+Singular Value 
+
+15 
+
+30 
+
+45 
+
+60 
+
+> late_mlp
+
+max: 0.08 
+
+min: 0.0001 
+
+ratio: 799.2 
+
+0.0001 0.001 0.01 
+
+Singular Value 
+
+8
+
+16 
+
+24 
+
+32 
+
+40 
+
+max: 0.02 
+
+min: 0.00005 
+
+ratio: 350.1 
+
+0.0001 0.001 0.01 
+
+Singular Value 
+
+10 
+
+20 
+
+30 
+
+40 
+
+max: 0.008 
+
+min: 0.00008 
+
+ratio: 96.2 
+
+0.0001 0.001 
+
+Singular Value 
+
+8
+
+16 
+
+24 
+
+32 
+
+40 
+
+max: 0.006 
+
+min: 0.00009 
+
+ratio: 66.2 Figure F.10: Singular value distribution of raw stochastic gradients for the 124M-parameter model trained with AdamW. We visualize the spectrum at four training stages (0%, 5%, 50%, and 99%) for representative layers across the network depth. Each panel reports the maximum and minimum singular values along with their ratio (condition number). We observe that a small number of singular values are orders of magnitude larger than the rest, leading to high condition numbers. 48 100 1K 
+
+20 
+
+40 
+
+60 
+
+80 
+
+100 
+
+> embedding
+
+max: 4.2K 
+
+min: 83.4 
+
+ratio: 49.8 
+
+Step 1 
+
+100 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 
+
+max: 685.5 
+
+min: 42.5 
+
+ratio: 16.1 
+
+Step 800 
+
+10 100 
+
+15 
+
+30 
+
+45 
+
+60 
+
+max: 369.4 
+
+min: 11.6 
+
+ratio: 32 
+
+Step 8000 
+
+100 
+
+15 
+
+30 
+
+45 
+
+60 
+
+max: 397 
+
+min: 14.3 
+
+ratio: 27.7 
+
+Step 15840 
+
+10 100 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 
+
+> early_attn
+
+max: 639.5 
+
+min: 11 
+
+ratio: 57.6 
+
+10 100 
+
+8
+
+16 
+
+24 
+
+32 
+
+40 
+
+max: 228 
+
+min: 2.6 
+
+ratio: 86.8 
+
+1 10 100 
+
+6
+
+12 
+
+18 
+
+24 
+
+30 
+
+max: 81 
+
+min: 0.82 
+
+ratio: 98.3 
+
+10 100 
+
+8
+
+16 
+
+24 
+
+32 
+
+max: 147.4 
+
+min: 1.5 
+
+ratio: 99.7 
+
+10 100 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 
+
+> early_mlp
+
+max: 619.2 
+
+min: 9.7 
+
+ratio: 64 
+
+10 100 
+
+8
+
+16 
+
+24 
+
+32 
+
+40 
+
+max: 130.5 
+
+min: 4.2 
+
+ratio: 31.3 
+
+10 
+
+8
+
+16 
+
+24 
+
+32 
+
+max: 80.4 
+
+min: 3.1 
+
+ratio: 25.7 
+
+10 100 
+
+8
+
+16 
+
+24 
+
+32 
+
+max: 88.6 
+
+min: 3.5 
+
+ratio: 25.5 
+
+10 100 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 
+
+> middle_attn
+
+max: 584.8 
+
+min: 10 
+
+ratio: 58.4 
+
+10 100 
+
+6
+
+12 
+
+18 
+
+24 
+
+30 
+
+max: 141.7 
+
+min: 1.6 
+
+ratio: 90.2 
+
+10 
+
+6
+
+12 
+
+18 
+
+24 
+
+30 
+
+max: 69 
+
+min: 2.6 
+
+ratio: 26.8 
+
+10 
+
+6
+
+12 
+
+18 
+
+24 
+
+30 
+
+max: 78.6 
+
+min: 2.6 
+
+ratio: 30.4 
+
+10 100 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 
+
+> middle_mlp
+
+max: 661.3 
+
+min: 9 
+
+ratio: 74 
+
+10 100 
+
+6
+
+12 
+
+18 
+
+24 
+
+30 
+
+max: 95.4 
+
+min: 2.6 
+
+ratio: 37.4 
+
+10 
+
+8
+
+16 
+
+24 
+
+32 
+
+40 
+
+max: 55.9 
+
+min: 1.3 
+
+ratio: 41.6 
+
+10 
+
+8
+
+16 
+
+24 
+
+32 
+
+40 
+
+max: 61.2 
+
+min: 1.4 
+
+ratio: 44 
+
+10 100 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 
+
+> late_attn
+
+max: 541.6 
+
+min: 9 
+
+ratio: 59.6 
+
+1 10 100 
+
+8
+
+16 
+
+24 
+
+32 
+
+max: 159.1 
+
+min: 1.2 
+
+ratio: 137.2 
+
+10 
+
+6
+
+12 
+
+18 
+
+24 
+
+30 
+
+max: 73.4 
+
+min: 2.8 
+
+ratio: 26.5 
+
+10 
+
+8
+
+16 
+
+24 
+
+32 
+
+max: 81.1 
+
+min: 3 
+
+ratio: 27 
+
+10 100 
+
+Singular Value 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 
+
+> late_mlp
+
+max: 671.8 
+
+min: 8.5 
+
+ratio: 79 
+
+10 100 
+
+Singular Value 
+
+8
+
+16 
+
+24 
+
+32 
+
+max: 153.2 
+
+min: 1.5 
+
+ratio: 100 
+
+1 10 100 
+
+Singular Value 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 max: 91 
+
+min: 0.76 
+
+ratio: 119.8 
+
+1 10 100 
+
+Singular Value 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 max: 87.2 
+
+min: 0.86 
+
+ratio: 101.5 Figure F.11: Singular value distribution of update matrices ( Uk) trained with AdamW on the 124M-parameter model. We visualize the spectrum at four training stages (0%, 5%, 50%, and 99%) for repre-sentative layers across the network depth. Each panel reports the maximum and minimum singular values along with their ratio (condition number). AdamW updates show a more uniform spectral distribution compared to the raw gradient. However, they fail to impose a hard ceiling. 49 200 210 220 230 240 250 
+
+4
+
+8
+
+12 
+
+16 
+
+20 
+
+> embedding
+
+max: 251 
+
+min: 196.7 
+
+ratio: 1.3 
+
+Step 1 
+
+1K 
+
+20 
+
+40 
+
+60 
+
+80 
+
+max: 1.3K 
+
+min: 135.3 
+
+ratio: 9.9 
+
+Step 800 
+
+200 300 400 500 600 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 
+
+max: 628.3 
+
+min: 139 
+
+ratio: 4.5 
+
+Step 8000 
+
+200 300 400 500 600 
+
+15 
+
+30 
+
+45 
+
+60 max: 633.4 
+
+min: 137.1 
+
+ratio: 4.6 
+
+Step 15840 
+
+30 45 60 75 
+
+5
+
+10 
+
+15 
+
+20 
+
+25 
+
+> early_attn
+
+max: 75.1 
+
+min: 20.3 
+
+ratio: 3.7 
+
+100 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 max: 534.4 
+
+min: 14.3 
+
+ratio: 37.2 
+
+100 
+
+8
+
+16 
+
+24 
+
+32 
+
+max: 280.6 
+
+min: 11.8 
+
+ratio: 23.8 
+
+100 
+
+8
+
+16 
+
+24 
+
+32 
+
+max: 291.3 
+
+min: 12 
+
+ratio: 24.4 
+
+30 45 60 75 
+
+5
+
+10 
+
+15 
+
+20 
+
+25 
+
+> early_mlp
+
+max: 73.2 
+
+min: 17.5 
+
+ratio: 4.2 
+
+100 
+
+8
+
+16 
+
+24 
+
+32 
+
+40 max: 258.8 
+
+min: 14.5 
+
+ratio: 17.9 
+
+100 
+
+6
+
+12 
+
+18 
+
+24 
+
+30 
+
+max: 149.7 
+
+min: 15.4 
+
+ratio: 9.7 
+
+100 
+
+6
+
+12 
+
+18 
+
+24 
+
+30 
+
+max: 140 
+
+min: 15 
+
+ratio: 9.3 
+
+30 45 60 75 
+
+5
+
+10 
+
+15 
+
+20 
+
+25 
+
+> middle_attn
+
+max: 75.4 
+
+min: 20.6 
+
+ratio: 3.7 
+
+100 
+
+8
+
+16 
+
+24 
+
+32 
+
+max: 258 
+
+min: 14.2 
+
+ratio: 18.2 
+
+100 
+
+6
+
+12 
+
+18 
+
+24 
+
+30 
+
+max: 169.2 
+
+min: 15.3 
+
+ratio: 11 
+
+100 
+
+8
+
+16 
+
+24 
+
+32 
+
+max: 198.7 
+
+min: 15.2 
+
+ratio: 13 
+
+30 45 60 75 
+
+5
+
+10 
+
+15 
+
+20 
+
+25 
+
+> middle_mlp
+
+max: 72.4 
+
+min: 17.7 
+
+ratio: 4 
+
+100 
+
+6
+
+12 
+
+18 
+
+24 
+
+30 
+
+max: 151.3 
+
+min: 13.3 
+
+ratio: 11.4 
+
+10 100 
+
+6
+
+12 
+
+18 
+
+24 
+
+30 
+
+max: 121 
+
+min: 11 
+
+ratio: 11 
+
+100 
+
+6
+
+12 
+
+18 
+
+24 
+
+30 
+
+max: 123.6 
+
+min: 12 
+
+ratio: 10.4 
+
+30 45 60 75 
+
+5
+
+10 
+
+15 
+
+20 
+
+> late_attn
+
+max: 75.2 
+
+min: 20.5 
+
+ratio: 3.7 
+
+100 
+
+8
+
+16 
+
+24 
+
+32 
+
+40 
+
+max: 321.2 
+
+min: 14.3 
+
+ratio: 22.5 
+
+25 50 75 100 125 
+
+5
+
+10 
+
+15 
+
+20 
+
+25 
+
+max: 127.8 
+
+min: 17 
+
+ratio: 7.5 
+
+25 50 75 100 125 
+
+6
+
+12 
+
+18 
+
+24 
+
+30 max: 135 
+
+min: 17 
+
+ratio: 8 
+
+30 45 60 75 
+
+Singular Value 
+
+5
+
+10 
+
+15 
+
+20 
+
+25 
+
+> late_mlp
+
+max: 73.2 
+
+min: 17.7 
+
+ratio: 4.1 
+
+100 
+
+Singular Value 
+
+8
+
+16 
+
+24 
+
+32 
+
+40 
+
+max: 293.3 
+
+min: 12.7 
+
+ratio: 23 
+
+20 40 60 80 100 120 
+
+Singular Value 
+
+6
+
+12 
+
+18 
+
+24 
+
+30 max: 118.2 
+
+min: 15.3 
+
+ratio: 7.7 
+
+20 40 60 80 100 120 
+
+Singular Value 
+
+6
+
+12 
+
+18 
+
+24 
+
+30 max: 119.6 
+
+min: 14.8 
+
+ratio: 8 Figure F.12: Singular value distribution of update matrices ( Uk) trained with Signum on the 124M-parameter model. We visualize the spectrum at four training stages (0%, 5%, 50%, and 99%) for representative layers across the network depth. Each panel reports the maximum and minimum singular values along with their ratio (condition number). The spectral norm of the update matrices ranges from 70 to 1300. 50 1K 
+
+15 
+
+30 
+
+45 
+
+60 
+
+> embedding
+
+max: 7.8K 
+
+min: 668 
+
+ratio: 11.6 
+
+Step 1 
+
+180 190 200 210 220 230 
+
+5
+
+10 
+
+15 
+
+20 
+
+25 max: 230 
+
+min: 177.5 
+
+ratio: 1.3 
+
+Step 800 
+
+64 68 72 76 80 84 
+
+15 
+
+30 
+
+45 
+
+60 
+
+75 max: 84.4 
+
+min: 64.4 
+
+ratio: 1.3 
+
+Step 8000 
+
+68 72 76 80 84 
+
+15 
+
+30 
+
+45 
+
+60 
+
+75 
+
+max: 84.5 
+
+min: 66 
+
+ratio: 1.3 
+
+Step 15840 
+
+100 1K 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 
+
+> early_attn
+
+max: 933.4 
+
+min: 19.2 
+
+ratio: 48.5 
+
+10 
+
+5
+
+10 
+
+15 
+
+20 
+
+25 max: 48.7 
+
+min: 4.3 
+
+ratio: 11.3 
+
+3 6 9 12 15 18 
+
+6
+
+12 
+
+18 
+
+24 
+
+30 max: 17.2 
+
+min: 3.3 
+
+ratio: 5.3 
+
+6 9 12 15 18 
+
+6
+
+12 
+
+18 
+
+24 
+
+30 
+
+max: 17.2 
+
+min: 3.5 
+
+ratio: 5 
+
+100 1K 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 
+
+> early_mlp
+
+max: 860.6 
+
+min: 15.8 
+
+ratio: 54.3 
+
+8 16 24 32 40 48 
+
+5
+
+10 
+
+15 
+
+20 
+
+25 
+
+max: 45.7 
+
+min: 5.6 
+
+ratio: 8.1 
+
+1 10 
+
+20 
+
+40 
+
+60 
+
+80 
+
+100 
+
+max: 16.2 
+
+min: 0.89 
+
+ratio: 18.1 
+
+1 10 
+
+25 
+
+50 
+
+75 
+
+100 
+
+max: 16.2 
+
+min: 0.89 
+
+ratio: 18.3 
+
+100 1K 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 
+
+> middle_attn
+
+max: 875.4 
+
+min: 17.4 
+
+ratio: 50.4 
+
+10 
+
+4
+
+8
+
+12 
+
+16 
+
+20 max: 48.4 
+
+min: 3.7 
+
+ratio: 13.2 
+
+5 7.5 10 12.5 15 17.5 
+
+6
+
+12 
+
+18 
+
+24 
+
+30 
+
+max: 17.2 
+
+min: 4 
+
+ratio: 4.3 
+
+5 7.5 10 12.5 15 17.5 
+
+8
+
+16 
+
+24 
+
+32 
+
+max: 17.2 
+
+min: 4 
+
+ratio: 4.4 
+
+100 1K 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 
+
+> middle_mlp
+
+max: 901 
+
+min: 14.6 
+
+ratio: 61.6 
+
+10 
+
+4
+
+8
+
+12 
+
+16 
+
+20 
+
+max: 45 
+
+min: 4.5 
+
+ratio: 10 
+
+3 6 9 12 15 
+
+15 
+
+30 
+
+45 
+
+60 max: 16.2 
+
+min: 2.1 
+
+ratio: 7.6 
+
+3 6 9 12 15 18 
+
+15 
+
+30 
+
+45 
+
+60 
+
+max: 16.3 
+
+min: 2.2 
+
+ratio: 7.4 
+
+100 1K 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 
+
+> late_attn
+
+max: 825.5 
+
+min: 15.8 
+
+ratio: 52.4 
+
+10 
+
+4
+
+8
+
+12 
+
+16 
+
+20 
+
+max: 48.6 
+
+min: 2.6 
+
+ratio: 18.7 
+
+5 7.5 10 12.5 15 17.5 
+
+6
+
+12 
+
+18 
+
+24 
+
+30 
+
+max: 17.2 
+
+min: 4 
+
+ratio: 4.4 
+
+5 7.5 10 12.5 15 17.5 
+
+6
+
+12 
+
+18 
+
+24 
+
+30 
+
+max: 17.2 
+
+min: 4.3 
+
+ratio: 4 
+
+100 1K 
+
+Singular Value 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 
+
+> late_mlp
+
+max: 910.6 
+
+min: 14 
+
+ratio: 65.4 
+
+10 
+
+Singular Value 
+
+4
+
+8
+
+12 
+
+16 
+
+20 
+
+max: 45.8 
+
+min: 3.5 
+
+ratio: 13.3 
+
+5 7.5 10 12.5 15 17.5 
+
+Singular Value 
+
+8
+
+16 
+
+24 
+
+32 
+
+max: 16.2 
+
+min: 3.2 
+
+ratio: 5.1 
+
+5 7.5 10 12.5 15 
+
+Singular Value 
+
+8
+
+16 
+
+24 
+
+32 
+
+40 max: 16.1 
+
+min: 3.3 
+
+ratio: 5 Figure F.13: Singular value distribution of update matrices Uk = α clip sp 
+
+ck (UAdamW 
+
+k ) trained with Spectra-AdamW on the 124M-parameter model. We visualize the spectrum at four training stages (0%, 5%, 50%, and 99%) for representative layers across the network depth. Each panel reports the maximum and minimum singular values along with their ratio (condition number). The spectral norms of the update matrices exhibit hard ceilings and the condition numbers are small. 51 1.6K 1.7K 1.8K 1.8K 1.9K 2K 
+
+4
+
+8
+
+12 
+
+16 
+
+20 
+
+> embedding
+
+max: 2.0K 
+
+min: 1.6K 
+
+ratio: 1.3 
+
+Step 1 
+
+222 225 228 231 234 
+
+6
+
+12 
+
+18 
+
+24 
+
+30 
+
+max: 235.1 
+
+min: 220 
+
+ratio: 1 
+
+Step 800 
+
+80 84 88 92 
+
+25 
+
+50 
+
+75 
+
+100 
+
+125 
+
+max: 94.2 
+
+min: 77.7 
+
+ratio: 1.2 
+
+Step 8000 
+
+80 84 88 92 96 
+
+30 
+
+60 
+
+90 
+
+120 
+
+150 
+
+max: 98.3 
+
+min: 78.1 
+
+ratio: 1.3 
+
+Step 15840 
+
+40 60 80 100 120 
+
+5
+
+10 
+
+15 
+
+20 
+
+25 
+
+> early_attn
+
+max: 130.2 
+
+min: 35.2 
+
+ratio: 3.7 
+
+24 30 36 42 48 
+
+6
+
+12 
+
+18 
+
+24 
+
+30 
+
+max: 49.3 
+
+min: 21 
+
+ratio: 2.4 
+
+14.4 15.2 16 16.8 17.6 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 
+
+max: 17.7 
+
+min: 14 
+
+ratio: 1.3 
+
+14.4 15.2 16 16.8 17.6 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 
+
+max: 17.6 
+
+min: 13.9 
+
+ratio: 1.3 
+
+40 60 80 100 120 
+
+5
+
+10 
+
+15 
+
+20 
+
+25 
+
+> early_mlp
+
+max: 119.6 
+
+min: 28.6 
+
+ratio: 4.2 
+
+18 24 30 36 42 48 
+
+8
+
+16 
+
+24 
+
+32 
+
+40 max: 46.3 
+
+min: 18.7 
+
+ratio: 2.5 
+
+8 10 12 14 16 
+
+40 
+
+80 
+
+120 
+
+160 
+
+max: 16.5 
+
+min: 8.1 
+
+ratio: 2 
+
+8 10 12 14 16 
+
+40 
+
+80 
+
+120 
+
+160 
+
+max: 16.6 
+
+min: 7.8 
+
+ratio: 2.1 
+
+40 60 80 100 120 
+
+5
+
+10 
+
+15 
+
+20 
+
+> middle_attn
+
+max: 130.5 
+
+min: 35.6 
+
+ratio: 3.7 
+
+25 30 35 40 45 50 
+
+6
+
+12 
+
+18 
+
+24 
+
+30 
+
+max: 49.2 
+
+min: 22.7 
+
+ratio: 2.2 
+
+14.4 15 15.6 16.2 16.8 17.4 
+
+15 
+
+30 
+
+45 
+
+60 max: 17.4 
+
+min: 14.4 
+
+ratio: 1.2 
+
+14.4 15.2 16 16.8 17.6 
+
+15 
+
+30 
+
+45 
+
+60 max: 17.5 
+
+min: 14.2 
+
+ratio: 1.2 
+
+40 60 80 100 120 
+
+5
+
+10 
+
+15 
+
+20 
+
+25 
+
+> middle_mlp
+
+max: 118.2 
+
+min: 29 
+
+ratio: 4 
+
+20 25 30 35 40 45 
+
+6
+
+12 
+
+18 
+
+24 
+
+30 
+
+max: 45.8 
+
+min: 20.3 
+
+ratio: 2.3 
+
+12 12.8 13.6 14.4 15.2 16 
+
+20 
+
+40 
+
+60 
+
+80 
+
+max: 16.3 
+
+min: 12 
+
+ratio: 1.4 
+
+12.8 13.6 14.4 15.2 16 
+
+15 
+
+30 
+
+45 
+
+60 
+
+75 
+
+max: 16.3 
+
+min: 12.4 
+
+ratio: 1.3 
+
+40 60 80 100 120 
+
+5
+
+10 
+
+15 
+
+20 
+
+> late_attn
+
+max: 130.3 
+
+min: 35.6 
+
+ratio: 3.7 
+
+24 30 36 42 48 
+
+6
+
+12 
+
+18 
+
+24 
+
+30 max: 49.4 
+
+min: 21.4 
+
+ratio: 2.3 
+
+14.4 15 15.6 16.2 16.8 17.4 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 
+
+max: 17.3 
+
+min: 14.2 
+
+ratio: 1.2 
+
+14.4 15 15.6 16.2 16.8 17.4 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 
+
+max: 17.5 
+
+min: 14.4 
+
+ratio: 1.2 
+
+40 60 80 100 120 
+
+Singular Value 
+
+5
+
+10 
+
+15 
+
+20 
+
+25 
+
+> late_mlp
+
+max: 119.5 
+
+min: 28.8 
+
+ratio: 4.1 
+
+20 25 30 35 40 45 
+
+Singular Value 
+
+6
+
+12 
+
+18 
+
+24 
+
+30 
+
+max: 46.3 
+
+min: 19.6 
+
+ratio: 2.4 
+
+12.8 13.6 14.4 15.2 16 
+
+Singular Value 
+
+15 
+
+30 
+
+45 
+
+60 max: 16.3 
+
+min: 13 
+
+ratio: 1.3 
+
+13.2 13.8 14.4 15 15.6 16.2 
+
+Singular Value 
+
+15 
+
+30 
+
+45 
+
+60 max: 16.4 
+
+min: 13.1 
+
+ratio: 1.2 Figure F.14: Singular value distribution of update matrices Uk = α clip sp 
+
+ck (USignum 
+
+k ) trained with Spectra-Signum on the 124M-parameter model. We visualize the spectrum at four training stages (0%, 5%, 50%, and 99%) for representative layers across the network depth. Each panel reports the maximum and minimum singular values along with their ratio (condition number). The spectral norms of the update matrices exhibit hard ceilings and the condition numbers are small. 52 0.001 0.01 0.10 1 10 
+
+30 
+
+60 
+
+90 
+
+120 
+
+150 
+
+> embedding
+> (SV dist)
+
+ratio=19.52 
+
+Step 1 
+
+G all SVs 
+
+N top-5 SVs (n=50) 
+
+||G|| =0.79 
+
+max||N|| =15.4 
+
+0.001 0.01 0.10 1
+
+40 
+
+80 
+
+120 
+
+160 
+
+200 ratio=23.37 
+
+Step 800 
+
+G all SVs 
+
+N top-5 SVs (n=50) 
+
+||G|| =0.13 
+
+max||N|| =3.1 
+
+0.001 0.01 0.10 1
+
+40 
+
+80 
+
+120 
+
+160 
+
+200 ratio=47.83 
+
+Step 8000 
+
+G all SVs 
+
+N top-5 SVs (n=50) 
+
+||G|| =0.02 
+
+max||N|| =0.78 
+
+0.001 0.01 0.10 
+
+40 
+
+80 
+
+120 
+
+160 
+
+200 
+
+ratio=131.52 
+
+Step 15840 
+
+G all SVs 
+
+N top-5 SVs (n=50) 
+
+||G|| =0.005 
+
+max||N|| =0.62 
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 
+
+> (subspace dist)
+
+spec=1.000 
+
+chord=0.881 
+
+spectral 
+
+chordal 
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 spec=1.000 
+
+chord=0.957 
+
+spectral 
+
+chordal 
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 spec=1.000 
+
+chord=0.952 
+
+spectral 
+
+chordal 
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 spec=1.000 
+
+chord=0.955 
+
+spectral 
+
+chordal 
+
+0.0001 0.001 0.01 0.10 1 10 
+
+20 
+
+40 
+
+60 
+
+80 
+
+> early_attn
+> (SV dist)
+
+ratio=17.31 G all SVs 
+
+N top-5 SVs (n=50) 
+
+||G|| =0.51 
+
+max||N|| =8.9 
+
+0.0001 0.001 0.01 0.10 1
+
+25 
+
+50 
+
+75 
+
+100 
+
+125 ratio=12.63 G all SVs 
+
+N top-5 SVs (n=50) 
+
+||G|| =0.18 
+
+max||N|| =2.3 
+
+0.000001 0.00001 0.0001 0.001 0.01 0.10 
+
+15 
+
+30 
+
+45 
+
+60 
+
+75 
+
+ratio=42.50 G all SVs 
+
+N top-5 SVs (n=50) 
+
+||G|| =0.007 
+
+max||N|| =0.31 
+
+0.000001 0.00001 0.0001 0.001 0.01 0.10 
+
+20 
+
+40 
+
+60 
+
+80 
+
+ratio=118.06 G all SVs 
+
+N top-5 SVs (n=50) 
+
+||G|| =0.004 
+
+max||N|| =0.43 
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 
+
+> (subspace dist)
+
+spec=1.000 
+
+chord=0.849 
+
+spectral 
+
+chordal 
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 spec=1.000 
+
+chord=0.934 
+
+spectral 
+
+chordal 
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 spec=0.999 
+
+chord=0.937 
+
+spectral 
+
+chordal 
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 spec=0.999 
+
+chord=0.943 
+
+spectral 
+
+chordal 
+
+0.001 0.01 0.10 1
+
+20 
+
+40 
+
+60 
+
+80 
+
+100 
+
+> early_mlp
+> (SV dist)
+
+ratio=23.42 G all SVs 
+
+N top-5 SVs (n=50) 
+
+||G|| =0.20 
+
+max||N|| =4.6 
+
+0.001 0.01 0.10 
+
+25 
+
+50 
+
+75 
+
+100 
+
+125 ratio=22.60 G all SVs 
+
+N top-5 SVs (n=50) 
+
+||G|| =0.03 
+
+max||N|| =0.61 
+
+0.0001 0.001 0.01 0.10 
+
+30 
+
+60 
+
+90 
+
+120 
+
+150 ratio=104.49 G all SVs 
+
+N top-5 SVs (n=50) 
+
+||G|| =0.002 
+
+max||N|| =0.21 
+
+0.0001 0.001 0.01 0.10 
+
+30 
+
+60 
+
+90 
+
+120 
+
+150 ratio=169.84 G all SVs 
+
+N top-5 SVs (n=50) 
+
+||G|| =0.001 
+
+max||N|| =0.19 
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 
+
+> (subspace dist)
+
+spec=1.000 
+
+chord=0.976 
+
+spectral 
+
+chordal 
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 spec=1.000 
+
+chord=0.995 
+
+spectral 
+
+chordal 
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 spec=1.000 
+
+chord=0.997 
+
+spectral 
+
+chordal 
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 spec=1.000 
+
+chord=0.998 
+
+spectral 
+
+chordal 
+
+0.00001 0.0001 0.001 0.01 0.10 1
+
+Singular Value 
+
+15 
+
+30 
+
+45 
+
+60 
+
+75 
+
+> middle_attn
+> (SV dist)
+
+ratio=18.45 G all SVs 
+
+N top-5 SVs (n=50) 
+
+||G|| =0.19 
+
+max||N|| =3.6 
+
+0.00001 0.0001 0.001 0.01 0.10 1
+
+Singular Value 
+
+20 
+
+40 
+
+60 
+
+80 
+
+100 
+
+ratio=46.13 G all SVs 
+
+N top-5 SVs (n=50) 
+
+||G|| =0.02 
+
+max||N|| =1.1 
+
+0.00001 0.0001 0.001 0.01 0.10 
+
+Singular Value 
+
+25 
+
+50 
+
+75 
+
+100 
+
+125 ratio=25.87 G all SVs 
+
+N top-5 SVs (n=50) 
+
+||G|| =0.006 
+
+max||N|| =0.15 
+
+0.0001 0.001 0.01 0.10 
+
+Singular Value 
+
+25 
+
+50 
+
+75 
+
+100 
+
+125 
+
+ratio=46.46 G all SVs 
+
+N top-5 SVs (n=50) 
+
+||G|| =0.005 
+
+max||N|| =0.22 
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+Subspace Distance 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 
+
+> (subspace dist)
+
+spec=0.999 
+
+chord=0.759 
+
+spectral 
+
+chordal 
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+Subspace Distance 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 spec=0.999 
+
+chord=0.947 
+
+spectral 
+
+chordal 
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+Subspace Distance 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 spec=1.000 
+
+chord=0.958 
+
+spectral 
+
+chordal 
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+Subspace Distance 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 spec=1.000 
+
+chord=0.942 
+
+spectral 
+
+chordal Figure F.15: For each layer, we report the singular value distribution of large-batch gradient G (blue bar) and top-5 singular value distribution of the noise matrices {Ni}50 
+
+i=1 (red) in the first row. In the second row, we report the distribution of both the spectral and chordal subspace distances of the top-5 principal directions between the noise matrices and the large-batch signal. Results are shown for representative layers of the 124M model (AdamW) at four training stages 0%, 5%, 50%, and 99%. (Part 1) This confirms the presence of ”sparse spectral spikes” in the noise and indicates that the dominant noise spikes are nearly orthogonal to the principal directions of the true signal. 53 0.0001 0.001 0.01 0.10 1
+
+25 
+
+50 
+
+75 
+
+100 
+
+125 
+
+> middle_mlp
+> (SV dist)
+
+ratio=29.34 
+
+Step 1 
+
+G all SVs 
+
+N top-5 SVs (n=50) 
+
+||G|| =0.06 
+
+max||N|| =1.9 
+
+0.0001 0.001 0.01 0.10 
+
+20 
+
+40 
+
+60 
+
+80 
+
+100 ratio=30.21 
+
+Step 800 
+
+G all SVs 
+
+N top-5 SVs (n=50) 
+
+||G|| =0.007 
+
+max||N|| =0.20 
+
+0.0001 0.001 0.01 0.10 
+
+30 
+
+60 
+
+90 
+
+120 
+
+150 ratio=162.23 
+
+Step 8000 
+
+G all SVs 
+
+N top-5 SVs (n=50) 
+
+||G|| =0.0010 
+
+max||N|| =0.16 
+
+0.0001 0.001 0.01 0.10 
+
+30 
+
+60 
+
+90 
+
+120 
+
+150 
+
+ratio=244.16 
+
+Step 15840 
+
+G all SVs 
+
+N top-5 SVs (n=50) 
+
+||G|| =0.0008 
+
+max||N|| =0.19 
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 
+
+> (subspace dist)
+
+spec=1.000 
+
+chord=0.895 
+
+spectral 
+
+chordal 
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 spec=1.000 
+
+chord=0.995 
+
+spectral 
+
+chordal 
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 spec=1.000 
+
+chord=0.998 
+
+spectral 
+
+chordal 
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 spec=1.000 
+
+chord=0.998 
+
+spectral 
+
+chordal 
+
+0.00001 0.0001 0.001 0.01 0.10 1
+
+20 
+
+40 
+
+60 
+
+80 
+
+> late_attn
+> (SV dist)
+
+ratio=27.24 G all SVs 
+
+N top-5 SVs (n=50) 
+
+||G|| =0.14 
+
+max||N|| =3.9 
+
+0.00001 0.0001 0.001 0.01 0.10 
+
+20 
+
+40 
+
+60 
+
+80 
+
+100 ratio=7.69 G all SVs 
+
+N top-5 SVs (n=50) 
+
+||G|| =0.03 
+
+max||N|| =0.20 
+
+0.0001 0.001 0.01 0.10 
+
+25 
+
+50 
+
+75 
+
+100 
+
+125 
+
+ratio=30.56 G all SVs 
+
+N top-5 SVs (n=50) 
+
+||G|| =0.004 
+
+max||N|| =0.13 
+
+0.0001 0.001 0.01 0.10 
+
+25 
+
+50 
+
+75 
+
+100 
+
+125 
+
+ratio=72.46 G all SVs 
+
+N top-5 SVs (n=50) 
+
+||G|| =0.002 
+
+max||N|| =0.17 
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 
+
+> (subspace dist)
+
+spec=0.999 
+
+chord=0.760 
+
+spectral 
+
+chordal 
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 spec=0.999 
+
+chord=0.949 
+
+spectral 
+
+chordal 
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 spec=1.000 
+
+chord=0.976 
+
+spectral 
+
+chordal 
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 spec=1.000 
+
+chord=0.971 
+
+spectral 
+
+chordal 
+
+0.0001 0.001 0.01 0.10 1
+
+Singular Value 
+
+25 
+
+50 
+
+75 
+
+100 
+
+125 
+
+> late_mlp
+> (SV dist)
+
+ratio=30.25 G all SVs 
+
+N top-5 SVs (n=50) 
+
+||G|| =0.06 
+
+max||N|| =1.7 
+
+0.00001 0.0001 0.001 0.01 0.10 
+
+Singular Value 
+
+20 
+
+40 
+
+60 
+
+80 
+
+100 ratio=20.02 G all SVs 
+
+N top-5 SVs (n=50) 
+
+||G|| =0.01 
+
+max||N|| =0.23 
+
+0.0001 0.001 0.01 0.10 
+
+Singular Value 
+
+30 
+
+60 
+
+90 
+
+120 
+
+150 ratio=60.59 G all SVs 
+
+N top-5 SVs (n=50) 
+
+||G|| =0.003 
+
+max||N|| =0.18 
+
+0.0001 0.001 0.01 0.10 
+
+Singular Value 
+
+30 
+
+60 
+
+90 
+
+120 
+
+150 
+
+ratio=197.79 G all SVs 
+
+N top-5 SVs (n=50) 
+
+||G|| =0.002 
+
+max||N|| =0.31 
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+Subspace Distance 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 
+
+> (subspace dist)
+
+spec=1.000 
+
+chord=0.854 
+
+spectral 
+
+chordal 
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+Subspace Distance 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 spec=1.000 
+
+chord=0.950 
+
+spectral 
+
+chordal 
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+Subspace Distance 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 spec=1.000 
+
+chord=0.935 
+
+spectral 
+
+chordal 
+
+0.0 0.2 0.4 0.6 0.8 1.0 
+
+Subspace Distance 
+
+10 
+
+20 
+
+30 
+
+40 
+
+50 spec=1.000 
+
+chord=0.942 
+
+spectral 
+
+chordal Figure F.16: Part 2 of Figure F.15. We observe a consistent phenomenon as in part 1. 54
