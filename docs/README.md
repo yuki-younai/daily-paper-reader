@@ -6,81 +6,100 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-03-22
-- 运行时间：2026-03-22 19:31:04 UTC
+- 最新运行日期：2026-03-23
+- 运行时间：2026-03-23 19:42:39 UTC
 - 运行状态：成功
-- 本次总论文数：20
-- 精读区：9
+- 本次总论文数：26
+- 精读区：15
 - 速读区：11
 
 ### 今日简报（AI）
-今日深挖 20 篇前沿成果，聚焦扩散大语言模型优化与智能体统一视觉环境的重大突破。
-满分论文 dTRPO 通过轨迹缩减革新了扩散 LLM
-- 详情：[/202603/22/README](/202603/22/README)
+今日深度解析 26 篇 AI 论文，聚焦 LLM 深度推理优化与后训练性能极限的突破。
+重点关注 FIPO 算法对复杂推理能力的诱导，以及马尔可夫状态在打破大模型能力天花板中的关键作用。
+建议从 VLA 模型的指令增强和智能体记忆机制入手，探索多模态具身智能与强化学习的最新融合趋势。
+- 详情：[/202603/23/README](/202603/23/README)
 
 ### 精读区论文标签
-1. [dTRPO: Trajectory Reduction in Policy Optimization of Diffusion Large Language Models](/202603/22/2603.18806v1-dtrpo-trajectory-reduction-in-policy-optimization-of-diffusion-large-language-models)  
+1. [FIPO: Eliciting Deep Reasoning with Future-KL Influenced Policy Optimization](/202603/23/2603.19835v1-fipo-eliciting-deep-reasoning-with-future-kl-influenced-policy-optimization)  
    标签：评分：10.0/10、query:rlaif
-   evidence：扩散语言模型的策略优化与对齐
-2. [Gym-V: A Unified Vision Environment System for Agentic Vision Research](/202603/22/2603.15432v1-gym-v-a-unified-vision-environment-system-for-agentic-vision-research)  
+   evidence：大模型深度推理的策略优化
+2. [Breaking the Capability Ceiling of LLM Post-Training by Reintroducing Markov States](/202603/23/2603.19987v1-breaking-the-capability-ceiling-of-llm-post-training-by-reintroducing-markov-states)  
+   标签：评分：10.0/10、query:rlaif
+   evidence：在大模型后训练强化学习中重新引入马尔可夫状态
+3. [Experience is the Best Teacher: Motivating Effective Exploration in Reinforcement Learning for LLMs](/202603/23/2603.20046v1-experience-is-the-best-teacher-motivating-effective-exploration-in-reinforcement-learning-for-llms)  
+   标签：评分：10.0/10、query:rlaif
+   evidence：利用后验经验进行大模型推理强化学习
+4. [Gym-V: A Unified Vision Environment System for Agentic Vision Research](/202603/23/2603.15432v2-gym-v-a-unified-vision-environment-system-for-agentic-vision-research)  
    标签：评分：9.0/10、query:rlaif
-   evidence：用于智能体强化学习的统一视觉环境
-3. [From Passive Observer to Active Critic: Reinforcement Learning Elicits Process Reasoning for Robotic Manipulation](/202603/22/2603.15600v1-from-passive-observer-to-active-critic-reinforcement-learning-elicits-process-reasoning-for-robotic-manipulation)  
+   evidence：用于强化学习智能体视觉研究的统一视觉环境系统
+5. [AcceRL: A Distributed Asynchronous Reinforcement Learning and World Model Framework for Vision-Language-Action Models](/202603/23/2603.18464v2-accerl-a-distributed-asynchronous-reinforcement-learning-and-world-model-framework-for-vision-language-action-models)  
    标签：评分：9.0/10、query:rlaif
-   evidence：用于机器人操作的视频多模态大模型强化学习
-4. [TRUST-SQL: Tool-Integrated Multi-Turn Reinforcement Learning for Text-to-SQL over Unknown Schemas](/202603/22/2603.16448v1-trust-sql-tool-integrated-multi-turn-reinforcement-learning-for-text-to-sql-over-unknown-schemas)  
+   evidence：视觉-语言-动作模型与世界模型的强化学习
+6. [Balancing the Reasoning Load: Difficulty-Differentiated Policy Optimization with Length Redistribution for Efficient and Robust Reinforcement Learning](/202603/23/2603.18533v2-balancing-the-reasoning-load-difficulty-differentiated-policy-optimization-with-length-redistribution-for-efficient-and-robust-reinforcement-learning)  
    标签：评分：9.0/10、query:rlaif
-   evidence：用于Text-to-SQL自主智能体的多轮强化学习
-5. [Interpreting Context-Aware Human Preferences for Multi-Objective Robot Navigation](/202603/22/2603.17510v1-interpreting-context-aware-human-preferences-for-multi-objective-robot-navigation)  
+   evidence：针对大推理模型处理复杂任务的策略优化
+7. [Do Post-Training Algorithms Actually Differ? A Controlled Study Across Model Scales Uncovers Scale-Dependent Ranking Inversions](/202603/23/2603.19335v1-do-post-training-algorithms-actually-differ-a-controlled-study-across-model-scales-uncovers-scale-dependent-ranking-inversions)  
    标签：评分：9.0/10、query:rlaif
-   evidence：基于视觉语言模型的机器人智能体多目标强化学习
-6. [VC-Soup: Value-Consistency Guided Multi-Value Alignment for Large Language Models](/202603/22/2603.18113v1-vc-soup-value-consistency-guided-multi-value-alignment-for-large-language-models)  
+   evidence：后训练对齐算法的受控研究
+8. [Adaptive Layerwise Perturbation: Unifying Off-Policy Corrections for LLM RL](/202603/23/2603.19470v1-adaptive-layerwise-perturbation-unifying-off-policy-corrections-for-llm-rl)  
    标签：评分：9.0/10、query:rlaif
-   evidence：利用奖励重加权和模型合并进行大语言模型多价值对齐
-7. [VLM-AutoDrive: Post-Training Vision-Language Models for Safety-Critical Autonomous Driving Events](/202603/22/2603.18178v1-vlm-autodrive-post-training-vision-language-models-for-safety-critical-autonomous-driving-events)  
+   evidence：使用层级扰动统一LLM强化学习的离策修正
+9. [Teaching an Agent to Sketch One Part at a Time](/202603/23/2603.19500v1-teaching-an-agent-to-sketch-one-part-at-a-time)  
    标签：评分：9.0/10、query:rlaif
-   evidence：视觉语言模型的后训练领域对齐
-8. [Balancing the Reasoning Load: Difficulty-Differentiated Policy Optimization with Length Redistribution for Efficient and Robust Reinforcement Learning](/202603/22/2603.18533v1-balancing-the-reasoning-load-difficulty-differentiated-policy-optimization-with-length-redistribution-for-efficient-and-robust-reinforcement-learning)  
+   evidence：多模态语言模型智能体的多轮过程奖励强化学习
+10. [A Subgoal-driven Framework for Improving Long-Horizon LLM Agents](/202603/23/2603.19685v1-a-subgoal-driven-framework-for-improving-long-horizon-llm-agents)  
    标签：评分：9.0/10、query:rlaif
-   evidence：推理模型高效强化学习的策略优化
-9. [OS-Themis: A Scalable Critic Framework for Generalist GUI Rewards](/202603/22/2603.19191v1-os-themis-a-scalable-critic-framework-for-generalist-gui-rewards)  
+   evidence：自主LLM智能体的强化学习微调
+11. [LoopRPT: Reinforcement Pre-Training for Looped Language Models](/202603/23/2603.19714v1-looprpt-reinforcement-pre-training-for-looped-language-models)  
    标签：评分：9.0/10、query:rlaif
-   evidence：随机环境下使用强化学习的GUI智能体评论家框架
+   evidence：针对语言模型潜空间推理步骤的强化信号
+12. [FedPDPO: Federated Personalized Direct Preference Optimization for Large Language Model Alignment](/202603/23/2603.19741v1-fedpdpo-federated-personalized-direct-preference-optimization-for-large-language-model-alignment)  
+   标签：评分：9.0/10、query:rlaif
+   evidence：大模型对齐的联邦偏好优化
+13. [Enhancing Alignment for Unified Multimodal Models via Semantically-Grounded Supervision](/202603/23/2603.19807v1-enhancing-alignment-for-unified-multimodal-models-via-semantically-grounded-supervision)  
+   标签：评分：9.0/10、query:rlaif
+   evidence：统一多模态模型对齐的微调框架
+14. [What If Consensus Lies? Selective-Complementary Reinforcement Learning at Test Time](/202603/23/2603.19880v1-what-if-consensus-lies-selective-complementary-reinforcement-learning-at-test-time)  
+   标签：评分：9.0/10、query:rlaif
+   evidence：用于提升大语言模型推理能力的测试时强化学习
+15. [Chain-of-Adaptation: Surgical Vision-Language Adaptation with Reinforcement Learning](/202603/23/2603.20116v1-chain-of-adaptation-surgical-vision-language-adaptation-with-reinforcement-learning)  
+   标签：评分：9.0/10、query:rlaif
+   evidence：利用强化学习进行视觉语言适配与领域对齐
 
 ### 速读区论文标签
-1. [ToolTree: Efficient LLM Agent Tool Planning via Dual-Feedback Monte Carlo Tree Search and Bidirectional Pruning](/202603/22/2603.12740v1-tooltree-efficient-llm-agent-tool-planning-via-dual-feedback-monte-carlo-tree-search-and-bidirectional-pruning)  
+1. [D-MEM: Dopamine-Gated Agentic Memory via Reward Prediction Error Routing](/202603/23/2603.14597v1-d-mem-dopamine-gated-agentic-memory-via-reward-prediction-error-routing)  
    标签：评分：8.0/10、query:rlaif
-   evidence：大模型智能体工具规划与多步任务交互
-2. [OARS: Process-Aware Online Alignment for Generative Real-World Image Super-Resolution](/202603/22/2603.12811v1-oars-process-aware-online-alignment-for-generative-real-world-image-super-resolution)  
+   evidence：自主大模型智能体的智能记忆系统
+2. [Delightful Policy Gradient](/202603/23/2603.14608v1-delightful-policy-gradient)  
    标签：评分：8.0/10、query:rlaif
-   evidence：基于多模态大模型的跨模态对齐奖励
-3. [Fine-tuning is Not Enough: A Parallel Framework for Collaborative Imitation and Reinforcement Learning in End-to-end Autonomous Driving](/202603/22/2603.13842v1-fine-tuning-is-not-enough-a-parallel-framework-for-collaborative-imitation-and-reinforcement-learning-in-end-to-end-autonomous-driving)  
+   evidence：新型策略梯度加权方法
+3. [Enhancing Linguistic Generalization of VLA: Fine-Tuning OpenVLA via Synthetic Instruction Augmentation](/202603/23/2603.16044v1-enhancing-linguistic-generalization-of-vla-fine-tuning-openvla-via-synthetic-instruction-augmentation)  
    标签：评分：8.0/10、query:rlaif
-   evidence：用于自动驾驶智能体的协作强化学习
-4. [Fine-tuning MLLMs Without Forgetting Is Easier Than You Think](/202603/22/2603.14493v1-fine-tuning-mllms-without-forgetting-is-easier-than-you-think)  
+   evidence：微调视觉-语言-动作（VLA）模型以增强具身智能中的语言泛化能力
+4. [Communication-Aware Multi-Agent Reinforcement Learning for Decentralized Cooperative UAV Deployment](/202603/23/2603.16141v1-communication-aware-multi-agent-reinforcement-learning-for-decentralized-cooperative-uav-deployment)  
    标签：评分：8.0/10、query:rlaif
-   evidence：多模态大语言模型微调方案以减轻遗忘
-5. [Chunk-Guided Q-Learning](/202603/22/2603.13971v1-chunk-guided-q-learning)  
+   evidence：自主无人机智能体的多智能体强化学习
+5. [Diffusion Reinforcement Learning via Centered Reward Distillation](/202603/23/2603.14128v1-diffusion-reinforcement-learning-via-centered-reward-distillation)  
    标签：评分：7.0/10、query:rlaif
-   evidence：用于序列决策的离线强化学习
-6. [Exposing Long-Tail Safety Failures in Large Language Models through Efficient Diverse Response Sampling](/202603/22/2603.14355v1-exposing-long-tail-safety-failures-in-large-language-models-through-efficient-diverse-response-sampling)  
+   evidence：通过奖励蒸馏对生成模型进行强化学习微调
+6. [Nudging Hidden States: Training-Free Model Steering for Chain-of-Thought Reasoning in Large Audio-Language Models](/202603/23/2603.14636v1-nudging-hidden-states-training-free-model-steering-for-chain-of-thought-reasoning-in-large-audio-language-models)  
    标签：评分：7.0/10、query:rlaif
-   evidence：通过人类反馈强化学习进行安全微调
-7. [POLCA: Stochastic Generative Optimization with LLM](/202603/22/2603.14769v1-polca-stochastic-generative-optimization-with-llm)  
+   evidence：大型音频语言模型中的跨模态迁移
+7. [Interference-Aware K-Step Reachable Communication in Multi-Agent Reinforcement Learning](/202603/23/2603.15054v1-interference-aware-k-step-reachable-communication-in-multi-agent-reinforcement-learning)  
    标签：评分：7.0/10、query:rlaif
-   evidence：针对大模型提示词和多轮智能体的随机生成优化
-8. [Brain-Inspired Graph Multi-Agent Systems for LLM Reasoning](/202603/22/2603.15371v1-brain-inspired-graph-multi-agent-systems-for-llm-reasoning)  
+   evidence：用于协作任务和通信的多智能体强化学习
+8. [Emergent Dexterity via Diverse Resets and Large-Scale Reinforcement Learning](/202603/23/2603.15789v1-emergent-dexterity-via-diverse-resets-and-large-scale-reinforcement-learning)  
    标签：评分：7.0/10、query:rlaif
-   evidence：用于大语言模型推理的多智能体系统
-9. [GoldenStart: Q-Guided Priors and Entropy Control for Distilling Flow Policies](/202603/22/2603.14245v1-goldenstart-q-guided-priors-and-entropy-control-for-distilling-flow-policies)  
+   evidence：用于自主机器人智能体的大规模强化学习
+9. [Sample-Efficient Hypergradient Estimation for Decentralized Bi-Level Reinforcement Learning](/202603/23/2603.14867v1-sample-efficient-hypergradient-estimation-for-decentralized-bi-level-reinforcement-learning)  
    标签：评分：6.0/10、query:rlaif
-   evidence：强化学习中的策略蒸馏与熵控制
-10. [Enhancing LLM Training via Spectral Clipping](/202603/22/2603.14315v1-enhancing-llm-training-via-spectral-clipping)  
+   evidence：用于战略决策智能体的双层强化学习
+10. [Iterative Learning Control-Informed Reinforcement Learning for Batch Process Control](/202603/23/2603.15180v1-iterative-learning-control-informed-reinforcement-learning-for-batch-process-control)  
    标签：评分：6.0/10、query:rlaif
-   evidence：大语言模型训练稳定性的优化技术
-11. [Towards Next-Generation LLM Training: From the Data-Centric Perspective](/202603/22/2603.14712v1-towards-next-generation-llm-training-from-the-data-centric-perspective)  
+   evidence：控制律的迭代优化
+11. [Beyond the Covariance Trap: Unlocking Generalization in Same-Subject Knowledge Editing for Large Language Models](/202603/23/2603.15518v1-beyond-the-covariance-trap-unlocking-generalization-in-same-subject-knowledge-editing-for-large-language-models)  
    标签：评分：6.0/10、query:rlaif
-   evidence：基于智能体的大模型训练数据准备
+   evidence：大语言模型的后训练知识编辑与泛化
 
 
 <div class="dpr-home-promo-card">
