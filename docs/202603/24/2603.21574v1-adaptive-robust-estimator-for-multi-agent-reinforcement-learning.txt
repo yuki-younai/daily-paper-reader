@@ -1,0 +1,2449 @@
+Title: Adaptive Robust Estimator for Multi-Agent Reinforcement Learning
+
+URL Source: https://arxiv.org/pdf/2603.21574v1
+
+Published Time: Tue, 24 Mar 2026 02:40:14 GMT
+
+Number of Pages: 29
+
+Markdown Content:
+# Adaptive Robust Estimator for Multi-Agent Reinforcement Learning 
+
+Zhongyi Li * 1 Wan Tian * 2 Jingyu Chen 3 Kangyao Huang 4 Huiming Zhang 1 Hui Yang 2 Tao Ren 2
+
+Jinyang Jiang 2 Yijie Peng † 2 Yikun Ban † 1 Fuzhen Zhuang † 1
+
+## Abstract 
+
+Multi-agent collaboration has emerged as a pow-erful paradigm for enhancing the reasoning ca-pabilities of large language models, yet it suf-fers from interaction-level ambiguity that blurs generation, critique, and revision, making credit assignment across agents difficult. Moreover, policy optimization in this setting is vulnerable to heavy-tailed and noisy rewards, which can bias advantage estimation and trigger unstable or even divergent training. To address both is-sues, we propose a robust multi-agent reinforce-ment learning framework for collaborative rea-soning, consisting of two components: Dual-Agent Answer–Critique–Rewrite (DACR) and an Adaptive Robust Estimator (ARE). DACR de-composes reasoning into a structured three-stage pipeline—answer, critique, and rewrite—while enabling explicit attribution of each agent’s marginal contribution to its partner’s performance. ARE provides robust estimation of batch experi-ence means during multi-agent policy optimiza-tion. Across mathematical reasoning and embod-ied intelligence benchmarks, even under noisy rewards, our method consistently outperforms the baseline in both homogeneous and heterogeneous settings. These results indicate stronger robust-ness to reward noise and more stable training dy-namics, effectively preventing optimization fail-ures caused by noisy reward signals. Our code is available at https://github.com/bhai114/ARE. 
+
+## 1. Introduction 
+
+Large language models (LLMs) have achieved impressive performance on mathematical and logical reasoning tasks (Zhang et al., 2026; Yang et al., 2026; Liu et al., 2025a; 
+
+> *
+
+Equal contribution 
+
+> †
+
+Corresponding authors 1Beihang University 2Peking University 
+
+> 3
+
+Chinese Academy of Sciences 4Tsinghua University. Correspon-dence to: Yijie Peng <> , Yikun Ban <> , Fuzhen Zhuang <> .
+
+Preprint. March 24, 2026. 
+
+Wang et al., 2025; Liu et al., 2025c; Huang et al., 2026a). In this line of work, reinforcement learning (RL) has emerged as an increasingly common approach, providing a com-pelling alternative to supervised imitation learning (Ren et al., 2025; Shao et al., 2025; Zou et al., 2025). In parallel, multi-agent collaboration has emerged as a practical way to mitigate single-agent limitations such as confirmation bias and weak self-critique: pairing complementary roles (e.g., solver vs. evaluator) or aggregating multiple attempts can surface hidden errors and improve reliability (Wan et al., 2025; Lin et al., 2025; Liao et al., 2025; Chen et al., 2025c). These trends naturally motivate training collaborative LLM systems via multi-agent reinforcement learning (MARL). However, in practice, policy optimization for multi-agent reasoning is often brittle, and stability issues can dominate the training dynamics. A major source of brittleness is the reward signal . Rea-soning rewards are frequently produced by verifiers, re-ward models, or heuristic graders, and can be noisy, bi-ased, and heavy-tailed, with occasional extreme outliers (Figure 1). Standard GRPO (Group Relative Policy Opti-mization) (Shao et al., 2024) normalizes rewards using the batch empirical mean and variance. Under heavy-tailed or contaminated rewards, a small number of anomalous sam-ples can significantly skew batch statistics, distort advantage scaling, and trigger oscillatory updates or even training di-vergence (Yang et al., 2026). This issue becomes more pronounced in multi-agent settings, where interaction can introduce additional variability and non-stationarity into the return distribution (Wang & Xu, 2025; Huang et al., 2026b). To address these two challenges, we propose a robust MARL framework that stabilizes policy optimization under noisy, heavy-tailed rewards. The framework consists of two com-ponents. First, DACR is an interaction protocol that decom-poses collaboration into explicit stages: each agent produces an initial answer, critiques its partner’s answer, and then rewrites its own solution conditioned on the critique. This structure decouples generation from evaluation and yields richer training trajectories than unstructured dialogues. We further adopt a lightweight cross-stage reward design to encourage effective interaction, without requiring complex credit assignment. Second, ARE is an adaptive robust es-timator for MARL policy optimization. It replaces fragile 1         
+
+> arXiv:2603.21574v1 [cs.AI] 23 Mar 2026 Adaptive Robust Estimator for Multi-Agent Reinforcement Learning 010 20
+> Reward Value
+> 0.00
+> 0.05
+> 0.10
+> 0.15
+> Density
+> Distribution
+> -0.1 0.0 0.1
+> t
+> 1
+> 2
+> MX(t)
+> MGF
+> 010 20
+> Reward Value
+> 0.00
+> 0.05
+> 0.10
+> 0.15
+> Density
+> Distribution
+> -0.1 0.0 0.1
+> t
+> 1
+> 2
+> MX(t)
+> MGF
+> Figure 1. The scoring results of the reward model. We randomly selected questions and answers from the MATH500 and Gaokao2023 datasets, and then used the large model to generate the answers. The first and third figures show the scoring results of the reward model for the answers generated by the large model. The second and fourth figures are the corresponding moment generating functions. It can be seen that the data distribution of the scoring by the reward model is biased.
+
+batch-mean normalization of experience returns with a ro-bust, adaptive location estimator, thereby improving training stability in the presence of outliers. We evaluate the effectiveness of our framework on math-ematical reasoning benchmarks, using both homogeneous and heterogeneous agent pairs across model families and scales. We further demonstrate the generality of ARE be-yond language reasoning by applying it to an aerial vision-and-language navigation (VLN) task. Across both tasks, our approach consistently improves performance over GRPO-based baselines. Overall, our contributions are: • We introduce DACR, a structured collaboration proto-col with a cross-improvement reward that attributes each agent’s contribution to its collaborator’s reasoning quality, enabling more interpretable and learnable credit assign-ment. • We propose ARE, which replaces GRPO’s fragile batch-mean advantage normalization with a robust estimator, mitigating instability in advantage estimation under noisy and heavy-tailed rewards. • We systematically evaluate both homogeneous and hetero-geneous multi-agent systems on large-scale mathematical reasoning benchmarks, demonstrating consistent improve-ments over single-agent and multi-agent baselines in ac-curacy, stability, and generalization. • We further validate ARE in an embodied aerial VLN set-ting with a Qwen2-VL-2B VLM, achieving higher train-ing rewards and improved NE/SR/OSR/SPL across all splits, with the largest gains on unseen environments. 
+
+## 2. Methodology 
+
+In this section, we present our robust MARL framework, which consists of two components: DACR and ARE. DACR centers on a structured interaction protocol that facilitates collaborative error detection, while ARE provides a robust optimization procedure that mitigates the heavy-tailed re-wards inherent to multi-agent settings. 
+
+2.1. Dual-Agent Reasoning Interaction Protocol 
+
+In this section, we introduce DACR, whose workflow is illustrated in the left panel of Figure 2. DACR decouples the reasoning process into a dual-agent system in which two policies, πθ 
+
+> 1
+
+and πϕ 
+
+> 2
+
+, alternate between generative and evaluative roles. Given a problem q, the interaction proceeds through a structured three-stage trajectory: 1. Independent Answering: Both agents generate initial reasoning chains and answers: a1 ∼ π1(q) and a2 ∼
+
+π2(q).2. Mutual Critique: Agents swap their answers. Agent 1 generates a critique identifying potential errors in a2
+
+(c1 ∼ π1(q, a 2)), while Agent 2 critiques a1 (c2 ∼
+
+π2(q, a 1)). 3. Revision: Each agent produces a refined answer ri
+
+by conditioning on the peer feedback received: r1 ∼
+
+π1(q, a 1, d 2) and r2 ∼ π2(q, a 2, c 1).This protocol ensures that evaluation signals are external to the original reasoning trace, providing a more objective and adversarial diagnostic environment for solving complex problems. 
+
+2.2. Cross-Evaluation Reward Mechanism 
+
+In this section, we describe the multi-agent reward design for DACR, as illustrated in the middle panel of Figure 2. To optimize DACR, we move beyond binary correctness and adopt a lightweight reward mechanism that supports fine-grained credit attribution. Let S( y, q ) denote a scoring function that assesses the logical and numerical validity of a response y to problem q.For each agent i ∈ { 1, 2}, we assign stage-wise rewards for the answering and rewriting phases: 
+
+Rans ,i = S( ai, q ), Rrw ,i = S( ri, q ).
+
+Crucially, we introduce a cross-improvement term ∆i that credits an agent when its critique leads to a measurable 2Adaptive Robust Estimator for Multi-Agent Reinforcement Learning Answer( �1) 
+
+> Critiqu e( �1)
+> Critiqu e( �2)
+> Answe r( �2)
+> Rewrite( �1)Rewrite( �2)
+
+Trajectory Batch 
+
+DACR Interaction Protocol Cross-Evaluation Reward Mechanism 
+
+Agent1 Reward   
+
+> Base Score ��1
+> Critique Utility ��1
+
+Agent2 Reward   
+
+> Base Score ��2
+> Critique Utility ��2
+
+∑
+
+∑
+
+Robust Policy Optimization 
+
+Adaptive Robust Estimator   
+
+> Noisy
+> Distribution
+> ARE Filter
+> (Adaptive Loss �)
+> Robust Estimate ��
+
+Robust Advantage 
+
+�� 
+
+> ARE
+
+= �� 
+
+> tot
+
+− ��
+
+��
+
+Figure 2. The proposed DACR interaction framework. Two agents, π1 and π2, act as both solvers and peer-evaluators. The reward mechanism attributes credit based on standalone accuracy and the marginal improvement induced in the partner’s revised solution. 
+
+improvement in its partner’s rewritten answer: 
+
+∆1 = Rrw ,2 − Rans ,2, ∆2 = Rrw ,1 − Rans ,1.
+
+The total return for agent i is then 
+
+Rtotal  
+
+> i
+
+= Rrw ,i + γ ∆i,
+
+where γ > 0 trades off individual solution quality against collaborative utility. This objective encourages agents to provide actionable critiques while maintaining high stan-dards for their own final answers. 
+
+2.3. Robust Multi-Agent Policy Optimization 
+
+In this section, we instantiate ARE (introduced in Section 3) for robust multi-agent policy optimization. The key idea is to stabilize advantage estimation by replacing the fragile batch mean with our proposed ARE-based location esti-mator. Given a batch of returns {Rk}Bk=1 , we compute a robust location estimate ˜μB using ARE. The resulting robust advantage is defined as 
+
+AARE  
+
+> k
+
+= Rtotal  
+
+> k
+
+− ˜μB
+
+σB + ϵ .
+
+Each agent is then optimized by maximizing the clipped surrogate objective 
+
+L(θ) = E
+
+h
+
+min  η A ARE , clip (η, 1 − ϵ, 1 + ϵ) AARE i
+
+− β DKL (πθ ∥ πref ),
+
+where η denotes the importance sampling ratio. By anchor-ing advantage estimation at a robust center, robust policy optimization suppresses gradient spikes induced by outlier rewards, yielding more stable convergence in challenging multi-agent reasoning landscapes. 
+
+## 3. Adaptive Robust Estimator 
+
+In this section, we introduce our proposed ARE method, which can be viewed as a principled refinement of the classi-cal Median-of-Means (MoM) estimator (Sun, 2021). MoM partitions samples into blocks, computes a mean within each block, and aggregates the blockwise estimates via a median, providing robustness to heavy tails and a minority of corrupted blocks (see Appendix B for details). However, MoM enforces robustness only at the aggregation stage: each blockwise estimate is still a sample mean and thus re-mains sensitive to within-block outliers. ARE addresses this weakness by replacing the blockwise mean with a robust estimator obtained by minimizing an adaptive loss (Barron, 2019), thereby enforcing robustness at both intra-block and inter-block levels and improving stability under heavy-tailed contamination. We defer the adaptive loss definition and its optimization properties to Appendix D. Specifically, following the MoM template, we partition the samples X1, . . . , X n into k disjoint blocks B1, . . . , B k. For each block, we compute a robust location estimate by mini-mizing the adaptive loss: 
+
+eXj ∈ arg min 
+
+> x∈R
+
+1
+
+|Bj |
+
+X
+
+> i∈Bj
+
+ρ Xi − x; α, c , j = 1 , . . . , k. 
+
+(1) We then define ARE as the median of these blockwise esti-mates: 
+
+eμ = median( eX1, . . . , eXk). (2) The main computational challenge is solving (1) , since 
+
+ρ(·; α, c ) can be nonconvex and involves robustness param-eters (α, c ). Without loss of generality, consider a single 3Adaptive Robust Estimator for Multi-Agent Reinforcement Learning 
+
+block of size m:
+
+eX ∈ arg min 
+
+> x∈R
+
+1
+
+m
+
+> m
+
+X
+
+> i=1
+
+ρ Xi − x; α, c . (3) Tuning (α, c ) via cross-validation or Lepski’s method is computationally prohibitive, especially in multi-agent set-tings. We therefore use alternating optimization: initial-ize eX(0) and (α(0) , c (0) ) (e.g., eX(0) as the sample median, 
+
+α(0) = 1 , c(0) = 1 ), and iterate 
+
+α(t+1) , c (t+1) = arg min 
+
+> α∈(−∞ ,2] , c> 0
+
+1
+
+m
+
+> m
+
+X
+
+> i=1
+
+ρ Xi − eX(t); α, c ,
+
+(4) 
+
+eX(t+1) = arg min 
+
+> x∈R
+
+1
+
+m
+
+> m
+
+X
+
+> i=1
+
+ρ Xi − x; α(t+1) , c (t+1) ,
+
+(5) until convergence. Section 4 details efficient solvers for (4) and (5). 
+
+## 4. Optimization Perspective 
+
+In this section, we outline tailored solution procedures for the nonconvex subproblems (4) and (5), respectively. 
+
+4.1. Estimation of Robust and Scale Parameters 
+
+Prior to estimating the adaptive loss parameters, we first de-rive the following key insight by differentiating the adaptive loss with respect to α.
+
+Lemma 4.1. Fix ϵ ∈ R and c > 0. For α̸ = 0 , 2. Then  
+
+> ∂∂α
+
+ρ(ϵ; α, c ) ≥ 0, and the inequality is strict whenever 
+
+X̸ = 0 .-5.0 -2.5 0.0 2.5 5.0 
+
+> 0
+> 2
+> 4
+
+ρ(², α, 1) + log( Z(α))            
+
+> Bound
+> α= 0
+> α= 0 .5
+> α= 1
+> α= 2
+> α= 4
+> α=∞
+> -5.0 -2.5 0.0 2.5 5.0
+> 0.0
+> 0.2
+> 0.4
+
+p(²|0, α, 1)        
+
+> Bound
+> α= 0
+> α= 0 .5
+> α= 1
+> α= 2
+> α= 4
+> α=∞
+
+Figure 3. The probability distribution and its negative log-likelihood corresponding to the adaptive loss function. The left panel shows the negative log-likelihood function 
+
+− log p(ϵ; α, 1) = ρ(ϵ; α, 1) + log Z(α) for different shape parameters α = 0, 0.5, 1, 2, 4, ∞; The right panel shows the corresponding probability density function p(ϵ; α, 1) =exp {− ρ(ϵ; α, 1) }/Z (α).
+
+Lemma 4.1 indicates that, although it may seem natural to es-timate the parameters by directly solving (4) , this approach is in fact ill-posed: the objective admits a degenerate solu-tion that pushes the shape parameter α to excessively small values. To avoid this collapse, we follow Barron (2019); Jung et al. (2024) and adopt a likelihood-based calibration. Concretely, we consider the exponential-family density 
+
+p(ϵ; α, c ) = exp( −ρ(ϵ; α, c )) /cZ (α) with Z(α) =R ∞−∞ exp( −ρ(u; α, 1)) du so that Z(α) normalizes the dis-tribution. The corresponding negative log-likelihood is 
+
+− log p(ϵ; α, c ) = ρ(ϵ; α, c ) + log c + log Z(α).
+
+Figure 3 shows the induced density and its negative log-likelihood, clarifying the effect of α. Decreasing α flattens the tails, reducing the penalty on large residuals (outliers) while increasing the relative penalty near the origin (inliers). Estimation therefore involves a trade-off: smaller α dis-counts large errors but penalizes small ones more, whereas larger α approaches least squares, favoring inliers while charging more for outliers. This trade-off encourages the method to adapt its robustness to the empirical residual distribution, avoiding the degenerate behavior implied by Lemma 4.1. Following the aforementioned discussion, we estimate the parameters α and c by minimizing the negative log-likelihood function based on the sample, which is defined as 
+
+α(1) , c (1) = arg min 
+
+> α, c> 0
+> m
+
+X
+
+> i=1
+
+ρ Xi − eX(0) ; α, c 
+
++ m log c + log Z(α).
+
+(6) It is worth noting that in optimization problem (6), we need to jointly optimize α and c, which differs from methods such as Jung et al. (2024); Chebrolu et al. (2021) that optimize only α, and may entail greater computational challenges. 
+
+4.2. Estimation of the Mean 
+
+Upon obtaining α(1) and c(1) , directly solving (5) remains nontrivial since the adaptive robust loss is generally noncon-vex. We therefore adopt the graduated nonconvexity (GNC) paradigm (Black & Rangarajan, 1996) within an iteratively reweighted least-squares (IRLS) framework (Chebrolu et al., 2021). Let ϵi = Xi − X. By matching the gradients of (5) and the weighted least-squares objective, (5) is equivalent to 
+
+eX(1) = arg min 
+
+> X∈R
+
+12m
+
+> m
+
+X
+
+> i=1
+
+wi (Xi − X)2, (7) where the weights are induced by the loss through wi = 
+
+> 1
+> ϵi
+> ∂ρ (ϵi;α(1) ,c (1) )
+> ∂ϵ i
+
+. However, if wi are treated as uncon-strained free variables and optimized jointly with X in (7) ,the objective admits a degenerate minimum at wi = 0 for all 
+
+i (independent of X), rendering the solution meaningless. 4Adaptive Robust Estimator for Multi-Agent Reinforcement Learning 
+
+To prevent this degeneration, we introduce an outlier-process regularizer on the weights via the Black–Rangarajan duality (Black & Rangarajan, 1996). Define ϕ(z) := 
+
+ρ(c√z; α, c ). For the adaptive robust loss family, ϕ′(z) sat-isfies lim z→0 ϕ′(z) = 12 , lim z→∞ ϕ′(z) = 0 , ϕ ′′ (z) < 0,
+
+which guarantees the existence of an analytical outlier-process function Φρ(·) such that 
+
+ρ(ϵ; α, c ) = min 
+
+> w∈(0 ,1]
+
+12 wϵ 2 + Φ ρ(w).
+
+Consequently, (7) can be rewritten as the following con-strained and regularized problem: 
+
+eX(1) = arg min 
+
+> X∈R, w i∈(0 ,1]
+
+12m
+
+> m
+
+X
+
+> i=1
+
+
+
+wi(Xi−X)2+Φ ρ(wi)
+
+
+
+.
+
+(8) When initialization is poor, directly optimizing (8) remains challenging due to nonconvexity. We therefore solve it by GNC: we start from a convex quadratic surrogate and gradually introduce nonconvexity until the original adaptive loss is recovered. Concretely, we employ a shape mapping 
+
+f (β, α (1) ) that interpolates from f = 2 (quadratic) to f =
+
+α(1) (target adaptive regime), controlled by a continuation parameter β. Details are provided in Appendix E. 
+
+## 5. Theoretical Properties 
+
+We organize this section as follows. We first study the mean estimator with a fixed shape parameter α ∈ (0 , 1] 
+
+and a sample-size–dependent scale cm. We then establish two complementary regimes: (i) a finite-variance regime, in which the estimator is consistent and asymptotically normal at the classical √m rate; and (ii) a heavy-tailed regime, where only a (1 + ϵ)-moment is assumed and the estimator attains a high-probability deviation bound of order 
+
+ log(1 /δ )/m ϵ/ (1+ ϵ) for the single-block estimator in (3) .Finally, we study the asymptotic theory of the median-of-means aggregation—namely, the ARE in (2) —based on the collection of block means. Throughout, the same estimat-ing equation underlies all results; the difference between regimes is driven by how cm is scaled relative to the stochas-tic fluctuations of the empirical score. Let X1, . . . , X m be i.i.d. real-valued random variables. The goal is to estimate the mean μ := E[X1] (assumed to exist). Fix a shape parameter α ∈ (0 , 1] and let κα := 2 − α ∈
+
+[1 , 2) . We use the adaptive robust loss family 
+
+ρ(ε; α, c ) := κα
+
+α
+
+"
+
+1 + (ε/c )2
+
+κα
+
+α/ 2
+
+− 1
+
+#
+
+, c > 0,
+
+with score (influence) function 
+
+ψ(ε; α, c ) := ∂∂ε ρ(ε; α, c ) = εc2
+
+
+
+1 + (ε/c )2
+
+κα
+
+α/ 2−1
+
+.
+
+Heuristically, ρ is locally quadratic while ψ downweights large residuals when |ε| exceeds the scale c.Given a scale cm > 0 (possibly depending on m), define the empirical risk 
+
+bRm(x) := 1
+
+m
+
+> m
+
+X
+
+> i=1
+
+ρ(Xi − x; α, c m),
+
+and the estimating equation 
+
+bgm(x) := ddx bRm(x) = − 1
+
+m
+
+> m
+
+X
+
+> i=1
+
+ψ(Xi − x; α, c m).
+
+Let Rm(x) := E[ρ(X −x; α, c m)] and gm(x) := R′
+
+> m
+
+(x) = 
+
+−E[ψ(X − x; α, c m)] . Our proofs compare bgm to its popu-lation counterpart gm on a neighborhood of μ to localize a stable root. For α < 1, bgm(x) = 0 may have multiple roots due to non-convexity. We therefore define a central root in a controlled interval. Let bμpil be any pilot estimator and choose a radius 
+
+rm > 0 such that rm → ∞ and rm = o(cm). Define 
+
+Im := [ bμpil − rm, bμpil + rm].
+
+Definition 5.1 (Central-root estimator) . If the equation 
+
+bgm(x) = 0 has a unique solution in Im, denote it by eXm.The only role of Im is to rule out spurious distant roots while keeping μ inside with high probability. 
+
+5.1. Finite-Variance Regime Assumption 5.2 (Finite variance) . E[X1] = μ and E[( X1 −
+
+μ)2] = σ2 ∈ (0 , ∞).We use a purely asymptotic deterministic tuning: for a fixed 
+
+γ > 0, let cm := m1/2+ γ , rm := mγ/ 4. With this choice, 
+
+cm diverges fast enough that the score is essentially linear on Im, recovering the classical √m behavior. 
+
+Theorem 5.3. Assume Assumption 5.2 and fix α ∈ (0 , 1] .With the tuning above and with eXm defined as the unique central root of bgm(x) = 0 in Im, there exists an event Em
+
+with P(Em) → 1 such that, on Em, bgm has a unique zero in 
+
+Im; moreover, eXmp
+
+−→ μ, and √m( eXm − μ) ⇒ N (0 , σ 2).
+
+5.2. Heavy-Tailed Regime Assumption 5.4 ((1 + ϵ)-moment) . Fix ϵ ∈ (0 , 1] . Assume 
+
+E[X1] = μ and E[|X1 − μ|1+ ϵ] ≤ v1+ ϵ < ∞.For any confidence level δ ∈ (0 , 1/2) , choose cm(δ) := 
+
+τ
+
+ v1+ ϵ m
+
+> log(2 /δ )
+
+ 11+ ϵ
+
+, τ > 0, and take any rm → ∞ with 
+
+rm = o(cm(δ)) (e.g., rm = cm(δ)1/2). Here cm(δ) is tuned to balance (controlled) bias from downweighting large residuals with concentration of the empirical score. 5Adaptive Robust Estimator for Multi-Agent Reinforcement Learning MATH500     
+
+> AIME24
+> AIME25
+> AMC23
+> Gaokao2023en
+> MinervaMath
+> 0
+> 10
+> 20
+> 30
+> 40
+> 50
+> 60
+> Accuracy (%)
+> 55.8
+> 25.0
+> 43.9
+> 15.4
+> 55.2
+> 22.5
+> 45.2
+> 13.2
+> 56.6
+> 3.3
+> 32.5
+> 46.0
+> 14.0
+> 55.6
+> 3.3
+> 3.3
+> 27.5
+> 45.5
+> 15.4
+> qwen2.5-1.5b-instruct
+> MATH500
+> AIME24
+> AIME25
+> AMC23
+> Gaokao2023en
+> MinervaMath
+> 0
+> 10
+> 20
+> 30
+> 40
+> 50
+> Accuracy (%)
+> 49.4
+> 6.7
+> 20.0
+> 38.7
+> 19.9
+> 49.0
+> 3.3
+> 27.5
+> 44.9
+> 15.4
+> 49.4
+> 13.3
+> 25.0
+> 40.8
+> 19.1
+> 50.4
+> 6.7
+> 27.5
+> 40.3
+> 18.8
+> llama3.1-8b-instruct
+> MATH500
+> AIME24
+> AIME25
+> AMC23
+> Gaokao2023en
+> MinervaMath
+> 0
+> 10
+> 20
+> 30
+> 40
+> 50
+> 60
+> 70
+> 80
+> Accuracy (%)
+> 77.4
+> 10.0
+> 6.7
+> 47.5
+> 61.6
+> 28.3
+> 77.8
+> 13.3
+> 10.0
+> 57.5
+> 61.0
+> 28.7
+> 77.6
+> 10.0
+> 10.0
+> 60.0
+> 61.8
+> 28.3
+> 77.2
+> 13.3
+> 13.3
+> 57.7
+> 62.9
+> 29.8
+> qwen2.5-7b-instruct
+> Answer Alone ARE Group A Group B Group C
+
+Figure 4. Comparison of the effectiveness of the three-stage interaction model,The grey-filled area represents the experimental results without the three-stage interaction, while the orange part shows the results obtained with the three-stage interaction. It can be seen that the three-stage interactive solution is effective. 20% 40% 60% 80% 
+
+> Ratio of Contaminated Groups
+> 50
+> 55
+> Accuracy (%)  55.6
+> 50.4
+> 55.8
+> 49.6
+> 55.4
+> 49.0
+> 55.0
+> 49.8
+
+(a) Varying Contaminated Group Ratio    
+
+> 20% 40% 60% 80%
+> Contamination Rate per Group
+> 45
+> 50
+> 55
+> Accuracy (%)  55.8
+> 48.0
+> 55.2
+> 49.0
+> 54.6
+> 49.0
+> 55.6
+> 48.8
+
+(b) Varying Contamination Rate  
+
+> Agent1 (Qwen2.5-1.5B-instruct) Agent2 (LLaMA3.1-8B-instruct)
+
+Figure 5. The performance of the proposed method under different noise conditions is illustrated: the left figure shows contamination by noise groups of varying proportions, while the right figure depicts contamination ratios within the same group. It can be observed that the proposed method demonstrates strong noise resistance. 
+
+Theorem 5.5. Assume Assumption 5.4 and fix α ∈ (0 , 1] .With cm = cm(δ) and the central-root estimator eXm, there exist constants C1, C 2 > 0 depending only on α, ϵ, τ such that for all sufficiently large m,
+
+P eXm − μ ≤ C1
+
+ v1+ ϵ log( C2/δ )
+
+m
+
+ ϵ
+
+> 1+ ϵ
+
+!
+
+≥ 1 − δ. 
+
+This single-block deviation bound is the basic ingredient for median-of-means aggregation, which amplifies constant-success probability to an arbitrary confidence level. 
+
+5.3. Asymptotic Theory for ARE 
+
+We now aggregate across blocks using a sample median. In the finite-variance regime, a block-level CLT combined with the classical median CLT yields a √n limit and the usual 
+
+π/ 2 variance inflation, giving a constant asymptotic relative efficiency. 
+
+Theorem 5.6. Assume Assumption 5.2 and fix α ∈ (0 , 1] .Let k = kn → ∞ and kn = o(n), and set m := 
+
+⌊n/k n⌋ → ∞ . On each block, compute eXj using the finite-variance tuning in Theorem 5.3, namely for a fixed γ > 0,
+
+cm := m1/2+ γ , r m := mγ/ 4. Assume in addition that the block-level distribution of eXj admits the local normal ap-proximation needed for the sample-median CLT (formalized in Appendix G). Then 
+
+√n (eμ − μ) ⇒ N
+
+
+
+0, π
+
+2 σ2
+
+.
+
+Consequently, relative to the sample mean ¯Xn, the asymp-totic relative efficiency is 2
+
+π .
+
+Theorem 5.7 (Heavy-tailed deviation bound) . Assume As-sumption 5.4 with some ϵ ∈ (0 , 1] and fix α ∈ (0 , 1] .Let δ ∈ (0 , 1/2) and choose the number of blocks k := l
+
+8 log 
+
+ 2
+
+δ
+
+m 
+
+, m := ⌊n/k ⌋. On each block, run the central-root estimator eXj with the scale cm := cm(δ0) =
+
+τ
+
+ v1+ ϵ m
+
+log(2 /δ 0)
+
+ 11+ ϵ
+
+, δ 0 := 14 , and any radius rm → ∞ such that rm = o(cm) (e.g., rm = c1/2
+
+m ). Then there exist con-stants C1, C 2 > 0 depending only on α, ϵ, τ such that for all sufficiently large n,
+
+P eμ − μ ≤ C1
+
+ v1+ ϵ log( C2/δ )
+
+n
+
+ ϵ
+
+> 1+ ϵ
+
+!
+
+≥ 1 − δ. 
+
+## 6. Experiments 
+
+6.1. Mathematical Reasoning Experiments 
+
+In this section, we evaluate the proposed ARE and DACR on challenging mathematical reasoning benchmarks across LLMs of different parameter scales and model families. We train on MATH 7.5k (Hendrycks et al., 2021) and test on MATH 500 (Lightman et al., 2023) (in-distribution), using 6Adaptive Robust Estimator for Multi-Agent Reinforcement Learning 0 200 400 600 800 
+
+> Training Steps
+> 0.0
+> 0.5
+> 1.0
+> 1.5
+> 2.0
+> 2.5
+> Reward
+
+Reward     
+
+> ARE
+> Base
+> 0200 400 600 800
+> Training Steps
+> 0.0
+> 0.5
+> 1.0
+> 1.5
+> Accuracy Reward
+
+Accuracy     
+
+> ARE
+> Base
+> 0200 400 600 800
+> Training Steps
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> Format Reward
+
+Format  
+
+> ARE
+> Base
+> Figure 6. Training reward curves of ARE and FlightGPT.
+
+AMC23, Gaokao2023en (Zhang et al., 2024), and Min-ervaMath (Lewkowycz et al., 2022) as out-of-distribution suites to assess generalization. We compare against a base-line that matches our collaboration setting but replaces ARE/DACR with standard GRPO. We organize the em-pirical study around three research questions, examining overall effectiveness under noisy rewards, the contribution of the three-stage interaction, and robustness under diverse contamination patterns. 
+
+Q1: Is the proposed multi-agent robust training effec-tive? 
+
+To evaluate robustness under noisy rewards, we inject heavy-tailed, peaked Cauchy noise into the reward model and train on mathematical reasoning datasets. As shown in Table 1, our method consistently improves accuracy over the GRPO-based baseline on both ID and OOD tests. The gains can be substantial; e.g., on AMC23, Qwen2.5-1.5B-Instruct improves from 22 .5% to 32 .5% (+ 10% ), suggesting the pro-posed multi-agent robust training is effective across model scales and families. 
+
+Q2: Is the proposed three-stage interaction effective? 
+
+We ablate the interaction protocol by training two agents that answer independently while keeping all other settings unchanged. Results in Figure 4 show that the three-stage interaction yields consistently better reasoning performance across LLMs; in particular, on AMC23, Qwen2.5-7B-Instruct improves from 47 .5% to 60% (+ 12 .5% ). 
+
+Q3: How robust is the method to noise? 
+
+We further stress-test robustness under diverse contamina-tion patterns (Figure 5): (i) group-level corruption where a fraction of groups are selected and 20% of samples within each selected group are contaminated, and (ii) within-group corruption where the contamination ratio varies inside the same group. Both settings evaluate accuracy on MATH500. Across all conditions, our method degrades gracefully and remains consistently more robust to reward contamination than the baseline. 
+
+6.2. Embodied VLN Evaluation  
+
+> Figure 7. Visualization of the navigation task. The UAV trajectory, predicted target, and ground-truth target are annotated.
+
+To assess whether ARE transfers beyond pure language rea-soning, we evaluated it on an embodied aerial VLN task by applying ARE to a visual language model. We built on FlightGPT (Cai et al., 2025) and replaced its standard GRPO optimization with ARE, fine-tuning a Qwen2-VL-2B-Instruct backbone (Wang et al., 2024) with downscaled image resolutions to fit available compute; due to current constraints, we focused on validating the Adaptive Robust Estimator component, leaving full multi-agent interaction to future work. In VLN, the agent follows a natural-language instruction D and visual observations from a 3D environ-ment E, starting from (p0, θ 0) and executing discrete ac-tions at ∈ A ; an episode succeeds if the final position pT
+
+is within a threshold δ of the target. 7Adaptive Robust Estimator for Multi-Agent Reinforcement Learning  
+
+> Table 1. Comparison of accuracy rates of various methods on the mathematical reasoning dataset
+
+Model Method MATH500 AIME24 AIME25 AMC23 Gaokao 2023en Minerva Math 
+
+Qwen2.5 (1.5B-Instruct) Base Model 35.80 - - 30.00 23.50 5.150 baseline-GroupA 56.00 - - 22.50 45.50 13.20 baseline-GroupC 55.00 3.300 - 22.50 45.50 13.60 ARE-GroupA 56.60 3.300 - 32.50 46.00 14.00 ARE-GroupC 55.60 3.300 3.300 27.50 45.50 15.40 
+
+Llama3.1 (8B-Instruct) Base Model 32.60 - - 5.000 3.390 7.350 baseline-GroupB 49.40 3.300 - 20.00 39.70 17.60 baseline-GroupC 49.20 6.700 3.300 22.50 39.20 17.30 ARE-GroupB 51.00 6.700 - 22.50 42.60 19.90 
+
+ARE-GroupC 50.40 6.700 - 27.50 40.30 18.80 Qwen2.5 (7B-Instruct) Base Model 68.00 6.667 10.00 37.50 42.04 18.38 baseline-GroupA 77.60 16.70 6.700 50.00 62.60 27.60 baseline-GroupB 77.40 13.30 10.00 52.50 61.30 28.70 ARE-GroupA 77.60 10.00 10.00 60.00 61.80 28.30 ARE-GroupB 77.40 13.30 10.00 57.70 61.60 30.50 
+
+Following (Cai et al., 2025), we reported four standard metrics: Navigation Error (NE), the Euclidean distance between the final position and the ground-truth target (lower is better); Success Rate (SR), the fraction of episodes whose final position is within 20 meters of the target (higher is better); Oracle Success Rate (OSR), the fraction of episodes that reach within 20 meters of the target at any time (higher is better); and Success weighted by Path Length (SPL), which penalizes unnecessarily long trajectories (higher is better). Figure 6 shows that ARE achieved consistently higher train-ing rewards than FlightGPT, suggesting improved optimiza-tion stability under the same VLN setup; although we used a smaller backbone than in (Cai et al., 2025) (lead-ing to lower absolute performance), the comparison to the GRPO baseline remained controlled. Consistently, Table 2 shows that ARE outperformed both the base model and FlightGPT across all splits, with the largest gains on un-seen environments (e.g., NE 145.56 ! →124.38 on val unseen 
+
+and 140.78 ! →129.71 on test unseen ) while also improving SR/OSR/SPL, indicating better localization, higher success, and more efficient trajectories. 
+
+## 7. Conclusion 
+
+This work addressed a key instability in MARL for LLM reasoning: noisy, heavy-tailed rewards can make GRPO’s batch-mean advantage normalization fragile, leading to os-cillation or divergence. We proposed a robust collaborative training framework that coupled a structured DACR proto-col with a cross-improvement reward for more reliable credit assignment, and introduced ARE to replace the batch mean in GRPO-style advantage estimation. We established theo-                                              
+
+> Table 2. Aerial VLN results (higher is better for SR/OSR/SPL; lower is better for NE).
+> Split Method NE ↓SR ↑OSR ↑SPL ↑
+> VS
+> Base 193.92 0.3300 1.0000 0.0000 FlightGPT 148.19 2.6700 13.670 0.0200 ARE 139.49 3.0000 14.330 0.0300 VUS
+> Base 190.84 1.3300 1.3300 0.0100 FlightGPT 145.56 3.6700 18.000 0.0300 ARE 124.38 6.3300 18.330 0.0600 TUS
+> Base 195.95 1.3300 2.3300 0.0100 FlightGPT 140.78 2.3300 17.330 0.0200 ARE 129.71 4.6700 18.330 0.0400
+> VS: val seen, VUS: val unseen, TUS: test unseen.
+
+retical guarantees for ARE under both finite-variance and heavy-tailed regimes, and experiments on mathematical rea-soning benchmarks showed consistent gains in accuracy and training stability across model scales and families, including homogeneous and heterogeneous agent pairs, especially un-der heavy-tailed reward noise. We further validated ARE in an embodied aerial VLN setting by replacing FlightGPT’s GRPO with ARE on a Qwen2-VL-2B VLM, yielding higher training rewards and improved NE/SR/OSR/SPL across all splits, with the largest gains on unseen environments. 
+
+## Impact Statement 
+
+This paper presents work whose goal is to advance the field of machine learning by developing robust multi-agent pol-icy optimization methods for collaborative reasoning under noisy, heavy-tailed rewards. We do not feel any potential so-cietal consequences of this work necessary to be discussed here. 8Adaptive Robust Estimator for Multi-Agent Reinforcement Learning 
+
+## References 
+
+Barron, J. T. A general and adaptive robust loss function. 
+
+CVPR , 2019. Black, M. J. and Anandan, P. The robust estimation of multiple motions: Parametric and piecewise-smooth flow fields. Computer vision and image understanding , 63(1): 75–104, 1996. Black, M. J. and Rangarajan, A. On the unification of line processes, outlier rejection, and robust statistics with applications in early vision. Int. J. Comput. Vision , 19(1): 57–91, July 1996. ISSN 0920-5691. Cai, H., Dong, J., Tan, J., Deng, J., Li, S., Gao, Z., Wang, H., Su, Z., Sumalee, A., and Zhong, R. Flightgpt: Towards generalizable and interpretable uav vision-and-language navigation with vision-language models, 2025. URL 
+
+https://arxiv.org/abs/2505.12835 .Chebrolu, N., L ¨abe, T., Vysotska, O., Behley, J., and Stach-niss, C. Adaptive robust kernels for non-linear least squares problems. IEEE Robotics and Automation Letters ,6(2):2240–2247, 2021. Chen, Z., Ai, T., Li, Y., Li, G., Wei, Y., Zhou, W., Li, G., Yu, B., Chen, Z., Sun, H., Zhuang, F., Li, J., Wang, D., and Ban, Y. Llmboost: Make large language models stronger with boosting, 2025a. URL https://arxiv.org/ abs/2512.22309 .Chen, Z., Ji, Z., Mao, Q., Wu, H., Cheng, J., Qin, B., Li, Z., Li, J., Sun, K., Wang, Z., et al. Scoring, reasoning, and selecting the best! ensembling large language models via a peer-review process. arXiv preprint arXiv:2512.23213 ,2025b. Chen, Z., Li, J., Chen, P., Li, Z., Sun, K., Luo, Y., Mao, Q., Li, M., Xiao, L., Yang, D., et al. Harnessing multiple large language models: A survey on llm ensemble. arXiv preprint arXiv:2502.18036 , 2025c. Chen, Z., Li, G., Ai, T., Li, Y., Huang, Z., Zhou, W., Zhuang, F., Liu, X., Li, J., Wang, D., et al. Weak-driven learning: How weak agents make strong agents stronger. arXiv preprint arXiv:2602.08222 , 2026. Dennis Jr, J. E. and Welsch, R. E. Techniques for nonlinear least squares and robust regression. Communications in Statistics-simulation and Computation , 7(4):345–359, 1978. Geman, D. and Geman, S. Bayesian image analysis. In 
+
+Disordered systems and biological organization , pp. 301– 319. Springer, 1986. Hastie, T., Tibshirani, R., and Friedman, J. The Elements of Statistical Learning . Springer Series in Statistics. Springer New York Inc., New York, NY, USA, 2001. He, X., Ban, Y., Zou, J., Wei, T., Cook, C., and He, J. Llm-forest: Ensemble learning of llms with graph-augmented prompts for data imputation. In Findings of the Asso-ciation for Computational Linguistics: ACL 2025 , pp. 6921–6936, 2025. Hendrycks, D., Burns, C., Kadavath, S., Arora, A., Basart, S., Tang, E., Song, D., and Steinhardt, J. Measuring math-ematical problem solving with the math dataset, 2021. URL https://arxiv.org/abs/2103.03874 .Hitchcox, T. and Forbes, J. R. Mind the gap: Norm-aware adaptive robust loss for multivariate least-squares prob-lems. IEEE Robotics and Automation Letters , 7(3):7116– 7123, 2022. Hu, J. Reinforce++: A simple and efficient approach for aligning large language models. arXiv preprint arXiv:2501.03262 , 2025. Huang, Z., Xia, X., Ren, Y., Zheng, J., Wang, X., Zhang, Z., Xie, H., Liang, S., Chen, Z., Xiao, X., et al. Does your reasoning model implicitly know when to stop thinking? 
+
+arXiv preprint arXiv:2602.08354 , 2026a. Huang, Z., Xia, X., Ren, Y., Zheng, J., Xiao, X., Xie, H., Huaqiu, L., Liang, S., Dai, Z., Zhuang, F., et al. Real-time aligned reward model beyond semantics. arXiv preprint arXiv:2601.22664 , 2026b. Huber, P. J. Robust statistics. In International encyclopedia of statistical science , pp. 1248–1251. Springer, 2011. Humbert, P., Le Bars, B., and Minvielle, L. Robust kernel density estimation with median-of-means principle. In 
+
+International Conference on Machine Learning , pp. 9444– 9465. PMLR, 2022. Jung, K., Hitchcox, T., and Forbes, J. R. An adaptive grad-uated nonconvexity loss function for robust nonlinear least-squares solutions. IEEE Transactions on Robotics ,2024. Leclerc, Y. G. Constructing simple stable descriptions for image partitioning. International journal of computer vision , 3(1):73–102, 1989. Lecu ´e, G., Lerasle, M., and Mathieu, T. Robust classifica-tion via mom minimization. Machine learning , 109(8): 1635–1665, 2020. Lewkowycz, A., Andreassen, A., Dohan, D., Dyer, E., Michalewski, H., Ramasesh, V., Slone, A., Anil, C., Schlag, I., Gutman-Solo, T., Wu, Y., Neyshabur, B., 9Adaptive Robust Estimator for Multi-Agent Reinforcement Learning 
+
+Gur-Ari, G., and Misra, V. Solving quantitative rea-soning problems with language models, 2022. URL 
+
+https://arxiv.org/abs/2206.14858 .Liao, J., Wen, M., Wang, J., and Zhang, W. Marft: Multi-agent reinforcement fine-tuning. arXiv preprint arXiv:2504.16129 , 2025. Lightman, H., Kosaraju, V., Burda, Y., Edwards, H., Baker, B., Lee, T., Leike, J., Schulman, J., Sutskever, I., and Cobbe, K. Let’s verify step by step, 2023. URL https: //arxiv.org/abs/2305.20050 .Lin, H., Cao, S., Wang, S., Wu, H., Li, M., Yang, L., Zheng, J., and Qin, C. Interactive learning for llm reasoning. 
+
+arXiv preprint arXiv:2509.26306 , 2025. Liu, H., Fu, Z., Ding, M., Ning, R., Zhang, C., Liu, X., and Zhang, Y. Logical reasoning in large language models: A survey. arXiv preprint arXiv:2502.09100 , 2025a. Liu, S., Chen, T., Liang, Z., Lyu, X., and Amato, C. Llm collaboration with multi-agent reinforcement learning. 
+
+arXiv preprint arXiv:2508.04652 , 2025b. Liu, W., Hu, H., Zhou, J., Ding, Y., Li, J., Zeng, J., He, M., Chen, Q., Jiang, B., Zhou, A., et al. Mathematical language models: A survey. ACM Computing Surveys ,58(6):1–37, 2025c. Lu, L., Yu, Y., de Lamare, R. C., and Yang, X. Tukey’s biweight m-estimate with conjugate gradient adaptive learning. IEEE Signal Processing Letters , 29:1117–1121, 2022. Lu, X., Wang, X., Chai, J., Yin, G., Lin, W., Chen, Z., Luo, Y., Zhuang, F., Ban, Y., and Wang, D. Contextual rollout bandits for reinforcement learning with verifiable rewards. 
+
+arXiv preprint arXiv:2602.08499 , 2026. Ma, H., Hu, T., Pu, Z., Boyin, L., Ai, X., Liang, Y., and Chen, M. Coevolving with the other you: Fine-tuning llm with sequential cooperative multi-agent reinforcement learning. Advances in Neural Information Processing Systems , 37:15497–15525, 2024. Motwani, S. R., Smith, C., Das, R. J., Rafailov, R., Laptev, I., Torr, P. H., Pizzati, F., Clark, R., and de Witt, C. S. Malt: Improving reasoning with multi-agent llm training. 
+
+arXiv preprint arXiv:2412.01928 , 2024. Park, C., Han, S., Guo, X., Ozdaglar, A. E., Zhang, K., and Kim, J.-K. Maporl: Multi-agent post-co-training for collaborative large language models with reinforcement learning. In Proceedings of the 63rd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , pp. 30215–30248, 2025. Rafailov, R., Sharma, A., Mitchell, E., Manning, C. D., Ermon, S., and Finn, C. Direct preference optimiza-tion: Your language model is secretly a reward model. 
+
+Advances in neural information processing systems , 36: 53728–53741, 2023. Ren, T., Jiang, J., Yang, H., Tian, W., and Peng, Y. RiskPO: Risk-based policy optimization with verifiable reward for LLM post-training. In NeurIPS 2025 Workshop MLxOR: Mathematical Foundations and Operational Integration of Machine Learning for Uncertainty-Aware Decision-Making , 2025. URL https://openreview.net/ forum?id=8hxqmh25ZH .Rieder, H. Robust Asymptotic Statistics: Volume I . Springer Science & Business Media, 2012. Shao, Z., Wang, P., Zhu, Q., Xu, R., Song, J., Bi, X., Zhang, H., Zhang, M., Li, Y. K., Wu, Y., and Guo, D. Deepseekmath: Pushing the limits of mathemat-ical reasoning in open language models, 2024. URL 
+
+https://arxiv.org/abs/2402.03300 .Shao, Z., Luo, Y., Lu, C., Ren, Z., Hu, J., Ye, T., Gou, Z., Ma, S., and Zhang, X. Deepseekmath-v2: Towards self-verifiable mathematical reasoning. arXiv preprint arXiv:2511.22570 , 2025. Sun, Q. Do we need to estimate the variance in robust mean estimation? arXiv preprint arXiv:2107.00118 , 2021. Wan, Z., Li, Y., Wen, X., Song, Y., Wang, H., Yang, L., Schmidt, M., Wang, J., Zhang, W., Hu, S., et al. Rema: Learning to meta-think for llms with multi-agent rein-forcement learning. arXiv preprint arXiv:2503.09501 ,2025. Wang, P., Bai, S., Tan, S., Wang, S., Fan, Z., Bai, J., Chen, K., Liu, X., Wang, J., Ge, W., Fan, Y., Dang, K., Du, M., Ren, X., Men, R., Liu, D., Zhou, C., Zhou, J., and Lin, J. Qwen2-vl: Enhancing vision-language model’s perception of the world at any resolution. arXiv preprint arXiv:2409.12191 , 2024. Wang, P.-Y., Liu, T.-S., Wang, C., Li, Z., Wang, Y., Yan, S., Jia, C., Liu, X.-H., Chen, X., Xu, J., et al. A survey on large language models for mathematical reasoning. ACM Computing Surveys , 2025. Wang, X. and Xu, M. Multi-agent multi-armed ban-dit with fully heavy-tailed dynamics. arXiv preprint arXiv:2501.19239 , 2025. Xue, X., Zhou, Y., Zhang, G., Zhang, Z., Li, Y., Zhang, C., Yin, Z., Torr, P., Ouyang, W., and Bai, L. Comas: Co-evolving multi-agent systems via interaction rewards. 
+
+arXiv preprint arXiv:2510.08529 , 2025. 10 Adaptive Robust Estimator for Multi-Agent Reinforcement Learning 
+
+Yang, F., Chen, Z., Wang, X., Lu, X., Chai, J., Yin, G., Lin, W., Ma, S., Zhuang, F., Wang, D., et al. Your group-relative advantage is biased. arXiv preprint arXiv:2601.08521 , 2026. Zhang, X., Li, C., Zong, Y., Ying, Z., He, L., and Qiu, X. Evaluating the performance of large language models on gaokao benchmark, 2024. URL https://arxiv. org/abs/2305.12474 .Zhang, Z., Huang, Z., Xia, X., Wang, D., Zhuang, F., Ma, S., Ding, N., Yang, Y., Li, J., and Ban, Y. Heteroge-neous agent collaborative reinforcement learning. arXiv preprint arXiv:2603.02604 , 2026. Zou, J., Ban, Y., Li, Z., Qi, Y., Qiu, R., Yang, L., and He, J. Transformer copilot: Learning from the mistake log in LLM fine-tuning. In The Thirty-ninth Annual Conference on Neural Information Processing Systems ,2025. URL https://openreview.net/forum? id=MRvxlTlkNQ .11 Adaptive Robust Estimator for Multi-Agent Reinforcement Learning 
+
+## A. Related Work 
+
+A.1. Multi-Agent Collaboration and Training 
+
+Recent advances in large language models have inspired substantial interest in multi-agent collaboration(Chen et al., 2025a; He et al., 2025; Chen et al., 2026; 2025b; Lu et al., 2026), where multiple LLM-based agents interact to solve tasks that exceed the capabilities of a single model. Early explorations primarily focused on role specialization, task decomposition, and collaborative protocols such as planning, debating, and mutual verification. These frameworks improve solution quality through interaction but typically rely on fixed, frozen models without joint optimization. More recent studies extend this paradigm by treating multi-agent systems as interactive learning environments, in which agents coordinate, compete, or exchange information while being jointly optimized through reinforcement learning. Collectively, these efforts demonstrate that coordinated multi-agent LLMs can exhibit stronger reasoning, more robust generalization, and higher reliability than single-agent systems. A representative example is CORY (Ma et al., 2024), which formulates two symbiotic agents: a pioneer and an observer, both initialized from the same base model. The pioneer generates an initial response, while the observer synthesizes an improved refinement based on the pioneer’s output. The two agents periodically switch roles to foster cooperative evolution. MARFT (Liao et al., 2025) models multi-agent collaboration as a sequential decision-making process that aligns with the PPO training paradigm. This approach allows agents to share a common backbone while adopting distinct capabilities through different LoRA adapters. Beyond these architectures, several works explicitly incorporate reinforcement learning for multi-agent reasoning. Lin et al. (2025) propose an interactive learning framework where agents dynamically choose cooperative or competitive behaviors based on problem difficulty and model capability. Their three-stage discussion protocol enhances information exchange, and the reward design incorporates distributional properties of other agents’ returns. Training is performed using GRPO, ultimately improving the reasoning ability of individual agents through multi-agent synergy. Similarly, CoMAS (Xue et al., 2025) constructs a rich interaction loop based on solution proposal, peer evaluation, and scoring, and employs an LLM-as-a-judge mechanism to convert discussion signals into reward feedback. These rewards are then optimized via the REINFORCE++ (Hu, 2025) algorithm, enabling decentralized and scalable emergent learning without external supervision.(Yang et al., 2026) provides a principled theoretical analysis of group-based advantage estimation. Several recent works extend GRPO into explicit multi-agent regimes. ReMA (Wan et al., 2025) introduces meta-level reasoning into hierarchical multi-agent training, involving high-level and low-level agents trained under both shared and independent GRPO setups with single- and multi-round interaction schemes. MAGRPO (Liu et al., 2025b) further generalizes GRPO to collaborative fine-tuning across multiple agents, where a centralized group-relative advantage guides joint optimization while retaining decentralized execution; this method has demonstrated effectiveness in program synthesis tasks. MAPoRL (Park et al., 2025) proposes a post-training framework that combines multi-agent reinforcement learning with a carefully designed reward mechanism to explicitly train LLMs for coordinated decision-making in complex environments. Meanwhile, MALT (Motwani et al., 2024) constructs a division-of-labor multi-agent system with iterative collaboration and experience-based improvement, leveraging tree-structured data generation, value-iteration-style credit assignment, and a hybrid SFT–DPO (Rafailov et al., 2023) post-training pipeline to overcome the limitations of single-agent reasoning. While these works have established a solid foundation for multi-agent reinforcement learning with LLMs, they rarely address the robustness challenges of GRPO in multi-agent optimization. In contrast, our approach introduces a new collaboration mechanism and explicitly incorporates robust reinforcement learning techniques to stabilize multi-agent GRPO training. 
+
+A.2. Robust Estimation Methods 
+
+Robust estimation methods are designed to maintain statistical reliability when data deviate from idealized assumptions, such as in the presence of outliers, model misspecification, or heavy-tailed noise (Huber, 2011; Rieder, 2012). Classical estimators—e.g., the sample mean or ordinary least squares—can be highly sensitive to a small fraction of corrupted observations, leading to unstable inference and degraded predictive performance. After decades of development, robust estimation methods can be categorized—according to their evolutionary trajectory—into the design of robust loss functions, adaptive procedures, tuning-free approaches, and median-of-means (MOM) estimators. The core idea of robust loss functions is to minimize the influence of abnormally large per-sample residuals or gradients on the overall objective (Jung et al., 2024). Representative choices include the Huber (Huber, 2011), pseudo-Huber (Hastie et al., 2001), Cauchy (Black & Anandan, 1996), Tukey’s biweight (Lu et al., 2022), and Geman–McClure (GM) (Geman & 12 Adaptive Robust Estimator for Multi-Agent Reinforcement Learning 
+
+Geman, 1986) losses . A key caveat, however, is the risk of over-robustness: overly aggressive down-weighting of extreme observations may suppress rare yet genuine signals. Moreover, the landscape of robust losses is broad, and selecting an appropriate form typically relies heavily on expert knowledge and empirical tuning. To mitigate this issue, Barron (2019) proposed an adaptive loss (as shown in (9)) which, via a shape parameter α governing tail behavior and robustness and a scale parameter c controlling the width of the near-zero quadratic basin, unifies many classical losses within a single continuously adjustable—and potentially automatically learnable—framework. Nevertheless, both classes of approaches may suffer from substantial computational overhead for tuning-parameter selection (e.g., common choices such as Lepski’s method and cross-validation can be computationally expensive), and the resulting objectives are often nonconvex (Jung et al., 2024), which can lead to poor local optima, sensitivity to initialization, and training instability. To address these two major challenges, a third line of work—tuning-free methods—has emerged. The key idea is to determine the value of the tuning parameter (typically depending on the target estimation accuracy and the population second moment of the data) under which the resulting estimator can achieve a sub-Gaussian rate of convergence. A representative example is the work of Sun (2021), which builds on the pseudo-Huber loss and derives an explicit criterion for choosing the tuning parameter. A fourth class of approaches that has attracted considerable attention in recent years is the MoM estimator (Lecu ´e et al., 2020; Humbert et al., 2022). The procedure first partitions the sample into multiple groups, computes the sample mean within each group, and then takes the median of these group-wise means. Under the mere existence of a finite second moment, the MoM estimator can achieve sub-Gaussian rates of convergence. In Appendix B, we further discuss that, under both random contamination and adversarial contamination, the MoM estimator may still fail to be robust; moreover, attaining strong empirical performance typically requires a careful trade-off between the number of blocks and the sample size within each block. 
+
+## B. Discussion on the MOM Estimator and its Robustness 
+
+In this section, we review the Median-of-Means (MoM) estimator as our baseline and discuss its key limitations under two contamination regimes: random and adversarial contamination. Let X1, . . . , X n be i.i.d. real-valued random variables with mean μ = E[Xi]. The empirical mean X = 1
+
+> n
+
+Pni=1 Xi is statistically optimal under light-tailed distributions (e.g., sub-Gaussian), yet it can be highly unstable in the presence of heavy tails or contaminated samples. As noted in Section 1, MoM provides a canonical robust alternative by combining blockwise averaging with a robust aggregation step. Concretely, fix k ≥ 2 and randomly partition [n] into k disjoint blocks 
+
+B1, . . . , B k of size m = ⌊n/k ⌋. Define the block means 
+
+Xj = 1
+
+|Bj |
+
+X
+
+> i∈Bj
+
+Xi, j = 1 , . . . , k, 
+
+and aggregate them via the median: 
+
+bμ = median( X1, . . . , X k).
+
+This construction exhibits a transparent robustness mechanism: blockwise averaging reduces the variance contributed by the uncontaminated observations, while the median discards the influence of a minority of corrupted blocks. In particular, under the mild assumption σ2 = Var( Xi) < ∞, MoM achieves a sub-Gaussian-type concentration bound. For any δ ∈ (0 , 1) ,choosing k ≃ c0 log(1 /δ ) yields 
+
+P bμ − μ ≤ C0σ
+
+r log(1 /δ )
+
+n
+
+!
+
+≥ 1 − δ, 
+
+for universal constants c0, C 0 > 0 (Sun, 2021). Hence, even without sub-Gaussian tails, MoM retains the optimal 
+
+n−1/2 rate and the canonical plog(1 /δ ) confidence scaling. Practically, k controls the robustness–efficiency trade-off: increasing k improves tolerance to corruption through the median at the cost of smaller block sizes. A common default is 
+
+k = ⌈c0 log(1 /δ )⌉ (with c0 in the range 2–8); when δ is not specified, the heuristic k ≈ ⌈ log n⌉ is often used. We now turn to a simple analysis and discussion. 
+
+In random contamination, assume each observation is independently corrupted with probability κ ∈ (0 , 1) . Randomly partition the n samples into k disjoint blocks, each of size m = ⌊n/k ⌋. Call a block clean if none of its m samples is contaminated. Under independent contamination, the probability that a fixed block is clean is 
+
+p0 = Pr( a block is clean ) = (1 − κ)m,
+
+13 Adaptive Robust Estimator for Multi-Agent Reinforcement Learning 
+
+where we ignore the minor imbalance due to the floor operation and possible leftovers. Let Xj = 1{block j is clean } for 
+
+j = 1 , . . . , k . Then Xj ∼ Bernoulli( p0) i.i.d., and the number of clean blocks is 
+
+S := 
+
+> k
+
+X
+
+> j=1
+
+Xj ∼ Binomial( k, p 0).
+
+A key mechanism behind MoM is that the median is taken over a majority of blocks; thus, if more than half of the blocks are clean (i.e., S > k/ 2), then the median is computed from predominantly uncontaminated block means. This motivates the condition p0 > 1/2. When p0 > 1/2, a Chernoff–Hoeffding (KL-form) bound yields 
+
+Pr( S ≤ k/ 2) ≤ exp 
+
+
+
+−k KL  1/2 ∥ p0
+
+
+
+,
+
+where the binary KL divergence is 
+
+KL  1/2 ∥ p0
+
+ = 12 ln 1/2
+
+p0
+
++ 12 ln 1/21 − p0
+
+.
+
+Hence, provided p0 > 1/2, the failure event “at most half of the blocks are clean” has probability exponentially small in k.The condition p0 > 1/2 is equivalent to 
+
+(1 − κ)m > 12 ⇐⇒ m < ln 2 
+
+− ln(1 − κ) .
+
+For small κ, using − ln(1 − κ) ≈ κ, this becomes the convenient rule of thumb 
+
+m ≲ ln 2 
+
+κ .
+
+Thus, smaller blocks (smaller m, larger k) make it easier to ensure that a majority of blocks are clean, which is precisely the regime in which MoM can retain sub-Gaussian-type deviation bounds under only finite second moments. It is important to note that “smaller blocks are cleaner” does not mean “the smaller the better.” Decreasing m increases 
+
+p0 = (1 −κ)m and improves the probability of having a clean majority, but it also increases the variance of each within-block mean because fewer samples are averaged within a block. Therefore, obtaining good estimation accuracy requires balancing the number of blocks k and the block size m.
+
+In the adversarial contamination, an attacker can strategically place corrupted observations across blocks. In particular, it suffices to inject a single extremely large outlier into each of ⌈k/ 2⌉ distinct blocks to arbitrarily shift the MoM output. Indeed, within any contaminated block of size m, the block mean takes the form 
+
+¯Xblock = 1
+
+m
+
+> m
+
+X
+
+> i=1
+
+Xi,
+
+so a single outlier of magnitude M shifts the block mean by 
+
+∆ = Mm .
+
+Although the multiplicative factor 1/m attenuates the effect, the attacker may choose M arbitrarily large, hence ∆ can be made arbitrarily large. Consequently, once at least half of the blocks are contaminated, the median over block means can be driven to an arbitrary value. This yields a finite-sample breakdown point on the order of 
+
+ϵbd ≈ ⌈k/ 2⌉
+
+n ,
+
+since contaminating ⌈k/ 2⌉ blocks requires only ⌈k/ 2⌉ adversarial points among n observations. In particular, if k is fixed (or grows sublinearly in n), then ϵbd → 0 as n → ∞ , indicating extremely poor robustness in the strict breakdown-point sense. Equivalently, even when the overall contamination proportion is very small, MoM can be completely compromised if more than half of the blocks each contain at least one outlier. Finally, the choice of k exhibits an intrinsic tension. If k is too large, then m = ⌊n/k ⌋ becomes too small and the variance of each block mean inflates; if k is too small, then blocks are too large and it becomes easier for contamination to hit a majority of blocks (especially under random contamination). Therefore, MoM entails a structural trade-off between k and 
+
+m that is difficult to calibrate in practice. 14 Adaptive Robust Estimator for Multi-Agent Reinforcement Learning 
+
+## C. Simulation Studies of the ARE 
+
+In the main text, we validate the effectiveness of the ARE estimator through several concrete LLM applications. In this section, we further demonstrate its performance via simulation studies. We consider one-dimensional robust mean estimation with ground-truth mean μ⋆ = 1 . For each sample size n ∈{200 , 500 , 1000 , 2000 , 5000 }, we generate i.i.d. samples X1, . . . , X n under five data-generating processes (DGP1–DGP5) that progressively increase distributional difficulty from light tails to heavy tails and explicit corruption. DGP1 (Gaussian) serves as a light-tailed baseline: 
+
+Xi = μ⋆ + σZ i, Zi ∼ N (0 , 1) ,
+
+with default σ = 1 . DGP2 (centered log-normal) captures skewed heavy tails while preserving the mean: letting Yi ∼N (0 , 1) ,
+
+Xi = μ⋆ +
+
+
+
+exp( τ Y i) − exp( τ 2/2) 
+
+
+
+,
+
+where τ > 0 controls tail-heaviness and skewness (default τ = 1 .5). DGP3 (Student-t) models symmetric heavy tails with finite variance: 
+
+Xi = μ⋆ + sT i, Ti ∼ tν , ν > 2,
+
+with default (s, ν ) = (1 , 4) ; in our implementation Ti = Zi/pVi/ν with Zi ∼ N (0 , 1) and Vi ∼ χ2(ν). DGP4 (symmetric Pareto) probes the infinite-variance regime while keeping the mean finite: 
+
+Xi = μ⋆ + SiUi,
+
+where Si ∈ {− 1, +1 } is Rademacher (equiprobable) and Ui ≥ 1 has Pareto tail P(Ui > u ) = u−α for u ≥ 1, with 
+
+α ∈ (1 , 2) (default α = 1 .5). Finally, DGP5 (contamination) explicitly injects outliers on top of a clean baseline 
+
+X(0)  
+
+> i
+
+∼ N (μ⋆, σ 20 ) with default σ0 = 1 . Under random (mean-preserving) contamination, independently for each i we set 
+
+Xi = X(0)  
+
+> i
+
+with probability 1 − κ, and with probability κ replace 
+
+Xi ← μ⋆ + SiM, 
+
+where Si ∈ {− 1, +1 } is equiprobable (default (κ, M ) = (0 .05 , 100) ). Under adversarial one-sided contamination, after drawing the clean sample we replace exactly ⌊κn ⌋ points by the outlier μ⋆ + M . To further stress-test median-of-means (MoM) style aggregation, we also consider a block-aware adversary: we deterministically partition the first mk samples into 
+
+k blocks of equal size m = ⌊n/k ⌋ (discarding leftovers), then select r = ⌈k/ 2⌉ blocks and inject one outlier μ⋆ + M into each selected block (optionally capped by a global budget ⌊κn ⌋). We compare the estimators l2 , Cauchy , GM , Adapt , AMB (adaptive Maxwell–Boltzmann (Hitchcox & Forbes, 2022)), their GNC variants GNC Adapt , GNC AMB , GNC TLS (truncated least squares), and the MoM-integrated variant ARE . Each method is initialized at the sample mean μ(0) = 1
+
+> n
+
+Pni=1 Xi and returns a scalar estimate bμ. For each pair (DGP , n ), we run R = 100 Monte Carlo replications. To ensure fair comparisons, we use common random numbers: in replication 
+
+r ∈ { 0, . . . , R − 1} we set the seed to base seed + r (default base seed = 12345 ), generate one dataset, and evaluate all estimators on the same data. Performance is summarized by the error e = bμ − μ⋆ through MAE and MSE, 
+
+MAE = E[|e|], MSE = E[e2],
+
+together with robust quantiles of |e| (Median, Q90, and Q95 computed via linear interpolation on sorted absolute errors). Tables 3–7 report the experimental results for DGP1–DGP5 across all sample sizes and estimators. 15 Adaptive Robust Estimator for Multi-Agent Reinforcement Learning 
+
+Table 3. Results on DGP1 (Gaussian): robust error summaries over R = 100 replications. 
+
+n Metric l2 Cauchy GM Adapt AMB GNC Adapt GNC AMB GNC TLS ARE 200 MAE 0.057287 0.074298 0.082726 0.089879 0.086309 0.089576 0.086304 0.067855 0.093291 MSE 0.005173 0.008747 0.010770 0.012688 0.011817 0.012600 0.011710 0.007302 0.013051 Median 0.047519 0.062271 0.068645 0.074465 0.070920 0.074508 0.072363 0.056955 0.080019 Q90 0.117608 0.152255 0.173105 0.185062 0.181983 0.185578 0.178264 0.140570 0.187690 Q95 0.137931 0.199400 0.216909 0.229500 0.224137 0.225030 0.220215 0.163779 0.224390 500 MAE 0.034494 0.044633 0.049594 0.053918 0.052523 0.053909 0.052433 0.041655 0.063132 MSE 0.001838 0.002937 0.003645 0.004326 0.004069 0.004322 0.004044 0.002647 0.006196 Median 0.029021 0.040605 0.043591 0.046434 0.045928 0.046208 0.046618 0.035880 0.052503 Q90 0.069328 0.089981 0.100150 0.106283 0.105652 0.106068 0.105136 0.085231 0.132819 Q95 0.081448 0.099868 0.114402 0.126156 0.119561 0.126863 0.119259 0.097621 0.152423 1000 MAE 0.024141 0.032439 0.036162 0.039273 0.038195 0.039322 0.038274 0.029353 0.044525 MSE 0.000877 0.001590 0.001982 0.002343 0.002228 0.002344 0.002231 0.001330 0.003116 Median 0.020658 0.028489 0.031086 0.034594 0.034696 0.034421 0.034927 0.025598 0.037707 Q90 0.048351 0.064046 0.073582 0.079218 0.079125 0.079847 0.079148 0.059341 0.089249 Q95 0.057840 0.077597 0.085396 0.092410 0.090472 0.092422 0.089938 0.068942 0.108791 2000 MAE 0.018659 0.025467 0.028122 0.030252 0.029671 0.030232 0.029631 0.022884 0.035059 MSE 0.000534 0.000973 0.001192 0.001395 0.001326 0.001394 0.001323 0.000812 0.001860 Median 0.016846 0.022130 0.024437 0.026106 0.026217 0.026044 0.026388 0.020445 0.029204 Q90 0.038356 0.052066 0.056480 0.061172 0.058984 0.061170 0.058737 0.046448 0.072581 Q95 0.044255 0.059942 0.066329 0.071238 0.069291 0.071240 0.068512 0.055781 0.082386 5000 MAE 0.011756 0.015152 0.016491 0.017618 0.017328 0.017611 0.017323 0.014490 0.020988 MSE 0.000215 0.000365 0.000439 0.000507 0.000490 0.000507 0.000489 0.000317 0.000683 Median 0.010020 0.012336 0.013943 0.014923 0.014729 0.014922 0.014766 0.013010 0.017922 Q90 0.023354 0.032167 0.035496 0.037974 0.037047 0.037991 0.036445 0.027374 0.041582 Q95 0.027684 0.036030 0.040371 0.043431 0.043515 0.043434 0.042303 0.033452 0.049732 
+
+Table 4. Results on DGP2 (Centered LogNormal): robust error summaries over R = 100 replications. 
+
+n Metric l2 Cauchy GM Adapt AMB GNC Adapt GNC AMB GNC TLS ARE 200 MAE 0.440732 2.383597 2.428866 2.437117 2.441007 2.457052 2.348575 2.228842 2.442037 MSE 0.319861 5.684898 5.905568 5.977074 5.964692 6.039979 5.522237 4.972983 5.968493 Median 0.374759 2.385970 2.433266 2.458548 2.446208 2.460386 2.348119 2.225001 2.446614 Q90 0.835407 2.453506 2.501665 2.523363 2.513925 2.521825 2.452893 2.326485 2.530520 Q95 1.092987 2.474307 2.514922 2.537888 2.530098 2.537393 2.473458 2.343185 2.551792 500 MAE 0.284348 2.384501 2.431850 2.456983 2.446077 2.457022 2.342375 2.230460 2.456446 MSE 0.139719 5.686893 5.914873 6.037721 5.984414 6.037914 5.489974 4.976731 6.035749 Median 0.233371 2.385287 2.431715 2.457309 2.446462 2.457377 2.335733 2.230171 2.458230 Q90 0.599346 2.426119 2.470482 2.496481 2.488803 2.496624 2.425090 2.284673 2.504184 Q95 0.708262 2.434107 2.482159 2.508471 2.499906 2.508461 2.444517 2.296450 2.517809 1000 MAE 0.211270 2.385299 2.432640 2.457747 2.448701 2.457779 2.329159 2.231928 2.457179 MSE 0.077294 5.690247 5.918278 6.041038 5.996701 6.041196 5.426657 4.982442 6.038572 Median 0.172539 2.384034 2.432140 2.457033 2.448279 2.457028 2.324848 2.231803 2.457498 Q90 0.424567 2.417506 2.463839 2.489640 2.481998 2.489626 2.387608 2.270945 2.494162 Q95 0.530385 2.423898 2.470188 2.493565 2.486350 2.493547 2.406430 2.283688 2.506638 2000 MAE 0.156645 2.385716 2.433062 2.458169 2.449900 2.458201 2.318107 2.231655 2.458427 MSE 0.043052 5.691973 5.920085 6.042870 6.002305 6.043028 5.374561 4.980825 6.044297 Median 0.121270 2.386073 2.433150 2.457977 2.449910 2.458020 2.313820 2.231244 2.459061 Q90 0.320521 2.409282 2.456259 2.480855 2.473205 2.480893 2.358750 2.261899 2.485424 Q95 0.394085 2.417107 2.461496 2.485910 2.478026 2.485956 2.375311 2.270079 2.491608 5000 MAE 0.105697 2.385195 2.432413 2.457464 2.449503 2.457496 2.307456 2.231414 2.458300 MSE 0.018055 5.689290 5.916752 6.039241 6.000178 6.039394 5.324652 4.979428 6.043399 Median 0.091034 2.385240 2.432084 2.457331 2.449294 2.457379 2.306014 2.231975 2.458453 Q90 0.216724 2.399676 2.445936 2.470685 2.462998 2.470644 2.330204 2.251057 2.474467 Q95 0.262409 2.405306 2.450735 2.475080 2.466920 2.475065 2.338020 2.255622 2.477549 
+
+16 Adaptive Robust Estimator for Multi-Agent Reinforcement Learning 
+
+Table 5. Results on DGP3 (Student-t): robust error summaries over R = 100 replications. 
+
+n Metric l2 Cauchy GM Adapt AMB GNC Adapt GNC AMB GNC TLS ARE 200 MAE 0.079329 0.077027 0.085139 0.091804 0.089159 0.091806 0.088340 0.075760 0.106217 MSE 0.010140 0.009076 0.011105 0.013011 0.012191 0.013010 0.011964 0.009004 0.017967 Median 0.065749 0.066426 0.074241 0.079843 0.077080 0.079817 0.076304 0.065225 0.086817 Q90 0.165889 0.156022 0.175618 0.185670 0.181116 0.185723 0.181239 0.155254 0.216114 Q95 0.197331 0.181987 0.201629 0.219082 0.212402 0.219154 0.211227 0.181042 0.265095 500 MAE 0.053192 0.050686 0.055188 0.059119 0.057425 0.059175 0.057249 0.050691 0.070144 MSE 0.004389 0.003959 0.004725 0.005423 0.005150 0.005426 0.005107 0.004040 0.007499 Median 0.047555 0.042452 0.048275 0.049438 0.048677 0.049481 0.048193 0.041320 0.063075 Q90 0.108891 0.100059 0.111604 0.121137 0.118760 0.120968 0.118494 0.103940 0.144723 Q95 0.124714 0.122820 0.130709 0.143039 0.141928 0.143011 0.136721 0.123777 0.162166 1000 MAE 0.036055 0.034389 0.036687 0.038872 0.038216 0.038801 0.038277 0.035842 0.045915 MSE 0.002049 0.001818 0.002119 0.002405 0.002328 0.002397 0.002328 0.001978 0.003375 Median 0.030219 0.029908 0.031209 0.032017 0.031530 0.031926 0.031413 0.030449 0.039262 Q90 0.076757 0.071994 0.077547 0.081623 0.079673 0.081599 0.080059 0.072346 0.096297 Q95 0.087859 0.085480 0.095375 0.100148 0.098976 0.100240 0.098355 0.083406 0.117685 2000 MAE 0.027005 0.025412 0.027685 0.029742 0.029301 0.029659 0.029244 0.026076 0.035955 MSE 0.001130 0.001019 0.001203 0.001371 0.001331 0.001361 0.001327 0.001082 0.002001 Median 0.024092 0.021646 0.023765 0.025259 0.025824 0.025264 0.025472 0.022653 0.029967 Q90 0.053873 0.050953 0.057300 0.062042 0.060372 0.061152 0.059646 0.054660 0.073035 Q95 0.063653 0.059921 0.065569 0.071133 0.069951 0.070878 0.070029 0.063390 0.083720 5000 MAE 0.016767 0.015550 0.016721 0.017673 0.017497 0.017613 0.017462 0.016209 0.022485 MSE 0.000438 0.000380 0.000446 0.000505 0.000494 0.000503 0.000493 0.000417 0.000775 Median 0.014579 0.013322 0.014540 0.015093 0.015065 0.015025 0.015005 0.013681 0.019660 Q90 0.033488 0.031232 0.033738 0.035248 0.035180 0.035245 0.035151 0.033712 0.045893 Q95 0.041146 0.037998 0.041529 0.044344 0.043462 0.044339 0.043444 0.041594 0.051865 
+
+Table 6. Results on DGP4 (Symmetric Pareto): robust error summaries over R = 100 replications. 
+
+n Metric l2 Cauchy GM Adapt AMB GNC Adapt GNC AMB GNC TLS ARE 200 MAE 0.412362 1.438328 1.518497 1.522176 1.517095 1.500790 1.564941 1.595852 1.326587 MSE 0.590463 2.072604 2.413169 2.459166 2.413946 2.255401 2.458244 2.645237 1.767638 Median 0.253832 1.436787 1.502406 1.498419 1.502898 1.501094 1.564170 1.650789 1.325492 Q90 0.848063 1.514769 1.572911 1.565906 1.574786 1.566497 1.664394 1.763932 1.438845 Q95 1.155875 1.537037 1.602260 1.596185 1.600452 1.599216 1.694309 1.795882 1.461990 500 MAE 0.346482 1.439051 1.505764 1.513167 1.516621 1.497524 1.574814 1.638352 1.339161 MSE 0.441919 2.072407 2.268632 2.356217 2.371738 2.243820 2.482337 2.718181 1.798361 Median 0.214237 1.435626 1.503844 1.501487 1.503984 1.495642 1.576356 1.655792 1.345156 Q90 0.679670 1.488627 1.554075 1.548618 1.551994 1.545145 1.633025 1.723029 1.425720 Q95 1.001716 1.505555 1.565078 1.559460 1.565327 1.556368 1.648180 1.741259 1.447595 1000 MAE 0.404736 1.435188 1.568055 1.499761 1.502030 1.496583 1.581408 1.650191 1.172465 MSE 6.035140 2.060631 4.486813 2.249927 2.260321 2.244539 2.502444 2.742182 1.592772 Median 0.174446 1.433928 1.502667 1.497949 1.503413 1.497246 1.585403 1.658140 1.350682 Q90 0.617388 1.473958 1.538876 1.532762 1.537795 1.533496 1.626974 1.709116 1.419330 Q95 0.977243 1.485230 1.548406 1.543379 1.549137 1.545707 1.641047 1.721744 1.435046 2000 MAE 0.277339 1.483650 1.553332 1.549032 1.553667 1.498893 1.583741 1.640998 1.358529 MSE 1.570783 3.414067 3.633623 3.623838 3.619150 2.247003 2.509354 2.721683 1.850885 Median 0.134661 1.434549 1.503553 1.499047 1.504036 1.497680 1.589020 1.660958 1.364235 Q90 0.499724 1.461581 1.527771 1.521979 1.528136 1.521673 1.621502 1.693832 1.421070 Q95 0.723037 1.468161 1.534138 1.527576 1.533661 1.527547 1.628375 1.702626 1.432571 5000 MAE 0.172371 1.433381 1.503061 1.498617 1.504033 1.498603 1.585251 1.610063 1.376493 MSE 0.291315 2.054726 2.259312 2.245967 2.262231 2.245924 2.518299 2.668343 1.896178 Median 0.095233 1.433980 1.502981 1.498358 1.503860 1.498899 1.592539 1.660890 1.377615 Q90 0.312437 1.447404 1.516828 1.511865 1.517150 1.511360 1.608947 1.678992 1.423776 Q95 0.446499 1.452532 1.519658 1.515645 1.521086 1.515568 1.613800 1.682779 1.436759 
+
+17 Adaptive Robust Estimator for Multi-Agent Reinforcement Learning 
+
+Table 7. Results on DGP5 (Random contamination): robust error summaries over R = 100 replications.                                                                                                                                                                                                                                            
+
+> nMetric l2 Cauchy GM Adapt AMB GNC Adapt GNC AMB GNC TLS ARE 200 MAE 1.275762 0.076195 0.085042 0.092851 0.088960 0.092902 0.082093 0.069203 0.101623 MSE 2.589767 0.009235 0.011385 0.013490 0.012538 0.013503 0.010758 0.007540 0.016209 Median 1.034393 0.063265 0.071296 0.077451 0.074361 0.077476 0.064493 0.058816 0.085344 Q90 2.562352 0.154705 0.171824 0.187716 0.182085 0.187708 0.170956 0.143705 0.219979 Q95 3.040650 0.198719 0.218241 0.232770 0.224837 0.232767 0.207915 0.179176 0.251584 500 MAE 0.803141 0.045911 0.051108 0.055784 0.054351 0.055812 0.051871 0.043391 0.065892 MSE 0.999150 0.003058 0.003778 0.004492 0.004241 0.004495 0.003863 0.002878 0.006678 Median 0.647632 0.042344 0.047195 0.050444 0.050155 0.050443 0.046949 0.037627 0.055327 Q90 1.648696 0.088117 0.097799 0.107246 0.102712 0.107400 0.100482 0.087705 0.133173 Q95 1.987630 0.103240 0.113667 0.125033 0.119585 0.124933 0.113398 0.103239 0.162270 1000 MAE 0.559301 0.033795 0.037628 0.040745 0.039726 0.040750 0.038179 0.030827 0.047724 MSE 0.478545 0.001704 0.002122 0.002517 0.002390 0.002517 0.002215 0.001423 0.003510 Median 0.493729 0.028837 0.032411 0.035934 0.034792 0.035898 0.033473 0.027246 0.038480 Q90 1.097783 0.068452 0.077436 0.084156 0.082611 0.084147 0.076178 0.059305 0.097886 Q95 1.313985 0.080211 0.088760 0.097425 0.095241 0.097411 0.092335 0.073964 0.115841 2000 MAE 0.402444 0.025673 0.028418 0.030721 0.030015 0.030728 0.029719 0.023478 0.036463 MSE 0.252472 0.000999 0.001222 0.001433 0.001362 0.001434 0.001334 0.000846 0.002092 Median 0.342546 0.022232 0.024743 0.026295 0.026008 0.026305 0.026590 0.020136 0.030277 Q90 0.814902 0.052501 0.057734 0.063119 0.060448 0.063057 0.059638 0.046563 0.077859 Q95 0.983756 0.063525 0.067954 0.074476 0.071649 0.074469 0.071677 0.054432 0.091296 5000 MAE 0.254088 0.015730 0.017206 0.018488 0.018124 0.018487 0.018104 0.014815 0.023329 MSE 0.099986 0.000389 0.000470 0.000546 0.000526 0.000546 0.000520 0.000330 0.000835 Median 0.214689 0.013191 0.014152 0.015257 0.014829 0.015312 0.014979 0.013506 0.020551 Q90 0.528963 0.031760 0.035809 0.038966 0.038035 0.038986 0.038560 0.027583 0.047545 Q95 0.641245 0.037724 0.041986 0.045497 0.044011 0.045536 0.043942 0.032985 0.055688
+
+Across the five data-generating processes (DGP1–DGP5), the dominant pattern is that ARE offers its clearest benefits precisely in the regimes where robustness is genuinely needed: skewed heavy tails, infinite-variance tails, and explicit contamination. In the skewed heavy-tailed DGP2 (centered log-normal) and the infinite-variance DGP4 (symmetric Pareto with tail index ξ ∈ (1 , 2) ), several non-MoM robust losses (e.g., Cauchy/GM/Adapt/AMB and their GNC counterparts) exhibit a pronounced non-vanishing error floor: their MAE and Median remain essentially flat as n grows, with high quantiles (Q90/Q95) also failing to improve materially. In contrast, ARE consistently suppresses the tail risk in these settings, yielding markedly smaller Q90/Q95 and, in DGP4, substantially improved overall error summaries at representative sample sizes (e.g., a striking reduction in MAE/MSE at n = 1000 ). This behavior is consistent with the two-layer robustness of the method: the inner GNC mechanism stabilizes the optimization of a nonconvex robust objective, while the outer median-of-means aggregation truncates the influence of a minority of blocks containing extreme observations, thereby preventing the estimator from being dominated by rare but catastrophic samples. The advantage becomes even more transparent under explicit contamination (DGP5). Under random contamination, the sample mean ( l2 ) suffers a dramatic degradation in all metrics, while ARE maintains small errors and noticeably better tail quantiles, indicating strong protection against sporadic outliers. Under adversarial contamination, l2 is effectively “locked” by the injected outliers: its MAE stays near 5 and does not meaningfully decrease with n, reflecting a complete breakdown of classical averaging. In sharp contrast, ARE remains accurate and continues to improve with n, with particularly strong control of Q90/Q95, which highlights its robustness to worst-case corruption consistent with MoM-type guarantees (so long as a majority of blocks remain uncontaminated). Importantly, in the benign baselines DGP1 (Gaussian) and DGP3 (Student-t with finite variance), ARE incurs only a modest constant-factor efficiency loss relative to the best light-tail methods (e.g., l2 or GNC TLS ) and does not exhibit instability. Overall, these results suggest that ARE trades a small amount of efficiency in easy regimes for substantial and reliable gains in heavy-tailed and contaminated regimes, with its most consistent improvements appearing in the high-quantile error metrics (Q90/Q95) that directly capture tail-risk robustness. 
+
+## D. Introduction to Adaptive Losses. 
+
+In this paper, we employ the adaptive loss function introduced by Barron (2019), defined as follows: 
+
+ρ(ϵ; α, c ) = |α − 2|
+
+α
+
+
+
+1 + (ϵ/c )2
+
+|α − 2|
+
+α/ 2
+
+− 1
+
+!
+
+, (9) where α ∈ (−∞ , 2] is a shape parameter controlling the loss’s robustness, while c > 0 is a scale parameter governing the quadratic bowl near ϵ = 0 . Through simple analysis, we can immediately recover several common losses—such as the L2, 18 Adaptive Robust Estimator for Multi-Agent Reinforcement Learning 
+
+Charbonnier/pseudo-Huber/L1-L2, Cauchy/Lorentzian (Black & Anandan, 1996), Geman–McClure (Geman & Geman, 1986), and Welsch/Leclerc losses (Dennis Jr & Welsch, 1978; Leclerc, 1989)—as special cases of the adaptive loss ρ(ϵ; α, c )
+
+in (9) by setting α to particular values, as summarized as follows, 
+
+ρ(ϵ; α, c ) = 
+
+ 
+
+> 12
+
+(ϵ/c )2 α = 2 
+
+p(ϵ/c )2 + 1 − 1 α = 1 log   12 (ϵ/c )2 + 1  α = 0 2( ϵ/c )2/ (ϵ/c )2 + 4  α = −21 − exp  − 12 (ϵ/c )2 α = −∞ 
+
+, ∂ρ ∂ϵ (ϵ; α, c ) = 
+
+
+
+ϵ/c 2 α = 2 (ϵ/c 2)/p(ϵ/c )2 + 1 α = 1 2ϵ/ (ϵ2 + 2 c2) α = 0 (ϵ/c 2) (ϵ/c )2/4 + 1 −3/2 α = −2(ϵ/c 2) exp  − 12 (ϵ/c )2 α = −∞ -5 0 5
+
+0
+
+1
+
+2
+
+3 ρ(²; α, c = 1)         
+
+> α= 2
+> α= 1
+> α= 0
+> α=−2
+> α=− ∞
+
+-5 0 5
+
+0
+
+1
+
+2
+
+3 ρ(²; α = 0 , c )   
+
+> c= 0 .5
+> c= 1 .0
+> c= 2 .0
+
+-5 0 5
+
+-5 
+
+0
+
+5
+
+ρ² (²; α, c = 1)         
+
+> α= 2
+> α= 1
+> α= 0
+> α=−2
+> α=− ∞
+
+-5 0 5
+
+-1 
+
+0
+
+1
+
+ρ² (²; α = 0 , c )   
+
+> c= 0 .5
+> c= 1 .0
+> c= 2 .0
+
+-5 0 5
+
+0
+
+1
+
+2
+
+## ρ(²; α, c = 1)         
+
+> α= 2
+> α= 1
+> α= 0
+> α=−2
+> α=− ∞
+
+-5 0 5
+
+-5 
+
+0
+
+5
+
+ρ² (²; α, c = 1)         
+
+> α= 2
+> α= 1
+> α= 0
+> α=−2
+> α=− ∞
+
+-5 0 5
+
+0
+
+1
+
+2
+
+3 ρ(²; α = 0 , c )    
+
+> c= 0 .5
+> c= 1 .0
+> c= 1 .5
+> c= 2 .0
+
+-5 0 5
+
+-1 
+
+0
+
+1
+
+ρ² (²; α = 0 , c )    
+
+> c= 0 .5
+> c= 1 .0
+> c= 1 .5
+> c= 2 .0
+
+Figure 8. Adaptive robust loss ρ(ϵ; α, c ) and its gradient under different parameter settings. From left to right and top to bottom, the four panels show: ( top-left ) the loss ρ(ϵ; α, c ) for varying shape α with fixed c = 1 ; ( top-right ) the corresponding gradient ∂ρ/∂ϵ for varying α with fixed c = 1 ; ( bottom-left ) the loss for varying scale c with fixed α = 0 ; ( bottom-right ) the corresponding gradient for varying c with fixed α = 0 .
+
+The adaptive loss ρ(ϵ; α, c ) provides a unified two-parameter family that spans a broad spectrum of robust penalties through a shape parameter α ∈ (−∞ , 2] and a scale parameter c > 0. As illustrated in Figure 8, decreasing α continuously interpolates from the quadratic ℓ2 loss ( α = 2 ), which assigns unbounded influence to large residuals, to increasingly robust losses whose growth slows down for large |ϵ|. This continuum makes α a direct knob for robustness: smaller α reduces the marginal penalty on large errors and thus mitigates the effect of outliers or heavy-tailed noise. The scale parameter c
+
+controls the width of the near-zero quadratic regime. For fixed α (e.g., α = 0 ), larger c enlarges the approximately quadratic region around ϵ = 0 , thereby behaving more like least squares on moderate residuals and improving statistical efficiency under mild noise. Conversely, smaller c triggers earlier deviation from quadratic growth, increasing robustness by treating moderate-to-large residuals more conservatively. Hence, c mediates a local efficiency–robustness trade-off by determining the transition point at which the loss begins to downweight large errors. The gradients ∂ρ/∂ϵ make the robustness mechanism explicit through the induced influence function. When α is small, the gradient decays rapidly as |ϵ| grows and can approach zero for very large residuals, effectively suppressing the contribution of extreme observations during optimization. This bounded (or rapidly vanishing) influence stabilizes gradient-based updates and prevents optimization from being dominated by a small number of corrupted samples. The scale c further adjusts the decay rate of ∂ρ/∂ϵ : smaller c yields faster saturation (stronger outlier rejection but potentially slower progress when many residuals are moderately large), whereas larger c preserves larger gradients over a wider range (often faster convergence locally but weaker robustness). Overall, the (α, c ) parameterization enables data-dependent control of robustness versus 19 Adaptive Robust Estimator for Multi-Agent Reinforcement Learning 
+
+efficiency within a single coherent framework, which is particularly useful for robust estimation and learning under heavy-tailed or contaminated data. 
+
+## E. The GNC Paradigm for Mean Estimation in Subsection 4.2 
+
+This appendix details the graduated nonconvexity (GNC) procedure used to solve the nonconvex subproblem (5) (equivalently (8) ) after obtaining (α(1) , c (1) ). We present (i) a GNC surrogate for the adaptive loss, (ii) the induced IRLS weights and the associated Black–Rangarajan (BR) regularization, and (iii) a complete GNC-IRLS algorithm with practical continuation schedules and stopping criteria. Let f (β, α (1) ) be a shape mapping controlled by a continuation parameter β. We construct a one-parameter family of surrogate losses by replacing the shape parameter α(1) with f (β, α (1) ):
+
+ρβ (ϵ; α(1) , c (1) ) := ρ
+
+
+
+ϵ; f (β, α (1) ), c (1) 
+
+, (10) where ρ(·; α, c ) denotes the adaptive robust loss used in the main text. To avoid ambiguity and ensure numerical stability, we recommend writing ρβ in the standard Barron form with a scale parameter: 
+
+ρβ (ϵ; α(1) , c (1) ) = |f − 2|
+
+f
+
+ (ϵ/c (1) )2
+
+|f − 2| + 1 
+
+ f
+
+> 2
+
+− 1
+
+ , f ≡ f (β, α (1) ). (11) This definition guarantees the correct quadratic limit as f → 2 and matches the commonly used scaling convention (cf. Barron-style adaptive losses). If a different scaling convention is adopted in the main text, (11) should be adjusted accordingly; the derivations below remain identical up to constant factors. A valid shape mapping must satisfy 
+
+lim 
+
+> β→β1
+
+f (β, α (1) ) = 2 , lim 
+
+> β→β2
+
+f (β, α (1) ) = α(1) , f (β, α (1) ) ≤ 2, (12) where β1, β 2 are surrogate-dependent constants (or endpoints) determined by the chosen parameterization of β. Intuitively, 
+
+f (β, α (1) ) → 2 yields a convex quadratic surrogate, while f (β, α (1) ) → α(1) recovers the original adaptive loss (typically nonconvex). We consider three concrete choices of f (β, α (1) ):
+
+Example 1 (Polynomial decay; β : ∞ → 1). 
+
+f1(β, α (1) ) = 2 − 2 − α(1) 
+
+βp , p > 0, (13) so that β → ∞ implies f1 → 2 and β → 1 implies f1 → α(1) .
+
+Example 2 (Exponential transition; β : 0 + → ∞ ). 
+
+f2(β, α (1) ) = α(1) e−1/β + 2  1 − e−1/β , (14) so that β → 0+ implies f2 → 2 and β → ∞ implies f2 → α(1) .
+
+Example 3 (Rational form; β : 0 + → ∞ ). 
+
+f3(β, α (1) ) = 2 + α(1) βq
+
+1 + βq , q > 0, (15) so that β → 0+ implies f3 → 2 and β → ∞ implies f3 → α(1) .20 Adaptive Robust Estimator for Multi-Agent Reinforcement Learning 50 100 
+
+## β
+
+-2 
+
+0
+
+2     
+
+> f1(β, α (1) )
+> α(1) =−2
+> α(1) = 0
+> α(1) = 1
+
+0 5 10 
+
+## β
+
+-2 
+
+0
+
+2     
+
+> f2(β, α (1) )
+> α(1) =−2
+> α(1) = 0
+> α(1) = 1
+
+0 5 10 
+
+## β
+
+-2 
+
+0
+
+2     
+
+> f3(β, α (1) )
+> α(1) =−2
+> α(1) = 0
+> α(1) = 1
+
+Figure 9. Three instantiations of the interpolation function f (β, α (1) ): (a) polynomial decay f1 = 2 − 2−α(1)  
+
+> βp
+
+with β : ∞ → 1; (b) exponential transition f2 = α(1) e−1/β + 2(1 − e−1/β ) with β : 0 + → ∞ ; (c) rational form f3 = 2+ α(1) βq 
+
+> 1+ βq
+
+with β : 0 + → ∞ , all smoothly interpolating between the quadratic regime ( f = 2 ) and the adaptive regime ( f = α(1) ) for different values of α(1) ∈ {− 2, 0, 1}.
+
+Let ϵi = Xi − X and consider the surrogate objective 
+
+min 
+
+> X∈R
+
+1
+
+m
+
+> m
+
+X
+
+> i=1
+
+ρβ (ϵi; α(1) , c (1) ). (16) At fixed (β, α (1) , c (1) ), IRLS solves a sequence of weighted least-squares problems 
+
+min 
+
+> X∈R
+
+12m
+
+> m
+
+X
+
+> i=1
+
+wi ϵ2 
+
+> i
+
+, (17) with weights obtained by matching derivatives w.r.t. X:
+
+wi = 1
+
+ϵi
+
+∂∂ϵ i
+
+ρβ (ϵi; α(1) , c (1) ). (18) With ρβ defined in (11), straightforward differentiation yields 
+
+wi = 1(c(1) )2
+
+ (ϵi/c (1) )2
+
+|f − 2| + 1 
+
+ f 
+
+> 2−1
+
+, f = f (β, α (1) ). (19) For numerical robustness, it is often convenient to use the following special-case expressions when f is close to singular values (and otherwise use (19)): 
+
+wi =
+
+ 
+
+> 1(c(1) )2
+
+, f = 2 ,  
+
+> 2
+> ϵ2
+> i+2( c(1) )2
+
+, f = 0 ,
+
+> 1(c(1) )2
+
+ (ϵi/c (1) )2  
+
+> |f−2|
+
++ 1 
+
+ f 
+
+> 2−1
+
+, otherwise ,
+
+(20) and to clip wi to (0 , 1] when required by the BR-duality constraint. Optimizing (17) jointly over (X, (wi)mi=1 ) without regularization degenerates to wi = 0 for all i. To prevent this, we exploit the Black–Rangarajan duality (Black & Rangarajan, 1996). Under standard conditions (e.g., concavity of ϕ(z) := ρβ (c(1) √z)
+
+in z), there exists an outlier-process penalty Φρβ (·) such that 
+
+ρβ (ϵ) = min 
+
+> w∈(0 ,1]
+
+12 wϵ 2 + Φ ρβ (w). (21) Plugging (21) into (16) yields the BR-regularized formulation 
+
+min 
+
+> X∈R, w i∈(0 ,1]
+
+12m
+
+> m
+
+X
+
+> i=1
+
+
+
+wiϵ2 
+
+> i
+
++ Φ ρβ (wi)
+
+
+
+, (22) 21 Adaptive Robust Estimator for Multi-Agent Reinforcement Learning 
+
+which matches (8) with the surrogate loss ρβ . At fixed X, minimizing (22) over wi recovers the IRLS update (18) . For fixed weights, (17) admits a closed-form minimizer: 
+
+X ←
+
+Pmi=1 wiXi
+
+Pmi=1 wi
+
+. (23) The GNC continuation progressively changes β so that f (β, α (1) ) moves from the quadratic regime ( f ≈ 2) to the target regime ( f ≈ α(1) ). Example 1 schedule ( β : ∞ → 1). We initialize β0 at a large value (e.g., β0 ≫ 1 so that f1(β0, α (1) ) ≈ 2) and decrease it geometrically toward 1:
+
+βk = 1 + βk−1 − 1
+
+γ , γ > 1. (24) This update ensures βk ↓ 1 and hence f1(βk, α (1) ) ↓ α(1) .Example 2/3 schedule ( β : 0 + → ∞ ). We initialize β0 small (e.g., β0 ≪ 1 so that f2/3(β0, α (1) ) ≈ 2) and increase it geometrically: 
+
+βk = γβ k−1, γ > 1, (25) so that βk ↑ ∞ and f2/3(βk, α (1) ) → α(1) .We terminate the outer continuation once 
+
+f (β, α (1) ) − α(1) ≤ εf , (26) or after a maximum number of continuation steps. Algorithm 1 summarizes the full procedure. The method alternates IRLS updates of (X, (wi)mi=1 ) at a fixed β, and then updates β to increase nonconvexity. This yields a robust solver with improved basins of attraction compared to directly optimizing the original nonconvex loss. We use geometric schedules (24) (Example 1) or (25) (Examples 2–3) with γ ∈ [1 .2, 2] in our experiments. For initialization, we set X to the sample mean (or median for additional robustness) and choose β0 such that f (β0, α (1) ) is sufficiently close to 2 (e.g., |f (β0, α (1) ) − 2| ≤ 10 −2). Each inner iteration costs O(m) due to the closed-form updates (19) and (23) . Hence the total cost is O(m T max Kmax ). The continuation parameter β controls the rate at which nonconvexity is injected. A faster schedule (larger γ in (24) –(25) ) can accelerate convergence but may reduce robustness to poor initialization; conversely, a slower schedule yields more stable iterations with larger attraction basins at the expense of additional outer steps. 22 Adaptive Robust Estimator for Multi-Agent Reinforcement Learning 
+
+Algorithm 1 GNC-IRLS for solving (8) (Step-1 update) 
+
+Require: Measurements (Xi)mi=1 ; parameters (α(1) , c (1) ); mapping f (β, α (1) ); schedule β ← S (β); tolerances εX , ε f ;iteration limits Tmax (inner) and Kmax (outer). 
+
+Ensure: eX(1) .
+
+1: X ← 1
+
+> m
+
+Pmi=1 Xi (or median); choose β ← β0 such that f (β0, α (1) ) ≈ 2.
+
+2: for k = 1 , 2, . . . , K max do 
+
+3: f ← f (β, α (1) ).
+
+4: for t = 1 , 2, . . . , T max do 
+
+5: ϵi ← Xi − X, wi ← 1 
+
+> ϵi
+> ∂∂ϵ i
+
+ρ(ϵi; f, c (1) ), w i ← min {1, max {δ, w i}} , ∀i
+
+6: Xnew ←  
+
+> Pmi=1 wiXi
+> Pmi=1 wi
+
+7: if |Xnew − X| ≤ εX then 
+
+8: X ← Xnew ;
+
+9: end if 
+
+10: X ← Xnew .
+
+11: end for 
+
+12: if f (β, α (1) ) − α(1) ≤ εf then 
+
+13: break 
+
+14: end if 
+
+15: β ← S (β) (increase nonconvexity) .
+
+16: end for 
+
+17: return eX(1) ← X.
+
+## F. Technical Proofs 
+
+F.1. Proof of Lemma 4.1 
+
+Proof. We divide the analysis into two cases. When α > 2, we have |α − 2| = α − 2, so 
+
+ρ(ϵ; α, c ) = α − 2
+
+α
+
+"
+
+1 + (ϵ/c )2
+
+α − 2
+
+α/ 2
+
+− 1
+
+#
+
+.
+
+Let 
+
+y = 1 + (ϵ/c )2
+
+α − 2 (≥ 1) .
+
+Differentiating with respect to α (via the product and chain rules) yields 
+
+∂ρ ∂α = 2
+
+α2
+
+ yα/ 2 − 1 + α − 22α yα/ 2 log y − 12 yα/ 2−1(y − 1) .
+
+For fixed α, ϵ, and c, define the function F : [1 , ∞) → R by 
+
+F (y) := ∂ρ ∂α (ϵ, α, c ) = 2
+
+α2
+
+ yα/ 2 − 1 + α − 22α yα/ 2 log y − 12 yα/ 2−1(y − 1) .
+
+Direct differentiation in y gives 
+
+ddy F (y) = α − 24 yα/ 2−2 1 − y + y log y ≥ 0,
+
+Moreover, 
+
+F (1) = 2
+
+α2 (1 − 1) + α − 22α · 1 · log 1 − 12 · 1 · (1 − 1) = 0 .
+
+Hence, F (y) ≥ 0 for all y ≥ 1, with strict inequality when y > 1 (equivalently, ϵ̸ = 0 ). When α < 2, we have 
+
+ρ(ϵ; α, c ) = 2 − αα
+
+"
+
+1 + (ϵ/c )2
+
+2 − α
+
+α/ 2
+
+− 1
+
+#
+
+.
+
+23 Adaptive Robust Estimator for Multi-Agent Reinforcement Learning 
+
+Let 
+
+y = 1 + (ϵ/c )2
+
+2 − α (≥ 1) .
+
+Differentiating with respect to α gives 
+
+∂ρ ∂α = − 2
+
+α2
+
+ yα/ 2 − 1 + 2 − α
+
+2α yα/ 2 log y + 12 yα/ 2−1(y − 1) .
+
+For fixed α, ϵ, and c, define G : [1 , ∞) → R by 
+
+G(y) := ∂ρ ∂α (ϵ, α, c ) = − 2
+
+α2
+
+ yα/ 2 − 1 + 2 − α
+
+2α yα/ 2 log y + 12 yα/ 2−1(y − 1) .
+
+Differentiating in y gives 
+
+dG dy = 2 − α
+
+4 yα/ 2−2 y log y − (y − 1) .
+
+The fact that y log y − (y − 1) ≥ 0 for y ≥ 1 (a standard inequality, with equality only at y = 1 ) implies dG dy ≥ 0, since 
+
+2 − α > 0 and yα/ 2−2 ≥ 0. As in the previous case, G(1) = 0 , so G(y) ≥ 0 for all y ≥ 1, with strict inequality when 
+
+y > 1 (i.e., ϵ̸ = 0 ). Combining both cases, we conclude that ∂ρ/∂α ≥ 0 for all α̸ = 0 , 2, with strict inequality unless ϵ = 0 .At α = 0 and α = 2 , the function is not differentiable in α due to the absolute value, but the one-sided limits from the analysis above confirm that the loss increases as α moves away from these points whenever ϵ̸ = 0 .
+
+F.2. Basic properties of the score function Lemma F.1. Fix α ∈ (0 , 1] and k = 2 − α ∈ [1 , 2) . There exist constants Lα, C α, c α > 0 depending only on α such that for all ε ∈ R and c > 0:1. (Bounded score) 
+
+|ψ(ε; α, c )| ≤ min 
+
+ |ε|
+
+c2 , Lα
+
+c
+
+
+
+.
+
+2. (Derivative bound) Let ψ′(ε; α, c ) := ∂∂ε ψ(ε; α, c ). Then 
+
+|ψ′(ε; α, c )| ≤ Cα
+
+c2 , ψ′(0; α, c ) = 1
+
+c2 .
+
+3. (Local positive curvature) If |ε| ≤ c, then 
+
+ψ′(ε; α, c ) ≥ cα
+
+c2 .
+
+Proof. Write u := ( ε/c )2/k ≥ 0 and s := 1 + u ≥ 1. Then ψ(ε; α, c ) = εc2 sα/ 2−1. Since α/ 2 − 1 ≤ 0 and s ≥ 1,we have sα/ 2−1 ≤ 1, hence |ψ| ≤ | ε| /c 2. Moreover, |ψ(ε; α, c )| decays for large |ε| (because α − 1 ≤ 0), hence 
+
+sup ε |ψ(ε; α, c )| ≤ Lα/c for some constant Lα.Differentiate to obtain 
+
+ψ′(ε; α, c ) = 1
+
+c2 sα/ 2−2h
+
+1 + ( α − 1) u
+
+i
+
+.
+
+This yields ψ′(0) = 1 /c 2 and |ψ′| ≤ Cα/c 2. If |ε| ≤ c then u ≤ 1/k ≤ 1 and 1 + ( α − 1) u ≥ α; also sα/ 2−2 ≥
+
+(1 + 1 /k )α/ 2−2. Thus ψ′(ε; α, c ) ≥ cα/c 2 with cα := α(1 + 1 /k )α/ 2−2 > 0.
+
+F.3. Proof of Theorem 5.3 
+
+We prove Theorem 5.3 by comparing the empirical score bgm to its population counterpart gm in a neighborhood of μ. The key idea is that, under finite variance and with cm → ∞ , the score behaves locally like the linear score of the sample mean, while still being well-defined even when α < 1. We first show that gm identifies a unique population root θm near μ and that θm is close enough to μ so that its contribution is asymptotically negligible after √m scaling. We then show that bgm
+
+has a unique central root with high probability and finally derive a Bahadur-type linearization around θm, which reduces the problem to a triangular-array CLT. 24 Adaptive Robust Estimator for Multi-Agent Reinforcement Learning 
+
+Lemma F.2 (Population identification near μ). Assume Assumption 5.2 and fix α ∈ (0 , 1] . Let cm → ∞ . Then there exist constants c0 > 0 and m0 such that for all m ≥ m0 and all x with |x − μ| ≤ cm/4,
+
+− 2
+
+c2
+
+> m
+
+≤ g′
+
+> m
+
+(x) ≤ − c0
+
+c2
+
+> m
+
+.
+
+In particular, gm is strictly decreasing on {x : |x − μ| ≤ cm/4}, hence the equation gm(x) = 0 has a unique solution on this interval, denoted by θm.Proof. Recall g′
+
+> m
+
+(x) = −E[ψ′(X − x; α, c m)] . The upper bound follows from Lemma F.1(ii). For the lower bound, define 
+
+Ax := {| X − x| ≤ cm}. If |x − μ| ≤ cm/4 then {| X − μ| ≤ cm/2} ⊆ Ax, hence by Chebyshev, 
+
+P(Ax) ≥ 1 − 4σ2
+
+c2
+
+> m
+
+.
+
+On Ax, Lemma F.1(iii) gives ψ′(X − x; α, c m) ≥ cα/c 2
+
+> m
+
+; on Acx, Lemma F.1(ii) gives |ψ′| ≤ Cα/c 2
+
+> m
+
+. Therefore 
+
+E[ψ′(X − x; α, c m)] ≥ c0/c 2 
+
+> m
+
+for m large enough, implying g′
+
+> m
+
+(x) ≤ − c0/c 2
+
+> m
+
+.
+
+Lemma F.3 (Population bias) . Assume Assumption 5.2 and let θm be the unique solution of gm(θ) = 0 in {| θ − μ| ≤ cm/4}.Then 
+
+|θm − μ| ≤ Cσ 2
+
+cm
+
+,
+
+for a constant C depending only on α.Proof. The goal is to bound the (small) mismatch gm(μ) induced by the robust score at finite cm. Let ε := X − μ and 
+
+s := 1 + ( ε/c m)2/k . Then 
+
+ψ(ε; α, c m) = εc2
+
+> m
+
++ εc2
+
+> m
+
+
+
+sα/ 2−1 − 1
+
+
+
+.
+
+Since E[ε] = 0 ,
+
+E[ψ(X − μ; α, c m)] = 1
+
+c2
+
+> m
+
+E
+
+h
+
+ε sα/ 2−1 − 1i
+
+.
+
+Split B = {| ε| ≤ cm} and Bc. On B, with u = ( ε/c m)2/k ∈ [0 , 1] , a Taylor remainder bound gives sα/ 2−1 − 1 ≤ Cu ;hence 
+
+|ε| sα/ 2−1 − 1 ≤ C |ε| u = C |ε|3
+
+c2
+
+> m
+
+≤ C ε2
+
+cm
+
+.
+
+On Bc, sα/ 2−1 − 1 ≤ 1 and |ε| 1{| ε| > c m} ≤ ε2/c m, so the same bound holds. Therefore 
+
+|E[ψ(X − μ; α, c m)] | ≤ Cσ 2
+
+c3
+
+> m
+
+, i.e., |gm(μ)| ≤ Cσ 2
+
+c3
+
+> m
+
+.
+
+By the mean value theorem, for some ¯θ between μ and θm,
+
+0 = gm(θm) = gm(μ) + ( θm − μ)g′
+
+> m
+
+(¯θ).
+
+Lemma F.2 ensures g′
+
+> m
+
+(¯θ) ≥ c0/c 2
+
+> m
+
+, hence 
+
+|θm − μ| ≤ |gm(μ)|
+
+g′
+
+> m
+
+(¯θ) ≤ Cσ 2/c 3
+
+> m
+
+c0/c 2
+
+> m
+
+= C′σ2
+
+cm
+
+.
+
+Proof of Theorem 5.3. Step 1 (reduce to a CLT around the population root). Let θm be the unique solution of gm(θ) = 0 
+
+in |θ − μ| ≤ cm/4. Lemma F.3 yields |θm − μ| ≤ Cσ 2/c m, hence 
+
+√m |θm − μ| ≤ Cσ 2
+
+√mcm
+
+= Cσ 2m−γ → 0.
+
+25 Adaptive Robust Estimator for Multi-Agent Reinforcement Learning 
+
+Thus it suffices to prove √m( eXm − θm) ⇒ N (0 , σ 2) and then apply Slutsky. (Informally, θm is the “population correction” induced by robustness, and it vanishes under our finite-variance tuning.) 
+
+Step 2 (existence/uniqueness of the central root). We show that bgm is strictly monotone on the central interval and that it changes sign at the endpoints. Using Lemma F.1(ii) and Lemma F.2, one shows that with probability tending to one, 
+
+inf  
+
+> x∈[μ−rm,μ +rm]
+
+bg′
+
+> m
+
+(x) ≥ c0
+
+2c2
+
+> m
+
+.
+
+Hence bgm is strictly monotone on [μ − rm, μ + rm]. Moreover, |ψ(·; α, c m)| ≤ Lα/c m implies 
+
+sup 
+
+> x∈[μ−rm,μ +rm]
+
+|bgm(x) − gm(x)| = Op
+
+ 1
+
+cm
+
+√m
+
+
+
+.
+
+Since gm has slope ≍ 1/c 2 
+
+> m
+
+on this interval and rm/c 2 
+
+> m
+
+≫ 1/(cm
+
+√m) under our tuning, the endpoint signs of bgm match those of gm with probability → 1, so bgm crosses 0 exactly once on the interval. This yields the existence and uniqueness of 
+
+eXm on an event Em with P(Em) → 1.
+
+Step 3 (Bahadur representation). On Em, by the mean value theorem there exists ¯Xm between eXm and θm such that 
+
+0 = bgm( eXm) = bgm(θm) + ( eXm − θm)bg′
+
+> m
+
+( ¯Xm),
+
+so 
+
+eXm − θm = − bgm(θm)
+
+bg′
+
+> m
+
+( ¯Xm) .
+
+Since gm(θm) = 0 ,
+
+bgm(θm) = − 1
+
+m
+
+> m
+
+X
+
+> i=1
+
+h
+
+ψ(Xi − θm; α, c m) − Eψ(X − θm; α, c m)
+
+i
+
+.
+
+Also bg′
+
+> m
+
+( ¯Xm) = E[ψ′(X − θm; α, c m)] + op(1 /c 2
+
+> m
+
+) ∼ 1/c 2
+
+> m
+
+, hence 
+
+1
+
+bg′
+
+> m
+
+( ¯Xm) = c2
+
+> m
+
+(1 + op(1)) .
+
+Therefore 
+
+√m( eXm − θm) = c2
+
+> m
+
+√m
+
+> m
+
+X
+
+> i=1
+
+h
+
+ψ(Xi − θm; α, c m) − Eψ(X − θm; α, c m)
+
+i
+
++ op(1) .
+
+This linearization makes explicit that the leading term is an average of i.i.d. centered scores. 
+
+Step 4 (triangular-array CLT). Let Zi,m := c2
+
+> m
+
+ψ(Xi −θm; α, c m)−Eψ(X −θm; α, c m). Then c2
+
+> m
+
+ψ(X −θm; α, c m) →
+
+X −μ a.s., and c2
+
+> m
+
+ψ(·) ≤ |·| ; dominated convergence yields Var( Zi,m ) → σ2. Lindeberg holds because E[( X −μ)2] < ∞.Thus 1√m
+
+Pmi=1 Zi,m ⇒ N (0 , σ 2). Combining with Step 3 gives √m( eXm − θm) ⇒ N (0 , σ 2), and Step 1 finishes. 
+
+F.4. Proof of Theorem 5.5 
+
+The proof follows the same three-step structure as the finite-variance case: (i) identify a unique population root θm and bound its bias relative to μ; (ii) control the empirical score at θm with high probability; and (iii) convert score control into an error bound for the empirical root via a mean-value expansion. The only difference is that, under a mere (1 + ϵ)-moment, the scale cm must be tuned at the deviation level to balance truncation bias and concentration. 
+
+Lemma F.4 (Bias under (1 + ϵ)-moment) . Assume Assumption 5.4 and fix α ∈ (0 , 1] . Let θm be the unique root of 
+
+gm(θ) = 0 in {| θ − μ| ≤ cm/4}. Then 
+
+|θm − μ| ≤ C v1+ ϵ
+
+cϵm
+
+.
+
+Proof. The argument parallels Lemma F.3, replacing second-moment tail bounds by (1 + ϵ)-moment bounds (Markov). One shows |gm(μ)| ≤ Cv 1+ ϵ/c 2+ ϵm and |g′
+
+> m
+
+(·)| ≍ 1/c 2 
+
+> m
+
+on |x − μ| ≤ cm/4, yielding |θm − μ| ≤ Cv 1+ ϵ/c ϵm.26 Adaptive Robust Estimator for Multi-Agent Reinforcement Learning 
+
+Lemma F.5 (Variance bound for ψ). Assume Assumption 5.4. Then for any x ∈ R and c > 0,
+
+Var  ψ(X − x; α, c ) ≤ C v1+ ϵ
+
+c3+ ϵ ,
+
+for a constant C depending only on α and ϵ.Proof. By Lemma F.1(i), 
+
+ψ(ε; α, c )2 ≤ ε2
+
+c4 1{| ε| ≤ c} + L2
+
+> α
+
+c2 1{| ε| > c }.
+
+For the first term, use |ε|2 1{| ε| ≤ c} ≤ c1−ϵ |ε|1+ ϵ. For the second term, Markov gives P(|ε| > c ) ≤ E[|ε|1+ ϵ]/c 1+ ϵ.Combine these bounds and use E[|X − x|1+ ϵ] ≤ C(E[|X − μ|1+ ϵ] + |x − μ|1+ ϵ).
+
+Lemma F.6 (Bernstein control) . Assume Assumption 5.4 and let θm be the population root. Then for any δ ∈ (0 , 1/2) , with probability at least 1 − δ,
+
+|bgm(θm)| ≤ C
+
+s
+
+v1+ ϵ log(2 /δ )
+
+m c 3+ ϵm
+
++ log(2 /δ )
+
+m · 1
+
+cm
+
+!
+
+.
+
+Proof. We control the centered empirical score by a bounded-variance Bernstein inequality. Let Yi := ψ(Xi − θm; α, c m) −
+
+E[ψ(X − θm; α, c m)] . Then bgm(θm) = −(1 /m ) Pmi=1 Yi. Lemma F.1(i) gives |Yi| ≤ 2Lα/c m. Lemma F.5 gives 
+
+Var( Yi) ≤ Cv 1+ ϵ/c 3+ ϵm . Apply Bernstein’s inequality for bounded independent variables. 
+
+Proof of Theorem 5.5. Let θm be the population root. We first relate the estimation error to the empirical score at θm. By the mean value theorem (on the event where bgm is strictly monotone and crosses zero in Im), 
+
+eXm − θm = − bgm(θm)
+
+bg′
+
+> m
+
+( ¯Xm)
+
+for some ¯Xm between eXm and θm. The identification argument (population E[ψ′] ≍ 1/c 2 
+
+> m
+
+and a uniform LLN for bg′ 
+
+> m
+
+on 
+
+Im) gives 
+
+bg′
+
+> m
+
+( ¯Xm) ≥ c0
+
+2c2
+
+> m
+
+with probability at least 1 − δ/ 2 for m large enough. Hence 
+
+eXm − θm ≤ Cc 2 
+
+> m
+
+|bgm(θm)| .
+
+Next, apply Lemma F.6 (with probability at least 1 − δ/ 2) to obtain 
+
+eXm − θm ≤ C
+
+r v1+ ϵ log(2 /δ )
+
+m c 1−ϵ 
+
+> 2
+> m
+
++ log(2 /δ )
+
+m cm
+
+!
+
+.
+
+Finally, we add the population bias controlled by Lemma F.4: 
+
+eXm − μ ≤ eXm − θm + |θm − μ| ≤ C
+
+r v1+ ϵ log(2 /δ )
+
+m c 1−ϵ 
+
+> 2
+> m
+
++ log(2 /δ )
+
+m cm + v1+ ϵ
+
+cϵm
+
+!
+
+.
+
+The chosen tuning 
+
+cm = cm(δ) = τ
+
+ v1+ ϵm
+
+log(2 /δ )
+
+ 11+ ϵ
+
+balances the bias term v1+ ϵ/c ϵm with the leading stochastic term, and a direct calculation shows that each term on the right-hand side is bounded by C1
+
+ v1+ ϵ log( C2/δ )
+
+> m
+
+ ϵ
+
+> 1+ ϵ
+
+for suitable constants C1, C 2.27 Adaptive Robust Estimator for Multi-Agent Reinforcement Learning 
+
+## G. Proofs for the ARE results 
+
+G.1. A median-boosting lemma Lemma G.1 (Median boosting) . Let Z1, . . . , Z k be independent random variables and let θ ∈ R. Assume that for some 
+
+r > 0 and p ∈ (0 , 1/2) ,
+
+P |Zj − θ| ≤ r ≥ 1 − p, j = 1 , . . . , k. 
+
+Let median( Z1, . . . , Z k) be any median. Then 
+
+P  median( Z1, . . . , Z k) − θ > r  ≤ exp   − 2k(1 /2 − p)2.
+
+In particular, if p = 1 /4, then P(| median( Z1, . . . , Z k) − θ| > r ) ≤ e−k/ 8.Proof. Let Ij := 1{| Zj − θ| ≤ r}. Then E[Ij ] ≥ 1 − p > 1/2 and {Ij } are independent. If | median( Z1, . . . , Z k) − θ| > r ,then at least ⌈k/ 2⌉ of the Zj ’s must fall outside [θ − r, θ + r], i.e., Pkj=1 Ij ≤ k/ 2. Hence, by Hoeffding’s inequality, 
+
+P
+
+
+
+> k
+
+X
+
+> j=1
+
+Ij ≤ k/ 2
+
+ = P
+
+
+
+> k
+
+X
+
+> j=1
+
+(Ij − EIj ) ≤ − k(EI1 − 1/2) 
+
+ ≤ exp   − 2k(EI1 − 1/2) 2 ≤ exp   − 2k(1 /2 − p)2.
+
+G.2. Proof of Theorem 5.7 
+
+Proof of Theorem 5.7. Fix δ0 := 1 /4 and let m = ⌊n/k ⌋. Apply Theorem 5.5 on each block (with confidence level δ0) to obtain: there exist constants C′
+
+> 1
+
+, C ′ 
+
+> 2
+
+> 0 such that for all sufficiently large m,
+
+P | eXj − μ| ≤ rm := C′
+
+> 1
+
+ v1+ ϵ log( C′
+
+> 2
+
+/δ 0)
+
+m
+
+ ϵ
+
+> 1+ ϵ
+
+!
+
+≥ 1 − δ0 = 34 .
+
+Since the blocks are disjoint, eX1, . . . , eXk are independent. Therefore Lemma G.1 (with p = δ0 = 1 /4) yields 
+
+P |eμ − μ| > r m
+
+ ≤ e−k/ 8.
+
+Choosing k = ⌈8 log(2 /δ )⌉ gives e−k/ 8 ≤ δ/ 2. It remains to rewrite rm in terms of n and δ. Since m = ⌊n/k ⌋ ≥ n/ (2 k)
+
+for n large enough, 
+
+rm ≤ C
+
+ v1+ ϵ kn
+
+ ϵ
+
+> 1+ ϵ
+
+≤ C
+
+ v1+ ϵ log(2 /δ )
+
+n
+
+ ϵ
+
+> 1+ ϵ
+
+.
+
+Absorb constants and the log(2 /δ ) vs log( C2/δ ) adjustment into C1, C 2 to conclude the claim. 
+
+G.3. Proof of Theorem 5.6 Lemma G.2 (Median CLT with local density) . Let Y1, . . . , Y k be i.i.d. with distribution function F and density f . Assume 
+
+F (μ) = 1 /2, f (μ) > 0, and f is continuous at μ. Let bμ := median( Y1, . . . , Y k). Then 
+
+√k (bμ − μ) ⇒ N
+
+
+
+0, 14f (μ)2
+
+
+
+.
+
+Proof. This is the classical sample-median CLT (e.g., via the Bahadur representation for sample quantiles). 
+
+Proof of Theorem 5.6. Let k = kn → ∞ and m = ⌊n/k ⌋ → ∞ . By Theorem 5.3, for each block, 
+
+√m ( eXj − μ) ⇒ N (0 , σ 2), j = 1 , . . . , k. 
+
+28 Adaptive Robust Estimator for Multi-Agent Reinforcement Learning  
+
+> Table 9. Training hyperparameters for dual-agent ILR training.
+
+Hyperparameter Value Description 
+
+Learning rate (Agent 1) 1 × 10 −6 Adam optimizer Learning rate (Agent 2) 1 × 10 −6 Adam optimizer Sampling temperature 0.5 —Training batch size 32 —Number of episodes 10 —Max prompt length 6144 Tokens Max generation length 1536 Tokens Top-p sampling 0.95 Nucleus sampling Discount factor γ 1.0 —KL estimator K2 —Advantage estimator ILR —Precision BF16 Mixed precision  
+
+> Table 10. Reward noise hyperparameters (Sparse Cauchy Outlier Noise).
+
+Parameter Symbol Value Description 
+
+Noise type — Outlier Sparse one-sided heavy-tail Group contamination prob. p 0.2 Probability of corrupting a group Cauchy scale γ 1.0 Controls distribution width Spike scale α 10 .0 Noise magnitude scaling factor Spike clip ∆max 10 .0 Maximum absolute noise value Noise target — Argmax Inject noise to group maximum Let Fm and fm denote the cdf and density of eXj . Under the additional local normal approximation condition stated in the theorem, we have Fm(μ) = 1 /2 and 
+
+fm(μ) = 
+
+√mσ√2π (1 + o(1)) .
+
+Apply Lemma G.2 to Yj = eXj with F = Fm and f = fm:
+
+√k (eμ − μ) ⇒ N
+
+
+
+0, 14fm(μ)2
+
+
+
+= N
+
+
+
+0, π
+
+2 · σ2
+
+m
+
+
+
+.
+
+Multiplying both sides by √m gives 
+
+√mk (eμ − μ) = √n (eμ − μ) ⇒ N
+
+
+
+0, π
+
+2 σ2
+
+.
+
+Finally, since ¯Xn has asymptotic variance σ2/n , we obtain ARE( eμ, ¯Xn) = 2 /π .
+
+## H. Hyperparameter Settings for The Experiments 
+
+All experiments are conducted on a single node with 8 A800 GPUs. We use Ray for distributed training orchestration and vLLM for efficient inference with 4 inference engines and tensor parallelism of 2. Gradient checkpointing and Adam parameter offloading are enabled to optimize GPU memory usage. To simulate reward uncertainty in realistic scenarios, we introduce a sparse one-sided heavy-tail spike noise based on the Cauchy distribution. 29

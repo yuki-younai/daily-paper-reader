@@ -6,100 +6,100 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-03-23
-- 运行时间：2026-03-23 19:42:39 UTC
+- 最新运行日期：2026-03-24
+- 运行时间：2026-03-24 19:43:03 UTC
 - 运行状态：成功
 - 本次总论文数：26
 - 精读区：15
 - 速读区：11
 
 ### 今日简报（AI）
-今日深度解析 26 篇 AI 论文，聚焦 LLM 深度推理优化与后训练性能极限的突破。
-重点关注 FIPO 算法对复杂推理能力的诱导，以及马尔可夫状态在打破大模型能力天花板中的关键作用。
-建议从 VLA 模型的指令增强和智能体记忆机制入手，探索多模态具身智能与强化学习的最新融合趋势。
-- 详情：[/202603/23/README](/202603/23/README)
+今日深度解析 26 篇 AI 论文，重点攻克低成本强化学习与长文本压缩难题。
+PivotRL 实现了低算力下的高精度智能体训练，TAMTRL 则通过奖励重塑优化了多轮对话中的长上下文处理。
+建议关注强化学习在科学智能体及模型剪枝中的跨界应用。
+- 详情：[/202603/24/README](/202603/24/README)
 
 ### 精读区论文标签
-1. [FIPO: Eliciting Deep Reasoning with Future-KL Influenced Policy Optimization](/202603/23/2603.19835v1-fipo-eliciting-deep-reasoning-with-future-kl-influenced-policy-optimization)  
+1. [PivotRL: High Accuracy Agentic Post-Training at Low Compute Cost](/202603/24/2603.21383v1-pivotrl-high-accuracy-agentic-post-training-at-low-compute-cost)  
    标签：评分：10.0/10、query:rlaif
-   evidence：大模型深度推理的策略优化
-2. [Breaking the Capability Ceiling of LLM Post-Training by Reintroducing Markov States](/202603/23/2603.19987v1-breaking-the-capability-ceiling-of-llm-post-training-by-reintroducing-markov-states)  
+   evidence：结合SFT与强化学习的智能体任务后训练，优化长程任务表现
+2. [TAMTRL: Teacher-Aligned Reward Reshaping for Multi-Turn Reinforcement Learning in Long-Context Compression](/202603/24/2603.21663v1-tamtrl-teacher-aligned-reward-reshaping-for-multi-turn-reinforcement-learning-in-long-context-compression)  
    标签：评分：10.0/10、query:rlaif
-   evidence：在大模型后训练强化学习中重新引入马尔可夫状态
-3. [Experience is the Best Teacher: Motivating Effective Exploration in Reinforcement Learning for LLMs](/202603/23/2603.20046v1-experience-is-the-best-teacher-motivating-effective-exploration-in-reinforcement-learning-for-llms)  
+   evidence：用于LLM长文本处理和奖励重塑的多轮强化学习
+3. [P^2O: Joint Policy and Prompt Optimization](/202603/24/2603.21877v1-p2o-joint-policy-and-prompt-optimization)  
    标签：评分：10.0/10、query:rlaif
-   evidence：利用后验经验进行大模型推理强化学习
-4. [Gym-V: A Unified Vision Environment System for Agentic Vision Research](/202603/23/2603.15432v2-gym-v-a-unified-vision-environment-system-for-agentic-vision-research)  
+   evidence：大语言模型推理的策略与提示词联合强化学习优化
+4. [Demystifying Reinforcement Learning for Long-Horizon Tool-Using Agents: A Comprehensive Recipe](/202603/24/2603.21972v1-demystifying-reinforcement-learning-for-long-horizon-tool-using-agents-a-comprehensive-recipe)  
+   标签：评分：10.0/10、query:rlaif
+   evidence：在大模型智能体的复杂多轮环境中扩展强化学习
+5. [PA3: Policy-Aware Agent Alignment through Chain-of-Thought](/202603/24/2603.14602v2-pa3-policy-aware-agent-alignment-through-chain-of-thought)  
    标签：评分：9.0/10、query:rlaif
-   evidence：用于强化学习智能体视觉研究的统一视觉环境系统
-5. [AcceRL: A Distributed Asynchronous Reinforcement Learning and World Model Framework for Vision-Language-Action Models](/202603/23/2603.18464v2-accerl-a-distributed-asynchronous-reinforcement-learning-and-world-model-framework-for-vision-language-action-models)  
+   evidence：使用奖励机制的大模型智能体多阶段对齐方法
+6. [CoVerRL: Breaking the Consensus Trap in Label-Free Reasoning via Generator-Verifier Co-Evolution](/202603/24/2603.17775v2-coverrl-breaking-the-consensus-trap-in-label-free-reasoning-via-generator-verifier-co-evolution)  
    标签：评分：9.0/10、query:rlaif
-   evidence：视觉-语言-动作模型与世界模型的强化学习
-6. [Balancing the Reasoning Load: Difficulty-Differentiated Policy Optimization with Length Redistribution for Efficient and Robust Reinforcement Learning](/202603/23/2603.18533v2-balancing-the-reasoning-load-difficulty-differentiated-policy-optimization-with-length-redistribution-for-efficient-and-robust-reinforcement-learning)  
+   evidence：推理任务中的生成器-验证器迭代协同演化
+7. [Towards Practical World Model-based Reinforcement Learning for Vision-Language-Action Models](/202603/24/2603.20607v1-towards-practical-world-model-based-reinforcement-learning-for-vision-language-action-models)  
    标签：评分：9.0/10、query:rlaif
-   evidence：针对大推理模型处理复杂任务的策略优化
-7. [Do Post-Training Algorithms Actually Differ? A Controlled Study Across Model Scales Uncovers Scale-Dependent Ranking Inversions](/202603/23/2603.19335v1-do-post-training-algorithms-actually-differ-a-controlled-study-across-model-scales-uncovers-scale-dependent-ranking-inversions)  
+   evidence：视觉-语言-动作（VLA）模型的强化学习微调
+8. [LongCat-Flash-Prover: Advancing Native Formal Reasoning via Agentic Tool-Integrated Reinforcement Learning](/202603/24/2603.21065v1-longcat-flash-prover-advancing-native-formal-reasoning-via-agentic-tool-integrated-reinforcement-learning)  
    标签：评分：9.0/10、query:rlaif
-   evidence：后训练对齐算法的受控研究
-8. [Adaptive Layerwise Perturbation: Unifying Off-Policy Corrections for LLM RL](/202603/23/2603.19470v1-adaptive-layerwise-perturbation-unifying-off-policy-corrections-for-llm-rl)  
+   evidence：用于迭代形式化推理的智能体工具集成强化学习
+9. [RoboAlign: Learning Test-Time Reasoning for Language-Action Alignment in Vision-Language-Action Models](/202603/24/2603.21341v1-roboalign-learning-test-time-reasoning-for-language-action-alignment-in-vision-language-action-models)  
    标签：评分：9.0/10、query:rlaif
-   evidence：使用层级扰动统一LLM强化学习的离策修正
-9. [Teaching an Agent to Sketch One Part at a Time](/202603/23/2603.19500v1-teaching-an-agent-to-sketch-one-part-at-a-time)  
+   evidence：在视觉-语言-动作模型中使用强化学习进行语言动作对齐
+10. [AgentHER: Hindsight Experience Replay for LLM Agent Trajectory Relabeling](/202603/24/2603.21357v1-agenther-hindsight-experience-replay-for-llm-agent-trajectory-relabeling)  
    标签：评分：9.0/10、query:rlaif
-   evidence：多模态语言模型智能体的多轮过程奖励强化学习
-10. [A Subgoal-driven Framework for Improving Long-Horizon LLM Agents](/202603/23/2603.19685v1-a-subgoal-driven-framework-for-improving-long-horizon-llm-agents)  
+   evidence：用于LLM智能体轨迹重标记和离线数据增强的后验经验回放
+11. [KG-Hopper: Empowering Compact Open LLMs with Knowledge Graph Reasoning via Reinforcement Learning](/202603/24/2603.21440v1-kg-hopper-empowering-compact-open-llms-with-knowledge-graph-reasoning-via-reinforcement-learning)  
    标签：评分：9.0/10、query:rlaif
-   evidence：自主LLM智能体的强化学习微调
-11. [LoopRPT: Reinforcement Pre-Training for Looped Language Models](/202603/23/2603.19714v1-looprpt-reinforcement-pre-training-for-looped-language-models)  
+   evidence：大模型多跳推理的强化学习
+12. [Counterfactual Credit Policy Optimization for Multi-Agent Collaboration](/202603/24/2603.21563v1-counterfactual-credit-policy-optimization-for-multi-agent-collaboration)  
    标签：评分：9.0/10、query:rlaif
-   evidence：针对语言模型潜空间推理步骤的强化信号
-12. [FedPDPO: Federated Personalized Direct Preference Optimization for Large Language Model Alignment](/202603/23/2603.19741v1-fedpdpo-federated-personalized-direct-preference-optimization-for-large-language-model-alignment)  
+   evidence：基于反事实信用分配的多智能体强化学习，用于大模型协作
+13. [Adaptive Robust Estimator for Multi-Agent Reinforcement Learning](/202603/24/2603.21574v1-adaptive-robust-estimator-for-multi-agent-reinforcement-learning)  
    标签：评分：9.0/10、query:rlaif
-   evidence：大模型对齐的联邦偏好优化
-13. [Enhancing Alignment for Unified Multimodal Models via Semantically-Grounded Supervision](/202603/23/2603.19807v1-enhancing-alignment-for-unified-multimodal-models-via-semantically-grounded-supervision)  
+   evidence：用于大语言模型协作推理的多智能体强化学习
+14. [On the Direction of RLVR Updates for LLM Reasoning: Identification and Exploitation](/202603/24/2603.22117v1-on-the-direction-of-rlvr-updates-for-llm-reasoning-identification-and-exploitation)  
    标签：评分：9.0/10、query:rlaif
-   evidence：统一多模态模型对齐的微调框架
-14. [What If Consensus Lies? Selective-Complementary Reinforcement Learning at Test Time](/202603/23/2603.19880v1-what-if-consensus-lies-selective-complementary-reinforcement-learning-at-test-time)  
+   evidence：分析大模型推理强化学习中更新方向的影响
+15. [Closed-Loop Verbal Reinforcement Learning for Task-Level Robotic Planning](/202603/24/2603.22169v1-closed-loop-verbal-reinforcement-learning-for-task-level-robotic-planning)  
    标签：评分：9.0/10、query:rlaif
-   evidence：用于提升大语言模型推理能力的测试时强化学习
-15. [Chain-of-Adaptation: Surgical Vision-Language Adaptation with Reinforcement Learning](/202603/23/2603.20116v1-chain-of-adaptation-surgical-vision-language-adaptation-with-reinforcement-learning)  
-   标签：评分：9.0/10、query:rlaif
-   evidence：利用强化学习进行视觉语言适配与领域对齐
+   evidence：使用LLM执行器和VLM评论家进行机器人规划的言语强化学习
 
 ### 速读区论文标签
-1. [D-MEM: Dopamine-Gated Agentic Memory via Reward Prediction Error Routing](/202603/23/2603.14597v1-d-mem-dopamine-gated-agentic-memory-via-reward-prediction-error-routing)  
+1. [Protein Design with Agent Rosetta: A Case Study for Specialized Scientific Agents](/202603/24/2603.15952v1-protein-design-with-agent-rosetta-a-case-study-for-specialized-scientific-agents)  
    标签：评分：8.0/10、query:rlaif
-   evidence：自主大模型智能体的智能记忆系统
-2. [Delightful Policy Gradient](/202603/23/2603.14608v1-delightful-policy-gradient)  
+   evidence：利用大模型推理和迭代优化的自主智能体
+2. [Mostly Text, Smart Visuals: Asymmetric Text-Visual Pruning for Large Vision-Language Models](/202603/24/2603.16001v1-mostly-text-smart-visuals-asymmetric-text-visual-pruning-for-large-vision-language-models)  
    标签：评分：8.0/10、query:rlaif
-   evidence：新型策略梯度加权方法
-3. [Enhancing Linguistic Generalization of VLA: Fine-Tuning OpenVLA via Synthetic Instruction Augmentation](/202603/23/2603.16044v1-enhancing-linguistic-generalization-of-vla-fine-tuning-openvla-via-synthetic-instruction-augmentation)  
+   evidence：针对大视觉语言模型处理模态差异的非对称剪枝
+3. [MOSAIC: Composable Safety Alignment with Modular Control Tokens](/202603/24/2603.16210v1-mosaic-composable-safety-alignment-with-modular-control-tokens)  
    标签：评分：8.0/10、query:rlaif
-   evidence：微调视觉-语言-动作（VLA）模型以增强具身智能中的语言泛化能力
-4. [Communication-Aware Multi-Agent Reinforcement Learning for Decentralized Cooperative UAV Deployment](/202603/23/2603.16141v1-communication-aware-multi-agent-reinforcement-learning-for-decentralized-cooperative-uav-deployment)  
+   evidence：通过可学习控制令牌进行安全对齐
+4. [Efficient Reasoning on the Edge](/202603/24/2603.16867v1-efficient-reasoning-on-the-edge)  
    标签：评分：8.0/10、query:rlaif
-   evidence：自主无人机智能体的多智能体强化学习
-5. [Diffusion Reinforcement Learning via Centered Reward Distillation](/202603/23/2603.14128v1-diffusion-reinforcement-learning-via-centered-reward-distillation)  
+   evidence：通过强化学习和有监督微调进行推理后训练优化
+5. [How Log-Barrier Helps Exploration in Policy Optimization](/202603/24/2603.15001v1-how-log-barrier-helps-exploration-in-policy-optimization)  
    标签：评分：7.0/10、query:rlaif
-   evidence：通过奖励蒸馏对生成模型进行强化学习微调
-6. [Nudging Hidden States: Training-Free Model Steering for Chain-of-Thought Reasoning in Large Audio-Language Models](/202603/23/2603.14636v1-nudging-hidden-states-training-free-model-steering-for-chain-of-thought-reasoning-in-large-audio-language-models)  
+   evidence：策略优化的对数屏障正则化收敛
+6. [Counteractive RL: Rethinking Core Principles for Efficient and Scalable Deep Reinforcement Learning](/202603/24/2603.15871v1-counteractive-rl-rethinking-core-principles-for-efficient-and-scalable-deep-reinforcement-learning)  
    标签：评分：7.0/10、query:rlaif
-   evidence：大型音频语言模型中的跨模态迁移
-7. [Interference-Aware K-Step Reachable Communication in Multi-Agent Reinforcement Learning](/202603/23/2603.15054v1-interference-aware-k-step-reachable-communication-in-multi-agent-reinforcement-learning)  
+   evidence：高效且可扩展的智能体深度强化学习
+7. [Efficient LLM Serving for Agentic Workflows: A Data Systems Perspective](/202603/24/2603.16104v1-efficient-llm-serving-for-agentic-workflows-a-data-systems-perspective)  
    标签：评分：7.0/10、query:rlaif
-   evidence：用于协作任务和通信的多智能体强化学习
-8. [Emergent Dexterity via Diverse Resets and Large-Scale Reinforcement Learning](/202603/23/2603.15789v1-emergent-dexterity-via-diverse-resets-and-large-scale-reinforcement-learning)  
+   evidence：智能体工作流和大模型调用的服务框架
+8. [RetailBench: Evaluating Long-Horizon Autonomous Decision-Making and Strategy Stability of LLM Agents in Realistic Retail Environments](/202603/24/2603.16453v1-retailbench-evaluating-long-horizon-autonomous-decision-making-and-strategy-stability-of-llm-agents-in-realistic-retail-environments)  
    标签：评分：7.0/10、query:rlaif
-   evidence：用于自主机器人智能体的大规模强化学习
-9. [Sample-Efficient Hypergradient Estimation for Decentralized Bi-Level Reinforcement Learning](/202603/23/2603.14867v1-sample-efficient-hypergradient-estimation-for-decentralized-bi-level-reinforcement-learning)  
+   evidence：评估大模型智能体的长程自主决策能力
+9. [ViSA: Visited-State Augmentation for Generalized Goal-Space Contrastive Reinforcement Learning](/202603/24/2603.14887v1-visa-visited-state-augmentation-for-generalized-goal-space-contrastive-reinforcement-learning)  
    标签：评分：6.0/10、query:rlaif
-   evidence：用于战略决策智能体的双层强化学习
-10. [Iterative Learning Control-Informed Reinforcement Learning for Batch Process Control](/202603/23/2603.15180v1-iterative-learning-control-informed-reinforcement-learning-for-batch-process-control)  
+   evidence：用于策略更新的目标条件强化学习
+10. [ViSA: Visited-State Augmentation for Generalized Goal-Space Contrastive Reinforcement Learning](/202603/24/2603.14887v2-visa-visited-state-augmentation-for-generalized-goal-space-contrastive-reinforcement-learning)  
    标签：评分：6.0/10、query:rlaif
-   evidence：控制律的迭代优化
-11. [Beyond the Covariance Trap: Unlocking Generalization in Same-Subject Knowledge Editing for Large Language Models](/202603/23/2603.15518v1-beyond-the-covariance-trap-unlocking-generalization-in-same-subject-knowledge-editing-for-large-language-models)  
+   evidence：目标条件策略的对比强化学习
+11. [CLAG: Adaptive Memory Organization via Agent-Driven Clustering for Small Language Model Agents](/202603/24/2603.15421v1-clag-adaptive-memory-organization-via-agent-driven-clustering-for-small-language-model-agents)  
    标签：评分：6.0/10、query:rlaif
-   evidence：大语言模型的后训练知识编辑与泛化
+   evidence：小语言模型智能体的智能体驱动记忆组织
 
 
 <div class="dpr-home-promo-card">
