@@ -1,0 +1,577 @@
+Title: Delightful Distributed Policy Gradient
+
+URL Source: https://arxiv.org/pdf/2603.20521v1
+
+Published Time: Tue, 24 Mar 2026 00:20:11 GMT
+
+Number of Pages: 18
+
+Markdown Content:
+# Delightful Distributed Policy Gradient 
+
+Ian Osband 
+
+Google DeepMind 
+
+iosband@google.com 
+
+# Abstract 
+
+Distributed reinforcement learning trains on data from stale, buggy, or mismatched actors, producing actions with high surprisal (negative log-probability) under the learner’s policy. The core difficulty is not surprising data per se, but negative learning from surprising data . High-surprisal failures can dominate the update direction despite carrying little useful signal, while high-surprisal successes reveal opportunities the current policy would otherwise miss. The Delightful Policy Gra-dient (DG) separates these cases by gating each update with delight, the product of advantage and surprisal, suppressing rare failures and amplifying rare successes without behavior probabilities. Under contaminated sampling, the cosine similarity between the standard policy gradient and the true gradient collapses, while DG’s grows as the policy improves. No sign-blind reweighting, including exact impor-tance sampling, can reproduce this effect. On MNIST with simulated staleness, DG without off-policy correction outperforms importance-weighted PG with exact behavior probabilities. On a transformer sequence task with staleness, actor bugs, reward corruption, and rare discovery, DG achieves roughly 10 × lower error. When all four frictions act simultaneously, its compute advantage is order-of-magnitude and grows with task complexity. 
+
+# 1 Introduction 
+
+Distributed reinforcement learning has become a central systems challenge in frontier AI. Large-scale post-training for reasoning models relies on policy-gradient updates executed through distributed stacks [ 16 , 7]. Rollout generation and gradient computation may use different backends, actor versions, or inference implementations. Even nominally identical model weights can assign different token probabilities across these systems, and small mismatches compound across tokens, silently turning on-policy training into off-policy training [ 27 , 8]. Stale actors, buggy implementations, and mismatched inference stacks all generate actions with high surprisal under the learner’s current policy. Existing approaches ask how to reconstruct or stabilize the policy-gradient update under this mis-match. Importance weighting corrects for actor–learner differences when behavior probabilities are known [ 21 ]. Trust-region and clipped-ratio methods such as TRPO and PPO constrain unstable updates [ 22 , 23 ]. But these methods treat surprising failures and successes symmetrically. Super-vised fine-tuning is far more stable and requires no behavior probabilities, even though it also trains on logged data from distributed actors. One salient difference is that SFT only increases the log-probability of observed targets, whereas policy-gradient methods must also apply negative updates. This suggests the toxic case is negative learning from surprising data : high-surprisal actions with negative advantage carry little signal yet dominate the update direction. The Delightful Policy Gradient (DG) addresses this directly. DG gates each update by delight ,the product of advantage and action surprisal, i.e. the negative log-probability under the current policy [ 17 ]. When a surprising action succeeds (positive delight), the gate opens and the update is amplified; when a surprising action fails (negative delight), the gate closes and the update is suppressed. Because delight depends only on the learner’s current policy, DG requires no behavior probabilities and no knowledge of the friction source. 
+
+Preprint. 
+
+> arXiv:2603.20521v1 [cs.LG] 20 Mar 2026
+
+The limitation of standard policy gradients under stale and corrupted data is foundational, not a matter of scale. On MNIST with simulated staleness, plain PG breaks down and exact importance weighting only partially repairs it. DG remains strong across the full delay range and, even at the extreme, outperforms both plain and importance-weighted PG given fresh data (Section 3). A bandit analysis explains why: DG’s relative alignment advantage grows as the policy improves, while standard PG collapses under contamination (Section 4). Reweighting methods that treat successes and failures identically, including exact importance sampling, cannot replicate this. If the policy-gradient direction is already wrong in these controlled settings, recovering exact behavior probabilities will not fix it at scale. On a transformer sequence task, we isolate four distributed frictions: staleness, actor bugs, reward corruption, and rare discovery (Section 5). DG achieves roughly 10 × lower error across all friction levels tested. When these frictions are combined, DG’s advantage strengthens with sequence complexity: its compute advantage is order-of-magnitude and grows as longer-horizon problems become harder to solve (Section 5.5). 
+
+# 2 Delightful Policy Gradient 
+
+We briefly recall the Delightful Policy Gradient (DG) of Osband [17] . The standard policy gradient forms per-sample updates gt = Ut∇θ log πθ (At | H t), where Ut is an advantage estimate and 
+
+Ht is the history observed before action At. DG augments each term with action surprisal ℓt =
+
+− log πθ (At | H t), which measures how unlikely the chosen action was under the learner’s current policy. This surprisal is policy-relative: it depends on the probability the learner assigns to the action, not on how or why the actor generated it. DG then defines delight as their product χt = Utℓt.1
+
+Delight is positive when an unlikely action has positive advantage and negative when an unlikely action has negative advantage; for actions the policy already expects, surprisal is small and delight stays near zero. 
+
+2.1 Implementation 
+
+DG gates each policy-gradient term by wt = σ(χt/η ), where σ(x) = 1 /(1 + e−x) is the sigmoid and η > 0 is a temperature. The resulting update over a batch B of samples is 
+
+∆θ ∝ X
+
+> t∈B
+
+wtgt = X
+
+> t∈B
+
+σ(χt/η ) Ut ∇θ log πθ (At | H t). (1) Positive delight opens the gate and largely preserves the update; negative delight closes the gate and suppresses it. For common actions, surprisal is small, so the gate stays near 12 and acts as an approximately constant rescaling. We use η = 1 throughout. DG adds one sigmoid and one multiply per sample, with no measurable wall-clock overhead [17]. REINFORCE weights updates by advantage alone [ 26 ]. Methods based on probability ratios, including importance sampling, PPO-style clipping [ 23 ], and V-trace [ 5], require behavior log-probabilities; DG does not. The companion paper also studies continuous actions using batch-whitened delight to control scale; all experiments here use discrete actions. 
+
+2.2 Why Delight, Not Importance Weights? 
+
+Like an importance ratio, DG assigns a scalar weight to each policy-gradient term. The difference is what that weight measures. An importance ratio π(a)/μ (a) corrects mismatch between learner and actor, but requires the behavior probability μ(a), which in distributed systems is often unknown, stale, or corrupted. Even when available, such ratios are numerically fragile: as the learner improves, it assigns high probability to actions the stale actor rarely took, producing large ratios that force practitioners to clip or truncate and accept the resulting bias [23, 5]. The deeper difference is conceptual. The action was taken and the reward was observed; what matters is not how likely some actor was to generate this sample, but how much the learner can gain from it. DG therefore asks a different question: how useful is this sample for the learner’s current policy? High delight marks surprising successes that reveal something new; negative delight marks surprising failures on actions the learner has already learned to avoid. Because surprisal is computed under the learner’s current policy, DG remains well-defined even when the actor’s policy is unknown.    
+
+> 1We write χfor the Greek chara : delight.
+
+23 MNIST Diagnostic 
+
+Before studying distributed frictions at scale, we show that the core limitation already appears in the simplest possible setting. We cast MNIST classification as a contextual bandit: given image x, the agent samples a label a ∈ { 0, . . . , 9} from a softmax policy πθ and receives reward r = I{a = y}.The true label y is never observed, so learning must proceed entirely from reward signal. We train a two-layer ReLU network with Adam [ 11 ] over batches of B=100 images, using the model’s expected reward under its own policy as a value baseline. We simulate staleness by having the actor use parameters from D gradient steps ago, modeling a distributed system in which actors lag behind the learner. We compare three methods: REINFORCE, which uses the stale-policy gradient without off-policy correction; PG, which applies importance weighting with exact behavior probabilities (the strongest possible off-policy correction); and DG (η=1 ), which uses no importance weights at all. All methods share the same learning rate, batch size, and value baseline; the only difference is how each method weights its gradient update. Full experimental details, including learning rate selection and baseline sensitivity, appear in Appendix A.     
+
+> (a) Learning curves at D=1000 .(b) Classification error at K=10 k vs. delay D.
+
+Figure 1: MNIST under staleness. Results average over 30 seeds with ±1 standard error. Exact importance weighting only partially repairs delayed PG, while DG remains strong across the full delay range (Figure 1). At D=1000 , REINFORCE fails completely and error remains at 90% ;the delay sweep shows that performance degrades sharply beyond D=3 (Figure 1b). Importance weighting rescues PG from total collapse, but convergence remains slow: after 10 k steps, PG reaches roughly 8% error. DG reaches 2% error over the same horizon, a 4× improvement, without using any importance weights. Across the full delay range, DG stays at or below 2% error, while PG degrades steadily from 3% to 8% .Figure 2 measures gradient quality directly by plotting 1 − cos( g, g ∗) against the ideal policy-gradient direction g∗ 
+
+> PG
+
+and the cross-entropy direction g∗
+
+> CE
+
+; lower is better. REINFORCE gradients are uncorrelated with either target. Importance-weighted PG recovers partial alignment, but DG achieves substantially lower misalignment to both, and the gap grows with training. Section 4 formalizes this self-reinforcing dynamic in a setting where the true gradient is analytically tractable. This is the best-case scenario for off-policy correction: PG has access to exact behavior probabilities and faces no other friction, yet DG still dominates without any importance weights. The issue is not how to recover the policy gradient under delay, but whether the policy gradient is the right target under contamination. The next section formalizes this distinction. 
+
+# 4 Tabular Bandit under Contaminated Sampling 
+
+We now formalize the mechanism behind the MNIST result. To isolate it analytically, we move to a tabular bandit, replacing function approximation with an explicit table over action probabilities so that the policy gradient can be computed in closed form. We prove that DG’s gradient alignment improves as the policy improves, while standard PG alignment collapses whenever contamination places mass on disfavored actions. This creates a self-reinforcing dynamic: a better policy produces less noise, which produces a better gradient. Proofs appear in Appendix B. 3(a) Misalignment versus g∗  
+
+> PG .(b) Misalignment versus g∗
+> CE .
+
+Figure 2: Gradient misalignment under staleness ( D=1000 ). (a) Distance to ideal PG direction g∗
+
+> PG
+
+.
+
+(b) Distance to cross-entropy direction g∗
+
+> CE
+
+. Results average over 30 seeds with ±1 standard error. Consider a K-armed bandit with a single correct arm y∗ and a softmax policy π = softmax( z) over logits z ∈ RK . The objective is the success probability J(z) = π(y∗) and the true ascent direction is 
+
+∇z J = π(y∗) ϕπ (y∗), where ϕπ (a) := ea − π is the logit-space gradient of log π(a). The reward is 
+
+r = I{a = y∗} with baseline b = 1 /2, so each action yields advantage U (a) ∈ { +1 /2, −1/2}. We call an action disfavored (incorrect) if a̸ = y∗ and parameterize near optimality by π(y∗) = 1 − δ,where δ ≪ 1 is the total mass on incorrect actions. Near optimality, each incorrect action has small probability but its logit-space gradient ϕπ (a) = ea − π has Θ(1) norm, because the unit vector ea dominates; yet its projection onto the true gradient ∇z J is only O(δ) [17 ]. Contamination that over-samples these actions therefore injects large-norm, nearly orthogonal terms that rotate the gradient direction away from ∇z J.We model distributed friction by sampling actions from a contaminated distribution μ = (1 −ρ)π+ρ ν ,where ρ ∈ [0 , 1] is a contamination rate and ν is an arbitrary distribution over actions. For example, an 
+
+ε-greedy actor corresponds to ν = Unif([ K]) and ρ = ε. Gradients are computed under the current learner policy π, not under μ. Under normalized steps z+ = z + αg/ ∥g∥, expected improvement is controlled by cosine similarity to ∇z J [17]. Let ℓ(a) := − log π(a) denote surprisal and write w(a) := σ U (a)ℓ(a)/η  for the DG gate. The expected updates under PG and DG are 
+
+¯gPG := Ea∼μ[U (a) ϕπ (a)] , ¯gDG := Ea∼μ[w(a) U (a) ϕπ (a)] .
+
+The only difference is the gate w(a). For disfavored failures ( a̸ = y∗, U = −1/2), this gate is at most π(a)1/(2 η):
+
+Lemma 1 (Polynomial suppression of disfavored failures) .
+
+For any disfavored action a̸ = y∗, U (a) = −1/2 and w(a) ≤ π(a)1/(2 η).
+
+For the default η = 1 , each disfavored failure is multiplied by at most pπ(a). No individual term is dramatically suppressed, but the aggregate effect is decisive: DG turns contamination into an overlap moment that shrinks as the policy improves. The following propositions make this precise. 
+
+Proposition 1 (PG degrades under contamination) .
+
+Let π(y∗) = 1 − δ and sample actions from μ = (1 − ρ)π + ρ ν . As δ → 0 with ρ, K, η fixed, 
+
+cos(¯ gPG , ∇z J) = O δ/ (ρ(1 − ν(y∗)) + δ).
+
+Under PG, the effective contamination is ρ(1 − ν(y∗)) , the contamination mass on disfavored actions. For any ν with 1 − ν(y∗) = Ω(1) , this does not shrink as the policy improves, so PG alignment vanishes as δ → 0. DG’s suppression limits this damage. Define the overlap moment Mν (π) := P 
+
+> a̸=y∗
+
+ν(a) π(a)1/(2 η), which measures how much leverage the contamination distribution ν retains on disfavored actions after DG’s gate. 
+
+Proposition 2 (DG limits contamination leverage) .
+
+Let π(y∗) = 1 − δ and sample actions from μ = (1 − ρ)π + ρ ν . As δ → 0 with ρ, K, η fixed, 
+
+cos(¯ gDG , ∇z J) = Ω  δ/ (ρ M ν (π) + δ).
+
+4Under DG, the effective contamination is ρ M ν (π), and this quantity vanishes as the policy improves. That is the self-reinforcing dynamic: a better policy suppresses disfavored actions more strongly, which improves the gradient direction, which in turn improves the policy further. For example, when 
+
+ν = Unif([ K]) and η = 1 , Mν (π) = Θ( pδ/K ), so DG’s effective contamination decays as √δ
+
+while PG’s remains Θ( ρ); for η ≤ 1/2 the suppression is even stronger (Appendix B). The better the policy, the greater DG’s relative advantage. This is not a fixed robustness constant; it is a dynamic that strengthens during learning. 
+
+Corollary 1 (DG advantage grows with optimality) . For any fixed ρ > 0 and any contamination distribution ν with 1 − ν(y∗) = Ω(1) ,
+
+cos(¯ gDG , ∇z J)cos(¯ gPG , ∇z J) = Ω 
+
+ ρ(1 − ν(y∗)) + δρ M ν (π) + δ
+
+
+
+→ ∞ as δ → 0.
+
+Under normalized steps, the cosine to ∇z J controls expected improvement per step [ 17 ], so a diverging cosine ratio means DG’s per-step progress increasingly dominates PG’s. The remaining question is whether this effect is specific to delight, or whether some other reweighting could recover it. 
+
+Proposition 3 (Importance weighting cannot reproduce DG’s directional effect) . Let f : A → R≥0
+
+be any action-only reweighting, i.e. a function that does not depend on the advantage sign, with P 
+
+> a̸=y∗
+
+ν(a) f (a) = Ω(1) (so that f does not trivially zero out all incorrect actions). Define the reweighted gradient ¯gf := Ea∼μ[f (a) U (a) ϕπ (a)] . Then for the bandit above with π(y∗) = 1 − δ,contamination μ = (1 −ρ)π+ρν , and any ν satisfying 1−ν(y∗) = Ω(1) : the effective contamination in ¯gf is Θ( ρ) as δ → 0, matching PG. In particular, exact importance weighting ( f (a) = π(a)/μ (a))achieves cos(¯ gf , ∇z J) = O(δ/ρ ).Proof sketch. Any action-only weight f (a) rescales disfavored gradient terms f (a) U (a) ϕπ (a) iden-tically for successes and failures because f does not see the sign of U (a). By Lemma 2, the disfavored terms retain Θ(1) norm and O(δ) projection onto ∇z J, so no choice of f reduces the effective contamination below Θ( ρ). DG’s gate depends on the product of advantage and surprisal, so it treats successes and failures asymmetrically. This sign-dependence is what allows Mν (π) → 0;no sign-blind reweighting can achieve this. The full proof appears in Appendix B. With finite batch size B, sample gradients concentrate at rate O(1 /√B), so the directional separation persists. Figures 3a and 3b validate these predictions.        
+
+> (a) Cosine similarity to ∇zJduring training ( ρ=0 .1). (b) Suboptimality 1−π(y∗)vs. contamination ρ.
+
+Figure 3: K-armed bandit ( K=100 ), ν = Unif([ K]) , B=100 , α=0 .1, η=1 . Results average over 100 seeds with ±1 standard error. Under contamination, standard PG retains Θ( ρ) effective contamination, so alignment can collapse even as the policy improves. DG instead reduces contamination through the overlap moment Mν (π),creating a self-reinforcing dynamic in which better policies produce cleaner gradients. No sign-blind reweighting, including exact importance sampling, can recover this effect. The next section tests whether the same directional advantage survives sequential decisions, function approximation, and multiple frictions at once. 55 Token Reversal with Distributed Friction 
+
+The bandit analysis isolates a single contaminated decision with exact gradients. We now test whether the same directional advantage survives in token reversal [ 17 ], a transformer sequence task that requires reading an input, preserving its structure in memory, and generating a coherent output autoregressively. This is the same broad computational pattern that underlies chain-of-thought reasoning in large language models. As sequence length grows, correct trajectories become exponentially rarer, so distributed frictions become more consequential. The agent receives H tokens drawn uniformly from a vocabulary of size M and must output them in reverse order (Figure 4). Let Nk denote the number of consecutive correct tokens from the start of episode k, and define correctness ck = Nk/H . We extend the task with a reward-shaping parameter 
+
+κ ∈ [−1, 1] : Rk = κ c k + (1 − κ) I{ck = 1 }. When κ > 0 (hedonic guide ), partial progress is rewarded; when κ < 0 (hedonic trap ), it is penalized, modeling settings where easy shortcuts do not generalize to full solutions. We compare DG against PG (REINFORCE [ 26 ]), PPO [ 23 ], and PMPO [ 1], using M =2 , H=10 , κ=1 , and K=1000 gradient steps ( 100 episodes per step: 10 
+
+prompts × 10 responses) over 30 seeds unless otherwise noted; full details appear in Appendix C. 
+
+Figure 4: Token reversal ( M =2 , H=5 ): the agent must output the input in reverse. Here it gets three correct then errs, giving ck = 3 /5 and reward Rk = κ · 3/5.Across all four frictions, DG outperforms every tuned baseline by large margins, often close to an order of magnitude in sequence error. Under substantial friction, DG often remains competitive with, and can outperform, baselines in much cleaner regimes. The first three frictions: staleness, actor bugs, and reward corruption, test the suppression side of the gate; rare discovery tests amplification. We combine all four, tune once at H=5 , and test how this generalizes as sequence complexity increases. 
+
+5.1 Staleness 
+
+Staleness creates high-surprisal failures from old policies. We model this by having each actor use a policy sampled uniformly from the last D learner checkpoints. At delay D=30 , many logged actions have high surprisal under the current learner because the old policy favored actions the learner has since learned to avoid. Figure 5 confirms the prediction: DG converges to near-zero error where baselines stall an order of magnitude higher. The held-out sweep shows the same pattern across delays: even at D=100 , DG outperforms every baseline at D=1 . Staleness that cripples PG and PPO degrades DG only gradually, because delight is computed under the learner’s current policy rather than the actor’s.      
+
+> (a) Learning curves at D=30 .(b) Sequence error at K=1000 vs. delay D.
+
+Figure 5: Sensitivity to actor delay. All methods tuned at D=30 . DG dominates across the full range; even with large delay it outperforms baselines at D=1 .65.2 Actor Bugs 
+
+Actor bugs create trajectories that are maximally surprising and almost always wrong. We model this by forcing an actor to emit an all-zeros trajectory with probability pE . These trajectories have near-maximal surprisal and negative advantage, so DG should close the gate and suppress them. Figure 6 shows exactly this behavior. At pE =3 ×10 −3, DG converges to low error while baselines plateau above 10% . The sweep shows robustness over several orders of magnitude: even at pE =10 −2,DG outperforms every baseline run without bugs.       
+
+> (a) Learning curves at pE=3 ×10 −3.(b) Sequence error at K=1000 vs. bug probability
+> pE.
+
+Figure 6: Sensitivity to actor bugs. All methods tuned at pE =3 ×10 −3. DG dominates across the full range of bug probabilities. 
+
+5.3 Reward Corruption 
+
+Reward corruption creates misleading advantage estimates even when the trajectory itself is unre-markable. We model this by replacing the episode reward with an independent Bernoulli(0 .5) draw with probability pR. Unlike staleness and bugs, this friction corrupts the advantage rather than the action distribution. DG remains robust because delight depends on both advantage and surprisal: for common actions, surprisal is small, so corrupted rewards rarely produce large-magnitude delight and the gate stays near half-strength. Figure 7 shows that at pR=0 .01 , DG separates cleanly from all baselines, achieving roughly 5×
+
+lower error. The sweep confirms the same pattern: DG maintains low error for pR ≲ 10 −2, while baselines remain at high error across the full range.      
+
+> (a) Learning curves at pR=0 .01 .(b) Sequence error at K=1000 vs. reward noise pR.
+
+Figure 7: Sensitivity to reward corruption. All methods tuned at pR=0 .01 . DG dominates across the full range of corruption rates. 75.4 Rare Discovery 
+
+Rare discovery tests the amplification side of the gate. We switch to the hedonic trap ( κ=−1,overriding the default κ=1 ) with H=5 , where only perfect trajectories yield positive reward, and inject oracle episodes with probability pC . These episodes are both surprising and successful, so they produce large positive delight. Figure 8 shows that DG is the only method that consistently exploits these rare discoveries. In the practically relevant regime ( pC ≲ 10 −2), DG is the only method that makes meaningful progress. DG is therefore not merely a noise filter; it also amplifies rare high-value signals once they appear.        
+
+> (a) Learning curves at pC=10 −3.(b) Sequence error at K=1000 vs. oracle rate pC.
+
+Figure 8: Sensitivity to rare discovery under the hedonic trap ( κ=−1). DG latches onto rare oracle trajectories; baselines require much higher oracle rates to make progress. 
+
+5.5 Combined Friction 
+
+In practice, all four frictions occur together, so the real question is whether DG’s advantage composes. We combine them at the operating points from the individual experiments: delay D=30 , bug probability pE =3 ×10 −3, reward noise pR=0 .01 , oracle rate pC =10 −3, and the hedonic trap κ=−1.The combination is tuned once at H=5 and then evaluated for generalization across sequence length. We define H∗ as the largest H for which a method achieves at least one perfect reversal within K
+
+episodes. Figure 9 is the main empirical result of the paper. At H=5 , DG reaches near-zero error within 
+
+2000 episodes while PMPO requires 5000 and PPO plateaus above 10% . The scaling plot shows the deeper pattern: DG solves sequences of length H∗≈13 at K=10 k, compared to H∗≈8 for PMPO, 
+
+H∗≈5 for PPO, and H∗≈3.5 for PG. Its advantage compounds with sequence complexity, exactly as predicted by the self-reinforcing dynamic from Section 4.     
+
+> (a) Learning curves at H=5 .(b) Largest sequence solved H∗vs. training episodes.
+
+Figure 9: Combined friction: all four frictions at their §5.1–5.4 operating points, scaling H. DG’s compute advantage over every baseline is order-of-magnitude and grows with problem complexity. 86 Related Work 
+
+Existing methods for handling off-policy data ask how to reconstruct the actor’s distribution, constrain unstable updates, or filter gradients by advantage. DG asks a different question: what does each sample teach the learner’s current policy? This shift from correcting mismatch to valuing signal produces a different set of contrasts. 
+
+Trust-region and clipped methods. TRPO constrains updates through a KL trust region [ 22 ], while PPO replaces this with clipped importance ratios [ 23 ]; the GRPO variant used in recent RLHF work [ 24 ] inherits the same ratio-based structure. These methods limit large updates but treat surprising successes and failures symmetrically. DG instead applies one-sided suppression, attenuating rare failures while preserving rare successes, using only the learner’s current policy. 
+
+Off-policy correction. Importance sampling corrects distribution mismatch using behavior proba-bilities [ 21 ]; V-trace [ 5], Retrace( λ) [ 15 ], and ACER [ 25 ] truncate these ratios to control variance. DG asks a different question: given the observed action and reward, how much can the learner gain from this sample? Because delight depends only on the learner’s current policy, DG remains well-defined even when behavior probabilities are missing or corrupted. 
+
+Distributed RL architectures. IMPALA [ 5], Ape-X [ 10 ], SEED [ 6 ], and Podracer [ 9] reduce staleness through systems design, for example with centralized inference, synchronous batching, or explicit correction terms. DG is complementary: it is an algorithmic change to sample weighting that can be inserted into any of these pipelines. 
+
+Robust and filtered policy gradients. PMPO thresholds updates by advantage sign, discarding negative-advantage samples [ 1]. This filters some noise but is surprisal-blind: it cannot distinguish common from rare failures. Filtered behavioral-cloning methods such as RWR [ 20 ] and AWR [ 19 ]weight by exponentiated advantage but likewise do not modulate by surprisal. REINFORCE-leave-one-out [ 12 ] reduces variance through improved baselines, but it still targets the same underlying policy-gradient direction. DG conditions on both advantage and surprisal, enabling asymmetric treatment of rare successes and failures according to the learner’s current beliefs. 
+
+Exploration and offline RL. Exploration methods such as count-based bonuses [ 2 ], curiosity [ 18 ], and Go-Explore [ 4] aim to generate novel experience. DG addresses the complementary question of how the learner should weight a rare success once it appears in the data. Offline RL methods such as CQL [ 14 ], IQL [ 13 ], and Decision Transformer [ 3] constrain the learned policy to stay near the data distribution. DG takes the opposite stance: it filters the data to improve the update direction. 
+
+# 7 Conclusion 
+
+Frontier reasoning models train through distributed policy gradients where actors are routinely stale, buggy, or run on mismatched inference stacks. The core problem is negative learning from surprising data: high-surprisal failures dominate the update despite carrying little signal. Supervised fine-tuning avoids this because it applies only positive updates; policy gradients do not. DG addresses this directly by gating each update with delight, suppressing rare failures while amplifying rare successes without behavior probabilities. Across MNIST, contaminated bandits, and transformer sequence modeling, the same picture emerges. Under distributed friction, the policy-gradient direction itself becomes the wrong target: standard PG stays vulnerable to contaminated failures, while DG becomes more selective as the policy improves. This creates a self-reinforcing dynamic in which better policies produce cleaner gradients; no sign-blind reweighting, including exact importance sampling, can reproduce this (Proposition 3). The experiments in this paper remain small-scale, so the next step is to test DG in frontier training systems. But the mechanism is not small-scale. Our claim is that distributed friction exposes a foundational weakness of standard policy gradients, and that DG fixes it at the root by weighting samples by what they can teach the current learner. DG is a drop-in, reference-free replacement for policy-gradient weighting, and its advantage grows with friction severity and problem complexity. 9References 
+
+[1] Abbas Abdolmaleki, Bilal Piot, Bobak Shahriari, Jost Tobias Springenberg, Tim Hertweck, Rishabh Joshi, Junhyuk Oh, Michael Bloesch, Thomas Lampe, Nicolas Heess, et al. Preference optimization as probabilistic inference. arXiv e-prints , pages arXiv–2410, 2024. [2] Marc Bellemare, Sriram Srinivasan, Georg Ostrovski, Tom Schaul, David Saxton, and Remi Munos. Unifying count-based exploration and intrinsic motivation. In Advances in Neural Information Processing Systems , volume 29, 2016. [3] Lili Chen, Kevin Lu, Aravind Rajeswaran, Kuang-Huei Lee, Aditya Grover, Misha Laskin, Pieter Abbeel, Aravind Srinivas, and Igor Mordatch. Decision transformer: Reinforcement learning via sequence modeling. In Advances in Neural Information Processing Systems ,volume 34, pages 15084–15097, 2021. [4] Adrien Ecoffet, Joost Huizinga, Joel Lehman, Kenneth O Stanley, and Jeff Clune. First return, then explore. Nature , 590(7847):580–586, 2021. [5] Lasse Espeholt, Hubert Soyer, Remi Munos, Karen Simonyan, Volodymyr Mnih, Tom Ward, Yotam Doron, Vlad Firoiu, Tim Harley, Iain Dunning, et al. IMPALA: Scalable distributed deep-RL with importance weighted actor-learner architectures. In International Conference on Machine Learning , pages 1407–1416, 2018. [6] Lasse Espeholt, Hubert Soyer, Remi Munos, Karen Simonyan, Volodymyr Mnih, Tom Ward, Yotam Doron, Vlad Firoiu, Tim Harley, Iain Dunning, et al. SEED RL: Scalable and effi-cient deep-RL with accelerated central inference. In International Conference on Learning Representations , 2020. [7] Daya Guo, Dejian Yang, He Zhang, Junxiao Song, Ruoyu Zhang, Runxin Xu, Qihao Zhu, Shirong Ma, Peiyi Wang, Xiao Bi, et al. DeepSeek-R1: Incentivizing reasoning capability in LLMs via reinforcement learning. arXiv preprint arXiv:2501.12948 , 2025. [8] Horace He. Defeating nondeterminism in LLM inference. Think-ing Machines Lab blog , 2025. https://thinkingmachines.ai/blog/ defeating-nondeterminism-in-llm-inference/ .[9] Matteo Hessel, Ivo Danihelka, Fabio Viola, Arthur Guez, Simon Schmitt, Laurent Sifre, Theo-phane Weber, David Silver, and Hado van Hasselt. Podracer architectures for scalable reinforce-ment learning. arXiv preprint arXiv:2104.06272 , 2021. [10] Daniel Horgan, John Quan, David Budden, Gabriel Barth-Maron, Matteo Hessel, Hado Van Hasselt, and David Silver. Distributed prioritized experience replay. In 6th International Conference on Learning Represenations , 2018. [11] Diederik P. Kingma and Jimmy Ba. Adam: A method for stochastic optimization. In Proc. of ICLR , 2015. [12] Wouter Kool, Herke van Hoof, and Max Welling. Buy 4 REINFORCE samples, get a baseline for free! In Deep Reinforcement Learning Meets Structured Prediction, ICLR Workshop , 2019. [13] Ilya Kostrikov, Ashvin Nair, and Sergey Levine. Offline reinforcement learning with implicit Q-learning. In International Conference on Learning Representations , 2022. [14] Aviral Kumar, Aurick Zhou, George Tucker, and Sergey Levine. Conservative Q-learning for offline reinforcement learning. In Advances in Neural Information Processing Systems ,volume 33, pages 1179–1191, 2020. [15] Rémi Munos, Tom Stepleton, Anna Harutyunyan, and Marc Bellemare. Safe and efficient off-policy reinforcement learning. In Advances in Neural Information Processing Systems 29 ,pages 1046–1054, 2016. [16] OpenAI. Learning to reason with LLMs. OpenAI blog , 2024. https://openai.com/index/ learning-to-reason-with-llms/ .10 [17] Ian Osband. Delightful policy gradient. Technical Report gdm/lfg-1, Google DeepMind, 2025. [18] Deepak Pathak, Pulkit Agrawal, Alexei A Efros, and Trevor Darrell. Curiosity-driven exploration by self-supervised prediction. In International Conference on Machine Learning , pages 2778– 2787, 2017. [19] Xue Bin Peng, Aviral Kumar, Grace Zhang, and Sergey Levine. Advantage-weighted regression: Simple and scalable off-policy reinforcement learning. arXiv preprint arXiv:1910.00177 , 2019. [20] Jan Peters and Stefan Schaal. Reinforcement learning by reward-weighted regression. In 
+
+International Conference on Machine Learning , pages 723–730, 2007. [21] Doina Precup, Richard Sutton, and Sanjoy Dasgupta. Off-policy temporal-difference learning with function approximation. In Proceedings of The 18th International Conference on Machine Learning , pages 417–424, 2001. [22] John Schulman, Sergey Levine, Pieter Abbeel, Michael Jordan, and Philipp Moritz. Trust region policy optimization. In Proc. of ICML , 2015. [23] John Schulman, Filip Wolski, Prafulla Dhariwal, Alec Radford, and Oleg Klimov. Proximal policy optimization algorithms. arXiv preprint arXiv:1707.06347 , 2017. [24] Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Mingchuan Zhang, Y.K. Li, Y. Wu, and Daya Guo. DeepSeekMath: Pushing the limits of mathematical reasoning in open language models. arXiv preprint arXiv:2402.03300 , 2024. [25] Ziyu Wang, Victor Bapst, Nicolas Heess, Volodymyr Mnih, Remi Munos, Koray Kavukcuoglu, and Nando de Freitas. Sample efficient actor-critic with experience replay. In International Conference on Learning Representations , 2017. [26] Ronald J Williams. Simple statistical gradient-following algorithms for connectionist reinforce-ment learning. Machine learning , 8(3):229–256, 1992. [27] Feng Yao et al. Your efficient RL framework secretly brings you off-policy RL training. 
+
+Technical blog post , 2025. https://fengyao.notion.site/off-policy-rl .11 A MNIST Diagnostic 
+
+This appendix supplements the MNIST experiments of Section 3 with full experimental details, a learning rate robustness check, and a baseline sensitivity analysis. The robustness and baseline experiments confirm that DG’s advantage under staleness is not an artifact of hyperparameter selection or baseline choice; the baseline analysis also provides additional evidence for the mechanism behind DG. 
+
+A.1 Experimental Details 
+
+Each MNIST image x is presented as a contextual bandit: the agent samples a label a ∈ { 0, . . . , 9}
+
+from a softmax policy πθ (a | x) and receives reward r = I{a = y}; the true label y is never observed. The policy is a two-layer ReLU MLP with hidden width 100, trained with Adam (learning rate 10 −3) over minibatches of B=100 images. We validate every 500 gradient steps on the full 10,000-image test set with greedy decoding. We use the model’s expected reward under its own policy as a value baseline, i.e. b(x) = P 
+
+> a
+
+πθ (a | x) r(a) = πθ (y | x). Because the learner never observes y directly, this is oracle supervision used only for this diagnostic; it gives every method access to the best possible baseline, ensuring that performance differences reflect gradient weighting rather than baseline quality. Staleness is modeled by storing the last D learner checkpoints and sampling actor parameters uniformly at random from this buffer. We sweep D ∈ { 0, 1, 3, 10 , 30 , 100 , 300 , 1000 }. We compare three methods, all sharing architecture, optimizer, and baseline: REINFORCE uses the stale-policy gradient without correction; PG applies exact importance weighting πθ (a | x)/μ θ′ (a | x) using the stored checkpoint that generated the action; DG ( η=1 ) weights updates by σ(delight /η ) using no importance weights and no knowledge of the actor’s policy. All results average over 30 seeds with 
+
+±1 standard error. The learning rate was selected for best average performance across methods at 
+
+D=30 ; we did not tune per-method. 
+
+A.2 Learning Rate Robustness 
+
+Figure 10 sweeps the learning rate across REINFORCE, PG, and DG at delay D=30 . All three methods share the same optimum at lr = 10 −3, with DG dominating across the full range. Training error (a) and test error (b) track almost identically, confirming that the DG advantage reflects better optimization, not overfitting.  
+
+> (a) Training error vs. learning rate. (b) Test error vs. learning rate.
+
+Figure 10: Learning rate sweep on MNIST at D=30 . All methods are optimal near lr = 10 −3; DG dominates across the range. Training and test error track closely, confirming no train/test gap. 
+
+A.3 Baseline Sensitivity 
+
+The main-text results use the expected-confidence baseline b(x) = P 
+
+> a
+
+π(a | x) · r(a) = π(y∗ | x).To check whether DG’s advantage depends on this choice, Figure 11 repeats the staleness sweep under four baselines: zero (b = 0 ), constant (b = 0 .5), expected (b = π(y∗ | x), the main-text default), and oracle (b = E[R | x] using the true label). 12 Figure 11: Baseline sensitivity on MNIST. Each panel sweeps sampler delay D under a different baseline. DG dominates under all baselines. Under baseline: zero, REINFORCE matches DG and PG is worse than uncorrected REINFORCE. The general pattern is consistent: DG dominates across all four baselines. The zero-baseline panel is the most revealing. With b = 0 , all advantages are positive ( Ut = Rt ≥ 0), so every update pushes toward the chosen action. In this regime REINFORCE learns only from positive outcomes and its behavior closely tracks DG: both methods amplify actions that yielded reward, regardless of whether the actor or learner generated them. PG, by contrast, becomes worse than uncorrected REINFORCE under the zero baseline. Importance weighting downweights off-policy successes precisely when the learner assigns them high probability, discarding the high-delight samples that DG and REINFORCE exploit. This is not a contradiction of DG’s mechanism but a direct confirmation: when stale data reveals a surprising success—high delight—it is better to learn from it than to correct it away. 
+
+# B Proofs for Tabular Analysis 
+
+This appendix collects proofs for all formal results in Section 4: the polynomial suppression lemma, the PG degradation and DG preservation propositions, the corollary showing DG’s advantage diverges, and the impossibility result for sign-blind reweighting. We restate the setup and the geometric properties of softmax gradients, then prove each result in order. All gradients are with respect to logits z ∈ RK . Recall that ϕπ (a) := ea −π is the logit-space gradient of log π(a), and the true gradient is ∇z J = π(y∗) ϕπ (y∗). The advantage is U (a) ∈ { +1 /2, −1/2}
+
+and actions are sampled from the contaminated distribution μ = (1 − ρ)π + ρ ν . The population PG and DG directions are 
+
+¯gPG = Ea∼μ[U (a) ϕπ (a)] , ¯gDG = Ea∼μ
+
+σ U (a)ℓ(a)/η  U (a) ϕπ (a) ,
+
+where ℓ(a) := − log π(a).
+
+Remark 1 (Stronger suppression at small η). When η ≤ 1/2, π(a)1/(2 η) ≤ π(a) for all disfavored 
+
+a, so Mν (π) = O(δ) and the cosine converges to a positive limit independent of δ [see also the discussion of the η > 1/2 regime in 17]. All experiments in this paper use η = 1 .
+
+We work in the near-optimal regime π(y∗) = 1 − δ with δ ≪ 1.
+
+Lemma 2 (Geometric properties of softmax gradients) . Let π = softmax( z) with π(y∗) = 1 − δ
+
+and δ ≪ 1. Then the following hold. 1. ∥ϕπ (y∗)∥ = Θ( δ), while ∥ϕπ (i)∥ = Θ(1) for every disfavored action i̸ = y∗.2. Every disfavored gradient vector has small projection onto the true gradient: 
+
+⟨ϕπ (i), ∇z J⟩ = O(δ) ∥∇ z J∥.
+
+These properties are proved in Osband [17] ; we restate them here because they are the only external facts needed for the proofs below. 
+
+B.1 Proof of Lemma 1 
+
+The key idea is that the sigmoid gate applied to a negative argument decays exponentially, converting the surprisal into polynomial suppression. For disfavored actions a̸ = y∗, the advantage is U (a) = 
+
+13 −1/2, so the gate evaluates to σ  − ℓ(a)/(2 η). Using σ(−x) ≤ e−x for x ≥ 0:
+
+σ  − ℓ(a)/(2 η) ≤ exp   − ℓ(a)/(2 η) = π(a)1/(2 η). (2) 
+
+□
+
+B.2 Proof of Proposition 1 
+
+Decompose ¯gPG = s + n where 
+
+s := 12 μ(y∗) ϕπ (y∗), n := − 12
+
+X
+
+> i̸=y∗
+
+μ(i) ϕπ (i).
+
+The signal s is a positive scalar multiple of ∇z J (since ϕπ (y∗) points in the ∇z J direction); the noise n sums over disfavored actions, which contribute components largely orthogonal to ∇z J.
+
+Numerator. By Lemma 2(ii), each disfavored term satisfies ⟨ϕπ (i), ∇z J⟩ = O(δ)∥∇ z J∥,so ⟨n, ∇z J⟩ = O(δ)∥∇ z J∥. Since ∥ϕπ (y∗)∥ = Θ( δ), the signal contributes ⟨s, ∇z J⟩ =
+
+O(μ(y∗) δ)∥∇ z J∥ = O(δ)∥∇ z J∥. Combining: ⟨¯gPG , ∇z J⟩ = O(δ)∥∇ z J∥.
+
+Denominator. We lower-bound ∥n∥ via its y∗-coordinate. For i̸ = y∗, ϕπ (i)y∗ = −π(y∗), so 
+
+ny∗ = 12 π(y∗) X
+
+> i̸=y∗
+
+μ(i) = 12 π(y∗) (1 − μ(y∗)) .
+
+Since μ(y∗) = (1 − ρ)π(y∗) + ρ ν (y∗), we have 1 − μ(y∗) = (1 − ρ)δ + ρ (1 − ν(y∗)) . Thus 
+
+∥n∥ ≥ | ny∗ | = Ω( ρ(1 − ν(y∗)) + δ), while ∥s∥ = O(δ) by Lemma 2(i). Since ρ(1 − ν(y∗)) = Ω(1) ,for sufficiently small δ the noise dominates the signal and ∥¯gPG ∥ ≥ ∥ n∥−∥ s∥ = Ω( ρ(1 −ν(y∗))+ δ).
+
+Combine. The numerator satisfies ⟨¯gPG , ∇z J⟩ ≤ C1 δ ∥∇ z J∥ for some constant C1 > 0. The denominator satisfies ∥¯gPG ∥ ∥∇ z J∥ ≥ c1 (ρ(1 − ν(y∗)) + δ) ∥∇ z J∥ for some c1 > 0. Dividing: 
+
+cos(¯ gPG , ∇z J) ≤ C1 δc1 (ρ(1 − ν(y∗)) + δ) = O
+
+ δρ(1 − ν(y∗)) + δ
+
+
+
+.
+
+□
+
+B.3 Proof of Proposition 2 
+
+Decompose ¯gDG = sDG + nDG where 
+
+sDG := 12 μ(y∗) σ ℓ(y∗)/(2 η) ϕπ (y∗), nDG := − 12
+
+X
+
+> i̸=y∗
+
+μ(i) σ  − ℓ(i)/(2 η) ϕπ (i).
+
+Signal. Since sDG is a positive scalar multiple of ∇z J and σ ℓ(y∗)/(2 η) ≥ 1/2, we have 
+
+∥sDG ∥ = Ω( μ(y∗) δ). For fixed ρ < 1 and small δ, μ(y∗) ≥ (1 − ρ)(1 − δ) = Θ(1) , so ∥sDG ∥ =Ω( δ).
+
+Noise. Applying (2) and ∥ϕπ (i)∥ = O(1) :
+
+∥nDG ∥ = O
+
+ X
+
+> i̸=y∗
+
+μ(i) π(i)1/(2 η)
+
+ .
+
+Expanding μ(i) = (1 − ρ)π(i) + ρ ν (i) and recalling the overlap moment Mν (π) := P 
+
+> i̸=y∗
+
+ν(i) π(i)1/(2 η):
+
+X
+
+> i̸=y∗
+
+μ(i) π(i)1/(2 η) ≤ (1 − ρ) X
+
+> i̸=y∗
+
+π(i)1+1 /(2 η)
+
+| {z } 
+
+> ≤δ
+
++ ρ X
+
+> i̸=y∗
+
+ν(i) π(i)1/(2 η)
+
+| {z }  
+
+> =Mν(π)
+
+,
+
+where the first sum uses π(i)1+1 /(2 η) ≤ π(i) for π(i) ∈ [0 , 1] . Therefore ∥nDG ∥ = O(δ + ρ M ν (π)) .14 Numerator. Since sDG is a positive multiple of ∇z J, we have ⟨sDG , ∇z J⟩ = ∥sDG ∥ ∥∇ z J∥ =Ω( δ)∥∇ z J∥. The noise contributes at most |⟨ nDG , ∇z J⟩| = O(δ)∥∇ z J∥ · (δ + ρ M ν (π)) , using the small-projection property. Since Mν (π) → 0 as δ → 0, we have δ + ρ M ν (π) → 0, so the noise projection is o(δ)∥∇ z J∥. For sufficiently small δ, the signal Ω( δ) dominates and ⟨¯gDG , ∇z J⟩ =Ω( δ) ∥∇ z J∥.
+
+Denominator. By triangle inequality, ∥¯gDG ∥ ≤ ∥ sDG ∥ + ∥nDG ∥ = O(δ + ρ M ν (π)) . For the matching lower bound, note that both sDG and nDG contribute positively on the y∗-coordinate (since 
+
+ϕπ (y∗)y∗ = δ > 0 and ϕπ (i)y∗ = −π(y∗) with the sign of nDG ), so no cancellation occurs and 
+
+∥¯gDG ∥ = Θ( δ + ρ M ν (π)) .
+
+Combine. 
+
+cos(¯ gDG , ∇z J) = Ω( δ) ∥∇ z J∥
+
+Θ( δ + ρ M ν (π)) ∥∇ z J∥ = Ω 
+
+ δρ M ν (π) + δ
+
+
+
+.
+
+□
+
+B.4 Proof of Corollary 1 
+
+The ratio diverges because PG’s effective contamination stays Θ( ρ) while DG’s vanishes through the overlap moment. Dividing Proposition 2 by Proposition 1: 
+
+cos(¯ gDG , ∇z J)cos(¯ gPG , ∇z J) = Ω 
+
+ ρ(1 − ν(y∗)) + δρ M ν (π) + δ
+
+
+
+.
+
+Since Mν (π) → 0 as δ → 0 and 1 − ν(y∗) = Ω(1) , the numerator converges to ρ(1 − ν(y∗)) > 0
+
+while the denominator vanishes, so the ratio diverges. □
+
+B.5 Proof of Proposition 3 
+
+The argument shows that any reweighting that depends only on the action identity—not the advantage sign—cannot selectively suppress disfavored failures, so the contamination stays Θ( ρ). Let f : A → 
+
+R≥0 be any action-only reweighting. The reweighted gradient is 
+
+¯gf = Ea∼μ[f (a) U (a) ϕπ (a)] = 12 μ(y∗) f (y∗) ϕπ (y∗) − 12
+
+X
+
+> i̸=y∗
+
+μ(i) f (i) ϕπ (i).
+
+Call these the signal sf and noise nf respectively. 
+
+Numerator. By the small-projection property, ⟨ϕπ (i), ∇z J⟩ = O(δ)∥∇ z J∥ for every i̸ =
+
+y∗. Since f (i) ≥ 0 and μ(i) ≥ 0, the noise projection satisfies |⟨ nf , ∇z J⟩| =
+
+O(δ)∥∇ z J∥ P 
+
+> i̸=y∗
+
+μ(i) f (i). The signal projection is ⟨sf , ∇z J⟩ = O(μ(y∗) f (y∗) δ)∥∇ z J∥. Com-bining: ⟨¯gf , ∇z J⟩ = O(δ)∥∇ z J∥ · (μ(y∗)f (y∗) + P 
+
+> i̸=y∗
+
+μ(i)f (i)) .
+
+Denominator. The noise norm is ∥nf ∥ ≥ | nf,y ∗ | = 12 π(y∗) P 
+
+> i̸=y∗
+
+μ(i) f (i). Since μ(i) ≥ ρ ν (i)
+
+for each i̸ = y∗:
+
+∥nf ∥ ≥ 12 (1 − δ) ρ X
+
+> i̸=y∗
+
+ν(i) f (i).
+
+For any f with P 
+
+> i̸=y∗
+
+ν(i) f (i) = Ω(1) , the noise norm remains Ω( ρ). The signal norm is ∥sf ∥ =
+
+O(μ(y∗) f (y∗) δ) = O(f (y∗)δ). Since cosine similarity is scale-invariant, we may set f (y∗) = O(1) 
+
+without loss, giving ∥sf ∥ = O(δ).
+
+Combine. For any f satisfying P 
+
+> i̸=y∗
+
+ν(i) f (i) = Ω(1) :
+
+cos(¯ gf , ∇z J) = O
+
+ δρ
+
+
+
+,
+
+matching the PG rate from Proposition 1. In particular, exact importance weighting f (a) = π(a)/μ (a)
+
+is sign-blind and yields cos(¯ gf , ∇z J) = O(δ/ρ ). The key distinction is that DG’s gate σ(U ℓ/η )
+
+depends on U (a), not just a, breaking the sign-blindness that limits all action-only reweightings. □
+
+15 C Token Reversal Details 
+
+This appendix supplements the token reversal experiments of Section 5 with architecture and opti-mization details, per-friction hyperparameter sweeps, and a reward shaping sensitivity analysis. Each friction type is tuned at a single representative operating point on 10 validation seeds, then evaluated on 30 held-out seeds. DG’s advantage is robust across broad ranges of η, and no PPO or PMPO configuration closes the gap. 
+
+C.1 Architecture and Optimization 
+
+All methods use a causal decoder-only transformer implemented in Flax/JAX with 3 layers, 4 attention heads, embedding dimension 64, feed-forward dimension 128, pre-norm LayerNorm, ReLU activations, no bias terms, and learned position embeddings ( ≈50 K parameters). The policy head is a linear layer mapping the final transformer output to logits over the vocabulary V. We use Adam [ 11 ]with learning rate 10 −4, selected via a sweep at the reference friction level for each experiment. No learning rate schedule, weight decay, or gradient clipping is applied. Each gradient step processes a batch of 100 episodes: 10 prompts with 10 sampled responses each. The value baseline for each response is the mean reward across the 10 responses to the same prompt (grouped baseline), shared across all methods. The grouped baseline is equivalent to the leave-one-out baseline in GRPO [24]. 
+
+Method implementation. PG (REINFORCE) is implemented as the PPO clipped surrogate with 
+
+ε = 10 9 (so no clipping ever triggers) and no KL penalty ( βKL =0 ), reducing to the standard REINFORCE gradient with a grouped baseline. PPO uses single-epoch updates (no data replay) with token-level clipped importance ratios and the same grouped baseline; the clip parameter ε is swept as described below. PMPO uses γ=10 −9 for numerical stability in the dispreferred log-likelihood term and the same grouped baseline for preference classification. All methods share the same architecture, optimizer, and baseline; they differ only in gradient weighting. For injected episodes (actor bugs and oracle trajectories), we set the behavior log-probability to zero by convention. For ratio-based methods (PPO), this makes the importance ratio equal to the learner’s own token probability on those episodes. 
+
+Compute. All experiments run on a single CPU machine. Each token reversal experiment ( K=1000 
+
+gradient steps, ≈50 K -parameter transformer) completes in under two minutes. The full experimental campaign (four friction types, four methods, six to eight hyperparameter settings each, 10 tuning seeds plus 30 evaluation seeds per configuration) requires approximately 200 CPU-hours total. 
+
+C.2 Per-Friction Hyperparameter Sweeps 
+
+For each friction type, we sweep DG temperature η ∈ {0.2, 0.5, 1, 2, 5, 10 }, PPO clip ε ∈{0.01 , 0.03 , 0.1, 0.3, 1, 3, 10 , 100 }, and PMPO α ∈ { 0.01 , 0.03 , 0.1, 0.3, 1, 3, 10 , 100 }. The learning rate is 10 −4 for all methods across all friction types. We select the setting with lowest sequence error at K=1000 gradient steps on 10 validation seeds, then evaluate on 30 held-out seeds. All heatmaps below display sequence error averaged over 10 seeds (lower is better). 
+
+Staleness (Section 5.1). Figure 12 shows the sweep at D=30 . DG achieves low sequence error across a broad range of η; PPO and PMPO are less sensitive to their hyperparameters but never match DG. 
+
+Actor Bugs (Section 5.2). Figure 13 shows the sweep at pE =3 ×10 −3. DG’s broad optimum around η ∈ [0 .5, 2] persists; no PPO or PMPO configuration closes the gap. 
+
+Reward Corruption (Section 5.3). Figure 14 shows the sweep at pR=0 .01 . DG again achieves its best sequence error around η ∈ [0 .5, 2] , with performance degrading gracefully outside this range. PPO and PMPO show flatter sensitivity profiles but settle at higher sequence error across all configurations. 16 (a) DG: η sweep. (b) PPO: ε sweep. (c) PMPO: α sweep. 
+
+Figure 12: Hyperparameter sensitivity under staleness ( D=30 ), 10 seeds.        
+
+> (a) DG: ηsweep.
+> (b) PPO: εsweep. (c) PMPO: αsweep.
+
+Figure 13: Hyperparameter sensitivity under actor bugs ( pE =3 ×10 −3), 10 seeds.         
+
+> (a) DG: ηsweep. (b) PPO: εsweep. (c) PMPO: αsweep.
+
+Figure 14: Hyperparameter sensitivity under reward corruption ( pR=0 .01 ), 10 seeds. 
+
+Rare Discovery (Section 5.4). Figure 15 shows the sweep at pC =10 −3. This is the hardest setting: only DG finds configurations that reach low sequence error. The best DG temperature is again near 
+
+η=1 , confirming that the default works across friction types. No PPO or PMPO configuration makes meaningful progress at this oracle rate.         
+
+> (a) DG: ηsweep. (b) PPO: εsweep. (c) PMPO: αsweep.
+
+Figure 15: Hyperparameter sensitivity under rare discovery ( pC =10 −3), 10 seeds. Across all four frictions, the pattern is consistent: DG’s default η=1 falls within a broad optimum that spans at least a factor of four, while PPO and PMPO achieve lower sequence error at some 17 configurations than PG but never match DG’s best. This confirms that DG’s advantage in the main text is not an artifact of hyperparameter selection. 
+
+Scaling to complex domains (Section 5.5). Figure 16 shows the sweep at H=5 with all four frictions active at their §5.1–5.4 operating points. DG achieves low sequence error across η ∈ [0 .5, 2] ,consistent with the per-friction sweeps. PPO and PMPO find configurations that improve over PG, but no setting closes the gap with DG.         
+
+> (a) DG: ηsweep. (b) PPO: εsweep. (c) PMPO: αsweep.
+
+Figure 16: Hyperparameter sensitivity under combined friction ( H=5 , all frictions active), 10 seeds. 
+
+C.3 Reward Shaping Sensitivity 
+
+To test whether DG’s advantage depends on the reward structure, we sweep the shaping parameter 
+
+κ ∈ [−1, 1] with oracle discovery rate pC =10 −3 and H=5 . Figure 17 shows that DG outperforms baselines across all values of κ, with the largest gains in the hedonic trap regime ( κ < 0) where partial progress is penalized.      
+
+> (a) Sequence error at K=1000 vs. κ.(b) Average sequence error vs. κ.
+
+Figure 17: Sensitivity to reward shaping under rare discovery ( pC =10 −3, H=5 ). DG dominates across all reward structures; gains are largest in the hedonic trap. Across all frictions and reward structures, DG’s default η=1 is consistently near-optimal and its advantage is not sensitive to hyperparameter selection. The token reversal appendix thereby confirms that the gains reported in Section 5 reflect a genuine algorithmic advantage rather than careful tuning. 18
