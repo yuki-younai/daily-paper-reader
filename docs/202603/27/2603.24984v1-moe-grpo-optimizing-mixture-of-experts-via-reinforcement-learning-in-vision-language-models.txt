@@ -1,0 +1,463 @@
+Title: MoE-GRPO: Optimizing Mixture-of-Experts via Reinforcement Learning in Vision-Language Models
+
+URL Source: https://arxiv.org/pdf/2603.24984v1
+
+Published Time: Fri, 27 Mar 2026 00:36:35 GMT
+
+Number of Pages: 11
+
+Markdown Content:
+# MoE-GRPO: Optimizing Mixture-of-Experts via Reinforcement Learning in Vision-Language Models 
+
+## Dohwan Ko 1 Jinyoung Park 2 Seoung Choi 2 Sanghyeok Lee 2 Seohyun Lee 2 Hyunwoo J. Kim 2†
+
+> 1
+
+## Korea University 2KAIST 
+
+ikodoh@korea.ac.kr 
+
+{jinyoung.park, choisw0823, sanghyeoklee, seohyunlee, hyunwoojkim }@kaist.ac.kr 
+
+## Abstract 
+
+Mixture-of-Experts (MoE) has emerged as an effective ap-proach to reduce the computational overhead of Trans-former architectures by sparsely activating a subset of pa-rameters for each token while preserving high model ca-pacity. This paradigm has recently been extended to Vision-Language Models (VLMs), enabling scalable multi-modal understanding with reduced computational cost. However, the widely adopted deterministic top-K routing mechanism may overlook more optimal expert combinations and lead to expert overfitting. To address this limitation and improve the diversity of expert selection, we propose MoE-GRPO , a reinforcement learning (RL)-based framework for optimiz-ing expert routing in MoE-based VLMs. Specifically, we formulate expert selection as a sequential decision-making problem and optimize it using Group Relative Policy Op-timization (GRPO), allowing the model to learn adaptive expert routing policies through exploration and reward-based feedback. Furthermore, we introduce a modality-aware router guidance that enhances training stability and efficiency by discouraging the router from exploring ex-perts that are infrequently activated for a given modal-ity. Extensive experiments on multi-modal image and video benchmarks show that MoE-GRPO consistently outper-forms standard top-K routing and its variants by promot-ing more diverse expert selection, thereby mitigating expert overfitting and enabling a task-level expert specialization. 
+
+## 1. Introduction 
+
+Scaling model capacity, particularly in Transformer archi-tectures [1], has led to unprecedented performance gains in Large Language Models (LLMs) [2–6]. However, these advancements incur substantial computational and memory       
+
+> †Corresponding authors. Input
+> Output
+> Top -𝐾
+> Top -𝐾
+> …
+> Ground
+> Truth Expert
+> (a) Top-Krouting. Input
+> …
+> Output 1
+> Rollout 1
+> Rollout 1
+> Reward 1
+> Rollout 2
+> Rollout 2
+> Output 2
+> Reward2
+> Output 3
+> Rollout 3
+> Rollout 3
+> Reward 3 >>(b) MoE-GRPO.
+
+Figure 1. Comparison between top-K routing and our MoE-GRPO. (a) While the top-K routing deterministically selects K
+
+experts based on gating scores, (b) MoE-GRPO stochastically samples K experts across multiple rollouts and optimizes the ex-pert selection policy through reward-based feedback. 
+
+costs during both training and inference. To address this in-efficiency while preserving model expressiveness, Mixture-of-Experts (MoE) [7–10] have emerged as a promising ap-proach. By sparsely activating only a subset of parameters for each token, MoE achieves significant computational ef-ficiency without compromising performance. This architec-ture has recently been extended to Vision-Language Models (VLMs) [3, 11–17], allowing scalable multi-modal under-standing while reducing computational cost. When activating a subset of experts, most MoE archi-tectures [6, 13, 18–21] select the top-K experts for each token at layer in a greedy manner based on gating (or rout-ing) scores as in Fig. 1a. While simple and computationally efficient, this deterministic top-K strategy restricts the ex-
+
+> arXiv:2603.24984v1 [cs.CV] 26 Mar 2026
+
+ploration of diverse expert combinations, often overlooking more optimal selections and leading the model to overfit to a small subset of experts. To mitigate this, several studies [8– 10, 22, 23] have proposed improved expert selection mecha-nisms. For example, V-MoE [8] introduces stochasticity by adding Gaussian noise to the gating scores, yielding mod-erate performance gains. However, such heuristic pertur-bations only partially address the exploration challenge, as they do not explicitly optimize the expert selection ‘policy’. As a result, the problem of learning an optimal expert selec-tion strategy remains largely unexplored. To this end, we investigate MoE architectures for multi-modal understanding in VLMs and propose an expert selection policy optimization framework, MoE-GRPO .Specifically, we formulate expert selection as a sequen-tial decision-making problem and employ a reinforcement learning (RL) algorithm, GRPO, to optimize the routing policy. Through MoE-GRPO, the model learns more op-timal expert combinations for each token and layer by ex-ploring diverse sampled expert sequences, guided by veri-fiable rewards. During training, the model reinforces high-reward outputs while suppressing low-reward ones within each rollout group. In addition, we introduce a modality-aware router guidance mechanism that discourages the router from exploring experts that are infrequently activated for a given modality, thereby enabling more stable and ro-bust policy sampling. For evaluation, we convert the InternVL3.5-1B [24] ar-chitecture into an MoE architecture and fine-tune it using MoE-GRPO. Across a wide range of image and video un-derstanding benchmarks, MoE-GRPO consistently outper-forms standard top-K routing and its variants. Our in-depth analyses further show that MoE-GRPO encourages more di-verse expert utilization and induces task-level expert spe-cialization, leading to improved generalization across both cross-dataset evaluation and domain generalization settings. These results indicate that the model effectively learns a routing policy that identifies effective expert combinations through reward-driven expert selection optimization. To summarize, our contributions are threefold :• We propose MoE-GRPO, a novel RL-based training framework for optimizing expert selection policy in MoE-based VLMs. To the best of our knowledge, this is the first work to formulate expert selection as a sequential decision-making problem and optimize it through RL. • We introduce a modality-aware router guidance mecha-nism that discourages the router from selecting experts that are rarely activated for a given modality, thereby im-proving training efficiency and stability. • Our experiments demonstrate that MoE-GRPO outper-forms standard top-K routing and its variants in optimiz-ing expert selection policies, exhibiting more diverse ex-pert utilization and improved generalization capability. 
+
+## 2. Related Works 
+
+Vision-Language Models (VLMs). Recent VLMs have been widely applied in diverse tasks for both images [25– 28] and videos [29–34] with their remarkable percep-tion and reasoning capabilities. Early approaches such as CLIP [35] and ALIGN [36] learned joint vision-language representations through contrastive pretraining, provid-ing strong zero-shot recognition capabilities. Subsequent instruction-tuned models, including LLaVA [27], Qwen-VL [28], InternVL [37], and their video counterparts [30, 32–34, 38–40], advanced multi-modal understanding by pairing pretrained LLMs with powerful vision encoders and large-scale multi-modal corpora. Despite these advances, scaling VLMs to larger model sizes or richer modalities in-curs substantial computational overhead. In this work, we adopt MoE architectures trained with RL to efficiently scale VLMs while preserving high model capacity. 
+
+Mixture-of-Experts (MoE). The MoE architecture im-proves computational efficiency by activating only a subset of parameters within large pretrained models. Early MoE frameworks such as GShard [9] and Switch Transformer [7] demonstrated that replacing the feed-forward networks in Transformers with MoE layers enables pretraining at the trillion-parameter scale. Subsequent research has advanced MoE models along three main directions: (1) designing more effective expert architectures [19, 20], (2) develop-ing improved routing algorithms [8, 22], and (3) enhancing load balancing across experts [10, 23]. However, most ex-isting approaches deterministically select the top-K experts for each token, which restricts diverse expert utilization and results in overfitting to a small subset of experts. To address this limitation, we aim to search for an optimal expert rout-ing policy using RL beyond deterministic top-K selection. 
+
+Reinforcement learning with verifiable rewards. Rein-forcement learning (RL) [41–44]-based fine-tuning meth-ods, such as RLHF [42] and DPO [43], have been widely adopted to align LLM outputs with human preferences. Re-cently, DeepSeek [44] introduced Group Relative Policy Optimization (GRPO), which first generates multiple chain-of-thought (CoT) responses and then optimizes the LLM using outcome-based verifiable rewards derived from these generations. GRPO and its variants [45–48] have improved LLM reasoning performance by exploring and verifying multiple output sequences, outperforming traditional super-vised fine-tuning methods that rely solely on ground-truth data. Building upon these successes, several studies have extended GRPO to VLMs. For instance, Video-R1 [49] in-troduces video-specific reward functions to train VLMs via GRPO. Motivated by the success of GRPO, we formulate expert routing at each layer as a sequence of actions within the policy and propose MoE-GRPO, an RL-based frame-work that optimizes expert selection in MoE-based VLMs through RL. Q: Why are the     
+
+> umbrellas setup
+> above the chairs?
+> A. block wind
+> B. block rain
+> C. decoration
+> D. for shade
+> Reward
+> Function
+> Group
+> Computation
+
+# … … …  
+
+> …
+> …
+> ……
+> …
+> Rollout module 𝑔 !"#
+> Input Token
+> Gate -GRPO
+> Input
+
+MoE -GRPO Framework 
+
+> Expert selection
+> Token -GRPO
+
+Figure 2. Overall pipeline of MoE-GRPO. Given an input image (or video) and a question, denoted as x, the rollout module gold samples 
+
+G expert routing policies, i.e ., {Ei}Gi=1 ∼ gold (E|x), where each policy Ei represents a sequence of expert selections across layers. Under each rollout Ei, the model generates an output token sequence yi, and a corresponding reward Ri is computed by the reward function. The relative reward of each rollout is evaluated within its group to derive the advantage value ˆAi, which guides the policy update toward higher-reward expert combinations. To jointly optimize token-level generation and layer-wise expert routing, the overall training objective of MoE-GRPO consists of two sub-objectives: Token-GRPO , which optimizes token-level generation quality, and Gate-GRPO ,which refines layer-wise expert selection through the gating network. 
+
+## 3. Method 
+
+Standard MoE architectures sparsely activate a small subset of experts by deterministically selecting the top-K experts for each token. However, this strategy restricts the explo-ration of diverse expert combinations, potentially overlook-ing more optimal routing policies. To address this issue, we formulate expert selection as a sequential decision-making problem and propose MoE-GRPO, an RL-based framework for optimizing expert routing. Leveraging Group Rela-tive Policy Optimization (GRPO), the model stochastically explores expert assignments and exploits those that yield higher rewards for each token. Moreover, to enable effi-cient and stable policy optimization in multi-modal MoE architectures, we introduce a modality-aware router guid-ance mechanisim that discourages the router from selecting experts that are rarely activated for a given modality. The overall pipeline of MoE-GRPO is illustrated in Fig. 2. Be-fore introducing MoE-GRPO, we first summarize the basic concepts of MoE and GRPO. 
+
+3.1. Preliminaries 
+
+Mixture-of-Experts (MoE). We formalize the standard MoE within the Transformer architecture [1]. At each layer, every token is routed among N experts, where the k-th expert at layer l is denoted as ek,l and implemented as a feed-forward network (FFN). Specifically, given the hidden representation ht,l of the t-th token after the self-attention block of layer l, a gating network gl computes gating scores 
+
+gl(ht,l ) ∈ RN , which represent the assignment probabili-ties over the N experts as: 
+
+gl(ht,l ) = softmax (linear (ht,l )) ∈ RN . (1) The standard MoE layer then selects the top-K experts ac-cording to gl(ht,l ) and computes the output representation 
+
+ot,l as: 
+
+ot,l = X
+
+> k∈top-K(gl(ht,l ))
+
+gl(ht,l )k · ek,l (ht,l ). (2) As shown in Eq. (2), the final output ot,l is calculated as a weighted sum of the selected K experts, where the gat-ing scores gl(ht,l ) determine each expert’s contribution. This formulation highlights the deterministic top-K rout-ing mechanism that our method aims to improve through RL-based stochastic exploration. 
+
+Group Relative Policy Optimization (GRPO). GRPO is a variant of Proximal Policy Optimization (PPO) [41], de-signed to enhance training efficiency through group-based relative rewards in the reinforcement fine-tuning of LLMs and VLMs. Unlike standard PPO, which relies on a single-sample value function estimate, GRPO approximates the value function using the average reward over multiple sam-pled trajectories ( i.e ., rollouts). Given an input prompt x, G
+
+rollout sequences {yi}Gi=1 are sampled from the old policy πold . Then, GRPO optimizes the following objective: 
+
+LGRPO = Ex∼D ,{yi}Gi=1 ∼πold (y|x)
+
+− 1
+
+|yi||yi|X
+
+> t=1
+
+min 
+
+h
+
+rit ˆAi, clip  rit, 1 − ϵ, 1 + ϵ ˆAii
+
+,
+
+where rit = πθ
+
+ yit|x, yi<t 
+
+
+
+πold 
+
+ yit|x, yi<t 
+
+ ,
+
+(3) and ϵ denotes the hyperparameter for the clipping function. Here, ˆAi denotes the normalized advantage of the i-th roll-out, computed as ˆAi = Ri−mean ({Rj }Gj=1 )
+
+> std
+
+({Rj }Gj=1 ) and Ri represents the reward of the output sequence yi calculated by a prede-fined reward function. By Eq. (3), GRPO adaptively up-dates the policy using relative rewards within each rollout group, enabling the model to reinforce high-reward actions while discouraging low-reward ones. 
+
+3.2. MoE-GRPO 
+
+In standard GRPO, an action is defined as sampling the next output token, whereas in MoE-GRPO, an action cor-responds to selecting the top-K experts for a given to-ken at a specific layer. Accordingly, while the action space of GRPO is restricted to the generated token se-quence [y1, y 2, . . . , y T ], limiting optimization to the out-put level, MoE-GRPO expands the action space to in-clude expert routing decisions across both tokens and lay-ers, i.e ., [o1,1, o 1,2, . . . , o 2,1, o 2,2, . . . o T,L ]. This broader formulation provides fine-grained, hierarchical control over the model’s behavior, enabling the policy to jointly opti-mize token-level generation and layer-wise expert selection through the gating network. Therefore, the overall train-ing objective of MoE-GRPO consists of two sub-objectives: 
+
+Token-GRPO to improve sequence generation and Gate-GRPO to enhance the expert routing decision process. First, the objective of Token-GRPO is defined as: 
+
+LToken-GRPO = Ex∼D ,{Ei}Gi=1 ∼gold (E|x),yi∼πold (y|x;Ei)
+
+− 1
+
+|yi||yi|X
+
+> t=1
+
+min 
+
+h
+
+rit ˆAi, clip  rit, 1 − ϵ, 1 + ϵ ˆAii
+
+,
+
+where rit = πθ
+
+ yit|x, yi<t ; Ei<t 
+
+
+
+πold 
+
+ yit|x, yi<t ; Ei<t 
+
+ ,
+
+(4) and E is a sequence of selected experts across all tokens and layers. yi ∼ πold 
+
+ y|x; Ei denotes the token sequence generated under the i-th sampled set of experts rollout Ei.In Eq. (4), a sequence of gating networks gold samples G
+
+rollout trajectories of expert assignments. The model then learns to reinforce expert selection policies that yield high-reward token generations while suppressing those associ-ated with low rewards, based on relative rewards within each rollout group. In addition to token-level optimization with Token-GRPO, we introduce Gate-GRPO, designed to refine layer-wise expert routing by optimizing the expert selection pol-icy of each gate network gl. Gate-GRPO is defined as: 
+
+LGate-GRPO = Ex∼D ,{Ei}Gi=1 ∼gold (E|x),yi∼πold (y|x;Ei)
+
+− 1
+
+L |yi|
+
+> L
+
+X
+
+> l=1
+
+|yi|X
+
+> t=1
+
+min 
+
+h
+
+ˆrit,l ˆAi, clip  ˆrit,l , 1 − ϵ, 1 + ϵ ˆAii
+
+,
+
+where ˆrit,l =
+
+glθ
+
+
+
+Eit,l |x, yi<t,<l 
+
+
+
+gl
+
+> old
+
+
+
+Eit,l |x, yi<t,<l 
+
+ .
+
+(5) 
+
+Eit,l represents the set of experts selected for the t-th to-ken at the l-th layer during the i-th rollout. Eq. (5) encour-ages the gating networks to assign higher probabilities to experts, yielding high rewards, while downweighting those that lead to low rewards. This mechanism effectively guides each gating network toward reward-aligned expert utiliza-tion. Unlike Token-GRPO, which optimizes expert selec-tion policies at the output token level, Gate-GRPO directly optimizes the gating function at each layer, providing dense and fine-grained supervision signals for the routing process. As a result, the final objective of MoE-GRPO jointly op-timizes the Token-GRPO and Gate-GRPO as: 
+
+LMoE-GRPO = LToken-GRPO + LGate-GRPO . (6) By directly applying MoE-GRPO without a supervised fine-tuning stage, the gating networks are trained from scratch, leaving no pretrained routing policy available. Therefore, unlike conventional GRPO formulations that incorporate a KL divergence term to regularize the learned policy toward a reference model, MoE-GRPO does not rely on a reference policy. For the reward function, we employ an accuracy-based reward that assigns a reward of 1 to correct model predictions and 0 otherwise. MoE-GRPO converts this bi-nary reward signal into dense supervision by propagating group-computed advantages to the router at every layer and token position, enabling direct optimization of sequential expert selection decisions. 
+
+3.3. Modality-Aware Router Guidance 
+
+In RL-based training, the router must explore a large search space of sequential expert selections, often requiring long training schedules to sufficiently cover this space. This mo-tivates the need for structured guidance that reduces unnec-essary exploration and improves training efficiency. To this end, we introduce a modality-aware router guidance that discourages the router from exploring experts that are in-frequently activated for a given modality. For example, when processing visual tokens, the policy prioritizes ex-perts frequently activated for visual representations while Image Understanding Benchmarks Video Understanding Benchmarks Models Arch. # activated # total MME MMBench MMStar MMT-Bench AI2D VideoMME MLVU LongVideoBench MVBench Avg.                                                                                                                                                                                       
+
+> LLaVA-OV [11] Dense 1B 1B 1,478 52.1 37.5 -57.1 44.0 50.3 45.8 45.5 -VideoChat2-Phi3 [50] Dense 4B 4B --------55.1 -Mini-InternVL1.5 [51] Dense 2B 2B 1,899 70.9 --69.8 42.9 --37.0 -InternVL2 [52] Dense 1B 1B 1,794 65.4 45.7 49.5 64.1 42.6 51.6 43.3 57.5 -InternVL2.5 [53] Dense 1B 1B 1,950 70.7 50.1 50.3 69.3 50.3 57.3 47.9 64.3 -DeepVideo-R1 [48] Dense 3B 3B -----51.1 --49.6 -LLaVA-NeXT-Video [54] Dense 7B 7B --------46.5 -VideoChat2 [50] Dense 7B 7B -----33.7 --51.1 -VideoLLaMA2 [55] Dense 7B 7B -----45.1 --53.4 -LongVA [56] Dense 7B 7B ----70.7 47.9 ----InternVL3.5 + Det-FT MoE 1.3B 2.9B 1,660 75.8 45.6 51.8 62.7 45.6 48.6 45.3 56.7 54.0 InternVL3.5 + Stoch-FT-Multi MoE 1.3B 2.9B 1,458 73.9 43.3 51.2 61.8 45.9 50.3 47.0 56.5 53.7 InternVL3.5 + Stoch-FT-Noise MoE 1.3B 2.9B 1,684 76.3 46.1 52.0 62.4 45.1 51.1 45.3 55.8 54.3 InternVL3.5 + MoE-GRPO ( ours )MoE 1.3B 2.9B 1,693 77.5 45.7 54.8 65.8 46.6 53.1 46.5 58.4 56.0
+
+Table 1. Results on multi-modal understanding benchmarks. # activated and # total denote the number of activated and total parameters. The last column reports the average accuracy across all benchmarks, excluding MME. 
+
+de-emphasizing those primarily associated with textual in-puts, and vice versa. To quantify modality specialization of each expert, we define modality-awareness scores, a vision-awareness score 
+
+ˆsv (ei) and a text-awareness score ˆst(ei), that estimate each expert’s affinity for visual or textual inputs. Specifically, we first compute Nv (ei) and Nt (ei), the number of times ex-pert ei is selected by vision and text tokens, respectively, baed on top-K routing. Then, the modality-awareness scores, ˆsv (ei) and ˆst(ei), are computed as: 
+
+sv (ei) = Nv (ei)
+
+P 
+
+> j
+
+Nv (ej ) , s t(ei) = Nt(ei)
+
+P 
+
+> j
+
+Nt(ej )ˆsv (ei) = sv (ei)
+
+sv (ei) + st(ei) , ˆst(ei) = st(ei)
+
+sv (ei) + st(ei) ,
+
+(7) Based on these scores, we deactivate the bottom P % of the experts by setting their gating scores to −∞ , thereby con-straining exploration to modality-relevant experts. Within the remaining search space, the gating network gold sam-ples K experts according to the adjusted gating scores via multinomial sampling, yielding G stochastic rollout poli-cies. This strategy ensures that the router primarily explores modality-consistent experts while maintaining sufficient di-versity for robust and efficient policy learning. 
+
+## 4. Experiments 
+
+To apply MoE-GRPO, we convert the InternVL3.5-1B [24] into an MoE architecture by activating K = 2 experts from a total of N = 8 experts at each layer. As a result, only 1.3B parameters are activated out of 2.9B total parameters. To further demonstrate the generalization capability of models trained with MoE-GRPO, we conduct cross-dataset evalua-tion and domain generalization experiments on image clas-sification using CLIP-MoE [21], where 0.7B parameters are activated out of 1.2B total parameters by selecting two ex-perts from four at each layer. We first compare MoE-GRPO with both dense and MoE models in Sec. 4.1, followed by ablation studies and in-depth analyses in Sec. 4.2 and Sec. 4.3, respectively. 
+
+Implementation details. In MoE-GRPO, we set the num-ber of rollouts to G = 8 and apply multinomial sampling within each gating network. For modality-aware router guidance, we deactivate the bottom 25% of experts for each modality. During rollout, we employ greedy decoding for language generation and introduce stochasticity only in the expert selection process. For training, we sample 100K multi-choice visual instruction-tuning examples from One-Thinker [60] and conduct 25K training steps on 4 × RTX Pro 6000 Blackwell Max-Q GPUs with a batch size of 4. The learning rate is set to 1e-6 with cosine scheduling, and the total training time is approximately one day. We ap-ply the load-balancing loss introduced in Switch Transform-ers [7]. We use up to 8 images for image inputs and 8 frames for video inputs. During inference, expert selection is per-formed deterministically by choosing the top-K experts. 
+
+Baselines. To evaluate the effectiveness of MoE-GRPO, we compare it against standard fine-tuning strategies and their variants for MoE architectures: • Deterministic Fine-Tuning ( Det-FT ) selects the top-K
+
+experts according to the gating scores. • Stochastic Fine-Tuning with Multinomial Sampling (Stoch-FT-Multi ) samples K experts from a multinomial distribution parameterized by the gating scores, following V-MoE [8]. • Stochastic Fine-Tuning with Gaussian Noise ( Stoch-FT-Noise ) perturbs the gating scores with Gaussian noise prior to selecting the top-K experts, following [61]. To ensure a fair comparison, we apply the load-balancing loss to all baselines, consistent with MoE-GRPO. Models Caltech101 OxfordPets StanfordCars Flowers102 Food101 Aircraft SUN397 DTD EuroSAT UCF101 Avg. 
+
+CoOp [57] 93.7 89.1 64.5 68.7 85.3 18.5 64.2 41.9 46.4 66.6 63.9 CoCoOp [58] 94.4 90.1 65.3 71.9 86.1 22.9 67.4 45.7 45.4 68.2 65.7 MaPLe [59] 93.5 90.5 65.6 72.2 86.2 24.7 67.0 46.5 48.1 68.7 66.3 CLIP-MoE [21] 95.8 92.3 74.9 72.1 88.7 29.0 70.1 54.9 57.6 73.0 70.8 CLIP-MoE + Det-FT 94.1 89.7 66.1 68.6 88.3 25.1 67.0 53.1 62.2 73.9 68.8 CLIP-MoE + MoE-GRPO ( ours ) 95.9 91.6 75.5 75.9 90.5 30.0 71.1 53.8 58.9 76.2 71.9 
+
+Table 2. Results on cross-dataset evaluation. We train the model on the source ImageNet dataset for three epochs under the 16-shot setting and evaluate it on 10 target datasets.                                                 
+
+> Models ImageNet ImageNetV2 ImageNet-S ImageNet-A ImageNet-R Avg.
+> CLIP [35] 66.7 60.8 46.2 47.8 74.0 59.1 CoOP [57] 71.5 64.2 48.0 49.7 75.2 61.7 CoCoOp [58] 71.0 64.1 48.8 50.6 76.2 62.1 MaPLe [59] 70.7 64.1 49.2 50.9 77.0 62.4 CLIP-MoE [21] 72.9 72.6 57.4 45.6 68.7 63.4 + Det-FT 76.1 75.0 57.0 49.1 72.7 66.0 + MoE-GRPO ( ours )77.6 76.9 59.0 50.3 73.6 67.5
+
+Table 3. Results of domain generalization. We train the model on the source ImageNet dataset for three epochs under the 16-shot setting and evaluate it on four out-of-domain target datasets. 
+
+4.1. Main Results 
+
+Results on multi-modal understanding benchmarks. We compare MoE-GRPO with three fine-tuning baselines for MoE architectures (Det-FT, Stoch-FT-Multi, and Stoch-FT-Noise) on multi-modal understanding benchmarks in Tab. 1. Comparisons between Det-FT, Stoch-FT-Multi, and Stoch-FT-Noise indicate that merely introducing stochastic-ity does not consistently improve performance. Although stochastic routing increases exploration over experts, these methods do not explicitly optimize the expert selection pol-icy, limiting their effectiveness. In contrast, MoE-GRPO di-rectly optimizes the routing policy via RL, resulting in con-sistent performance improvements over all fine-tuning base-lines on 7 out of 9 evaluated benchmarks. Consequently, it surpasses the three baselines by 2.0%, 2.3%, and 1.7% in terms of average accuracy, respectively. Overall, these re-sults demonstrate that RL-based direct expert selection pol-icy optimization improves generalization and leads to more robust performance across diverse multi-modal image and video understanding tasks. 
+
+Results of cross-dataset generalization. We further apply MoE-GRPO to CLIP-MoE [21], a vision encoder based on a MoE architecture, to evaluate its generalization capability. Specifically, we train CLIP-MoE + MoE-GRPO for three epochs on the source ImageNet dataset [62] under the 16-shot setting and evaluate the model on 10 target datasets. As shown in Tab. 2, training with Det-FT leads to performance degradation compared to the baseline CLIP-MoE, indicat-ing a loss of generalization due to overfitting. In contrast, MoE-GRPO outperforms Det-FT on 9 out of 10 evaluation datasets, achieving an average accuracy gain of 3.1%.                         
+
+> Token-GRPO Gate-GRPO MMBench MMStar MLVU LongVideoBench Avg.
+> ✔-74.8 44.4 51.2 45.0 53.9 -✔72.3 39.9 47.5 43.8 50.9
+> ✔✔77.5 45.7 53.1 46.5 55.7
+
+Table 4. Ablation studies on MoE-GRPO. 
+
+Results of domain generalization. We evaluate the out-of-domain generalization of MoE-GRPO by assessing the transferability of the ImageNet-trained model to four out-of-domain datasets in Tab. 3. While both Det-FT and MoE-GRPO substantially improve performance on the source Im-ageNet dataset, Det-FT often degrades accuracy on out-of-domain datasets. For instance, on ImageNet-S, the accu-racy decreases by 0.4% compared to CLIP-MoE. In con-trast, training with MoE-GRPO consistently outperforms both CLIP-MoE and CLIP-MoE + Det-FT with average gains of 4.1% and 1.5%, respectively. These results demon-strate that RL-based expert routing mitigates overfitting and enhances cross-domain generalization by promoting diverse expert utilization and effective use of model capacity. 
+
+4.2. Ablation Studies 
+
+Ablation studies on MoE-GRPO. Tab. 4 presents the indi-vidual contributions of Token-GRPO and Gate-GRPO. Ap-plying Gate-GRPO alone leads the average accuracy to drop substantially from 55.7% to 50.9%, indicating that opti-mizing expert routing without explicitly shaping token-level generation fails to align the model with task-level rewards. This finding suggests that token-level policy optimization is more directly coupled with reward improvement and is therefore indispensable. In contrast, adopting only Token-GRPO results in a 1.8% decrease in average accuracy, im-plying that while token-level optimization captures the pri-mary reward signal, it does not explicitly regularize layer-wise expert routing. Gate-GRPO complements this limi-tation by providing dense supervisory signals to the rout-ing modules at each layer, thereby facilitating more effec-tive expert selection. Overall, these results demonstrate that Token-GRPO and Gate-GRPO are both necessary and com-plementary components of MoE-GRPO. 
+
+Ablation studies on modality-aware router guidance. Router guidance MMBench MMStar MLVU LongVideoBench Avg.                
+
+> MoE-GRPO + modality-agnostic (noise) 76.3 45.3 49.5 45.6 54.2 + modality-agnostic (multi.) 76.7 46.1 50.8 45.6 54.8 + modality-aware ( ours )77.5 45.7 53.1 46.5 55.7
+
+Table 5. Ablation studies on modality-aware router guidance. 
+
+We compare modality-aware router guidance with two modality-agnostic expert selection mechanisms, Gaussian noise and multi-nomial sampling. 0 5000 10000 15000 20000 25000 
+
+> Step
+> 0.40
+> 0.45
+> 0.50
+> 0.55
+> 0.60
+> 0.65
+> 0.70
+> Accuracy Reward Mean
+> modality-aware
+> modality-agnostic
+
+(a) Reward mean. 0 5000 10000 15000 20000 25000  
+
+> Step
+> 0.15
+> 0.20
+> 0.25
+> 0.30
+> 0.35
+> Accuracy Reward Std  modality-aware
+> modality-agnostic
+
+(b) Reward standard deviation. 
+
+Figure 3. Training curves. (a) and (b) present the mean and stan-dard deviation of the accuracy reward of MoE-GRPO, comparing our modality-aware router guidance with the modality-agnostic (multi.) expert selection baseline. 
+
+Tab. 5 presents ablation studies on modality-aware router guidance. While our proposed modality-aware router guid-ance explicitly discourages the router from exploring ex-perts that are infrequently activated for a given modality, we construct two modality-agnostic exploration baselines that do not condition on modality information: (1) perturb-ing the gating scores with Gaussian noise (noise), and (2) sampling experts via multinomial sampling (multi.) during rollout. As shown in Tab. 5, modality-aware router guid-ance outperforms both the Gaussian-noise and multinomial exploration baselines by 1.5% and 0.9%, respectively. Fig. 3 presents the training curves of MoE-GRPO under both modality-aware router guidance and modality-agnostic (multi.) expert selection, illustrating the mean and standard deviation of the accuracy reward. As shown in Fig. 3a, the mean accuracy steadily increases for both methods, indicat-ing that the model progressively learns to generate correct answers through RL-driven expert selection. Fig. 3b fur-ther illustrates a gradual reduction in the standard deviation of accuracy within each rollout group, reflecting increased policy stability over time. Notably, modality-aware router guidance converges more rapidly in terms of mean reward and exhibits lower reward variance than modality-agnostic (multi.) expert selection. This improvement arises from avoiding unnecessary exploration of irrelevant experts and more effectively leveraging modality-specific expert pat-terns. These results underscore the importance of modality-aware routing, which guides the router toward modality-relevant experts while avoiding unnecessary exploration,                     
+
+> RL Methods MMBench MMStar MLVU LongVideoBench Avg.
+> DAPO [47] 75.0 46.7 52.0 47.9 55.0 SAPO [63] 76.7 45.7 50.8 48.5 55.4 GRPO [44] 77.5 45.7 53.1 46.5 55.7
+
+Table 6. Ablation studies on RL methods of MoE-GRPO.                          
+
+> Routing Methods MMBench MMStar MLVU LongVideoBench Avg.
+> Expert Choice [22] 75.3 45.8 51.0 46.7 54.7 Optimal Transport [64] 74.4 45.3 51.0 47.0 54.4 MoE-GRPO w/o LB [7] 77.0 45.4 52.6 44.0 54.8 MoE-GRPO w/ LB [7] 77.5 45.7 53.1 46.5 55.7
+
+Table 7. Comparison with existing routing methods. MoE-GRPO achieves superior performance compared to Expert Choice [22] routing and Optimal Transport [64] routing. More-over, it is complementary to the load-balancing (LB) objective used in Switch Transformers [7], and their combination leads to further performance improvements. 
+
+thereby enabling faster and more stable convergence in pol-icy learning for vision-language models. 
+
+Ablation studies on RL methods. We present ablation studies of different reinforcement learning (RL) methods (GRPO [44], DAPO [47], and SAPO [63]), within the MoE-GRPO framework in Tab. 6. We observe that DAPO and SAPO achieve average accuracy comparable to GRPO, sug-gesting that expert selection policy optimization in MoE ar-chitectures is robust across different RL formulations. 
+
+4.3. Analyses of Routing Policy 
+
+In this section, we first compare MoE-GRPO with existing routing methods and then provide an in-depth analysis of the learned routing policy of MoE-GRPO. 
+
+Comparison with existing routing methods. Tab. 7 compares MoE-GRPO with three routing methods: Ex-pert Choice routing [22], Optimal Transport routing imple-mented with the Sinkhorn algorithm [64], and the auxiliary load-balancing (LB) loss used in Switch Transformers [7]. Specifically, Expert Choice routing allows experts to select the top-K tokens to enforce capacity constraints, whereas Optimal Transport routing leverages the Sinkhorn algorithm to achieve globally balanced assignments. In contrast, the auxiliary LB loss introduces a regularization term to the training objective to encourage balanced expert utilization. As in Tab. 7, MoE-GRPO outperforms both Expert Choice and Optimal Transport routing methods by 1.0% and 1.3% in average accuracy, respectively. Moreover, MoE-GRPO is complementary to the LB loss, and their combination yields further performance improvements by 0.9%. 
+
+Analysis of expert selection diversity. We visualize the effect of MoE-GRPO on token-level expert selection diver-sity over a 2K vision-language token sequence in Fig. 4. Det-FT predominantly activates only two experts across 0 20 40 60 80 100 
+
+Routing Distribution (%)     
+
+> MoE-GRPO
+> Det-FT
+> 30.9% 16.5% 15.9% 18.5%
+> 47.0% 43.7%
+> Expert 1
+> Expert 2
+> Expert 3
+> Expert 4
+> Expert 5
+> Expert 6
+> Expert 7
+> Expert 8
+
+Figure 4. Token-level expert utilization ratio. Under MoE-GRPO, expert activation is more evenly distributed across the to-ken sequence, resulting in more balanced expert utilization. 0 20 40 60 80 100 
+
+Routing Distribution (%) 
+
+> Tasks
+
+Det-FT      
+
+> 020 40 60 80 100
+
+Routing Distribution (%) 
+
+MoE-GRPO 
+
+> Expert 1
+> Expert 2
+> Expert 3
+> Expert 4
+> Expert 5
+> Expert 6
+> Expert 7
+> Expert 8
+
+Figure 5. Expert utilization ratio (x-axis) for each task (y-axis). 
+
+MoE-GRPO enhances task-level expert specialization by inducing more diverse expert activation patterns across tasks. 
+
+the sequence, whereas MoE-GRPO exhibits a substantially more diverse activation pattern, increasing the entropy of the routing distribution from 1.05 to 1.82. In addition, Fig. 5 presents the expert selection ratios across the 20 task cat-egories in MVBench. Compared to Det-FT, MoE-GRPO demonstrates more distinct expert activation across tasks, indicating stronger task-level specialization. Consistently, the average Jensen-Shannon divergence (JSD) of task-wise expert distributions increases from 0.06 to 0.20 under MoE-GRPO. Overall, these results suggest that MoE-GRPO en-hances task-level expert specialization while maintaining balanced expert utilization at the token level. 
+
+Qualitative analysis. We further analyze the layer-wise evolution of the expert selection policy through a qualitative comparison between Det-FT and MoE-GRPO in Fig. 6. As shown in Fig. 6a, both methods exhibit increasingly con-fident routing decisions in deeper layers, as indicated by darker blue shades, suggesting progressively more decisive expert selection. Notably, MoE-GRPO shows greater vari-ability in routing probabilities, reflected by lighter shades of blue compared to Det-FT. Such diversity mitigates over-reliance on specific experts and promotes more flexible fea-ture composition across layers. Consequently, this adaptive routing behavior enables MoE-GRPO to produce the correct answer (‘A’) in Fig. 6b, whereas Det-FT yields an incorrect prediction (‘D’). These observations are consistent with our Det -FT        
+
+> MoE -GRPO
+> Question: ”How many dogs are there?”
+> Options: A .4, B. 2, C. 6, D. 3
+> Det -FT: D
+> MoE -GRPO (ours ):A
+> Routing Probabilities
+> Result
+> (b) A qualitative example.
+> (a) Routing probabilities at each layer.
+
+Figure 6. A qualitative example and its routing probabilities. 
+
+(a) illustrates the expert routing probabilities, with the selected ex-perts highlighted in red boxes. (b) presents a qualitative example demonstrating that the learned expert selection policy of MoE-GRPO yields a correct prediction, whereas the baseline Det-FT model produces an incorrect one. 
+
+quantitative findings, demonstrating that MoE-GRPO fos-ters more diverse and adaptive expert utilization, thereby reducing expert over-specialization and improving general-ization. 
+
+## 5. Conclusion 
+
+In this paper, we introduce MoE-GRPO, an RL-based framework that enables MoE-based VLMs to learn an ex-plicit expert selection policy beyond deterministic top-K
+
+routing by optimizing a reward-driven GRPO objective. However, unrestricted RL exploration over the sequential expert selection space can be inefficient and unstable. To address this, we incorporate a modality-aware router guid-ance strategy that steers exploration toward experts most relevant to each modality, improving policy quality and learning stability. Empirically, MoE-GRPO consistently outperforms both deterministic and stochastic routing base-lines across a broad range of tasks and settings. Our in-depth analyses demonstrate that MoE-GRPO encourages diverse expert utilization and improved generalization by enabling more effective exploration of expert combinations during training. 
+
+Acknowledgements. This work was partly supported by IITP grant funded by MSIT (No. RS-2024-00443251, RS-2024-00457882), NRF grant funded by MSIT (NRF-2023R1A2C2005373), and Samsung Electronics Co., Ltd. (IO251218-14841-01). References 
+
+[1] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszko-reit, Llion Jones, Aidan N Gomez, Łukasz Kaiser, and Illia Polosukhin. Attention is all you need. In NeurIPS , 2017. 1, 3[2] Hugo Touvron, Louis Martin, Kevin Stone, Peter Albert, Amjad Almahairi, Yasmine Babaei, Nikolay Bashlykov, Soumya Batra, Prajjwal Bhargava, Shruti Bhosale, et al. Llama 2: Open foundation and fine-tuned chat models. arXiv preprint arXiv:2307.09288 , 2023. 1 [3] Josh Achiam, Steven Adler, Sandhini Agarwal, Lama Ah-mad, Ilge Akkaya, Florencia Leoni Aleman, Diogo Almeida, Janko Altenschmidt, Sam Altman, Shyamal Anadkat, et al. Gpt-4 technical report. arXiv preprint arXiv:2303.08774 ,2023. 1 [4] An Yang, Anfeng Li, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo Zheng, Bowen Yu, Chang Gao, Chengen Huang, Chenxu Lv, et al. Qwen3 technical report. arXiv preprint arXiv:2505.09388 , 2025. [5] Zheng Cai, Maosong Cao, Haojiong Chen, Kai Chen, Keyu Chen, Xin Chen, Xun Chen, Zehui Chen, Zhi Chen, Pei Chu, Xiaoyi Dong, Haodong Duan, Qi Fan, Zhaoye Fei, Yang Gao, Jiaye Ge, Chenya Gu, Yuzhe Gu, Tao Gui, Aijia Guo, Qipeng Guo, Conghui He, Yingfan Hu, Ting Huang, Tao Jiang, Penglong Jiao, Zhenjiang Jin, Zhikai Lei, Jiax-ing Li, Jingwen Li, Linyang Li, Shuaibin Li, Wei Li, Yin-ing Li, Hongwei Liu, Jiangning Liu, Jiawei Hong, Kaiwen Liu, Kuikun Liu, Xiaoran Liu, Chengqi Lv, Haijun Lv, Kai Lv, Li Ma, Runyuan Ma, Zerun Ma, Wenchang Ning, Linke Ouyang, Jiantao Qiu, Yuan Qu, Fukai Shang, Yunfan Shao, Demin Song, Zifan Song, Zhihao Sui, Peng Sun, Yu Sun, Huanze Tang, Bin Wang, Guoteng Wang, Jiaqi Wang, Jiayu Wang, Rui Wang, Yudong Wang, Ziyi Wang, Xingjian Wei, Qizhen Weng, Fan Wu, Yingtong Xiong, Chao Xu, Ruil-iang Xu, Hang Yan, Yirong Yan, Xiaogui Yang, Haochen Ye, Huaiyuan Ying, Jia Yu, Jing Yu, Yuhang Zang, Chuyu Zhang, Li Zhang, Pan Zhang, Peng Zhang, Ruijie Zhang, Shuo Zhang, Songyang Zhang, Wenjian Zhang, Wenwei Zhang, Xingcheng Zhang, Xinyue Zhang, Hui Zhao, Qian Zhao, Xiaomeng Zhao, Fengzhe Zhou, Zaida Zhou, Jing-ming Zhuo, Yicheng Zou, Xipeng Qiu, Yu Qiao, and Dahua Lin. Internlm2 technical report, 2024. [6] Kimi Team, Yifan Bai, Yiping Bao, Guanduo Chen, Jiahao Chen, Ningxin Chen, Ruijue Chen, Yanru Chen, Yuankun Chen, Yutian Chen, et al. Kimi k2: Open agentic intelli-gence. arXiv preprint arXiv:2507.20534 , 2025. 1 [7] William Fedus, Barret Zoph, and Noam Shazeer. Switch transformers: Scaling to trillion parameter models with sim-ple and efficient sparsity. JMLR , 2022. 1, 2, 5, 7 [8] Carlos Riquelme, Joan Puigcerver, Basil Mustafa, Maxim Neumann, Rodolphe Jenatton, Andr´ e Susano Pinto, Daniel Keysers, and Neil Houlsby. Scaling vision with sparse mix-ture of experts. In NeurIPS , 2021. 2, 5 [9] Dmitry Lepikhin, HyoukJoong Lee, Yuanzhong Xu, Dehao Chen, Orhan Firat, Yanping Huang, Maxim Krikun, Noam Shazeer, and Zhifeng Chen. Gshard: Scaling giant mod-els with conditional computation and automatic sharding. In 
+
+ICLR , 2021. 2 [10] Zewen Chi, Li Dong, Shaohan Huang, Damai Dai, Shum-ing Ma, Barun Patra, Saksham Singhal, Payal Bajaj, Xia Song, Xian-Ling Mao, et al. On the representation collapse of sparse mixture of experts. In NeurIPS , 2022. 1, 2 [11] Bo Li, Yuanhan Zhang, Dong Guo, Renrui Zhang, Feng Li, Hao Zhang, Kaichen Zhang, Yanwei Li, Ziwei Liu, and Chunyuan Li. Llava-onevision: Easy visual task transfer. 
+
+arXiv preprint arXiv:2408.03326 , 2024. 1, 5 [12] Dohwan Ko, Joonmyung Choi, Hyeong Kyu Choi, Kyoung-Woon On, Byungseok Roh, and Hyunwoo J Kim. Meltr: Meta loss transformer for learning to fine-tune video foun-dation models. In CVPR , 2023. [13] Kimi Team, Angang Du, Bohong Yin, Bowei Xing, Bowen Qu, Bowen Wang, Cheng Chen, Chenlin Zhang, Chen-zhuang Du, Chu Wei, et al. Kimi-vl technical report. arXiv preprint arXiv:2504.07491 , 2025. 1 [14] Jinguo Zhu, Weiyun Wang, Zhe Chen, Zhaoyang Liu, Shen-glong Ye, Lixin Gu, Hao Tian, Yuchen Duan, Weijie Su, Jie Shao, et al. Internvl3: Exploring advanced training and test-time recipes for open-source multimodal models. arXiv preprint arXiv:2504.10479 , 2025. [15] Shuai Bai, Keqin Chen, Xuejing Liu, Jialin Wang, Wenbin Ge, Sibo Song, Kai Dang, Peng Wang, Shijie Wang, Jun Tang, et al. Qwen2. 5-vl technical report. arXiv preprint arXiv:2502.13923 , 2025. [16] Dohwan Ko, Sihyeon Kim, Yumin Suh, Minseo Yoon, Man-mohan Chandraker, Hyunwoo J Kim, et al. St-vlm: Kine-matic instruction tuning for spatio-temporal reasoning in vision-language models. arXiv preprint arXiv:2503.19355 ,2025. [17] Ji Soo Lee, Jongha Kim, Jeehye Na, Jinyoung Park, and Hyunwoo J Kim. Vidchain: chain-of-tasks with metric-based direct preference optimization for dense video captioning. In 
+
+AAAI , 2025. 1 [18] Aixin Liu, Bei Feng, Bin Wang, Bingxuan Wang, Bo Liu, Chenggang Zhao, Chengqi Dengr, Chong Ruan, Damai Dai, Daya Guo, et al. Deepseek-v2: A strong, economical, and efficient mixture-of-experts language model. arXiv preprint arXiv:2405.04434 , 2024. 1 [19] Zhiyu Wu, Xiaokang Chen, Zizheng Pan, Xingchao Liu, Wen Liu, Damai Dai, Huazuo Gao, Yiyang Ma, Chengyue Wu, Bingxuan Wang, et al. Deepseek-vl2: Mixture-of-experts vision-language models for advanced multimodal understanding. arXiv preprint arXiv:2412.10302 , 2024. 2 [20] Damai Dai, Chengqi Deng, Chenggang Zhao, RX Xu, Huazuo Gao, Deli Chen, Jiashi Li, Wangding Zeng, Xingkai Yu, Yu Wu, et al. Deepseekmoe: Towards ultimate expert specialization in mixture-of-experts language models. In 
+
+ACL , 2024. 2 [21] Jihai Zhang, Xiaoye Qu, Tong Zhu, and Yu Cheng. Clip-moe: Towards building mixture of experts for clip with diver-sified multiplet upcycling. arXiv preprint arXiv:2409.19291 ,2024. 1, 5, 6 [22] Yanqi Zhou, Tao Lei, Hanxiao Liu, Nan Du, Yanping Huang, Vincent Zhao, Andrew M Dai, Quoc V Le, James Laudon, et al. Mixture-of-experts with expert choice routing. In 
+
+NeurIPS , 2022. 2, 7 [23] Barret Zoph, Irwan Bello, Sameer Kumar, Nan Du, Yanping Huang, Jeff Dean, Noam Shazeer, and William Fedus. St-moe: Designing stable and transferable sparse expert mod-els. arXiv preprint arXiv:2202.08906 , 2022. 2 [24] Weiyun Wang, Zhangwei Gao, Lixin Gu, Hengjun Pu, Long Cui, Xingguang Wei, Zhaoyang Liu, Linglin Jing, Shenglong Ye, Jie Shao, et al. Internvl3. 5: Advancing open-source multimodal models in versatility, reasoning, and efficiency. 
+
+arXiv preprint arXiv:2508.18265 , 2025. 2, 5 [25] Junnan Li, Dongxu Li, Silvio Savarese, and Steven Hoi. Blip-2: Bootstrapping language-image pre-training with frozen image encoders and large language models. In ICML ,2023. 2 [26] Wenliang Dai, Junnan Li, Dongxu Li, Anthony Tiong, Junqi Zhao, Weisheng Wang, Boyang Li, Pascale N Fung, and Steven Hoi. Instructblip: Towards general-purpose vision-language models with instruction tuning. In NeurIPS , 2023. [27] Haotian Liu, Chunyuan Li, Qingyang Wu, and Yong Jae Lee. Visual instruction tuning. In NeurIPS , 2023. 2 [28] Jinze Bai, Shuai Bai, Yunfei Chu, Zeyu Cui, Kai Dang, Xiaodong Deng, Yang Fan, Wenbin Ge, Yu Han, Fei Huang, et al. Qwen technical report. arXiv preprint arXiv:2309.16609 , 2023. 2 [29] Dohwan Ko, Joonmyung Choi, Juyeon Ko, Shinyeong Noh, Kyoung-Woon On, Eun-Sol Kim, and Hyunwoo J Kim. Video-text representation learning via differentiable weak temporal alignment. In CVPR , 2022. 2 [30] Hang Zhang, Xin Li, and Lidong Bing. Video-llama: An instruction-tuned audio-visual language model for video un-derstanding. In EMNLP , 2023. 2 [31] Dohwan Ko, Ji Soo Lee, Miso Choi, Jaewon Chu, Jihwan Park, and Hyunwoo J Kim. Open-vocabulary video question answering: A new benchmark for evaluating the generaliz-ability of video question answering models. In CVPR , 2023. [32] Bin Lin, Yang Ye, Bin Zhu, Jiaxi Cui, Munan Ning, Peng Jin, and Li Yuan. Video-llava: Learning united visual repre-sentation by alignment before projection. In EMNLP , 2024. 2[33] Peng Wang, Shuai Bai, Sinan Tan, Shijie Wang, Zhihao Fan, Jinze Bai, Keqin Chen, Xuejing Liu, Jialin Wang, Wenbin Ge, et al. Qwen2-vl: Enhancing vision-language model’s perception of the world at any resolution. arXiv preprint arXiv:2409.12191 , 2024. [34] Yi Wang, Kunchang Li, Yizhuo Li, Yinan He, Bingkun Huang, Zhiyu Zhao, Hongjie Zhang, Jilan Xu, Yi Liu, Zun Wang, et al. Internvideo: General video foundation models via generative and discriminative learning. arXiv preprint arXiv:2212.03191 , 2022. 2 [35] Alec Radford, Jong Wook Kim, Chris Hallacy, Aditya Ramesh, Gabriel Goh, Sandhini Agarwal, Girish Sastry, Amanda Askell, Pamela Mishkin, Jack Clark, et al. Learn-ing transferable visual models from natural language super-vision. In ICML , 2021. 2, 6 [36] Chao Jia, Yinfei Yang, Ye Xia, Yi-Ting Chen, Zarana Parekh, Hieu Pham, Quoc Le, Yun-Hsuan Sung, Zhen Li, and Tom Duerig. Scaling up visual and vision-language representation learning with noisy text supervision. In ICML , 2021. 2 [37] Zhe Chen, Jiannan Wu, Wenhai Wang, Weijie Su, Guo Chen, Sen Xing, Muyan Zhong, Qinglong Zhang, Xizhou Zhu, Lewei Lu, et al. Internvl: Scaling up vision foundation mod-els and aligning for generic visual-linguistic tasks. In CVPR ,2024. 2 [38] Dohwan Ko, Ji Lee, Woo-Young Kang, Byungseok Roh, and Hyunwoo Kim. Large language models are temporal and causal reasoners for video question answering. In EMNLP ,2023. 2 [39] Ji Soo Lee, Byungoh Ko, Jaewon Cho, Howoong Lee, Jae-woon Byun, and Hyunwoo J Kim. Captioning for text-video retrieval via dual-group direct preference optimization. In 
+
+EMNLP Findings , 2025. [40] Dohwan Ko, Ji Soo Lee, Minhyuk Choi, Zihang Meng, and Hyunwoo J Kim. Bidirectional likelihood estimation with multi-modal large language models for text-video retrieval. In ICCV , 2025. 2 [41] John Schulman, Filip Wolski, Prafulla Dhariwal, Alec Rad-ford, and Oleg Klimov. Proximal policy optimization algo-rithms. arXiv preprint arXiv:1707.06347 , 2017. 2, 3 [42] Long Ouyang, Jeffrey Wu, Xu Jiang, Diogo Almeida, Car-roll Wainwright, Pamela Mishkin, Chong Zhang, Sandhini Agarwal, Katarina Slama, Alex Ray, et al. Training lan-guage models to follow instructions with human feedback. In NeurIPS , 2022. 2 [43] Rafael Rafailov, Archit Sharma, Eric Mitchell, Christo-pher D Manning, Stefano Ermon, and Chelsea Finn. Direct preference optimization: Your language model is secretly a reward model. In NeurIPS , 2023. 2 [44] Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, YK Li, Yang Wu, et al. Deepseekmath: Pushing the limits of math-ematical reasoning in open language models. arXiv preprint arXiv:2402.03300 , 2024. 2, 7 [45] Jingyi Zhang, Jiaxing Huang, Huanjin Yao, Shunyu Liu, Xikun Zhang, Shijian Lu, and Dacheng Tao. R1-vl: Learning to reason with multimodal large language models via step-wise group relative policy optimization. In ICCV , 2025. 2 [46] Chujie Zheng, Shixuan Liu, Mingze Li, Xiong-Hui Chen, Bowen Yu, Chang Gao, Kai Dang, Yuqiong Liu, Rui Men, An Yang, et al. Group sequence policy optimization. arXiv preprint arXiv:2507.18071 , 2025. [47] Qiying Yu, Zheng Zhang, Ruofei Zhu, Yufeng Yuan, Xi-aochen Zuo, Yu Yue, Weinan Dai, Tiantian Fan, Gao-hong Liu, Lingjun Liu, et al. Dapo: An open-source llm reinforcement learning system at scale. arXiv preprint arXiv:2503.14476 , 2025. 7 [48] Jinyoung Park, Jeehye Na, Jinyoung Kim, and Hyunwoo J Kim. Deepvideo-r1: Video reinforcement fine-tuning via difficulty-aware regressive grpo. In NeurIPS , 2025. 2, 5 [49] Kaituo Feng, Kaixiong Gong, Bohao Li, Zonghao Guo, Yibing Wang, Tianshuo Peng, Junfei Wu, Xiaoying Zhang, Benyou Wang, and Xiangyu Yue. Video-r1: Reinforcing video reasoning in mllms. In NeurIPS , 2025. 2 [50] Kunchang Li, Yali Wang, Yinan He, Yizhuo Li, Yi Wang, Yi Liu, Zun Wang, Jilan Xu, Guo Chen, Ping Luo, et al. Mvbench: A comprehensive multi-modal video understand-ing benchmark. In CVPR , 2024. 5 [51] Zhangwei Gao, Zhe Chen, Erfei Cui, Yiming Ren, Weiyun Wang, Jinguo Zhu, Hao Tian, Shenglong Ye, Junjun He, Xizhou Zhu, et al. Mini-internvl: a flexible-transfer pocket multi-modal model with 5% parameters and 90% perfor-mance. Visual Intelligence , 2(1):1–17, 2024. 5 [52] Zhe Chen, Weiyun Wang, Hao Tian, Shenglong Ye, Zhang-wei Gao, Erfei Cui, Wenwen Tong, Kongzhi Hu, Jiapeng Luo, Zheng Ma, et al. How far are we to gpt-4v? closing the gap to commercial multimodal models with open-source suites. arXiv preprint arXiv:2404.16821 , 2024. 5 [53] Zhe Chen, Weiyun Wang, Yue Cao, Yangzhou Liu, Zhang-wei Gao, Erfei Cui, Jinguo Zhu, Shenglong Ye, Hao Tian, Zhaoyang Liu, et al. Expanding performance boundaries of open-source multimodal models with model, data, and test-time scaling. arXiv preprint arXiv:2412.05271 , 2024. 5 [54] Yuanhan Zhang, Bo Li, haotian Liu, Yong jae Lee, Liangke Gui, Di Fu, Jiashi Feng, Ziwei Liu, and Chunyuan Li. Llava-next: A strong zero-shot video understanding model, April 2024. 5 [55] Zesen Cheng, Sicong Leng, Hang Zhang, Yifei Xin, Xin Li, Guanzheng Chen, Yongxin Zhu, Wenqi Zhang, Ziyang Luo, Deli Zhao, et al. Videollama 2: Advancing spatial-temporal modeling and audio understanding in video-llms. 
+
+arXiv preprint arXiv:2406.07476 , 2024. 5 [56] Peiyuan Zhang, Kaichen Zhang, Bo Li, Guangtao Zeng, Jingkang Yang, Yuanhan Zhang, Ziyue Wang, Haoran Tan, Chunyuan Li, and Ziwei Liu. Long context transfer from language to vision. arXiv preprint arXiv:2406.16852 , 2024. 5[57] Kaiyang Zhou, Jingkang Yang, Chen Change Loy, and Ziwei Liu. Learning to prompt for vision-language models. IJCV ,2022. 6 [58] Kaiyang Zhou, Jingkang Yang, Chen Change Loy, and Zi-wei Liu. Conditional prompt learning for vision-language models. In CVPR , 2022. 6 [59] Muhammad Uzair Khattak, Hanoona Rasheed, Muhammad Maaz, Salman Khan, and Fahad Shahbaz Khan. Maple: Multi-modal prompt learning. In CVPR , 2023. 6 [60] Kaituo Feng, Manyuan Zhang, Hongyu Li, Kaixuan Fan, Shuang Chen, Yilei Jiang, Dian Zheng, Peiwen Sun, Yiyuan Zhang, Haoze Sun, et al. Onethinker: All-in-one reasoning model for image and video. In CVPR , 2026. 5 [61] Minghao Zhu, Zhengpu Wang, Mengxian Hu, Ronghao Dang, Xiao Lin, Xun Zhou, Chengju Liu, and Qijun Chen. Mote: Reconciling generalization with specialization for visual-language to video knowledge transfer. In NeurIPS ,2024. 5 [62] Jia Deng, Wei Dong, Richard Socher, Li-Jia Li, Kai Li, and Li Fei-Fei. Imagenet: A large-scale hierarchical image database. In CVPR , 2009. 6 [63] Chang Gao, Chujie Zheng, Xiong-Hui Chen, Kai Dang, Shixuan Liu, Bowen Yu, An Yang, Shuai Bai, Jingren Zhou, and Junyang Lin. Soft adaptive policy optimization. arXiv preprint arXiv:2511.20347 , 2025. 7 [64] Aidan Clark, Diego de Las Casas, Aurelia Guy, Arthur Men-sch, Michela Paganini, Jordan Hoffmann, Bogdan Damoc, Blake Hechtman, Trevor Cai, Sebastian Borgeaud, et al. Uni-fied scaling laws for routed language models. In ICML , 2022. 7

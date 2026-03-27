@@ -1,0 +1,380 @@
+Title: DAQ: Delta-Aware Quantization for Post-Training LLM Weight Compression
+
+URL Source: https://arxiv.org/pdf/2603.22324v1
+
+Published Time: Wed, 25 Mar 2026 00:01:37 GMT
+
+Number of Pages: 13
+
+Markdown Content:
+# DAQ: Delta-Aware Quantization for Post-Training LLM Weight Compression 
+
+## Xiaoming Yu * Shize Tang * Guanghua Yu Linchuan Xie Song Liu Jianchen Zhu Feng Li †
+
+## Yuanbao & Hunyuan AI Infra Team 
+
+# Abstract 
+
+We introduce Delta-Aware Quantization (DAQ), a data-free post-training quan-tization framework that preserves the knowledge acquired during post-training. Standard quantization objectives minimize reconstruction error but are ag-nostic to the base model, allowing quantization noise to disproportionately corrupt the small-magnitude parameter deltas ( ∆W ) that encode post-training behavior—an effect we analyze through the lens of quantization as implicit regu-larization. DAQ replaces reconstruction-based objectives with two delta-aware metrics—Sign Preservation Rate and Cosine Similarity—that directly optimize for directional fidelity of ∆W , requiring only the base and post-trained weight matrices. In a pilot FP8 study, DAQ recovers style-specific capabilities lost under standard quantization while maintaining general performance. Code is available at https://github.com/Tencent/AngelSlim .
+
+# 1 Introduction 
+
+Model quantization is widely adopted to reduce memory footprint and compu-tational cost of large language models (LLMs). Common approaches include Post-Training Quantization (PTQ) and Quantization-Aware Training (QAT) [ 1]. More broadly, quantization has long been viewed not only as a compression tech-nique, but also as a form of implicit regularization [ 2]. By injecting discretization noise and constraining weights to low-precision states, quantization can in some settings improve robustness or generalization by biasing optimization toward flatter regions of the loss landscape. For LLMs that have undergone post-training (e.g., SFT, RLHF [ 3 ], DPO [ 4]), however, this regularizing effect can become a double-edged sword.    
+
+> * Equal contribution. †Corresponding author: fengli@tencent.com
+
+1
+
+> arXiv:2603.22324v1 [cs.LG] 20 Mar 2026
+
+In post-trained models, the parameter updates relative to the base model— 
+
+∆W = Wpost − Wbase —are often small in magnitude yet semantically critical. Standard PTQ objectives typically optimize for reconstruction loss : minimizing the distance between quantized and original weights, preserving activation statistics, or reducing task-specific loss. From the regularization perspective, such objectives introduce a systematic bias toward the dominant structure inherited from the base checkpoint. Because the post-training signal is encoded in sparse, low-magnitude updates, this bias acts asymmetrically: the large base-model components are naturally robust to discretization noise, whereas the small 
+
+∆W components sit close to quantization boundaries and are disproportionately susceptible to sign flips or attenuation. A concrete example illustrates this asymmetry. Consider a weight Wpost = 5 .3
+
+composed of a dominant base component Wbase = 5 .0 and a small fine-tuning update ∆W = 0 .3. Standard quantization to the nearest integer yields Wquant =5.0. While this minimizes reconstruction error (MSE = 0 .09 ), it implicitly regularizes the weight back to its pre-trained state, completely erasing the fine-tuning information ( ∆Wquant = 0 ). Preserving the update’s existence would require quantizing to 6.0, but this is penalized by a much larger reconstruction error (MSE = 0 .49 ). Thus, standard quantization objectives exhibit a structural bias: they aggressively penalize the preservation of small ∆W components, treating them as noise to be smoothed out rather than signal to be kept. This vulnerability is especially pronounced when ∆W is small: limited training data, low learning rates, parameter-efficient fine-tuning (e.g., LoRA [ 5]), and continual learning. These considerations motivate Delta-Aware Quantization (DAQ) , which replaces the conventional reconstruction objective with delta-aware metrics—Sign Preservation Rate and Cosine Similarity—that directly measure how well the quantized weights preserve the direction of ∆W . Because the optimization target depends only on the base and post-trained weight matrices, DAQ is entirely 
+
+data-free : unlike calibration-based methods such as GPTQ [ 6 ] and AWQ [ 7], it requires no representative input samples, no activation statistics, and no Hessian estimation. DAQ is implemented as part of AngelSlim [ 8], an open-source toolkit for large model compression. 
+
+# 2 Delta-Aware Quantization 
+
+## 2.1 Problem Formulation 
+
+Given the base model weights Wbase , the post-trained weights Wpost , and a parameterized quantize–dequantize operator Qθ (·) (where θ denotes the quanti-zation hyperparameters, e.g., scale), we define the post-training delta and its quantized counterpart as: 
+
+∆Wpost = Wpost − Wbase (1) 
+
+∆Wquant = Qθ (Wpost ) − Wbase (2) 2where Qθ (Wpost ) denotes the dequantized floating-point tensor obtained by quantizing Wpost under hyperparameters θ and mapping the result back to the original numerical domain. Our goal is to find the optimal hyperparameters θ∗ that maximize an evalua-tion objective M (defined in Section 2.3). 
+
+θ∗ = arg max  
+
+> θ
+
+M(∆ Wpost , ∆Wquant ) (3) 
+
+## 2.2 Quantization Framework 
+
+Although DAQ is compatible with many quantization schemes, in this report we instantiate Qθ (·) using a scale-parameterized quantize–dequantize operator , where θ = s is a scalar scale factor. Concretely, 
+
+Qs(W ) = DeQuant (Quant (W, s ), s ) (4) where Quant (W, s ) maps W to a low-precision representation ˆW under scale 
+
+s, and DeQuant ( ˆW , s ) maps it back to the floating-point domain. We use 
+
+ˆW = Quant (W, s ) to denote the low-precision representation used for storage, and 
+
+Qs(W ) to denote its dequantized floating-point form used for metric evaluation. With this instantiation, the general objective in Eq. 3 reduces to optimizing the scale parameter: 
+
+s∗ = arg max  
+
+> s
+
+M(∆ Wpost , Q s(Wpost ) − Wbase ) (5) In this report, we instantiate Qs(·) with FP8 (E4M3) quantization using either block-wise or per-channel scaling. More generally, the DAQ objective is agnostic to the specific numerical format and could also be applied to integer or other low-precision quantization schemes. 
+
+## 2.3 Metrics 
+
+We consider three objectives for guiding the scale search: one conventional reconstruction metric (Mean Squared Error) and two delta-aware metrics (Sign Preservation Rate and Cosine Similarity). Table 1 compares the three objectives. 
+
+Mean Squared Error. The standard reconstruction loss metric minimizes the squared distance between the quantized and original weights: MSE = 1
+
+N
+
+> N
+
+∑
+
+> i=1
+
+(
+
+W (i) 
+
+> quant
+
+− W (i)
+
+> post
+
+)2
+
+(6) where N denotes the total number of elements in the weight tensor and the superscript (i) indexes individual weight elements. While widely used, MSE is 
+
+not delta-aware. Crucially, when applied in the delta framework, optimizing the 3MSE of the delta is mathematically equivalent to optimizing the MSE between the quantized weights and the post-trained weights: 
+
+∥∆Wquant − ∆Wpost ∥2 = ∥(Wquant − Wbase ) − (Wpost − Wbase )∥2
+
+= ∥Wquant − Wpost ∥2 (7) This identity reveals a fundamental limitation: MSE-based optimization is entirely base-model-agnostic . It treats the quantization problem identically regardless of whether a base model exists, and cannot distinguish between quantization errors that preserve the fine-tuning direction and those that reverse it. As shown in Section 3.3, MSE-guided scale search can actively degrade post-training knowledge. 
+
+Sign Preservation Rate. The simplest delta-aware metric focuses on pre-serving the sign (direction) of each weight update: SignRate = 1
+
+N
+
+> N
+
+∑
+
+> i=1
+
+I
+
+[
+
+sign (∆ W (i)
+
+> post
+
+) = sign (∆ W (i)
+
+> quant
+
+)
+
+]
+
+(8) where I[·] is the indicator function (equal to 1 when the condition holds and 0 otherwise), and sign (0) = 0 . This metric is simple, interpretable, and robust to magnitude differences, but it is binary and cannot capture how well magnitudes are preserved. 
+
+Cosine Similarity. A richer metric that considers both direction and relative magnitude: CosSim = ∆Wpost · ∆Wquant 
+
+∥∆Wpost ∥ ∥ ∆Wquant ∥ (9) where ∆Wpost · ∆Wquant denotes the inner product of the two flattened delta vectors, and ∥ · ∥ denotes the ℓ2 norm. This measures the alignment between the original and quantized delta vectors, providing a normalized score in [−1, 1] :a value of 1 indicates perfect directional alignment, 0 indicates orthogonality, and −1 indicates complete reversal of the fine-tuning direction. Table 1: Comparison of quantization metrics. 
+
+Metric Range Delta-Aware Complexity 
+
+MSE † [0 , +∞) No Low SignRate [0 , 1] Yes Low CosSim [−1, 1] Yes Medium     
+
+> †For consistency with the arg max formulation in Eq. 3, the optimization objective for MSE is −MSE , although the table reports the standard nonnegative MSE quantity.
+
+42.4 Scale Optimization 
+
+With the delta-aware metrics defined above, we optimize the quantization hyper-parameters against them directly. A common strategy in quantization is to tune these hyperparameters for a chosen objective—for example, SmoothQuant [ 9 ]smooths activation outliers to improve quantization quality, AWQ [ 7] rescales channels based on activation importance, and AutoRound [ 10 ] learns round-ing via gradient descent. Following this principle, in the FP8 instantiation studied in this report we optimize the scaling factor s via the objective in Eq. 5— the key parameter controlling effective dynamic range in scaled low-precision quantization. To solve Eq. 5 efficiently, we use a coarse-to-fine search strategy : candi-date scales are first sampled uniformly over [αmin , α max ] × sdefault in a coarse stage, followed by a refinement stage that samples more densely around the best coarse candidate. This search balances coverage and cost. The complete DAQ procedure is presented in Algorithm 1. 
+
+# 3 Experiments 
+
+## 3.1 Setup 
+
+Models. We use DeepSeek-V3 [ 11 ] as the base model Wbase 1. The post-trained model Wpost is obtained by Supervised Fine-Tuning (SFT) on a toy dataset of stylized conversational dialogues , which imparts a distinctive response style to the model. Because this stylistic behavior is encoded in small-magnitude parameter updates, it serves as an ideal testbed for evaluating whether quantiza-tion preserves post-training knowledge. 
+
+Quantization settings. Unless otherwise stated, we use FP8 (E4M3) quan-tization with two granularity settings: block-wise (block size 128) and per-channel . For the coarse-to-fine scale search, we experiment with three search ranges— [0 .5, 2] , [0 .8, 1.25] , and [0 .9, 1.11] —with 5 coarse candidates followed by 10 fine-grained candidates around the best coarse result. 
+
+Evaluation. We evaluate all models using a rubric-based framework comprising two categories of metrics, both scored on a [0 , 2] scale: 
+
+• SFT-specific metrics : These assess how faithfully the model reproduces the stylized conversational behavior learned during SFT, such as dialogue style adherence and style consistency. 
+
+• General capability metrics : These measure broad model competencies unrelated to the SFT style, such as word count compliance and response accuracy.  
+
+> 1The officially released DeepSeek-V3 weights are in FP8 format. We convert them to BF16 using the official casting script: https://github.com/deepseek-ai/DeepSeek-V3/blob/main/ inference/fp8_cast_bf16.py .
+
+5Table 2: Baseline comparison. Standard FP8 quantization significantly degrades the SFT-specific style metric while general capabilities remain relatively stable. ‡                                     
+
+> Model ∆W L2 SignRate (%) CosSim Style General
+> Base (BF16) –––0.215 1.501 Post-trained (BF16) 0100% 1.000 1.709 1.438 AbsMax (FP8 block) 48641 54.54% 0.239 1.081 1.491 AbsMax (FP8 channel) 51790 62.48% 0.261 1.323 1.501 SmoothQuant (FP8 channel) –––1.378 1.491 AWQ-W8A8 (FP8 channel) –––1.399 1.479
+> ‡SmoothQuant and AWQ absorb activation scale factors into the weight matrices via an equivalent per-channel transformation, so the stored weights no longer share the same numerical space as Wbase . The delta metrics are therefore undefined for these baselines.
+
+## 3.2 Baseline: Standard Quantization 
+
+We first establish the baseline by comparing the unquantized base model, the BF16 post-trained model, and several FP8 quantization baselines. In particular, we report simple AbsMax FP8 quantization with no additional scale optimization, together with SmoothQuant and AWQ FP8 baselines as representative PTQ-inspired comparisons. Results are shown in Table 2. Here, “Style” denotes the SFT-specific dialogue style metric, and “General” is the style-unrelated capability metric. The simple AbsMax FP8 baselines significantly degrade the Style metric— from 1.709 for the post-trained BF16 model to 1.081 (block-wise) and 1.323 (per-channel)—indicating substantial loss of SFT-specific knowledge. SmoothQuant and AWQ partially mitigate this (1.378 and 1.399, respectively) but remain well below the BF16 checkpoint. Meanwhile, the General metric stays stable across all variants (1.479–1.501), consistent with our hypothesis that small-magnitude ∆W signals are more vulnerable to quantization noise than broad capabilities. Notably, the base model scores only 0.215 on Style but 1.501 on General, confirming that Style specifically captures SFT knowledge and that the degradation under quantization reflects regression toward base-model behavior. 
+
+## 3.3 MSE-Based Scale Search 
+
+To validate our core hypothesis—that delta-unaware optimization cannot improve, and may even worsen, post-training preservation—we apply the same coarse-to-fine scale search framework using the traditional MSE metric as the optimization target. Table 3 presents the results. Strikingly, MSE-guided scale search actively degrades the Style metric further— from 1.081 (AbsMax block) down to as low as 0.260, and from 1.323 (AbsMax channel) down to 0.440—even though the ∆W L2 norm decreases (e.g., 28634 vs. 48641 for block-wise). The sign preservation rates also decline (e.g., 52.29% vs. 54.54% for block-wise), confirming that MSE optimization shifts weights toward 
+
+6Table 3: Scale search with MSE metric. 
+
+Type Range ∆W L2 SignRate (%) CosSim Style General 
+
+Block [0 .5, 2] 36625 54.09% 0.228 0.516 1.528 Block [0 .8, 1.25] 36938 53.39% 0.216 0.322 1.539 Block [0 .9, 1.11] 28634 52.29% 0.235 0.260 1.571 Channel [0 .5, 2] 33584 57.12% 0.231 0.642 1.555 Channel [0 .8, 1.25] 36939 58.43% 0.236 0.569 1.499 Channel [0 .9, 1.11] 33460 57.00% 0.223 0.440 1.493 
+
+the base model while the General metric shows no meaningful improvement (1.493–1.571). 
+
+## 3.4 DAQ: Delta-Aware Scale Search 
+
+We now apply the DAQ framework, optimizing the scaling factor using our proposed delta-aware metrics—Sign Preservation Rate and Cosine Similarity. Tables 4 and 5 present the results. Table 4: DAQ with Sign metric. Best Style result per quantization type in bold .
+
+Type Range ∆W L2 SignRate (%) CosSim Style General 
+
+Block [0 .5, 2] 75028 76.96% 0.324 1.607 1.404 Block [0 .8, 1.25] 66939 77.31% 0.363 1.718 1.380 Block [0 .9, 1.11] 69786 82.30% 0.408 1.571 1.377 Channel [0 .5, 2] 93524 77.23% 0.278 1.505 1.408 Channel [0 .8, 1.25] 66691 77.62% 0.361 1.761 1.438 Channel [0 .9, 1.11] 68953 80.38% 0.391 1.639 1.353 
+
+Table 5: DAQ with Cosine metric. Best Style result per quantization type in 
+
+bold .
+
+Type Range ∆W L2 SignRate (%) CosSim Style General 
+
+Block [0 .5, 2] 48728 59.51% 0.295 1.554 1.515 Block [0 .8, 1.25] 59263 64.46% 0.339 1.604 1.480 Block [0 .9, 1.11] 57445 65.52% 0.342 1.647 1.463 Channel [0 .5, 2] 53219 65.51% 0.315 1.545 1.454 Channel [0 .8, 1.25] 60088 68.84% 0.346 1.706 1.442 Channel [0 .9, 1.11] 63039 72.69% 0.369 1.726 1.471 
+
+## 3.5 Analysis 
+
+The experiments suggest three main takeaways: 71. DAQ recovers SFT knowledge without sacrificing general capabil-ities. DAQ with the sign metric recovers Style from 1.081 (AbsMax block) to 1.718, and per-channel to 1.761—slightly above the unquantized model. The cosine metric achieves comparable recovery (up to 1.726 per-channel). Meanwhile, General scores remain comparable to the Post-trained BF16 baseline (1.438), confirming that delta-aware optimization does not trade off general performance. In contrast, MSE-guided search actively degrades Style (down to 0.260) by pushing weights closer to the base model, while General scores show no meaningful improvement. 2. A regularization perspective unifies these findings. Standard quan-tization introduces a regularization bias that disproportionately attenuates small-magnitude ∆W while leaving the dominant base-model structure intact. MSE-based optimization amplifies this bias by selecting scales that further “smooth away” the post-training signal. DAQ’s delta-aware metrics counteract this bias by explicitly rewarding directional preservation of ∆W .3. The two delta-aware metrics offer complementary trade-offs. The sign metric achieves higher peak Style scores but shows non-monotonic behavior across search ranges (e.g., block-wise: 1.607 → 1.718 → 1.571 ), likely due to its binary nature. The cosine metric produces more stable, near-monotonic improvement as the search range narrows (block-wise: 
+
+1.554 → 1.604 → 1.647 ; channel-wise: 1.545 → 1.706 → 1.726 ), with the underlying delta-aware indicators also improving monotonically. These complementary characteristics suggest that a hybrid metric may be worth exploring. 
+
+# 4 Related Work 
+
+Quantization as Regularization. A long-standing perspective in deep learn-ing is that quantization can act as an implicit regularizer. Early work on binary and low-bit networks, such as BinaryConnect [ 2 ] and Binarized Neu-ral Networks [ 12 ], observed that weight discretization and stochastic rounding inject structured noise during optimization, in a manner reminiscent of other regularization techniques. In the LLM era, QLoRA [ 13 ] further showed that low-bit representations can be compatible with strong downstream adaptation performance, suggesting that quantization may sometimes stabilize or regularize fine-tuning. Our work highlights an important caveat to this perspective: when the goal is to preserve behavior introduced during post-training, the same regu-larizing effect can become destructive if it suppresses the small but semantically important parameter deltas responsible for alignment or instruction-following behavior. 
+
+General PTQ for Large Language Models. Post-training quantization (PTQ) for large language models spans several distinct design directions. Early 8work emphasized efficient low-precision deployment under the heavy-tailed activa-tion and weight distributions of transformers. For example, LLM.int8() [ 14 ] uses mixed-precision decomposition to isolate outlier features, while ZeroQuant [ 15 ]and ZeroQuant-V2 [ 16 ] study efficient quantization pipelines for large transform-ers, including layer-wise distillation and low-rank compensation. Subsequent work developed stronger objectives for improving quantization fidelity. GPTQ [ 6]uses approximate second-order information to reduce the effect of weight pertur-bations on layer outputs. AWQ [ 7] protects activation-salient weights through channel rescaling. SmoothQuant [ 9] migrates activation difficulty into weights via an equivalent transformation to handle activation outliers. OmniQuant [ 17 ]introduces learnable equivalent transformations for weight-and-activation quanti-zation, and SpQR [ 18 ] preserves salient outlier weights through sparse-quantized representations. AdaRound [ 19 ] and AutoRound [ 10 ] further show that opti-mizing rounding decisions can outperform standard nearest rounding. These methods therefore differ substantially in both mechanism and objective; it is more accurate to view them as improving the fidelity of a quantized check-point through complementary proxies such as output reconstruction, activation preservation, or rounding optimization. A useful commonality is that these PTQ methods are formulated for the 
+
+standalone checkpoint being quantized , without encoding the base–post-trained relationship. In contrast, DAQ focuses on preserving the increment relative to the base model. 
+
+Quantization of Post-Trained and Aligned Models. Models produced by SFT, RLHF [ 3], DPO [ 4], or LoRA [ 5 ] often rely on small but behaviorally important parameter updates, making post-training knowledge potentially fragile under quantization noise. Existing studies typically evaluate compressed models using perplexity or task accuracy—useful but only indirect indicators of whether post-training behavior is preserved. DAQ makes this failure mode explicit by treating preservation of post-training knowledge as a first-class optimization target. 
+
+Low-Precision Formats and FP8 Quantization. Low-precision floating-point formats such as FP8 E4M3 and E5M2 have emerged as an attractive trade-off between efficiency and accuracy for modern large-scale deployment [ 20 ]. In practice, such formats are usually paired with per-tensor, per-channel, or block-wise scaling in order to control dynamic range and reduce quantization error. We instantiate DAQ in the FP8 setting because FP8 is increasingly relevant in industrial inference pipelines and because it provides a clean setting for isolating the effect of the quantization objective. Importantly, DAQ is not tied to FP8 as a numerical format. The proposed delta-aware objective is compatible in principle with integer quantization, mixed-precision allocation, learned rounding, and other low-bit schemes. 9Positioning of DAQ. DAQ shifts the optimization focus from reconstructing the final checkpoint faithfully to preserving the knowledge increment from base to post-trained model. In this sense, it is complementary to methods such as GPTQ, AWQ, SmoothQuant, OmniQuant, AdaRound, and AutoRound, whose techniques could in principle be combined with DAQ’s delta-aware metrics. 
+
+# 5 Limitations and Future Work 
+
+We acknowledge several limitations of the current work. First, DAQ implicitly assumes that the post-training delta ∆W is relatively small compared to the base weights. When the delta is large—e.g., after extensive fine-tuning or full retraining—the sign and cosine metrics may become less informative, as quantization noise is unlikely to flip the direction of large-magnitude updates. One possible remedy is to use intermediate training checkpoints as the reference base, rather than the original pre-trained model, thereby keeping ∆W small and the delta-aware perspective applicable even in aggressive training scenarios. Second, our experiments are currently limited to FP8 (E4M3) quantization on a single model and a narrow set of evaluation metrics. Exploring lower bit-widths (e.g., INT4, INT3) where quantization noise is more severe, as well as broader task scenarios (e.g., code generation, mathematical reasoning, multilingual tasks), remains important future work. Third, in this work we deliberately adopt a simple FP8 quantization setting with scale search and improve delta-aware metrics solely by adjusting the scaling factor s via grid search. This minimalist design choice serves to isolate the effect of the delta-aware objective itself. In practice, however, many complementary techniques could be employed to further improve delta-aware metrics: asymmetric quantization with per-channel zero-points, mixed-precision allocation guided by per-layer delta sensitivity, non-uniform (e.g., lookup-table-based) quantization grids, learned rounding policies, or joint optimization of scales and zero-points. Integrating these richer quantization primitives with the delta-aware objective remains a promising direction. That said, the primary goal of this technical report is not to provide an exhaustive empirical study, but to highlight a different way to think about quan-tizing post-trained models: the optimization target should focus on preserving the knowledge increments acquired during post-training —not merely minimizing weight or activation reconstruction error. Reconstruction-based objectives are agnostic to whether a base model exists, and can inadvertently erase the very knowledge that post-training was meant to add. We hope this report provides a useful starting point for further work on delta-aware quantization across diverse settings. 10 6 Conclusion 
+
+We presented Delta-Aware Quantization (DAQ), a data-free post-training quan-tization framework that optimizes for directional fidelity of the parameter delta 
+
+∆W rather than reconstruction error. In our pilot FP8 study, DAQ recovers style-specific capabilities lost under standard quantization while maintaining general performance. We hope this report encourages broader investigation of delta-aware objectives across quantization formats, model families, and post-training settings. 
+
+# References 
+
+[1] B. Jacob, S. Kligys, B. Chen, M. Zhu, M. Tang, A. Howard, H. Adam, and D. Kalenichenko. Quantization and training of neural networks for efficient integer-arithmetic-only inference. CVPR , 2018. [2] M. Courbariaux, Y. Bengio, and J.-P. David. BinaryConnect: Training deep neural networks with binary weights during propagations. NeurIPS ,2015. [3] L. Ouyang, J. Wu, X. Jiang, D. Almeida, C. Wainwright, P. Mishkin, C. Zhang, S. Agarwal, K. Slama, A. Ray, et al. Training language models to follow instructions with human feedback. NeurIPS , 2022. [4] R. Rafailov, A. Sharma, E. Mitchell, S. Ermon, C. D. Manning, and C. Finn. Direct preference optimization: Your language model is secretly a reward model. NeurIPS , 2023. [5] E. J. Hu, Y. Shen, P. Wallis, Z. Allen-Zhu, Y. Li, S. Wang, L. Wang, and W. Chen. LoRA: Low-rank adaptation of large language models. ICLR ,2022. [6] E. Frantar, S. Ashkboos, T. Hoefler, and D. Alistarh. GPTQ: Accurate post-training quantization for generative pre-trained transformers. arXiv preprint arXiv:2210.17323 , 2022. [7] J. Lin, J. Tang, H. Tang, S. Yang, X. Dang, and S. Han. AWQ: Activation-aware weight quantization for LLM compression and acceleration. arXiv preprint arXiv:2306.00978 , 2023. [8] R. Cen, Q. Hu, H. Huang, H. Liu, S. Liu, X. Luo, L. Niu, Y. Tan, D. Wu, L. Xie, et al. AngelSlim: A more accessible, comprehensive, and efficient toolkit for large model compression. arXiv preprint arXiv:2602.21233 , 2026. [9] G. Xiao, J. Lin, M. Seznec, H. Wu, J. Demouth, and S. Han. SmoothQuant: Accurate and efficient post-training quantization for large language models. 
+
+ICML , 2023. 11 [10] W. Cheng, W. Lu, H. Zhang, J. Ding, C. Li, and C. Deng. Optimize weight rounding via signed gradient descent for the quantization of LLMs. arXiv preprint arXiv:2309.05516 , 2024. [11] DeepSeek-AI. DeepSeek-V3 technical report. arXiv preprint arXiv:2412.19437 , 2024. [12] I. Hubara, M. Courbariaux, D. Soudry, R. El-Yaniv, and Y. Bengio. Bina-rized neural networks. NeurIPS , 2016. [13] T. Dettmers, A. Pagnoni, A. Holtzman, and L. Zettlemoyer. QLoRA: Efficient finetuning of quantized LLMs. NeurIPS , 2023. [14] T. Dettmers, M. Lewis, Y. Belkada, and L. Zettlemoyer. LLM.int8(): 8-bit matrix multiplication for transformers at scale. NeurIPS , 2022. [15] Z. Yao, S. Chen, Y. Shen, A. Aminabadi, M. Jiang, Y. He, and J. Gonzalez. ZeroQuant: Efficient and affordable post-training quantization for large-scale transformers. NeurIPS , 2022. [16] Z. Yao, C. Wu, P. Zhang, Y. Aminabadi, M. He, and Y. He. ZeroQuant-V2: Exploring post-training quantization in LLMs from comprehensive study to low rank compensation. arXiv preprint arXiv:2303.08302 , 2023. [17] W. Shao, M. Chen, Z. Zhang, P. Xu, Z. Zhang, and J. Qin. OmniQuant: Omnidirectionally calibrated quantization for large language models. ICLR ,2024. [18] T. Dettmers, A. Pagnoni, A. Holtzman, and L. Zettlemoyer. SpQR: A sparse-quantized representation for near-lossless LLM weight compression. 
+
+arXiv preprint arXiv:2306.03078 , 2023. [19] M. Nagel, R. A. Amjad, M. van Baalen, C. Louizos, and T. Blankevoort. Up or down? Adaptive rounding for post-training quantization. ICML , 2020. [20] P. Micikevicius, D. Stosic, N. Burgess, M. Cornea, P. Dubey, R. Grisenth-waite, S. Ha, A. Heinecke, P. Judd, J. Kamalu, et al. FP8 formats for deep learning. arXiv preprint arXiv:2209.05433 , 2022. 12 Algorithm 1 DAQ via Coarse-to-Fine Scale Search 
+
+Require: {W (ℓ)
+
+> post
+
+, W (ℓ)
+
+> base
+
+}Lℓ=1 , M ∈ { SignRate , CosSim , −MSE }
+
+Require: αmin , α max , n coarse , n fine , δ 
+
+Ensure: { ˆW (ℓ), (s∗(ℓ))−1}Lℓ=1 
+
+1: for ℓ = 1 , . . . , L do 
+
+2: ∆W (ℓ) ← W (ℓ) 
+
+> post
+
+− W (ℓ)
+
+> base
+
+3: s(ℓ)0 ← max 
+
+(
+
+|W (ℓ)
+
+> post
+
+|
+
+)
+
+/Q max 
+
+4: W (ℓ) 
+
+> quant
+
+← DeQuant (Quant (W (ℓ)
+
+> post
+
+, s (ℓ)0 ), s (ℓ)0 )
+
+5: α∗(ℓ) ← 1
+
+6: m∗(ℓ) ← M (∆ W (ℓ), W (ℓ) 
+
+> quant
+
+− W (ℓ)
+
+> base
+
+)
+
+7: for α ∈ linspace (αmin , α max , n coarse ) do 
+
+8: s ← α s (ℓ)0
+
+9: W (ℓ) 
+
+> quant
+
+← DeQuant (Quant (W (ℓ)
+
+> post
+
+, s ), s )
+
+10: m ← M (∆ W (ℓ), W (ℓ) 
+
+> quant
+
+− W (ℓ)
+
+> base
+
+)
+
+11: if m > m ∗(ℓ) then 
+
+12: α∗(ℓ) ← α
+
+13: m∗(ℓ) ← m
+
+14: end if 
+
+15: end for 
+
+16: for α ∈ linspace (max( αmin , α ∗(ℓ) − δ), min( αmax , α ∗(ℓ) + δ), n fine ) do 
+
+17: s ← α s (ℓ)0
+
+18: W (ℓ) 
+
+> quant
+
+← DeQuant (Quant (W (ℓ)
+
+> post
+
+, s ), s )
+
+19: m ← M (∆ W (ℓ), W (ℓ) 
+
+> quant
+
+− W (ℓ)
+
+> base
+
+)
+
+20: if m > m ∗(ℓ) then 
+
+21: α∗(ℓ) ← α
+
+22: m∗(ℓ) ← m
+
+23: end if 
+
+24: end for 
+
+25: s∗(ℓ) ← α∗(ℓ)s(ℓ)0
+
+26: ˆW (ℓ) ← Quant (W (ℓ)
+
+> post
+
+, s ∗(ℓ))
+
+27: (s∗(ℓ))−1 ← 1/s ∗(ℓ)
+
+28: end for 
+
+29: return { ˆW (ℓ), (s∗(ℓ))−1}Lℓ=1 
+
+13

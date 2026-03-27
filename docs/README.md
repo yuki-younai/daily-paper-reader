@@ -6,88 +6,94 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-03-26
-- 运行时间：2026-03-26 20:37:39 UTC
+- 最新运行日期：2026-03-27
+- 运行时间：2026-03-27 19:46:39 UTC
 - 运行状态：成功
-- 本次总论文数：22
-- 精读区：11
+- 本次总论文数：24
+- 精读区：13
 - 速读区：11
 
 ### 今日简报（AI）
-今日深度解析 22 篇论文，见证 LLM 从被动助手向具备自主科研能力的“AI 科学家”跨越。
-核心突破在于实现主动交互的策略优化，以及利用 AI Agent 自动化发现全新的强化学习算法。
-建议重点关注 AI 如何通过自主算法发现和推理树搜索，实现从任务执行到逻辑进化的质变。
-- 详情：[/202603/26/README](/202603/26/README)
+今日精选 24 篇前沿论文，重点聚焦强化学习在多模态推理与策略联合优化中的突破性进展。
+满分论文 R-C2 通过循环一致性强化学习显著提升多模态推理能力，P^2O 则展示了提示词与策略协同优化的巨大潜力。
+建议关注强化学习如何从纯文本领域加速向多模态交互及复杂智能体工具调用场景演进。
+- 详情：[/202603/27/README](/202603/27/README)
 
 ### 精读区论文标签
-1. [Implicit Turn-Wise Policy Optimization for Proactive User-LLM Interaction](/202603/26/2603.23550v1-implicit-turn-wise-policy-optimization-for-proactive-user-llm-interaction)  
+1. [R-C2: Cycle-Consistent Reinforcement Learning Improves Multimodal Reasoning](/202603/27/2603.25720v1-r-c2-cycle-consistent-reinforcement-learning-improves-multimodal-reasoning)  
    标签：评分：10.0/10、query:rlaif
-   evidence：用于多轮大模型交互的隐式回合级策略优化
-2. [From AI Assistant to AI Scientist: Autonomous Discovery of LLM-RL Algorithms with LLM Agents](/202603/26/2603.23951v1-from-ai-assistant-to-ai-scientist-autonomous-discovery-of-llm-rl-algorithms-with-llm-agents)  
-   标签：评分：10.0/10、query:rlaif
-   evidence：自动发现大语言模型的强化学习算法
-3. [Cooperation and Exploitation in LLM Policy Synthesis for Sequential Social Dilemmas](/202603/26/2603.19453v1-cooperation-and-exploitation-in-llm-policy-synthesis-for-sequential-social-dilemmas)  
+   evidence：跨模态循环一致性的强化学习框架
+2. [P^2O: Joint Policy and Prompt Optimization](/202603/27/2603.21877v2-p2o-joint-policy-and-prompt-optimization)  
    标签：评分：9.0/10、query:rlaif
-   evidence：多智能体环境下的迭代大模型策略合成
-4. [Delightful Distributed Policy Gradient](/202603/26/2603.20521v1-delightful-distributed-policy-gradient)  
+   evidence：可验证奖励强化学习中的策略与提示词联合优化
+3. [A Context Engineering Framework for Improving Enterprise AI Agents based on Digital-Twin MDP](/202603/27/2603.22083v1-a-context-engineering-framework-for-improving-enterprise-ai-agents-based-on-digital-twin-mdp)  
    标签：评分：9.0/10、query:rlaif
-   evidence：大规模训练中的分布式策略梯度方法
-5. [A transformer architecture alteration to incentivise externalised reasoning](/202603/26/2603.21376v2-a-transformer-architecture-alteration-to-incentivise-externalised-reasoning)  
+   evidence：利用离线强化学习改进基于LLM的企业智能体
+4. [DAQ: Delta-Aware Quantization for Post-Training LLM Weight Compression](/202603/27/2603.22324v1-daq-delta-aware-quantization-for-post-training-llm-weight-compression)  
    标签：评分：9.0/10、query:rlaif
-   evidence：使用强化学习激励推理的后训练流水线
-6. [Quality Over Clicks: Intrinsic Quality-Driven Iterative Reinforcement Learning for Cold-Start E-Commerce Query Suggestion](/202603/26/2603.22922v1-quality-over-clicks-intrinsic-quality-driven-iterative-reinforcement-learning-for-cold-start-e-commerce-query-suggestion)  
+   evidence：大语言模型权重压缩的后训练量化
+5. [Rethinking Token-Level Policy Optimization for Multimodal Chain-of-Thought](/202603/27/2603.22847v1-rethinking-token-level-policy-optimization-for-multimodal-chain-of-thought)  
    标签：评分：9.0/10、query:rlaif
-   evidence：用于冷启动查询建议的迭代强化学习与大模型结合
-7. [HDPO: Hybrid Distillation Policy Optimization via Privileged Self-Distillation](/202603/26/2603.23871v1-hdpo-hybrid-distillation-policy-optimization-via-privileged-self-distillation)  
+   evidence：多模态推理的标记级策略优化
+6. [Large Language Model Guided Incentive Aware Reward Design for Cooperative Multi-Agent Reinforcement Learning](/202603/27/2603.24324v1-large-language-model-guided-incentive-aware-reward-design-for-cooperative-multi-agent-reinforcement-learning)  
    标签：评分：9.0/10、query:rlaif
-   evidence：用于LLM数学推理的混合蒸馏策略优化
-8. [ELITE: Experiential Learning and Intent-Aware Transfer for Self-improving Embodied Agents](/202603/26/2603.24018v1-elite-experiential-learning-and-intent-aware-transfer-for-self-improving-embodied-agents)  
+   evidence：大模型引导的多智能体强化学习奖励设计
+7. [Prune as You Generate: Online Rollout Pruning for Faster and Better RLVR](/202603/27/2603.24840v1-prune-as-you-generate-online-rollout-pruning-for-faster-and-better-rlvr)  
    标签：评分：9.0/10、query:rlaif
-   evidence：使用视觉语言模型的自改进具身智能体
-9. [Towards Effective Experiential Learning: Dual Guidance for Utilization and Internalization](/202603/26/2603.24093v1-towards-effective-experiential-learning-dual-guidance-for-utilization-and-internalization)  
+   evidence：优化大模型推理的可验证奖励强化学习
+8. [MoE-GRPO: Optimizing Mixture-of-Experts via Reinforcement Learning in Vision-Language Models](/202603/27/2603.24984v1-moe-grpo-optimizing-mixture-of-experts-via-reinforcement-learning-in-vision-language-models)  
    标签：评分：9.0/10、query:rlaif
-   evidence：基于可验证奖励的强化学习用于推理任务
-10. [A Deep Dive into Scaling RL for Code Generation with Synthetic Data and Curricula](/202603/26/2603.24202v1-a-deep-dive-into-scaling-rl-for-code-generation-with-synthetic-data-and-curricula)  
+   evidence：基于强化学习的MoE视觉语言模型专家路由优化框架
+9. [Bridging Perception and Reasoning: Token Reweighting for RLVR in Multimodal LLMs](/202603/27/2603.25077v1-bridging-perception-and-reasoning-token-reweighting-for-rlvr-in-multimodal-llms)  
    标签：评分：9.0/10、query:rlaif
-   evidence：利用多轮合成数据扩展大模型的强化学习
-11. [SumRank: Aligning Summarization Models for Long-Document Listwise Reranking](/202603/26/2603.24204v1-sumrank-aligning-summarization-models-for-long-document-listwise-reranking)  
+   evidence：针对多模态大模型的带验证奖励强化学习
+10. [MSRL: Scaling Generative Multimodal Reward Modeling via Multi-Stage Reinforcement Learning](/202603/27/2603.25108v1-msrl-scaling-generative-multimodal-reward-modeling-via-multi-stage-reinforcement-learning)  
    标签：评分：9.0/10、query:rlaif
-   evidence：包含强化学习对齐的三阶段训练流水线
+   evidence：多模态奖励建模的多阶段强化学习
+11. [Train at Moving Edge: Online-Verified Prompt Selection for Efficient RL Training of Large Reasoning Model](/202603/27/2603.25184v1-train-at-moving-edge-online-verified-prompt-selection-for-efficient-rl-training-of-large-reasoning-model)  
+   标签：评分：9.0/10、query:rlaif
+   evidence：通过在线验证的提示词选择实现高效的强化学习后训练
+12. [MMaDA-VLA: Large Diffusion Vision-Language-Action Model with Unified Multi-Modal Instruction and Generation](/202603/27/2603.25406v1-mmada-vla-large-diffusion-vision-language-action-model-with-unified-multi-modal-instruction-and-generation)  
+   标签：评分：9.0/10、query:rlaif
+   evidence：大型视觉-语言-动作模型中的跨模态对齐
+13. [TAPO: Translation Augmented Policy Optimization for Multilingual Mathematical Reasoning](/202603/27/2603.25419v1-tapo-translation-augmented-policy-optimization-for-multilingual-mathematical-reasoning)  
+   标签：评分：9.0/10、query:rlaif
+   evidence：基于GRPO的大语言模型推理强化学习框架
 
 ### 速读区论文标签
-1. [RAMP: Reinforcement Adaptive Mixed Precision Quantization for Efficient On Device LLM Inference](/202603/26/2603.17891v1-ramp-reinforcement-adaptive-mixed-precision-quantization-for-efficient-on-device-llm-inference)  
+1. [VAMPO: Policy Optimization for Improving Visual Dynamics in Video Action Models](/202603/27/2603.19370v1-vampo-policy-optimization-for-improving-visual-dynamics-in-video-action-models)  
    标签：评分：8.0/10、query:rlaif
-   evidence：用于大模型后训练量化的强化学习方法
-2. [Adaptive Decoding via Test-Time Policy Learning for Self-Improving Generation](/202603/26/2603.18428v1-adaptive-decoding-via-test-time-policy-learning-for-self-improving-generation)  
+   evidence：使用策略优化的视频动作模型后训练框架
+2. [Hyperagents](/202603/27/2603.19461v1-hyperagents)  
    标签：评分：8.0/10、query:rlaif
-   evidence：基于强化学习的LLM生成解码采样器
-3. [Revisiting Tree Search for LLMs: Gumbel and Sequential Halving for Budget-Scalable Reasoning](/202603/26/2603.21162v1-revisiting-tree-search-for-llms-gumbel-and-sequential-halving-for-budget-scalable-reasoning)  
+   evidence：自我改进的自主智能体
+3. [Utility-Guided Agent Orchestration for Efficient LLM Tool Use](/202603/27/2603.19896v1-utility-guided-agent-orchestration-for-efficient-llm-tool-use)  
    标签：评分：8.0/10、query:rlaif
-   evidence：用于大模型推理与决策的树搜索
-4. [A transformer architecture alteration to incentivise externalised reasoning](/202603/26/2603.21376v1-a-transformer-architecture-alteration-to-incentivise-externalised-reasoning)  
+   evidence：针对使用工具的LLM智能体的效用导向编排策略
+4. [CoVFT: Context-aware Visual Fine-tuning for Multimodal Large Language Models](/202603/27/2603.21077v1-covft-context-aware-visual-fine-tuning-for-multimodal-large-language-models)  
    标签：评分：8.0/10、query:rlaif
-   evidence：使用强化学习优化大模型推理效率的后训练流水线
-5. [Flow Matching Policy with Entropy Regularization](/202603/26/2603.17685v1-flow-matching-policy-with-entropy-regularization)  
+   evidence：多模态大语言模型的视觉微调
+5. [Escaping Offline Pessimism: Vector-Field Reward Shaping for Safe Frontier Exploration](/202603/27/2603.18326v1-escaping-offline-pessimism-vector-field-reward-shaping-for-safe-frontier-exploration)  
    标签：评分：7.0/10、query:rlaif
-   evidence：强化学习中的策略梯度方法与流匹配
-6. [Flow Matching Policy with Entropy Regularization](/202603/26/2603.17685v2-flow-matching-policy-with-entropy-regularization)  
+   evidence：用于智能体安全边界探索的离线强化学习
+6. [Bounded Coupled AI Learning Dynamics in Tri-Hierarchical Drone Swarms](/202603/27/2603.20333v1-bounded-coupled-ai-learning-dynamics-in-tri-hierarchical-drone-swarms)  
    标签：评分：7.0/10、query:rlaif
-   evidence：强化学习中的策略梯度方法与流匹配
-7. [Operator-Theoretic Foundations and Policy Gradient Methods for General MDPs with Unbounded Costs](/202603/26/2603.17875v2-operator-theoretic-foundations-and-policy-gradient-methods-for-general-mdps-with-unbounded-costs)  
+   evidence：无人机群战术协调的多智能体强化学习
+7. [Optimal low-rank stochastic gradient estimation for LLM training](/202603/27/2603.20632v1-optimal-low-rank-stochastic-gradient-estimation-for-llm-training)  
    标签：评分：7.0/10、query:rlaif
-   evidence：通用MDP的策略梯度方法
-8. [Unified Policy Value Decomposition for Rapid Adaptation](/202603/26/2603.17947v1-unified-policy-value-decomposition-for-rapid-adaptation)  
+   evidence：大模型训练优化中的随机梯度估计
+8. [Reward Sharpness-Aware Fine-Tuning for Diffusion Models](/202603/27/2603.21175v1-reward-sharpness-aware-fine-tuning-for-diffusion-models)  
    标签：评分：7.0/10、query:rlaif
-   evidence：强化学习控制系统中的快速适应
-9. [Reasonably reasoning AI agents can avoid game-theoretic failures in zero-shot, provably](/202603/26/2603.18563v1-reasonably-reasoning-ai-agents-can-avoid-game-theoretic-failures-in-zero-shot-provably)  
+   evidence：受RLHF启发的生成模型对齐与微调
+9. [Characterizing Linear Alignment Across Language Models](/202603/27/2603.18908v3-characterizing-linear-alignment-across-language-models)  
    标签：评分：6.0/10、query:rlaif
-   evidence：AI 智能体对齐的后训练方法
-10. [Secure Linear Alignment of Large Language Models](/202603/26/2603.18908v1-secure-linear-alignment-of-large-language-models)  
+   evidence：语言模型间的跨模型对齐与表示收敛
+10. [Box Maze: A Process-Control Architecture for Reliable LLM Reasoning](/202603/27/2603.19182v1-box-maze-a-process-control-architecture-for-reliable-llm-reasoning)  
    标签：评分：6.0/10、query:rlaif
-   evidence：跨模型对齐与表示收敛
-11. [Secure Linear Alignment of Large Language Models](/202603/26/2603.18908v2-secure-linear-alignment-of-large-language-models)  
+   evidence：大语言模型可靠推理过程的架构机制
+11. [MARLIN: Multi-Agent Reinforcement Learning for Incremental DAG Discovery](/202603/27/2603.20295v1-marlin-multi-agent-reinforcement-learning-for-incremental-dag-discovery)  
    标签：评分：6.0/10、query:rlaif
-   evidence：跨模型对齐与表示收敛
+   evidence：用于因果结构发现的多智能体强化学习
 
 
 <div class="dpr-home-promo-card">

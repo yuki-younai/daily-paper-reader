@@ -1,0 +1,534 @@
+Title: Escaping Offline Pessimism: Vector-Field Reward Shaping for Safe Frontier Exploration
+
+URL Source: https://arxiv.org/pdf/2603.18326v1
+
+Published Time: Fri, 20 Mar 2026 00:23:58 GMT
+
+Number of Pages: 16
+
+Markdown Content:
+# Escaping Offline Pessimism: Vector-Field Reward Shaping for Safe Frontier Exploration 
+
+# Amirhossein Roknilamouki 1 Arnob Ghosh 2 Eylem Ekici 1 Ness B. Shroff 1,3 
+
+{roknilamouki.1, ekici.2, shroff.11}@osu.edu, arnob.ghosh@njit.edu 
+
+> 1
+
+Department of Electrical and Computer Engineering, The Ohio State University 2Department of Electrical and Computer Engineering, New Jersey Institute of Technology 3Department of Computer Science and Engineering, The Ohio State University. 
+
+# Abstract 
+
+While offline reinforcement learning provides reliable policies for real-world deploy-ment, its inherent pessimism severely restricts an agent’s ability to explore and collect novel data online. Drawing inspiration from safe reinforcement learning, exploring near the boundary of regions well covered by the offline dataset and reliably modeled by the simulator allows an agent to take manageable risks—venturing into informative but moderate-uncertainty states while remaining close enough to familiar regions for safe recovery. However, naively rewarding this boundary-seeking behavior can lead to a degenerate “parking” behavior, where the agent simply stops once it reaches the fron-tier. To solve this, we propose a novel vector-field reward shaping paradigm designed to induce continuous, safe boundary exploration for non-adaptive deployed policies. Operating on an uncertainty oracle trained from offline data, our reward combines two complementary components: a gradient-alignment term that attracts the agent toward a target uncertainty level, and a rotational-flow term that promotes motion along the local tangent plane of the uncertainty manifold. Through theoretical analysis, we show that this reward structure naturally induces sustained exploratory behavior along the boundary while preventing degenerate solutions. Empirically, by integrating our pro-posed reward shaping with Soft Actor-Critic on a 2D continuous navigation task, we validate that agents successfully traverse uncertainty boundaries while balancing safe, informative data collection with primary task completion. 
+
+# 1 Introduction 
+
+Deep reinforcement learning (RL) has achieved remarkable success in simulated domains, yet train-ing agents from scratch in real-world, safety-critical environments—such as autonomous driving or robotics—remains prohibitively dangerous. Unconstrained online exploration frequently leads to catastrophic failures, such as high-speed collisions or unrecoverable system states. To mitigate these risks, offline RL provides a powerful paradigm: learning a reliable policy entirely from previously collected datasets prior to deployment (Levine et al., 2020). However, learning solely from static data introduces the severe challenge of out-of-distribution (OOD) actions. To prevent the agent from executing unseen and potentially hazardous behaviors, offline methods typically enforce strict pes-simism, either by heavily penalizing uncertain actions (Kumar et al., 2020) or by rigidly confining the learned policy to the support of the training data (Kostrikov et al., 2021). While this pessimism is crucial for ensuring initial safety, it introduces a paradoxical challenge for subsequent improvement. A natural progression in RL is to deploy the pre-trained offline agent to collect targeted online data for fine-tuning. Yet, the very pessimism that ensures safety severely 1
+
+> arXiv:2603.18326v1 [cs.LG] 18 Mar 2026
+
+paralyzes the agent’s ability to explore novel states during this online phase (Mark et al., 2022). Conversely, completely overriding this pessimism to force standard exploration immediately rein-troduces the risk of real-world catastrophes. Safe RL literature offers a conceptual bridge to this paradox. By incorporating cost constraints alongside traditional reward signals, Safe RL restricts exploration to a recoverable, safe neighborhood around the initial policy’s coverage (Roknilamouki et al., 2025; Pacchiano et al., 2025; Shi et al., 2023; Ghosh et al., 2022; Pacchiano et al., 2021). Much like a newly licensed driver who cautiously tests a car’s handling limits without pushing into dangerous extremes, a safe RL agent seeks out "reasonable risks"—regions of the state space where the agent is uncertain, but the potential for harm remains strictly bounded and recoverable. Unfortunately, translating these Safe RL paradigms to modern, high-dimensional deep reinforce-ment learning presents a fundamental conflict regarding online policy updates. Traditional Safe RL operates via a rigorous, iterative loop: it initializes with a known safe baseline policy, executes highly conservative exploration within a trusted local neighborhood, and uses the newly collected samples to update the policy. Crucially, the safety of this newly updated policy is mathematically guaranteed prior to execution using tight estimation bounds—typically derived from linear models, tabular representations, or Gaussian Processes (Berkenkamp et al., 2023). Modern deep RL relies on highly nonlinear neural networks that lack such tractable, well-calibrated bounds. Consequently, updating a deep RL policy online is inherently dangerous; a single gradient step on newly acquired data can unpredictably degrade performance and lead to catastrophic real-world failures. In prac-tice, establishing the safety of deep RL models requires exhaustive offline hyperparameter tuning and rigorous evaluation across diverse scenarios—a luxury that is impossible during live, on-the-fly interaction (Huang et al., 2024). To overcome these limitations, we propose shifting the responsibility of safe exploration entirely to the offline pre-training phase. Instead of relying on dangerous online updates to learn new behaviors, we pre-train a policy that is already designed to take manageable risks. Specifically, we train the policy offline to accomplish two goals simultaneously: (1) successfully complete the primary task, and (2) use any remaining time in the episode to actively collect data from regions just outside the coverage of the offline dataset or simulator. By keeping this exploration strictly close to well-known regions, the agent can safely expand its knowledge without venturing into unrecoverable, out-of-distribution territory. Because this training happens entirely offline, researchers can thoroughly test and verify the safety of these exploratory behaviors before the agent ever interacts with the real world. This approach provides a highly practical and safe solution for real-world deployment. During the online phase, the policy’s parameters remain completely frozen. By using a fixed policy, we avoid the unpredictable dangers of online fine-tuning, while the agent’s pre-trained exploratory behavior still allows it to harvest valuable new data at the edges of its knowledge. This safely acquired data can then be used in a later offline phase—such as to enrich datasets, improve simulators, or train better reward models. While recent literature has begun to explore theoretical frameworks for this kind of fixed, offline-to-online data collection (Huang et al., 2024; Zhang & Zanette, 2023), developing a method that actually induces this behavior in scalable deep RL architectures remains a critical open challenge. This naturally motivates the central question of our paper: 
+
+How can we pre-train a policy during the offline phase such that, when deployed as a fixed policy online, it reliably completes its primary task while utilizing any remaining time in the episode to safely collect informative data from regions just outside the established coverage? 
+
+However, designing a reward signal that reliably induces this behavior is nontrivial. A natural idea is to encourage the agent to move toward regions of higher uncertainty by assigning larger rewards to states near the boundary of the known region. Intuitively, such a reward landscape concentrates incentives near this frontier, where informative samples can be collected while remaining close to recoverable states. However, purely state-based intrinsic rewards of this form often lead to degener-ate behaviors. Because the reward is maximized at particular boundary points, the agent may simply “park” at a single high-reward location rather than traverse the entire frontier. As a result, the re-2sulting state visitations collapse into a small set of modes instead of spreading along the boundary (See figure 3a). Similar concentration effects have been observed in state-visitation matching ob-jectives, where directly maximizing a target density can lead to mode collapse (Lee et al., 2019). Consequently, inducing sustained exploration along a boundary requires a reward mechanism that not only attracts the agent toward the frontier but also promotes motion along it. To solve this, we introduce a novel vector-field exploratory reward designed specifically to induce safe, continuous boundary exploration. Operating on an uncertainty oracle trained from offline data, our reward design comprises two synergistic elements: 
+
+1. Gradient Alignment: A potential-based component that encourages the agent to follow the uncertainty gradient toward the target boundary level. 
+
+2. Rotational Flow: A novel intrinsic signal that projects the agent’s movement along the local tangent plane of the uncertainty manifold. Once the agent reaches the target boundary, this rota-tional element prevents degenerate "parking" and pushes the agent to continuously traverse the safe frontier. Through theoretical analysis, we prove that this vector-field reward naturally induces the desired safe exploratory behavior. We evaluate our method on a 2D navigation task containing regions where the simulator is unreliable relative to the real world. When combined with Soft Actor-Critic (SAC) (Haarnoja et al., 2018a), the resulting policy exhibits the desired safe exploratory behavior: the agent approaches these regions and explores their boundary while avoiding transitions that move deeply into the unreliable region. 
+
+Related Work. Our work touches upon several areas of exploration and safe RL, but departs from them in crucial ways to support scalable, stationary deployment: • State-Visitation and Density Matching: A closely related line of work encourages exploration by matching the agent’s state-visitation distribution to a target distribution. Methods such as State Marginal Matching (SMM) (Lee et al., 2019) formulate this objective as a two-player game and have shown promising results in guiding exploration. However, achieving accurate coverage typically requires maintaining an online estimate of the state marginal distribution and, in practice, sampling from a collection of previously trained policies. We refer the reader to Remark 2 for a discussion of the relationship between this framework and our approach. Moreover, another related work in this category is Hazan et al. (2019). • Informative Sampling for Offline RL: Works such as Zhang & Zanette (2023); Huang et al. (2024) focus on designing non-adaptive policies from offline data to gather informative samples. However, these methods are largely analytical, and focus on tabular MDPs. • Reward-Free and Sim-to-Real Exploration: Methods exploring reward-free learning (Wagen-maker et al., 2022) or offline-to-online exploration (Wagenmaker et al., 2024) assume linear func-tion approximation. Moreover, they do not penalize the exploratory policy for entering unsafe regions. 
+
+# 2 Problem Formulation 
+
+We consider a true, real-world Markov Decision Process (MDP) defined by the tuple M∗ =(S, A, P ∗, r ∗), where the state space S ⊂ Rd is compact, and the reward function is bounded such that |r∗(s, a )| ≤ Rmax . Prior to online fine-tuning, we assume the agent undergoes a pre-training phase within a simulated MDP, cM = ( S, A, bP , br). This simulator is constructed based on a previ-ously collected offline dataset D. Due to finite data coverage and modeling approximations, there exists an inevitable sim-to-real gap between the simulated and true environments. To quantify this gap, let ∆( s) capture the true discrepancy between the simulator’s dynamics and reward functions and those of the real world at a given state s. We formulate this as the worst-case divergence over 3the action space: 
+
+∆( s) := sup 
+
+> a∈A
+
+h
+
+d
+
+ bP (·| s, a ), P ∗(·| s, a )
+
+
+
++ λ |br(s, a ) − r∗(s, a )|
+
+i
+
+, (1) where d(·, ·) denotes a suitable probability metric (e.g., Total Variation distance or Kullback-Leibler divergence) (Lattimore & Szepesvári, 2020), and λ > 0 is a weighting coefficient. Because P ∗
+
+and r∗ are unknown during pre-training, the true discrepancy ∆( s) cannot be computed exactly. Instead, we assume access to a twice continuously differentiable uncertainty oracle, U : S → R.To ensure the reliability of this estimation for safe deployment, we formally assume that U (s) acts as a well-calibrated, conservative upper bound on the true sim-to-real gap, such that ∆( s) ≤ U (s)
+
+for all s ∈ S . In practice, such pessimistic upper bounds are typically constructed via the epistemic uncertainty of the simulator or via the inverse state density of the underlying dataset D (Uehara et al., 2024; Burda et al., 2018; Fu et al., 2017). We utilize this continuous upper bound U (s) as our operational measure of data coverage and simulator reliability. During the online deployment and fine-tuning phase, unconstrained exploration can push the agent into high-uncertainty, out-of-distribution (OOD) regions where the sim-to-real gap is large. Because the pre-trained policy and value functions severely degrade in these regions, venturing too far from the dataset coverage often results in unrecoverable states (Zhou et al., 2024; Nakamoto et al., 2023; Kumar et al., 2020). Conversely, strictly confining the agent to regions with zero uncertainty halts exploration entirely. Drawing inspiration from the safe reinforcement learning literature, which em-phasizes the necessity of taking manageable, bounded risks to safely expand the exploration frontier (Kitamura et al., 2025; Roknilamouki et al., 2025; Shi et al., 2023; Ghosh et al., 2022), we propose a controlled exploration strategy. Specifically, we fix a target uncertainty level Umid ∈ R. By target-ing Umid , we encourage the agent to visit states that represent a manageable risk—novel enough to facilitate the discovery of new strategies and the collection of informative data to iteratively improve the simulator, yet close enough to known regions to ensure safe recovery. We formalize this target exploration manifold as the level set: U := {s ∈ S : U (s) = Umid }. In practice, Umid is a user-defined hyperparameter reflecting the risk tolerance of the deployment task. It can be calibrated based on the known degradation bounds of the offline pre-trained policy by setting Umid strictly below the uncertainty threshold where the sim-to-real gap leads to unrecoverable performance loss. 
+
+# 3 Proposed Approach (Vector Field-Guided Reward Shaping) 
+
+Having established the target manifold U, our objective is to train a policy within the offline simula-tor such that, upon deployment in the online phase, it simultaneously completes its primary task and actively collects informative samples from this boundary. To build intuition for the problem setting and the desired deployment behavior, we consider the following illustrative example. 
+
+Example 1 (Navigation with Localized Uncertainty) . Figure 1(a) illustrates a 2D navigation task in which a point robot starts from a fixed location and must navigate to a goal region. The environ-ment dynamics are accurately modeled across most of the state space, except within a designated 
+
+uncertain region (shown as the red shaded area), where the simulator becomes unreliable and en-tering may lead to poor prediction quality or potentially irrecoverable outcomes. In contrast, we seek a deployed policy that, before completing the primary task, safely approaches the uncertain region and moves along its boundary, the target manifold U (green region), to gather informative data while avoiding transitions into the unsafe interior. 
+
+To achieve the dual objectives of task completion and safe boundary exploration, we augment the base task reward r(s, a ) with a shaping term r′(s, a, s ′), such that the total reward is ˜r(s, a, s ′) := 
+
+r(s, a ) + r′(s, a, s ′). For a state transition s a
+
+−→ s′, we define the agent’s step vector as ∆s := s′ − s.Our proposed shaping reward is formulated as follows: 
+
+r′(s, a, s ′) := α(s)⟨∇ U (s), ∆s⟩
+
+| {z }
+
+> Gradient Alignment
+
++ β(s)⟨W ∇U (s), ∆s⟩
+
+| {z }
+
+> Rotational Flow
+
+(2) 4Figure 1: Toy navigation with localized uncertainty. (a) Example trajectories from the same start/goal. A pessimistic baseline (blue, dashed) takes a conservative detour to avoid the high-uncertainty region. Our approach drives the agent to the target manifold U (green), rotates along the boundary to collect informative samples, and then reaches the goal without entering the uncertain interior (shaded). (b) Visualization of the induced vector field for controlled exploration. The blue arrows direct the agent toward the high-uncertainty regions, seeking the target uncertainty boundary 
+
+Umid . Upon reaching this target level, the orange arrows (Curl Boundary Band) induce a tangential flow, ensuring the agent continuously moves along and explores the surface of the manifold. At a high level, r′ generates a vector field over the continuous state space. This field is explicitly designed to attract the RL agent toward the uncertain region until it reaches the target safety level 
+
+Umid , and subsequently encourages the agent to continuously move around the target manifold U
+
+(See Figure 1 (b)). We explain the mechanics of this equation step by step below. 
+
+Gradient Alignment (Attraction): The first element of our reward design acts as an attractive force to guide the policy toward the target manifold. The state-dependent scalar weight α(s) := sign( Umid − U (s)) tanh( |U (s) − Umid |) dictates both the strength and direction of this alignment. When the agent is in a highly explored state where U (s) < U mid , α(s) is positive. This rewards the agent for taking a step ∆s along the direction of the gradient ∇U (s), locally increasing its uncertainty. Conversely, if the agent breaches the boundary into highly unsafe, out-of-distribution regions where U (s) > U mid , α(s) becomes negative. This elegantly reverses the vector field, pushing the agent in the direction of −∇ U (s) to reduce uncertainty and safely guide it back to the recoverable boundary. 
+
+Rotational Flow (Surface Exploration): Once the agent reaches the target manifold, it is crucial that it does not simply stop exploring or "park" at a single boundary state. To prevent this, the second element of r′ induces a continuous, directed rotational flow. We isolate movement along the manifold by constructing a target vector field that is strictly tangent to U. This is achieved by applying a constant skew-symmetric matrix W (where W ⊤ = −W ) to the gradient. Because the quadratic form of a skew-symmetric matrix is always zero ( ∇U (s)⊤W ∇U (s) = 0 ), the resulting vector W ∇U (s) is mathematically guaranteed to be orthogonal to the gradient, thus pointing purely along the level set (Kapitanyuk et al., 2017). We measure the agent’s step ∆s against this rotational field using the inner product ⟨W ∇U (s), ∆s⟩. The scalar β(s) := 1 − | tanh( U (s) − Umid )| acts as a gating mechanism that peaks when the agent is exactly on the manifold ( U (s) ≈ Umid ). By rewarding this alignment, the agent is heavily incentivized to continuously "surf" along the manifold in a stable orbit, maximizing state coverage without penetrating deeper into unsafe regions. It is important to note that for state-space dimensions d > 2, the choice of the skew-symmetric matrix 
+
+W is not unique, as higher-dimensional spaces contain multiple orthogonal planes of rotation. 5One might naturally wonder if the gradient alignment term alone is sufficient to induce exploration once the manifold is reached. However, a purely gradient-based field cannot sustain continuous boundary traversal, a limitation we formalize through fundamental vector calculus: 
+
+Lemma 1 (Insufficiency of Gradient Fields for Boundary Exploration) . A reward function consisting solely of a gradient field yields zero net exploratory return for any trajectory confined to the target manifold U, or for any closed loop. Proof. Let γ(t) for t ∈ [0 , T ] be a continuous trajectory taken by the agent. By the fundamental theorem of line integrals (Spivak, 2018), the total reward accumulated from traversing a purely gradient field ∇U depends entirely on the endpoints: R 
+
+> γ
+
+∇U (s) · ds = U (γ(T )) − U (γ(0)) . If the agent perfectly navigates along the target manifold U, the uncertainty remains constant, meaning 
+
+U (γ(T )) = U (γ(0)) = Umid . Consequently, the net reward integral evaluates to exactly zero. ■
+
+Lemma 1 necessitates our introduction of the rotational flow term, which breaks the conservative nature of the field and actively rewards the continuous traversal of the boundary. 
+
+# 4 Analysis 
+
+In this section, we provide a theoretical analysis of the vector field reward shaping mechanism 
+
+˜r(s, a, s ′) introduced in Section 3. Specifically, we demonstrate that in the long-term average, the gradient alignment term acts as a near-potential-based shaper (Ng et al., 1999) that cancels out, leaving the agent to optimize a combination of the base task reward and the rotational flow along the target manifold U. To guarantee these theoretical properties, we first establish a set of standard, mild assumptions about the environment dynamics, the structure of the uncertainty oracle U , and the feasibility of the target manifold. 
+
+Assumption 1 (Regularity of the Target Level) . The target value Umid is a regular value of U .Specifically, there exists g0 > 0 such that ∥∇ U (s)∥ ≥ g0 for all s in a neighborhood of U.
+
+Assumption 1 ensures our target set U is a well-behaved, smooth (d − 1) -dimensional embedded manifold without “pinched” points or singularities (Lee, 2003). In particular, it guarantees that 
+
+∇U (s)̸ = 0 near the manifold, ensuring that the rotational field W ∇U (s) remains non-vanishing. 
+
+Assumption 2 (Ergodicity and Average Reward) . For every stationary policy π, the induced Markov chain is ergodic and admits a unique stationary distribution μπ . Consequently, the average reward 
+
+ρπ := lim T →∞ 1 
+
+> T
+
+Eπ
+
+hPT −1 
+
+> t=0
+
+˜r(st, a t, s t+1 )
+
+i
+
+always exists. 
+
+Assumption 2 is a standard infinite-horizon RL assumption. It allows us to evaluate policies based on their long-term stationary behavior, safely washing out the transient effects of initial state distri-butions (Levin & Peres, 2017). 
+
+Assumption 3 (Existence of a Manifold-Covering Policy) . There exist constants vmax < ∞ and 
+
+v0 > 0, alongside a stationary policy πU , such that: (i) μπU (U) = 1 (the manifold is invariant under πU ). (ii) EπU [⟨W ∇U (s), ∆s⟩] ≥ v0, while for all policies π, Eπ [|⟨ W ∇U (s), ∆s⟩| ] ≤ vmax .
+
+Assumption 3 should be viewed as a controllability-type condition. It posits that the environment admits at least one stationary policy that can stay on the manifold U while maintaining nontrivial tangential motion in the direction induced by W ∇U (s). This is natural in environments where the agent can steer locally along the level set while correcting drift in the normal direction. Our navigation experiment in Section 5 provides a concrete instance of this setting. 
+
+4.1 Theoretical Results 
+
+With the formal assumptions established, we now provide rigorous theoretical guarantees for our proposed vector-field reward. The first fundamental requirement of our approach is to ensure that 6the agent reliably navigates to, and remains tightly concentrated around, the target boundary U.Theorem 1 formalizes this manifold-seeking behavior by demonstrating that the gradient-alignment component of our reward naturally acts as a potential-based shaping mechanism. 
+
+Theorem 1 (Manifold-seeking orthogonal reward shaping) . Let Assumptions 1, 2, and 3 hold. Let 
+
+Φ( s) := |U (s) − Umid | and define the scalar potential function Ψ( s) := log cosh(Φ( s)) . Let 
+
+LΨ := sup x∈S ∥∇ 2Ψ( x)∥op < ∞ denote its maximum curvature. Then the following statements hold: 
+
+1. Potential-based decomposition up to second-order error. For all transitions (s, a, s ′), the normal-seeking component acts as a potential difference: 
+
+α(s)⟨∇ U (s), ∆s⟩ = − Ψ( s′) − Ψ( s) + ε(s, a, s ′) (3) 
+
+where the Taylor remainder is bounded by |ε(s, a, s ′)| ≤ LΨ 
+
+> 2
+
+∥∆s∥22.
+
+2. Vanishing potential in stationary average. For any stationary policy π, the long-term average shaped reward simplifies to: 
+
+ρπ = ¯ ρπr + Es∼μπ ,a ∼π
+
+h
+
+Es′
+
+β(s)⟨W ∇U (s), ∆s⟩i
+
++ ¯ επ (4) 
+
+where ¯ρπr is the average base reward, and the error satisfies |¯επ | ≤ LΨ 
+
+> 2
+
+Eμπ [∥∆s∥22]. In the small-step regime, the objective is shifted only by the orthogonal/tangential term. 
+
+3. Near-manifold concentration. Fix ϵ > 0 and define the ϵ-off-manifold region Nϵ := {s : Φ( s) ≥
+
+ϵ}. Let bϵ := 1 − tanh( ϵ). Any optimal policy π⋆ ∈ arg max π ρπ satisfies: 
+
+μπ⋆ (Nϵ) ≤
+
+ ¯ρπ⋆ 
+
+> r
+
+− ¯ρπU
+
+> r
+
+ + ( vmax − v0) + |¯επ⋆
+
+| + |¯επU |
+
+(1 − bϵ) vmax 
+
+. (5) 
+
+Remark 1 (Behavioral Trade-offs in Near-Manifold Concentration) . Equation 5 makes the behav-ioral trade-offs of our reward design fully explicit. If we ignore the second-order discretization errors ( |˜επ∗
+
+| and |˜επU |), the upper bound on the off-manifold state visitation μπ∗ (Nϵ) is driven primarily by two structural terms: 
+
+• Base Reward Temptation: The first term, ¯ρπ∗   
+
+> r−¯ρπUr
+> vmax
+
+, captures the maximum additional task reward the optimal policy might gain by venturing off the manifold. Since vmax ≥ v0, this fraction is strictly bounded above by ¯ρπ∗   
+
+> r−¯ρπUr
+> v0
+
+. Recall that v0 lower-bounds the expected rotational reward of the strictly on-manifold policy, EπU [β(s)⟨W ∇U (s), ∆s⟩] ≥ v0. Therefore, if the policy can move rapidly along the boundary (i.e., v0 is large), this term becomes small. Furthermore, if the base task reward difference is naturally small, the “temptation” to leave the manifold is negligible, resulting in a tighter concentration bound. 
+
+• Tangential Velocity Gap: The second fraction, vmax −v0 
+
+> vmax
+
+, reflects the relative gap in exploration speed. If the on-manifold policy ( πU ) can traverse the boundary rapidly, its guaranteed tangential speed v0 approaches the global maximum possible speed vmax , effectively driving this difference to zero. Ultimately, this bound demonstrates that if the agent can accumulate high rotational rewards (i.e., move fast) strictly on the manifold, these tangential incentives overwhelmingly dominate any marginal task-reward advantages found off-manifold, mathematically guaranteeing tight spatial concentration around U.Proof. The proof of Eq. (3) is deferred to Appendix 7. We now proceed to prove Eqs. (4) and (5). 
+
+Step 1: Average-reward limit (Proof of Eq. (4) ). Fix a stationary policy π. Summing −(Ψ( st+1 )−
+
+Ψ( st)) over t = 0 , . . . , T − 1 telescopes to Ψ( s0) − Ψ( sT ). Since Ψ is bounded on the compact set 
+
+S, taking the expectation and dividing by T yields lim T →∞ 1 
+
+> T
+
+E[Ψ( s0) − Ψ( sT )] = 0 . Thus, under 7Assumption 2, the potential difference vanishes in the limit. Substituting the result of Eq.(3) into the definition of ˜r leaves only the base reward, the tangential term, and the stationary expected Taylor remainder ¯επ , proving Claim 2. 
+
+Step 2: Near-manifold concentration (Proof of Eq. (5) ). Fix ϵ > 0. On the off-manifold region 
+
+Nϵ, w(s) = tanh(Φ( s)) ≥ tanh( ϵ), which implies β(s) = 1 − w(s) ≤ 1 − tanh( ϵ) = bϵ. Because 
+
+β(s) ≤ 1 everywhere and expected tangential movement is bounded by vmax (Assumption 3), we can bound the tangential reward for any policy π:
+
+Eβ(s)⟨W ∇U (s), ∆s⟩ ≤ vmax 
+
+
+
+(1 − μπ (Nϵ)) · 1 + μπ (Nϵ) · bϵ
+
+
+
+= vmax 
+
+
+
+1 − (1 − bϵ)μπ (Nϵ)
+
+
+
+.
+
+Applying this to the optimal policy π⋆ via Claim 2: 
+
+ρπ⋆
+
+≤ ¯ρπ⋆ 
+
+> r
+
++ vmax 
+
+
+
+1 − (1 − bϵ)μπ⋆ (Nϵ)
+
+
+
++ |¯επ⋆
+
+|.
+
+Conversely, for the manifold-invariant policy πU from Assumption 3, Φ( s) = 0 almost surely. Thus 
+
+β(s) = 1 a.s., yielding: 
+
+ρπU ≥ ¯ρπU 
+
+> r
+
++ v0 − | ¯επU |.
+
+By optimality, ρπ⋆
+
+≥ ρπU . Chaining these inequalities and rearranging for μπ⋆ (Nϵ) directly yields the bound in Eq. (5). 
+
+Tangential Mobility and No-Sticking Guarantees. While Theorem 1 guarantees that the agent reaches and remains concentrated around the target manifold U, this alone is insufficient for effective data collection. A common failure mode in boundary-seeking reinforcement learning is degenerate parking : the agent reaches a safe boundary state and stops moving—often via a self-loop policy—to avoid the risk of out-of-distribution penalties. To rule out this behavior, we show that the rotational component of our shaped reward prevents such degeneracy. The following corollary formalizes this result: 
+
+Corollary 1 (No-sticking on the manifold (in expectation)) . Let the setting of Theorem 1 hold and suppose Assumption 3 holds with constants v0 > 0 and vmax < ∞. Further assume that the base reward of the manifold-supported policy πU is near-optimal among all policies supported on U, in the sense that for some tolerance η ≥ 0, ¯ρπU 
+
+> r
+
+≥ sup π:μπ (U)=1 ¯ρπr − η. Then any average-reward optimal policy π⋆ ∈ arg max π ρπ that satisfies μπ⋆ (U) = 1 must achieve strictly positive expected tangential motion: 
+
+Es∼μπ⋆ Ea,s ′ [β(s)⟨W ∇U (s), ∆s⟩] ≥ v0 − η. 
+
+In particular, if η < v 0, then π⋆ cannot induce a self-loop ( s′ = s almost surely) on a set of stationary mass 1.Proof. On the target manifold U, the shaping weights satisfy α(s) = 0 and β(s) = 1 , hence 
+
+˜r(s, a, s ′) = r(s, a ) + β(s)⟨W ∇U (s), ∆s⟩.
+
+By Assumption 3(i)–(ii), the invariant policy πU satisfies μπU (U) = 1 and 
+
+ρπU = ¯ ρπU 
+
+> r
+
++ EπU [β(s)⟨W ∇U (s), ∆s⟩] ≥ ¯ρπU 
+
+> r
+
++ v0.
+
+Let π⋆ be average-reward optimal among policies supported on U (i.e., μπ⋆ (U) = 1 ). Optimality implies ρπ⋆
+
+≥ ρπU , and expanding ρπ⋆
+
+on U yields 
+
+¯ρπ⋆ 
+
+> r
+
++ Eπ⋆ [β(s)⟨W ∇U (s), ∆s⟩] ≥ ¯ρπU 
+
+> r
+
++ v0.
+
+Rearranging gives 
+
+Eπ⋆ [β(s)⟨W ∇U (s), ∆s⟩] ≥ v0 − (¯ ρπU 
+
+> r
+
+− ¯ρπ⋆ 
+
+> r
+
+).
+
+8Finally, the stated base-reward condition implies ¯ρπ⋆ 
+
+> r
+
+≤ ¯ρπU 
+
+> r
+
++ η, hence 
+
+Eπ⋆ [β(s)⟨W ∇U (s), ∆s⟩] ≥ v0 − η, 
+
+as claimed. If η < v 0, the right-hand side is strictly positive, ruling out an almost-sure self-loop on a full-mass stationary set. 
+
+# 5 Experiments 
+
+We evaluate our method on the continuous navigation task introduced in Example 1 and illustrated in Figure 1. Our primary objective is to demonstrate that a policy trained within an offline simulator can, upon deployment, simultaneously complete its primary task while actively collecting infor-mative samples from the mid-level uncertainty boundary U. To systematically analyze the agent’s behavior and decouple exploration from exploitation, we structure our experiments into two distinct scenarios: • Pure Exploration (Extrinsic Reward Removed): In the first scenario, we completely zero out the task-specific environment reward. This isolates the effects of our shaping reward, allowing us to observe the agent’s pure exploratory dynamics and verify whether it successfully adheres to and circulates along the manifold U without the pull of an external goal. • Goal-Directed Exploration (Extrinsic Reward Active): In the second scenario, we reintroduce the standard environment reward, which incentivizes the agent to navigate toward a designated goal region. This tests the policy’s ability to balance the exploratory behavior induced by our vector-field reward with standard task performance. Throughout these navigation scenarios, we benchmark our proposed method against an intrinsic reward that assigns higher value to states with greater estimated uncertainty. We compare the policies learned under these two reward designs to evaluate their resulting exploration behavior. Finally, we conclude by discussing the limitations of our current methodology and outlining interesting open problems for future research. 
+
+Implementation Details. We base our algorithm on Soft Actor-Critic (SAC) (Haarnoja et al., 2018a;b), utilizing a Normalizing Flow (Ghugare & Eysenbach, 2025) to parameterize the actor network. We use 32 flow blocks for the purely exploratory task and increase this to 64 blocks for the task that includes the environment reward. The actor is trained using a constant learning rate of 
+
+1 × 10 −6. All environments and training routines are implemented natively in JAX and executed on an NVIDIA H200 GPU. 
+
+5.1 Analysis of Exploratory Behavior 
+
+We first study the exploratory behavior induced by the intrinsic reward. To isolate this effect, we remove the extrinsic reward for reaching the goal region, so the agent’s objective is driven entirely by the exploratory signal. We then compare two approaches under this purely exploratory setting: 
+
+(i) Vector-field exploratory reward (Ours). In this run, we train the agent in simulation using our proposed vector-field reward design introduced in Eq. (2). Because the state space of this simula-tion is two-dimensional, we instantiate the rotational flow by setting the skew-symmetric matrix to the standard symplectic matrix W =
+
+ 0 1
+
+−1 0
+
+
+
+. Figure 2 reports three diagnostics of the learned behavior. Panel (a) visualizes empirical state visitations during an episode, illustrating the spatial coverage of the policy. Panel (b) measures the agent’s speed along the target manifold, while panel (c) reports the rate of unsafe transitions. During training, the agent gradually transitions from radial motion toward tangential motion around the target uncertainty level. This behavior is visible in the visitation map (panel (a)), where the states form a continuous band around the uncertainty boundary, and in panel (b), where the speed along the manifold increases as training progresses. Consistent with Corollary 1, the policy does not stall after reaching the manifold. Instead, the rotational com-9(a) Exploration behavior (b) Speed on the Manifold (c) Unsafe Behavior Rate 
+
+Figure 2: Our vector field reward design results in a periodic orbit behavior (the agent rotate around the uncertainty region to collect as much data as it can)   
+
+> (a) Exploration behavior (b) Speed on the Manifold (c) Unsafe Behavior Rate
+
+Figure 3: State-based intrinsic reward baseline demonstrating mode collapse. Without the rotational flow component, the agent’s state visitations (blue points) collapse into a highly localized cluster on the target manifold U rather than continuously exploring the frontier. ponent of the vector field induces a persistent orbit around the boundary, producing well-distributed coverage of the exploration frontier while maintaining a low unsafe rate (panel (c)). 
+
+(ii) Purely State-Based Intrinsic Reward Baseline. To highlight the necessity of the rotational flow, we construct a baseline that directly incentivizes boundary exploration via a purely state-based intrinsic reward, r′(s, a, s ′) = U (s′). To discourage the agent from entering unrecover-able out-of-distribution regions, we augment this reward with a safety penalty rpen (s, a, s ′) := 
+
+−λunsafe · 1{U (s′) > U mid + ϵ}, where ϵ > 0 and λunsafe ≫ 1 is a large penalty coefficient. One can view this reward structure as encouraging the agent to match a target distribution p∗(s) that is heavily concentrated on the target manifold U, conceptually similar to the objective in the State Marginal Matching (SMM) framework (Lee et al., 2019), except that we remove the term involving the policy’s state visitation distribution. Empirically, we observe that this static reward landscape behaves as a point attractor. As shown in Figure 3, the agent’s state visitations (blue points) collapse into a highly localized cluster on the target manifold rather than spreading along the exploration frontier. This phenomenon is consistent with the observations of Lee et al. (2019), who note that optimizing the unnormalized log-likelihood of a target distribution can lead to mode collapse. Their framework addresses this issue by incorporating a term involving the policy’s state visitation distri-bution, which we discuss in Remark 2. 
+
+Remark 2 (Challenges of State Marginal Matching for Stationary Deployment) . To mitigate the parking behavior described above, the complete SMM framework introduces a correction term that subtracts the policy’s own state visitation distribution from the reward, yielding an objective of the form r(s) ∝ log p∗(s) − log( policy state visitation ) (Lee et al., 2019). As discussed by Lee et al. 
+
+10 (a) Vector-field reward (Ours) (b) State intrinsic reward (Baseline) 
+
+Figure 4: Balancing target manifold coverage with a primary navigation task. (a) Our method induces a time-splitting strategy, actively circulating the manifold before navigating to the goal. (b) The baseline intrinsic reward fails to achieve diverse boundary coverage, moving almost directly to the goal. 
+
+(2019), this quantity must be estimated from the data generated by the current policy and updated whenever the policy changes during training. Consequently, accurately maintaining this estimate requires continuous density estimation throughout online interaction. This requirement moves the problem outside the scope of standard reinforcement learning, since the reward function itself de-pends on the policy. Maintaining and updating such an estimator during an online deployment phase is computationally demanding and can introduce additional instability. Furthermore, achiev-ing full coverage of the target distribution p∗(s) in the SMM framework often requires training and deploying a mixture of policies (or “experts”), which can be memory-intensive and difficult to scale to continuous control settings. In contrast, our vector-field reward introduces an explicit rotational component that encourages tangential motion along the manifold, enabling diverse boundary ex-ploration with a single stationary neural network policy and without requiring online estimation of the policy’s visitation distribution. That said, we emphasize that our reward shaping is not a uni-versal solution and may have its own limitations. We refer the reader to Section 5.3 for a detailed discussion of potential limitations and open problems. 
+
+5.2 Balancing Exploration with Task Completion 
+
+Finally, we evaluate the core motivation of our work: enabling a deployable agent to utilize excess time for safe data collection while still completing its primary task. In this scenario, we reintroduce the environment reward for reaching the goal region. To allow the agent to strategically manage its budget between exploration and goal-seeking, we augment its state input with time embeddings. Figure 4 compares the performance of policies trained using our vector-field reward design against those trained with the state intrinsic reward baseline. As shown in panel (a), our method exhibits a distinct time-splitting strategy: the agent initially collects diverse samples along the target manifold, and then, in the final phase of the horizon, runs toward the goal to secure the primary task reward. In contrast, the agent trained with the state intrinsic reward fails to achieve comprehensive coverage, merely visiting one of the uncertain regions on its direct path to the goal. 
+
+5.3 Limitations and Future Work 
+
+As established by our theoretical results (e.g., Corollary 1), our vector-field reward design success-fully motivates the agent to continuously navigate along the target manifold U. This highlights a crucial insight for boundary exploration: simply assigning high reward values to states residing 11 Figure 5: For higher dimensions ( d > 2), our reward function in Eq. (2) generates different tangen-tial vector fields for different choices of the skew-symmetric matrix W . Because rotational flow is not unique in these spaces, each arbitrary W dictates a distinct rotational trajectory along the bound-ary U.on the manifold is insufficient, as it often leads to degenerate "parking" or stalling behaviors. In-stead, active tangential movement is required to collect diverse, informative samples. However, the geometric nature of our approach introduces new challenges when scaling to higher-dimensional continuous control tasks. In a 2D state space, the target manifold is a 1D curve, meaning the rota-tional flow is essentially unique up to its direction (clockwise or counter-clockwise). Conversely, for 
+
+d > 2, higher-dimensional manifolds lack a single canonical rotation (Spivak, 2018). Consequently, the skew-symmetric matrix W in Eq. (2) is highly underdetermined and can be chosen arbitrarily. As illustrated by the schematic in Figure 5, different choices of W induce completely distinct di-rectional flows. A primary limitation of using a single, static W matrix in higher dimensions is the risk of "orbit collapse." Even with our reward design, the agent might converge to rotating along a single, localized 1D orbit on the manifold rather than achieving comprehensive coverage of the entire (d − 1) -dimensional surface. Addressing this topological limitation presents exciting avenues for future research. One potential approach is to combine a strong rotational flow with maximum entropy methods (Haarnoja et al., 2018a). Depending on the underlying geometry of the manifold, this noise injection could force the agent to traverse the boundary in a "zig-zag" pattern, naturally widening the exploration band. A more systematic solution could draw inspiration from the goal-conditioned RL literature(Nair et al., 2018; Eysenbach et al., 2018; Ghugare & Eysenbach, 2025). By treating the matrix W as a conditional input to the policy π(a | s, W ), we can train an agent capa-ble of executing various rotational flows. During deployment, randomly sampling or systematically rotating through different W matrices would generate intersecting search trajectories, maximizing surface coverage. Ultimately, while our proposed reward design does not universally solve the full distribution coverage problem addressed by State Marginal Matching (Lee et al., 2019), it offers a fundamentally different and tractable perspective. By leveraging W -conditioned geometric flows, future work could potentially bypass SMM’s computationally heavy requirements for continuous online density estimation and game-theoretic policy mixtures, framing manifold exploration purely as a controllable dynamical system. 
+
+# 6 Conclusion 
+
+In this work, we addressed the critical challenge of safely gathering informative out-of-distribution data during the deployment of pre-trained RL agents. By introducing a novel vector-field exploratory reward, we demonstrated that coupling gradient alignment with a rotational flow effectively compels a stationary policy to continuously navigate along target uncertainty boundaries. This geometric ap-12 proach mitigates the degenerate “parking” behaviors associated with purely state-based intrinsic re-wards and offers an alternative to relying on risky online policy updates. Ultimately, our framework provides a scalable, reliable mechanism for autonomous systems to balance primary task execution with safe frontier exploration, paving the way for robust iterative fine-tuning and safer sim-to-real transfer in continuous control domains. 
+
+# References 
+
+Felix Berkenkamp, Andreas Krause, and Angela P Schoellig. Bayesian optimization with safety constraints: safe and automatic parameter tuning in robotics. Machine learning , 112(10):3713– 3747, 2023. Yuri Burda, Harrison Edwards, Amos Storkey, and Oleg Klimov. Exploration by random network distillation. arXiv preprint arXiv:1810.12894 , 2018. Benjamin Eysenbach, Abhishek Gupta, Julian Ibarz, and Sergey Levine. Diversity is all you need: Learning skills without a reward function. arXiv preprint arXiv:1802.06070 , 2018. Justin Fu, John Co-Reyes, and Sergey Levine. Ex2: Exploration with exemplar models for deep reinforcement learning. Advances in neural information processing systems , 30, 2017. Arnob Ghosh, Xingyu Zhou, and Ness Shroff. Provably efficient model-free constrained rl with linear function approximation. Advances in Neural Information Processing Systems , 35:13303– 13315, 2022. Raj Ghugare and Benjamin Eysenbach. Normalizing flows are capable models for rl. arXiv preprint arXiv:2505.23527 , 2025. Tuomas Haarnoja, Aurick Zhou, Pieter Abbeel, and Sergey Levine. Soft actor-critic: Off-policy maximum entropy deep reinforcement learning with a stochastic actor. In International confer-ence on machine learning , pp. 1861–1870. Pmlr, 2018a. Tuomas Haarnoja, Aurick Zhou, Kristian Hartikainen, George Tucker, Sehoon Ha, Jie Tan, Vikash Kumar, Henry Zhu, Abhishek Gupta, Pieter Abbeel, et al. Soft actor-critic algorithms and appli-cations. arXiv preprint arXiv:1812.05905 , 2018b. Elad Hazan, Sham Kakade, Karan Singh, and Abby Van Soest. Provably efficient maximum entropy exploration. In International conference on machine learning , pp. 2681–2691. PMLR, 2019. Audrey Huang, Mohammad Ghavamzadeh, Nan Jiang, and Marek Petrik. Non-adaptive online finetuning for offline reinforcement learning. In Reinforcement Learning Conference , 2024. Yuri A Kapitanyuk, Anton V Proskurnikov, and Ming Cao. A guiding vector-field algorithm for path-following control of nonholonomic mobile robots. IEEE Transactions on Control Systems Technology , 26(4):1372–1385, 2017. Toshinori Kitamura, Arnob Ghosh, Tadashi Kozuno, Wataru Kumagai, Kazumi Kasaura, Kenta Hoshino, Yohei Hosoe, and Yutaka Matsuo. Provably efficient rl under episode-wise safety in constrained mdps with linear function approximation. arXiv preprint arXiv:2502.10138 , 2025. Ilya Kostrikov, Ashvin Nair, and Sergey Levine. Offline reinforcement learning with implicit q-learning. arXiv preprint arXiv:2110.06169 , 2021. Aviral Kumar, Aurick Zhou, George Tucker, and Sergey Levine. Conservative q-learning for offline reinforcement learning. Advances in neural information processing systems , 33:1179–1191, 2020. Tor Lattimore and Csaba Szepesvári. Bandit algorithms . Cambridge University Press, 2020. John M Lee. Smooth manifolds. In Introduction to smooth manifolds , pp. 1–29. Springer, 2003. 13 Lisa Lee, Benjamin Eysenbach, Emilio Parisotto, Eric Xing, Sergey Levine, and Ruslan Salakhutdi-nov. Efficient exploration via state marginal matching. arXiv preprint arXiv:1906.05274 , 2019. David A Levin and Yuval Peres. Markov chains and mixing times , volume 107. American Mathe-matical Soc., 2017. Sergey Levine, Aviral Kumar, George Tucker, and Justin Fu. Offline reinforcement learning: Tuto-rial, review, and perspectives on open problems. arXiv preprint arXiv:2005.01643 , 2020. Max Sobol Mark, Ali Ghadirzadeh, Xi Chen, and Chelsea Finn. Fine-tuning offline policies with optimistic action selection. In Deep Reinforcement Learning Workshop NeurIPS 2022 , 2022. Ashvin V Nair, Vitchyr Pong, Murtaza Dalal, Shikhar Bahl, Steven Lin, and Sergey Levine. Visual reinforcement learning with imagined goals. Advances in neural information processing systems ,31, 2018. Mitsuhiko Nakamoto, Simon Zhai, Anikait Singh, Max Sobol Mark, Yi Ma, Chelsea Finn, Aviral Kumar, and Sergey Levine. Cal-ql: Calibrated offline rl pre-training for efficient online fine-tuning. Advances in Neural Information Processing Systems , 36:62244–62269, 2023. Andrew Y Ng, Daishi Harada, and Stuart Russell. Policy invariance under reward transformations: Theory and application to reward shaping. In Icml , volume 99, pp. 278–287. Citeseer, 1999. Aldo Pacchiano, Mohammad Ghavamzadeh, Peter Bartlett, and Heinrich Jiang. Stochastic bandits with linear constraints. In International conference on artificial intelligence and statistics , pp. 2827–2835. PMLR, 2021. Aldo Pacchiano, Mohammad Ghavamzadeh, and Peter Bartlett. Contextual bandits with stage-wise constraints. Journal of machine learning research , 26(170):1–57, 2025. Amirhossein Roknilamouki, Arnob Ghosh, Ming Shi, Fatemeh Nourzad, Eylem Ekici, and Ness Shroff. Provably efficient rl for linear mdps under instantaneous safety constraints in non-convex feature spaces. In International Conference on Machine Learning , pp. 51957–51995. PMLR, 2025. Ming Shi, Yingbin Liang, and Ness Shroff. A near-optimal algorithm for safe reinforcement learning under instantaneous hard constraints. In International Conference on Machine Learning , pp. 31243–31268. PMLR, 2023. Michael Spivak. Calculus on manifolds: a modern approach to classical theorems of advanced calculus . CRC press, 2018. Masatoshi Uehara, Yulai Zhao, Ehsan Hajiramezanali, Gabriele Scalia, Gokcen Eraslan, Avantika Lal, Sergey Levine, and Tommaso Biancalani. Bridging model-based optimization and genera-tive modeling via conservative fine-tuning of diffusion models. Advances in Neural Information Processing Systems , 37:127511–127535, 2024. Andrew Wagenmaker, Kevin Huang, Liyiming Ke, Kevin Jamieson, and Abhishek Gupta. Over-coming the sim-to-real gap: Leveraging simulation to learn to explore for real-world rl. Advances in Neural Information Processing Systems , 37:78715–78765, 2024. Andrew J Wagenmaker, Yifang Chen, Max Simchowitz, Simon Du, and Kevin Jamieson. Reward-free rl is no harder than reward-aware rl in linear markov decision processes. In International Conference on Machine Learning , pp. 22430–22456. PMLR, 2022. Ruiqi Zhang and Andrea Zanette. Policy finetuning in reinforcement learning via design of experi-ments using offline data. Advances in Neural Information Processing Systems , 36:59953–59995, 2023. Zhiyuan Zhou, Andy Peng, Qiyang Li, Sergey Levine, and Aviral Kumar. Efficient online reinforce-ment learning fine-tuning need not retain offline data. arXiv preprint arXiv:2412.07762 , 2024. 14 Supplementary Materials 
+
+The following content was not necessarily subject to peer review. 
+
+# 7 Proof of Claim 1 from Theorem 1 
+
+Step 1: Rewrite the normal term via the smooth potential Ψ. For U (s)̸ = Umid , we have 
+
+∇Φ( s) = sign( U (s) − Umid )∇U (s). Using the definition α(s) = −w(s)sign( U (s) − Umid ), we find: 
+
+α(s)∇U (s) = −w(s) ∇Φ( s).
+
+By the chain rule, the gradient of our defined potential Ψ( s) = log cosh(Φ( s)) is: 
+
+∇Ψ( s) = tanh(Φ( s)) ∇Φ( s) = w(s) ∇Φ( s).
+
+Combining these yields α(s)⟨∇ U (s), ∆s⟩ = −⟨∇ Ψ( s), ∆s⟩.
+
+Step 2: Convert to a telescoping difference (Proof of Claim 1). By the second-order Taylor expansion of Ψ around s evaluated at s′ = s + ∆ s, there exists ξ on the segment between s and s′
+
+such that: 
+
+Ψ( s′) = Ψ( s) + ⟨∇ Ψ( s), ∆s⟩ + 12 ∆⊤ 
+
+> s
+
+∇2Ψ( ξ)∆ s.
+
+Rearranging this isolates our term from Step 1: 
+
+−⟨∇ Ψ( s), ∆s⟩ = −(Ψ( s′) − Ψ( s)) + ε(s, a, s ′)
+
+where ε(s, a, s ′) := 12 ∆⊤ 
+
+> s
+
+∇2Ψ( ξ)∆ s. Because S is compact and Ψ ∈ C2, the operator norm of 
+
+∇2Ψ is bounded by LΨ, yielding |ε(s, a, s ′)| ≤ LΨ 
+
+> 2
+
+∥∆s∥22.
+
+# 8 Experimental Setup and Hyperparameters 
+
+8.1 Uncertainty Oracle Construction 
+
+For our synthetic continuous control experiments, we model the uncertainty oracle U (s) analytically to simulate a localized region of high uncertainty (representing out-of-distribution states where the simulator is unreliable). Given a 2D state s = ( x, y ), we define the uncertainty landscape using a Gaussian function: 
+
+U (s) = A exp 
+
+
+
+− (x − cx)2 + ( y − cy )2
+
+2σ2
+
+
+
+where A represents the maximum uncertainty amplitude, (cx, c y ) denotes the center coordinate of the uncertain region, and σ controls the spatial spread of the uncertainty. 15 8.2 Hyperparameters 
+
+Table 1: SAC and environment hyperparameters used in our experiments. All models were trained with a replay buffer capacity of 10 6 transitions. 
+
+Category Hyperparameter Value 
+
+Optimization Actor Learning Rate 1 × 10 −6
+
+Critic Learning Rate 5 × 10 −4
+
+Alpha Learning Rate 2 × 10 −3
+
+Discount Factor ( γ) 0.99 
+
+Soft Target Update Rate ( τ ) 10 −4
+
+Max Gradient Norm 30 .0
+
+Training Loop Batch Size 256 
+
+Replay Buffer Size 1,000 ,000 
+
+Action Limit 0.1
+
+Entropy Target Entropy −8.0
+
+Initial Alpha ( α) 0.1
+
+Initial Temperature 1.0
+
+Normalizing Flow Number of Flow Blocks 32 − 64 
+
+Hidden Dimension 256 
+
+8.3 Continuous Box World Environment 
+
+To evaluate our proposed vector-field reward shaping, we implemented a custom, GPU-accelerated 2D continuous navigation environment natively in JAX. The environment is designed to explicitly model localized areas of missing data and unreliable simulator dynamics, simulating the out-of-distribution (OOD) challenges inherent in offline reinforcement learning. 
+
+State and Action Spaces: The state space consists of continuous 2D coordinates bounded within 
+
+s ∈ [0 , 1] 2. The agent begins each episode at a uniformly sampled position in the bottom-left region 
+
+[0 .05 , 0.2] ⊤. The action space is a continuous 2D vector, ∆s, representing the agent’s step, which is strictly clipped to [−0.1, 0.1] 2.
+
+Base Dynamics and Reward: In the nominal (safe) regions, the environment transitions are gov-erned by the agent’s action combined with a small Gaussian background noise ( N (0 , 0.01) ). The primary task is to navigate to a goal region of radius 0.05 centered at (0 .9, 0.9) . The base dense reward is proportional to the reduction in distance to the goal (scaled by 10 .0), minus a constant step penalty of 0.01 . Successfully reaching the goal yields a +20 .0 bonus and terminates the episode. The maximum episode horizon is 60 steps. 16
