@@ -1,0 +1,522 @@
+Title: DiscoUQ: Structured Disagreement Analysis for Uncertainty Quantification in LLM Agent Ensembles
+
+URL Source: https://arxiv.org/pdf/2603.20975v1
+
+Published Time: Tue, 24 Mar 2026 01:11:03 GMT
+
+Number of Pages: 10
+
+Markdown Content:
+## DISCO UQ: Structured Disagreement Analysis for Uncertainty Quantification in LLM Agent Ensembles 
+
+Bo Jiang 
+
+Temple University 
+
+bo.jiang@temple.edu 
+
+Abstract 
+
+Multi-agent LLM systems, where multiple prompted instances of a language model in-dependently answer questions, are increasingly used for complex reasoning tasks. However, existing methods for quantifying the uncer-tainty of their collective outputs rely on shal-low voting statistics that discard the rich se-mantic information in agents’ reasoning. We introduce D ISCO UQ, a framework that ex-tracts and leverages the structure of inter-agent disagreement—both linguistic properties (evidence overlap, argument strength, diver-gence depth) and embedding geometry (clus-ter distances, dispersion, cohesion)—to pro-duce well-calibrated confidence estimates. We propose three methods of increasing complex-ity: D ISCO UQ-LLM (logistic regression on LLM-extracted structure features), D ISCO UQ-Embed (logistic regression on embedding ge-ometry), and D ISCO UQ-Learn (a neural net-work combining all features). Evaluated on four diverse benchmarks (StrategyQA, MMLU, TruthfulQA, ARC-Challenge) with a 5-agent system using Qwen3.5-27B, D ISCO UQ-LLM achieves an average AUROC of 0.802, outper-forming the best baseline (LLM Aggregator, 0.791) while being substantially better cali-brated (ECE 0.036 vs. 0.098). The learned features generalize across benchmarks with near-zero performance degradation and provide the largest improvements where they are most needed: in the ambiguous “weak disagreement” tier where simple vote counting fails. 
+
+1 Introduction 
+
+Multi-agent LLM systems, in which several role-specialized instances of a language model inde-pendently reason about the same question, have emerged as a powerful paradigm for improving both accuracy and robustness (Du et al., 2024; Liang et al., 2024; Li et al., 2024). The standard approach to aggregating their outputs is majority voting, a strategy grounded in the Condorcet jury theorem (de Condorcet, 1785) and the wisdom-of-crowds literature (Surowiecki, 2005). When agents disagree, majority voting assigns a confidence pro-portional to the vote margin—3-to-2 yields 60%, 4-to-1 yields 80%. This approach, however, treats all 3-to-2 dis-agreements identically, discarding the rich seman-tic information in agents’ reasoning. Consider two questions where three out of five agents agree: in one case, the minority agents use entirely different evidence and produce weak arguments; in the other, the minority introduces compelling new informa-tion that the majority overlooked, and all agents share the same evidence base but diverge at the final conclusion. These two scenarios carry very different implications for the reliability of the ma-jority vote, yet vote counting assigns them the same confidence. We introduce DISCO UQ (Disagreement-Structure Confidence for Uncertainty Quantifi-cation), a framework that moves beyond vote counting by analyzing the structure of inter-agent disagreement. Our key insight is that disagree-ment among LLM agents has a rich internal structure—characterized by what evidence agents share, where in their reasoning they diverge, how strong the minority’s arguments are, and how the agents’ representations cluster geometrically—that is highly informative of whether the majority vote is correct. DISCO UQ extracts two complementary families of features from multi-agent outputs: (1) Linguis-tic structure features , obtained by prompting the LLM to analyze the disagreement pattern (evidence overlap, minority argument strength, divergence depth, etc.), and (2) Embedding geometry fea-tures , computed from the cosine-distance structure of agent reasoning embeddings (cluster distance, dispersion, cohesion, etc.). These features are com-bined through simple classifiers to produce cali-brated confidence estimates. 1
+
+> arXiv:2603.20975v1 [cs.CL] 21 Mar 2026
+
+We make the following contributions: • We formalize the notion of disagreement struc-ture in multi-agent LLM systems as a set of lin-guistically and geometrically motivated features. • We propose three methods of increasing complexity—D ISCO UQ-LLM, DISCO UQ-Embed, and D ISCO UQ-Learn—that use these features for uncertainty quantification. • We conduct extensive experiments on four bench-marks with nine methods, showing that D IS -
+
+> CO
+
+UQ-LLM achieves the best average AUROC (0.802) with the best calibration (ECE 0.036), and that the features generalize across bench-marks. 
+
+2 Related Work 
+
+Uncertainty quantification in LLMs. Estimat-ing the reliability of LLM outputs is a growing area of research. Verbalized confidence (Kada-vath et al., 2022; Tian et al., 2023; Xiong et al., 2024) asks models to self-report their certainty, but LLMs are often poorly calibrated and tend toward overconfidence. Token-level methods use output probabilities (Jiang et al., 2021), but these are un-available through many API interfaces. Seman-tic uncertainty (Kuhn et al., 2023) clusters sam-pled outputs by meaning and measures the entropy, while SelfCheckGPT (Manakul et al., 2023) de-tects hallucinations by checking consistency across samples. Lin et al. (2024) and Ye et al. (2024) provide broader surveys of black-box UQ meth-ods. Our work differs by leveraging the structure 
+
+of disagreement rather than just its presence. 
+
+Multi-agent debate and aggregation. Du et al. (2024) show that multi-agent debate improves factuality, and Liang et al. (2024) demonstrate that diverse agent roles encourage broader reasoning. Cemri et al. (2025) provide a taxonomy of multi-agent system failure modes (MAST), identifying communication breakdowns and cascading errors; our work is complementary, quantifying when such failures are likely rather than categorizing them post-hoc. Kim et al. (2025) study how multi-agent architectures scale across configurations but do not address uncertainty estimation. These works focus on improving the accuracy or understanding the 
+
+failures of multi-agent systems; our focus is on quantifying the uncertainty of the consensus. 
+
+Ensemble methods and calibration. Deep en-sembles (Lakshminarayanan et al., 2017) use pre-diction disagreement for uncertainty estimation, drawing on classical ensemble theory (Dietterich, 2000). Calibration of neural networks has been widely studied (Guo et al., 2017; Naeini et al., 2015). Self-consistency (Wang et al., 2023) ap-plies ensemble-like reasoning to chain-of-thought prompting. Our work extends the ensemble paradigm by moving beyond vote counting to ana-lyze the semantic content of disagreement. 
+
+Selective prediction. Selective prediction (Geif-man and El-Yaniv, 2017; Kamath et al., 2020) al-lows a model to abstain when uncertain. Our confi-dence estimates directly enable selective prediction, and we evaluate this through coverage metrics. 
+
+3 Method 
+
+3.1 Multi-Agent System 
+
+Given a question q with ground truth y∗, we deploy 
+
+K=5 role-specialized agents {a1, . . . , a K }, each with a distinct system prompt encouraging a differ-ent reasoning style (Analytical Reasoner, Devil’s Advocate, Knowledge-Focused, Intuitive Respon-der, Systematic Verifier). All agents independently produce a reasoning chain rk and a final answer 
+
+ˆyk. The majority answer ˆy = mode (ˆ y1, . . . , ˆyK )
+
+and the vote confidence cvote = |{ k : ˆ yk = ˆ y}| /K 
+
+form the baseline. 
+
+3.2 Disagreement Structure Features 
+
+We extract two complementary feature families from the agents’ outputs. 
+
+3.2.1 Linguistic Structure Features 
+
+For non-unanimous questions ( cvote < 1), we prompt the same LLM (with temperature 0) to an-alyze the disagreement among the K agents’ rea-soning texts and produce six scores: • Evidence overlap (eoverlap ∈ [0 , 1] ): degree to which majority and minority agents cite the same facts or evidence. • Minority new information (enew ∈ [0 , 1] ): ex-tent of genuinely new arguments introduced by the minority. • Minority argument strength (estr ∈ [0 , 1] ): log-ical soundness of the minority’s reasoning, inde-pendent of correctness. • Majority confidence language (econf ∈ [0 , 1] ): certainty expressed in the majority’s language (hedging vs. assertive). • Reasoning complexity (ecplx ∈ [0 , 1] ): complex-ity of the overall reasoning across agents. 2• Divergence depth (d ∈ { early , middle , late }): the stage at which agents’ reasoning diverges— from the initial framing, during intermediate steps, or only at the final conclusion. For unanimous votes, we assign default values (eoverlap =1 , estr =0 , d=none ). The categorical di-vergence depth is one-hot encoded, yielding 9 total LLM structure features (including cvote ). 
+
+3.2.2 Embedding Geometry Features 
+
+We embed each agent’s reasoning text rk using a sentence transformer (BGE-large, 1024-dim; Xiao et al. 2024) and compute seven geometric features from the cosine-distance structure of the resulting embedding vectors: • Overall dispersion : mean pairwise cosine dis-tance across all K agents. • Majority cohesion : mean pairwise distance within the majority group. • Cluster distance : distance between majority and minority centroids. • Minority outlier degree : mean distance from minority agents to majority centroid. • Majority centrality : distance from majority cen-troid to the global centroid. • Minority cohesion : mean pairwise distance within the minority group. • PCA variance ratio : first principal component’s explained variance ratio. Together with cvote , this yields 8 embedding fea-tures. 
+
+3.3 Uncertainty Quantification Methods 
+
+We propose three methods of increasing complex-ity, all predicting P (ˆ y = y∗ | q):
+
+M1: D ISCO UQ-LLM. Logistic regression on the 9 LLM structure features (vote confidence + 5 continuous structure scores + 3 one-hot diver-gence depth indicators). This method is highly in-terpretable: each coefficient directly reveals which disagreement patterns correlate with correctness. 
+
+M2: D ISCO UQ-Embed. Logistic regression on the 8 embedding geometry features (vote confi-dence + 7 geometric measures). This method re-quires no additional LLM calls beyond the initial agent queries, since embeddings are extracted via a separate encoder. 
+
+M3: D ISCO UQ-Learn. A two-layer MLP (32 hidden units, ReLU, dropout 0.3) on all 17 fea-tures (vote confidence, mean verbalized confidence, 5 structure scores, 3 divergence depth indicators, 7 geometry features). Trained with binary cross-entropy loss, Adam optimizer (lr= 5×10 −4, weight decay= 10 −2), and early stopping (patience 15, max 100 epochs). All methods are evaluated via 5-fold stratified cross-validation. 
+
+4 Experimental Setup 
+
+4.1 Benchmarks 
+
+We evaluate on four diverse question-answering benchmarks: • StrategyQA (Geva et al., 2021): 687 yes/no questions requiring implicit multi-step reason-ing. • MMLU (Hendrycks et al., 2021): 746 multiple-choice questions from three subjects (logical fal-lacies, philosophy, professional medicine). • TruthfulQA (Lin et al., 2022): 817 multiple-choice questions designed to test resistance to common misconceptions. • ARC-Challenge (Clark et al., 2018): 500 multiple-choice science questions from the Chal-lenge set. In total, we evaluate on 2,750 questions span-ning yes/no and multiple-choice formats, cover-ing knowledge retrieval, multi-step reasoning, anti-hallucination, and science reasoning. 
+
+4.2 Models 
+
+Our primary agent model is Qwen3.5-27B (Yang et al., 2025), served via vLLM with tempera-ture 0.7 and max tokens 800 for agent responses. For embedding extraction, we use BGE-large-en-v1.5 (Xiao et al., 2024) (1024 dimensions). For the heterogeneous agent experiment (§6.4), we ad-ditionally use Llama-3.1-8B-Instruct (Grattafiori et al., 2024). 
+
+4.3 Baselines 
+
+We compare against six baselines: • B1: Vote Count. c = |majority |/K .• B2: Vote Entropy. c = 1 − H(ˆ y)/ log 2 |Y| ,where H is Shannon entropy. • B3: Verbalized Confidence. Mean self-reported confidence of majority agents (0–100 scale, via follow-up prompts). • B4: Self-Consistency Entropy. Answer entropy with normalization (Wang et al., 2023). • B5: Embed Centroid. c = 1 −
+
+dcos (majority centroid , global centroid ).3• B6: LLM Aggregator. A single LLM call that reads all five agent responses and outputs its own answer and confidence in JSON format. B6 is a strong baseline that has access to the same information as our methods but processes it through a single forward pass rather than structured feature extraction. Note that B6 selects its own answer (which may differ from the majority vote), so its correctness is judged against B6’s answer. 
+
+4.4 Evaluation Metrics 
+
+We evaluate using seven complementary met-rics: AUROC (primary metric, discrimination abil-ity), ECE (expected calibration error, 10 bins; Naeini et al. 2015), Brier score (Brier, 1950), 
+
+AUPRC (area under precision-recall curve), Cover-age@90/95 (fraction of data retained at ≥90%/95% accuracy), and AUACC (area under accuracy-coverage curve; Geifman and El-Yaniv 2017). Sta-tistical significance is assessed via paired bootstrap (1,000 resamples, α=0 .05 ). 
+
+5 Results 
+
+5.1 Main Results 
+
+Table 1 presents the AUROC and ECE for all nine methods across four benchmarks. DISCO UQ-LLM (M1) achieves the highest aver-age AUROC (0.802), significantly outperforming all baselines including B6 LLM Aggregator (0.791, 
+
+p< 0.05 on StrategyQA, MMLU, and TruthfulQA). DISCO UQ-Learn (M3) is the second-best method overall (0.790), while D ISCO UQ-Embed (M2) per-forms on par with the best non-LLM baseline B5 (0.773 vs. 0.772) but with dramatically better cali-bration (ECE 0.040 vs. 0.160). All three D ISCO UQ methods achieve substan-tially better calibration than baselines. The aver-age ECE drops from 0.084 (B1) and 0.098 (B6) to 0.036 (M1), representing a 57% and 63% reduction, respectively. This suggests that structured disagree-ment features naturally produce well-calibrated probabilities through logistic regression’s sigmoid function. B6 LLM Aggregator is noteworthy as the strongest individual-benchmark performer on ARC-Challenge (0.868), likely because it can leverage the full reasoning of all agents through a single for-ward pass. However, it is poorly calibrated on most benchmarks, confirming that raw LLM confidence scores require post-hoc adjustment. Unanimous Strong Weak        
+
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> 0.8
+> 0.9
+> 1.0
+> AUROC
+> Arc Challenge
+> Unanimous Strong Weak
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> 0.8
+> 0.9
+> 1.0
+> AUROC
+> Mmlu
+> Unanimous Strong Weak
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> 0.8
+> 0.9
+> 1.0
+> AUROC
+> Strategyqa
+> Unanimous Strong Weak
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> 0.8
+> 0.9
+> 1.0
+> AUROC
+> Truthfulqa
+> AUROC by Confidence Tier
+> VC
+> VE
+> VerbConf
+> SC
+> ECD
+> DUQ-LLM
+> DUQ-Embed DUQ-Learn
+
+Figure 1: AUROC by disagreement tier across bench-marks. D ISCO UQ methods show the largest improve-ments in the strong and weak tiers where vote counting provides the least information. 
+
+5.2 Performance by Disagreement Tier 
+
+We stratify questions into three tiers based on vote confidence: unanimous (cvote =1 .0), strong 
+
+(cvote ≥0.8), and weak (cvote <0.8). Figure 1 shows AUROC by tier and benchmark. In the weak tier, where agents are most divided and vote counting is least informative, D ISCO UQ methods provide substantial gains. On MMLU’s weak tier (252 questions), M1 achieves AUROC 0.814 vs. B1’s 0.749, a 6.5 percentage point im-provement. On TruthfulQA’s strong tier (243 ques-tions), M1 reaches AUROC 0.902, demonstrat-ing that linguistic structure features capture fine-grained disagreement signals even when agents narrowly agree. However, B6 LLM Aggregator is the strongest method in the weak tier overall (average weak-tier AUROC 0.736 vs. M1’s 0.711), because it can read the full reasoning text of all five agents and re-derive an answer—an informational advantage when disagreement is extreme. Notably, M1 ap-proaches this upper bound using only six scalar features extracted from the same text, suggesting that the structured decomposition captures most of the signal available in the raw reasoning. In the unanimous tier, where all agents agree, vote counting assigns c=1 .0 and thus AUROC =0.5. Even here, M1 can discriminate correct from in-correct unanimous answers (e.g., AUROC 0.59 on StrategyQA) by leveraging verbalized confidence and structure features from a prior analysis pass. 4StrategyQA MMLU TruthfulQA ARC-Chal. Average Method AUC ECE AUC ECE AUC ECE AUC ECE AUC ECE B1: Vote Count .647 .095 .841 .114 .798 .037 .796 .089 .770 .084 B2: Vote Entropy .647 .338 .837 .205 .798 .096 .794 .185 .769 .206 B3: Verb. Conf. .681 .205 .720 .143 .733 .122 .760 .042 .724 .128 B4: Self-Consist. .647 .338 .837 .205 .798 .096 .794 .185 .769 .206 B5: Embed Centr. .657 .244 .845 .186 .807 .155 .778 .056 .772 .160 B6: LLM Agg. .670 .186 .822 .059 .805 .102 .868 .044 .791 .098 M1: D ISCO UQ-LLM .706 .008 .870 .049 .867 .062 .766 .024 .802 .036 
+
+M2: D ISCO UQ-Embed .676 .026 .840 .056 .798 .039 .779 .039 .773 .040 M3: D ISCO UQ-Learn .689 .038 .867 .048 .871 .074 .731 .009 .790 .042 
+
+Table 1: AUROC (higher is better) and ECE (lower is better) across four benchmarks. Bold : best per column. DISCO UQ-LLM achieves the highest average AUROC (0.802) and the lowest average ECE (0.036). Bootstrap 95% CIs and significance tests are in Appendix A. VC 
+
+> VE
+> VerbConf
+> SC
+> ECD
+> LLMAgg
+> DUQ-LLM
+> DUQ-Embed
+> DUQ-Learn
+> 0.00
+> 0.05
+> 0.10
+> 0.15
+> 0.20
+> 0.25
+> 0.30
+> 0.35
+> ECE (lower is better)
+> Strategyqa
+> VC
+> VE
+> VerbConf
+> SC
+> ECD
+> LLMAgg
+> DUQ-LLM
+> DUQ-Embed
+> DUQ-Learn
+> 0.000
+> 0.025
+> 0.050
+> 0.075
+> 0.100
+> 0.125
+> 0.150
+> 0.175
+> 0.200
+> ECE (lower is better)
+> Mmlu
+> VC
+> VE
+> VerbConf
+> SC
+> ECD
+> LLMAgg
+> DUQ-LLM
+> DUQ-Embed
+> DUQ-Learn
+> 0.00
+> 0.02
+> 0.04
+> 0.06
+> 0.08
+> 0.10
+> 0.12
+> 0.14
+> 0.16
+> ECE (lower is better)
+> Truthfulqa
+> VC
+> VE
+> VerbConf
+> SC
+> ECD
+> LLMAgg
+> DUQ-LLM
+> DUQ-Embed
+> DUQ-Learn
+> 0.000
+> 0.025
+> 0.050
+> 0.075
+> 0.100
+> 0.125
+> 0.150
+> 0.175
+> ECE (lower is better)
+> Arc Challenge
+> Expected Calibration Error by Method
+
+Figure 2: Expected calibration error (ECE) across benchmarks. Lower is better. All D ISCO UQ meth-ods achieve substantially lower ECE than baselines. 
+
+5.3 Calibration Analysis 
+
+Figure 2 shows the ECE comparison across bench-marks. The D ISCO UQ methods achieve ECE ≤ 0.074 across all benchmarks, while baselines range from 0.037 to 0.338. The improvement is most dramatic on StrategyQA (M1: ECE 0.008 vs. B1: 0.095) and ARC-Challenge (M3: ECE 0.009 vs. B1: 0.089). This reflects the fact that logistic regression nat-urally produces calibrated probabilities when the features are informative, whereas heuristic base-lines have no mechanism for calibration. 0.0 0.2 0.4 0.6 0.8 1.0                 
+
+> Coverage
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> 0.8
+> 0.9
+> 1.0
+> Accuracy
+> Arc Challenge
+> 0.0 0.2 0.4 0.6 0.8 1.0
+> Coverage
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> 0.8
+> 0.9
+> 1.0
+> Accuracy
+> Mmlu
+> 0.0 0.2 0.4 0.6 0.8 1.0
+> Coverage
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> 0.8
+> 0.9
+> 1.0
+> Accuracy
+> Strategyqa
+> 0.0 0.2 0.4 0.6 0.8 1.0
+> Coverage
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> 0.8
+> 0.9
+> 1.0
+> Accuracy
+> Truthfulqa
+> Accuracy-Coverage Curves
+> VC
+> VE
+> VerbConf
+> SC
+> ECD
+> DUQ-LLM
+> DUQ-Embed DUQ-Learn
+
+Figure 3: Accuracy-coverage curves across benchmarks. DISCO UQ methods maintain higher accuracy at all coverage levels, particularly on StrategyQA and Truth-fulQA. 
+
+5.4 Selective Prediction 
+
+Figure 3 shows accuracy-coverage curves, which trace the tradeoff between abstaining on uncertain questions and maintaining high accuracy on the remaining ones. On MMLU, M1 achieves Coverage@95 of 0.656 (i.e., 65.6% of questions can be answered at ≥95% accuracy), compared to 0.404 for B1 Vote Count. On TruthfulQA, M1 achieves Coverage@95 of 0.775 vs. B1’s 0.572. These improvements demon-strate the practical value of D ISCO UQ for selective prediction: systems can serve substantially more questions while maintaining their accuracy guaran-tee. 5Str. MMLU TQA ARC Avg. 
+
+M1: DISCO UQ -LLM 
+
+Cross-BM .679 .870 .856 .801 .802 Same-BM .706 .870 .867 .766 .802 
+
+∆ -.027 +.001 -.011 +.035 -.001 
+
+M3: DISCO UQ -Learn 
+
+Cross-BM .696 .892 .870 .839 .824 Same-BM .687 .868 .876 .695 .781 
+
+∆ +.009 +.025 -.006 +.144 +.043 
+
+Table 2: Cross-benchmark generalization (AUROC). Cross-BM: trained on 3 benchmarks, tested on the held-out one. Same-BM: within-benchmark 5-fold CV. ∆ = 
+
+Cross − Same. 
+
+6 Analysis 
+
+6.1 Cross-Benchmark Generalization 
+
+A key question is whether the disagreement pat-terns learned on one set of questions transfer to others. We evaluate this with leave-one-benchmark-out training: train on three benchmarks (pooling all questions) and test on the fourth. Table 2 shows that M1’s cross-benchmark AU-ROC (0.802) is virtually identical to its within-benchmark performance (0.802, ∆= −0.001 ), indi-cating that the structure features capture domain-general patterns of disagreement informativeness. M3 actually improves under cross-benchmark train-ing ( ∆=+0 .043 ), benefiting from the larger and more diverse training set (2,000+ vs. ∼500 ques-tions per fold). All cross-benchmark AUROCs exceed 0.5, confirming that the features are univer-sally informative. 
+
+6.2 Feature Ablation 
+
+We conduct ablation studies on StrategyQA (Ta-ble 3). For M1, the single most important feature be-yond vote confidence is majority confidence lan-guage (∆= −0.023 ), which measures how cer-tain the majority sounds in their language. This aligns with the intuition that hedging language from confident-seeming majorities signals potential unre-liability. The full set of structure features provides a 6.9 percentage point improvement over vote con-fidence alone (0.706 vs. 0.637), confirming that disagreement structure is highly informative. For M2, PCA variance ratio ( ∆= −0.018 ) is the most informative geometry feature, suggesting that the degree to which agent embeddings align along a single dimension captures meaningful disagree-ment structure. 
+
+Configuration AUROC 
+
+M1: LLM Features 
+
+Full (9 features) .706 
+
+− majority confidence lang. .683 (−.023) 
+
+− reasoning complexity .699 (−.007) 
+
+− vote confidence .699 (−.007) 
+
+− divergence depth (late) .702 (−.004) 
+
+Vote conf. only .637 (−.069) 
+
+M2: Embedding Features 
+
+Full (8 features) .676 
+
+− PCA variance ratio .658 (−.018) 
+
+− minority outlier degree .674 (−.002) 
+
+Vote conf. only .637 (−.039) 
+
+Agent count (M1) 
+
+3 agents .569 4 agents .617 5 agents .637 
+
+Table 3: Ablation on StrategyQA. For M1, majority confidence language is the most important individual feature. For M2, PCA variance ratio contributes the most beyond vote confidence. 0 2000 4000 6000 8000 10000 12000 14000 16000 
+
+> Extra LLM Calls (total across all benchmarks)
+> 0.50
+> 0.55
+> 0.60
+> 0.65
+> 0.70
+> 0.75
+> 0.80
+> Average AUROC
+> VC VE
+> VerbConf
+> SC ECD
+> LLMAgg
+> DUQ-LLM
+> DUQ-Embed
+> DUQ-Learn
+> Cost vs Performance Trade-off
+
+Figure 4: Cost (extra LLM calls) vs. performance (av-erage AUROC) for all methods. M1 offers the best cost-performance tradeoff. 
+
+Agent count ablation shows a clear relationship: more agents provide richer disagreement signals (3 agents: 0.569, 5 agents: 0.637). 
+
+Classifier choice. We also compare classifiers on M1’s features: Logistic Regression (0.706), Ran-dom Forest (0.730), SVM-RBF (0.698). While Random Forest slightly outperforms LR, we use LR throughout for its interpretability and calibra-tion properties. 
+
+6.3 Cost-Performance Analysis 
+
+Figure 4 and Table 4 show the computational over-head of each method. M1 is remarkably cost-efficient: it requires only 1,624 extra LLM calls (one per non-unanimous 6Method Extra calls Tok/q AUROC                                      
+
+> B1: Vote Count 00.770 M2: D ISCO UQ-Embed 00.773 M1: D ISCO UQ-LLM 1,624 2,799 .802
+> B6: LLM Agg. 2,750 1,387 .791 B3: Verb. Conf. 13,750 623 .724 M3: D ISCO UQ-Learn 15,374 3,422 .790
+> Table 4: Computational cost vs. AUROC. M1 achieves the best AUROC with only 1,624 extra calls (structure analysis for non-unanimous questions only). M2 re-quires zero extra LLM calls.
+> StrategyQA TruthfulQA
+> Homo Hetero Homo Hetero Disagree. rate 53.0% 45.6% 54.3% 49.2% B1: Vote Count .647 .675 .798 .881 M1: D ISCO UQ-LLM .706 .687 .867 .904
+> Table 5: Homogeneous vs. heterogeneous agent teams. Heterogeneous teams show lower disagreement rates but higher B1 performance, suggesting that cross-model disagreement is more informative.
+
+question) to achieve the best AUROC of 0.802. B6 requires 2,750 calls (one per question regardless) yet achieves a lower AUROC (0.791). M2 requires 
+
+zero extra LLM calls (only embedding model in-ference) and still outperforms all baselines except B6. M3’s higher cost (15,374 calls) stems from re-quiring both structure analysis and verbalized con-fidence. Despite this, its AUROC (0.790) does not exceed M1’s, suggesting that the additional fea-tures and model complexity are not worth the cost in this regime. 
+
+6.4 Heterogeneous Agent Teams 
+
+We investigate whether mixing different LLMs (Qwen3.5-27B and Llama-3.1-8B) as agents af-fects disagreement structure. In the heterogeneous configuration, agents 0, 2, 4 use Qwen and agents 1, 3 use Llama. Counter-intuitively, heterogeneous teams show 
+
+lower disagreement rates (StrategyQA: 45.6% vs. 53.0%; TruthfulQA: 49.2% vs. 54.3%). This likely occurs because Llama-3.1-8B is weaker and tends to agree with the majority more often. However, when heterogeneous agents do disagree, the dis-agreement is more informative: B1 improves sub-stantially on TruthfulQA (0.798 → 0.881). M1 also improves on TruthfulQA (0.867 → 0.904), suggesting that cross-model disagreement carries additional signal. 
+
+7 Discussion 
+
+Why does structure help? The core finding is that disagreement has meaningful internal struc-ture that vote counting discards. When the minor-ity introduces genuinely new evidence ( enew high) and makes a strong argument ( estr high), the ma-jority vote is less reliable—even if the vote mar-gin is the same. Conversely, when agents diverge only at the final conclusion ( d=late ) but share evi-dence ( eoverlap high), the majority is typically cor-rect. These patterns are captured by simple logistic regression, explaining M1’s strong performance without complex modeling. 
+
+Calibration advantage. The dramatic calibra-tion improvement (ECE 0.036 vs. 0.084) arises because logistic regression’s sigmoid function nat-urally maps informative features to well-calibrated probabilities. In contrast, vote counting produces only K+1 discrete confidence values, making cali-bration inherently coarse. 
+
+When does DISCO UQ underperform? On ARC-Challenge, where the base accuracy is very high (96%), M1 and M3 underperform B1 and B6 in AUROC. With so few errors, there is limited room for disagreement-based features to discrimi-nate, and B6’s access to full agent reasoning gives it an advantage on this nearly-saturated benchmark. M3’s performance drop on ARC (0.731 vs. B1’s 0.796) is particularly notable: with only ∼20 in-correct unanimous questions, the MLP overfits to noise in the minority class, producing miscalibrated confidence on the test fold. M1’s simpler logistic regression is more robust to this low-error regime (0.766), though it still trails the heuristic baselines. 
+
+Practical deployment. M1 offers the best cost-performance tradeoff for production systems: it requires only one extra LLM call per ambiguous question (1,624 calls for 2,750 questions) while achieving the best AUROC and calibration. For cost-sensitive applications, M2 achieves strong cal-ibration (ECE 0.040) with zero additional LLM calls. 
+
+8 Conclusion 
+
+We introduced D ISCO UQ, a framework for uncer-tainty quantification in multi-agent LLM systems that analyzes the structure of inter-agent disagree-ment. By extracting linguistic structure features 7(evidence overlap, argument strength, divergence depth) and embedding geometry features (cluster distances, dispersion), D ISCO UQ produces confi-dence estimates that are both more discriminative and better calibrated than existing approaches. Our experiments on four benchmarks demon-strate that D ISCO UQ-LLM achieves an average AUROC of 0.802 with ECE of 0.036, outperform-ing the strongest baseline (LLM Aggregator: AU-ROC 0.791, ECE 0.098) while requiring fewer LLM calls. The features generalize across bench-marks with negligible performance loss, and pro-vide the largest improvements where they are most needed—in ambiguous cases where agents are di-vided. This work opens several directions for future re-search: extending structure analysis to open-ended generation tasks, exploring how disagreement pat-terns vary across model families, and develop-ing online calibration methods that adapt structure weights over time. 
+
+Limitations 
+
+Our study has several limitations. (1) We eval-uate only on closed-form QA tasks (yes/no and multiple-choice); extending to open-ended gener-ation would require different evaluation criteria. 
+
+(2) Our experiments use a single primary model (Qwen3.5-27B); the degree to which disagreement structure generalizes across model families is only partially explored through the heterogeneous exper-iment. (3) The LLM-extracted structure features depend on the quality of the analyzing model’s in-trospection, which may degrade for more complex reasoning chains. (4) Our methods require a la-beled dataset for training the classifier, though the cross-benchmark results suggest that labels from one domain can be effective for another. (5) We use 5 agents; scaling to larger agent pools may introduce different disagreement dynamics. 
+
+References 
+
+Glenn W. Brier. 1950. Verification of forecasts ex-pressed in terms of probability. Monthly Weather Review , 78(1):1–3. Mert Cemri, Melissa Z. Pan, Shuyi Yang, Lakshya A. Agrawal, Bhavya Chopra, Rishabh Tiwari, Kurt Keutzer, Aditya Parameswaran, Dan Klein, Kannan Ramchandran, Matei A. Zaharia, Joseph E. Gonza-lez, and Ion Stoica. 2025. Why do multi-agent LLM systems fail? In Advances in Neural Information Pro-cessing Systems, Datasets and Benchmarks Track .Peter Clark, Isaac Cowhey, Oren Etzioni, Tushar Khot, Ashish Sabharwal, Carissa Schoenick, and Oyvind Tafjord. 2018. Think you have solved question an-swering? try ARC, the AI2 reasoning challenge. 
+
+arXiv preprint arXiv:1803.05457 .Marquis de Condorcet. 1785. Essai sur l’application de l’analyse à la probabilité des décisions rendues à la pluralité des voix. Thomas G. Dietterich. 2000. Ensemble methods in ma-chine learning. Lecture Notes in Computer Science ,1857:1–15. Yilun Du, Shuang Li, Antonio Torralba, Joshua B. Tenenbaum, and Igor Mordatch. 2024. Improving factuality and reasoning in language models through multiagent debate. In Proceedings of the Interna-tional Conference on Machine Learning .Yonatan Geifman and Ran El-Yaniv. 2017. Selective classification for deep neural networks. Advances in Neural Information Processing Systems .Mor Geva, Daniel Khashabi, Elad Segal, Tushar Khot, Dan Roth, and Jonathan Berant. 2021. Did aristotle use a laptop? a question answering benchmark with implicit reasoning strategies. In Transactions of the Association for Computational Linguistics .Aaron Grattafiori, Abhimanyu Dubey, Abhinav Jauhri, and 1 others. 2024. The Llama 3 herd of models. 
+
+arXiv preprint arXiv:2407.21783 .Chuan Guo, Geoff Pleiss, Yu Sun, and Kilian Q. Wein-berger. 2017. On calibration of modern neural net-works. In Proceedings of the International Confer-ence on Machine Learning .Dan Hendrycks, Collin Burns, Steven Basart, Andy Zou, Mantas Mazeika, Dawn Song, and Jacob Stein-hardt. 2021. Measuring massive multitask language understanding. In Proceedings of the International Conference on Learning Representations .Zhengbao Jiang, Jun Araki, Haibo Ding, and Graham Neubig. 2021. How can we know when language models know? on the calibration of language models for question answering. Transactions of the Associa-tion for Computational Linguistics .Saurav Kadavath, Tom Conerly, Amanda Askell, Tom Henighan, Dawn Drain, Ethan Perez, Nicholas Schiefer, Zac Hatfield-Dodds, Nova DaSilva, Nel-son Elhage, and 1 others. 2022. Language models (mostly) know what they know. In arXiv preprint arXiv:2207.05221 .Amita Kamath, Robin Jia, and Percy Liang. 2020. Selec-tive question answering under domain shift. Proceed-ings of the 58th Annual Meeting of the Association for Computational Linguistics .Yubin Kim, Ken Gu, Chanwoo Park, Chunjong Park, Samuel Schmidgall, A. Ali Heydari, Yao Yan, Zhihan Zhang, Yuchen Zhuang, Mark Malhotra, Paul Pu 
+
+8Liang, Hae Won Park, Yuzhe Yang, Xuhai Xu, Yilun Du, Shwetak Patel, Tim Althoff, Daniel McDuff, and Xin Liu. 2025. Towards a science of scaling agent systems. arXiv preprint arXiv:2512.08296 .Lorenz Kuhn, Yarin Gal, and Sebastian Farquhar. 2023. Semantic uncertainty: Linguistic invariances for un-certainty estimation in natural language generation. In Proceedings of the International Conference on Learning Representations .Balaji Lakshminarayanan, Alexander Pritzel, and Charles Blundell. 2017. Simple and scalable pre-dictive uncertainty estimation using deep ensembles. In Advances in Neural Information Processing Sys-tems .Junyou Li, Qin Zhang, Yangbin Yu, Qiang Fu, and Deheng Ye. 2024. More agents is all you need. arXiv preprint arXiv:2402.05120 .Tian Liang, Zhiwei He, Wenxiang Jiao, Xing Wang, Yan Wang, Rui Wang, Yujiu Yang, Zhaopeng Tu, and Shuming Shi. 2024. Encouraging divergent thinking in large language models through multi-agent debate. In Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics .Stephanie Lin, Jacob Hilton, and Owain Evans. 2022. TruthfulQA: Measuring how models mimic human falsehoods. In Proceedings of the 60th Annual Meet-ing of the Association for Computational Linguistics .Zhen Lin, Shubhendu Trivedi, and Jimeng Sun. 2024. Generating with confidence: Uncertainty quantifica-tion for black-box large language models. Transac-tions on Machine Learning Research .Potsawee Manakul, Adian Liusie, and Mark J.F. Gales. 2023. SelfCheckGPT: Zero-resource black-box hal-lucination detection for generative large language models. In Proceedings of the 2023 Conference on Empirical Methods in Natural Language Processing .Mahdi Pakdaman Naeini, Gregory Cooper, and Milos Hauskrecht. 2015. Obtaining well calibrated prob-abilities using Bayesian binning into quantiles. In 
+
+Proceedings of the AAAI Conference on Artificial Intelligence .James Surowiecki. 2005. The Wisdom of Crowds . An-chor Books. Katherine Tian, Eric Mitchell, Huaxiu Yao, Christo-pher D. Manning, and Chelsea Finn. 2023. Just ask for calibration: Strategies for eliciting calibrated con-fidence scores from language models fine-tuned with human feedback. In Proceedings of the 2023 Con-ference on Empirical Methods in Natural Language Processing .Xuezhi Wang, Jason Wei, Dale Schuurmans, Quoc V. Le, Ed H. Chi, Sharan Narang, Aakanksha Chowd-hery, and Denny Zhou. 2023. Self-consistency im-proves chain of thought reasoning in language mod-els. In Proceedings of the International Conference on Learning Representations .0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7        
+
+> AUROC
+> vote_conf_only
+> + vc+evidence_overlap
+> - majority_confidence_language
+> - reasoning_complexity
+> - vote_confidence
+> - dd_middle
+> - dd_late
+> + vc+majority_confidence_language
+> - minority_new_info
+> full
+> - evidence_overlap
+> - minority_argument_strength
+> - dd_early
+> Feature Ablation: LLM
+> 0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7
+> AUROC
+> + vc+geo_overall_dispersion
+> + vc+geo_cluster_distance
+> - geo_pca_variance_ratio
+> - geo_minority_outlier_degree
+> - geo_minority_cohesion
+> - geo_cluster_distance
+> - geo_majority_cohesion
+> - geo_majority_centrality
+> full
+> - geo_overall_dispersion
+> - vote_confidence
+> Feature Ablation: EMBED
+
+Figure 5: Feature importance from ablation studies. Ma-jority confidence language and reasoning complexity are the most important LLM structure features. Shitao Xiao, Zheng Liu, Peitian Zhang, Niklas Muen-nighoff, Defu Liang, and Jian-Yun Fang. 2024. C-Pack: Packaged resources to advance general chinese embedding. Proceedings of the 47th International ACM SIGIR Conference .Miao Xiong, Zhiyuan Hu, Xinyang Lu, Yifei Li, Jie Fu, Junxian He, and Bryan Hooi. 2024. Can LLMs express their uncertainty? an empirical evaluation of confidence elicitation in LLMs. In Proceedings of the International Conference on Learning Represen-tations .An Yang, Baosong Yang, Beichen Zhang, and 1 oth-ers. 2025. Qwen3 technical report. arXiv preprint arXiv:2505.09388 .Fanghua Ye, Mingming Yang, Jianhui Pang, Longyue Wang, Derek F. Wong, Emine Yilmaz, Shuming Shi, and Zhaopeng Tu. 2024. Benchmarking LLMs via uncertainty quantification. Advances in Neural Infor-mation Processing Systems .
+
+A Full Metrics Table 
+
+Table 6 presents the complete set of seven metrics for all nine methods across four benchmarks, with bootstrap 95% confidence intervals. 
+
+B Feature Importance Across Benchmarks 
+
+Figure 5 shows the ablation-based feature impor-tance. 
+
+C Disagreement Profile Analysis 
+
+We analyze the relationship between disagreement properties and accuracy in the weak tier by bin-ning questions along two dimensions: evidence overlap (low/medium/high) and divergence depth (early/middle/late). On StrategyQA, high evidence overlap com-bined with late divergence yields 60.3% accuracy (116 questions), while low evidence overlap yields 9Bench. Method AUROC ECE Brier AUPRC Cov@90 Cov@95 AUACC 
+
+> StrategyQA
+
+B1: Vote Count .647 [.603,.693] .095 .187 .818 .016 .001 .813 B2: Vote Entropy .647 [.603,.693] .338 .319 .818 .016 .001 .813 B3: Verb. Conf. .681 [.638,.724] .205 .224 .852 .339 .009 .849 B4: Self-Consist. .647 [.603,.693] .338 .319 .818 .016 .001 .813 B5: Embed Centr. .657 [.610,.704] .244 .244 .830 .003 .003 .823 B6: LLM Agg. .670 [.622,.718] .186 .194 .852 .000 .000 .836 M1: DUQ-LLM .706 [.661,.751] .008 .164 .856 .352 .007 .848 
+
+M2: DUQ-Embed .676 [.629,.723] .026 .173 .848 .221 .016 .840 M3: DUQ-Learn .689 [.643,.735] .038 .171 .846 .058 .003 .838 MMLU B1: Vote Count .841 [.800,.879] .114 .112 .935 .834 .404 .934 B2: Vote Entropy .837 [.795,.876] .205 .153 .937 .824 .404 .934 B3: Verb. Conf. .720 [.674,.760] .143 .162 .899 .579 .283 .898 B4: Self-Consist. .837 [.795,.876] .205 .153 .937 .824 .404 .934 B5: Embed Centr. .845 [.805,.880] .186 .186 .945 .835 .524 .934 B6: LLM Agg. .822 [.763,.874] .059 .071 .970 1.00 .912 .966 
+
+M1: DUQ-LLM .870 [.830,.904] .049 .096 .950 .854 .656 .939 M2: DUQ-Embed .840 [.795,.880] .056 .104 .944 .845 .308 .932 M3: DUQ-Learn .867 [.831,.899] .048 .103 .951 .851 .653 .938 TruthfulQA B1: Vote Count .798 [.762,.835] .037 .111 .938 .823 .572 .942 B2: Vote Entropy .798 [.759,.834] .096 .128 .947 .832 .621 .938 B3: Verb. Conf. .733 [.688,.778] .122 .137 .917 .739 .031 .914 B4: Self-Consist. .798 [.759,.834] .096 .128 .947 .832 .621 .938 B5: Embed Centr. .807 [.770,.846] .155 .156 .950 .820 .535 .944 B6: LLM Agg. .805 [.765,.842] .102 .110 .953 .927 .705 .956 
+
+M1: DUQ-LLM .867 [.831,.904] .062 .095 .965 .886 .775 .955 M2: DUQ-Embed .798 [.760,.837] .039 .111 .953 .800 .501 .944 M3: DUQ-Learn .871 [.833,.909] .074 .097 .958 .869 .781 .948 ARC-Chal. B1: Vote Count .796 [.704,.878] .089 .056 .976 1.00 .982 .981 B2: Vote Entropy .794 [.703,.876] .185 .103 .976 1.00 .982 .981 B3: Verb. Conf. .760 [.642,.860] .042 .052 .971 1.00 .984 .968 B4: Self-Consist. .794 [.703,.876] .185 .103 .976 1.00 .982 .981 B5: Embed Centr. .778 [.684,.867] .056 .057 .978 1.00 .980 .980 B6: LLM Agg. .868 [.779,.947] .044 .046 .987 1.00 1.00 .990 
+
+M1: DUQ-LLM .766 [.635,.875] .024 .048 .974 1.00 .982 .972 M2: DUQ-Embed .779 [.678,.871] .039 .050 .975 1.00 .984 .973 M3: DUQ-Learn .731 [.602,.839] .009 .053 .968 1.00 .974 .966 
+
+Table 6: Complete results with bootstrap 95% CIs for AUROC. Bold : best per benchmark-metric. DUQ = DiscoUQ. 
+
+only 25.0% accuracy (8 questions). This pattern— shared evidence with late divergence as a positive signal—is consistent across benchmarks and con-firms the informational value of structured disagree-ment features. On MMLU’s weak tier, we observe a clear gradient across M1 confidence groups: low-confidence questions have 17.9% accuracy while high-confidence questions have 84.6% accuracy, demonstrating that M1’s structured features pro-duce highly discriminative confidence scores even in the most challenging subset of questions. 
+
+D Experimental Details 
+
+Agent prompts. Each of the 5 agents uses a dis-tinct system prompt emphasizing a different reason-ing style. For example, the Devil’s Advocate agent is prompted: “You are a critical thinker who always considers why the obvious answer might be wrong. Look for counterexamples, edge cases, and hidden assumptions.” The full prompts are provided in our codebase. 
+
+Structure analysis prompt. The structure anal-ysis uses a detailed prompt that presents all five agents’ reasoning and asks for a JSON object with the six structure scores. Temperature is set to 0 for reproducibility. Analysis is only performed for non-unanimous votes (59% of questions on average), reducing costs. 
+
+B6 LLM Aggregator. B6 concatenates all five agent responses (each truncated to 1,200 charac-ters) and prompts the LLM to output a JSON with its answer and confidence. A system message (“You are a JSON-only responder”) ensures reli-able parsing. Temperature is 0 and max tokens is 100. 
+
+Hyperparameters. For M3’s MLP: 2 hidden layers of 32 units, ReLU activation, dropout 0.3, Adam optimizer with lr= 5×10 −4 and weight decay= 10 −2, trained for up to 100 epochs with early stopping (patience 15), batch size 32. 
+
+Reproducibility. All random seeds are fixed at 42. Code and data will be made available upon publication. 10

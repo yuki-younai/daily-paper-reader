@@ -1,0 +1,408 @@
+Title: Mitigating Shortcut Reasoning in Language Models: A Gradient-Aware Training Approach
+
+URL Source: https://arxiv.org/pdf/2603.20899v1
+
+Published Time: Tue, 24 Mar 2026 01:04:20 GMT
+
+Number of Pages: 12
+
+Markdown Content:
+# Mitigating Shortcut Reasoning in Language Models: A Gradient-Aware Training Approach 
+
+Hongyu Cao 
+
+Arizona State University 
+
+hongyuca@asu.edu 
+
+Kunpeng Liu 
+
+Clemson University 
+
+kunpenl@clemson.edu 
+
+Dongjie Wang 
+
+University of Kansas 
+
+wangdongjie100@gmail.com 
+
+Yanjie Fu 
+
+Arizona State University 
+
+yanjiefu@asu.edu 
+
+# Abstract 
+
+Large language models exhibit strong reasoning capabilities, yet often rely on short-cuts—surface pattern matching, memorization, and keyword correlations—rather than genuine logical inference. This stems from training signal misalignment: shortcut-encouraging examples reduce loss but impair generalization when distri-butions shift or problem phrasing varies. We formulate shortcut-aware reason-ing training : identifying samples that promote shortcut updates and modifying gradient dynamics to emphasize generalizable reasoning. A key challenge is that shortcut samples efficiently reduce training loss, making them difficult to detect via conventional metrics. Existing approaches—Chain-of-Thought train-ing, Self-Consistency decoding, data filtering, and RLHF—fail because they do not modify training dynamics or detect shortcut-promoting gradients. We iden-tify a new opportunity : shortcut reasoning samples produce distinct gradient signatures, exhibiting low alignment with validation-improving gradients and high concentration on answer tokens. These signals enable detection and mit-igation through gradient structure analysis rather than data labels alone. We propose a method combining ShortcutScore for sample reweighting with gra-dient surgery techniques . Our pipeline integrates periodic validation gradient computation with empirical validation across diverse datasets. Experiments demon-strate significant improvements in robustness and reasoning reliability, enhanc-ing LLM generalization toward genuine reasoning. Code available at: https: //github.com/fuyanjie/short-cut-aware-data-centric-reasoning 
+
+# 1 Introduction 
+
+Large language models (LLMs) deployed in high-stakes reasoning tasks frequently exploit reasoning shortcuts —surface pattern matching, answer memorization, keyword-answer correlations, and pre-mature answer prediction—rather than performing genuine logical inference [ 19 , 17 ]. This shortcut reliance stems from training signal misalignment : shortcut-encouraging samples efficiently reduce training loss but fail to foster generalizable reasoning. Consequently, models accurate on training distributions fail catastrophically when numbers change, constraints vary, or problem phrasing shifts. This motivates Shortcut-Aware Reasoning Training (SART) : identifying samples that promote short-cut updates and modifying gradient dynamics to emphasize genuine reasoning signals. Solving SART is critical for reliable LLM deployment in mathematical reasoning, financial analysis, planning, and scientific discovery—domains where spurious reasoning leads to incorrect decisions or unsafe recommendations. 
+
+Preprint. 
+
+> arXiv:2603.20899v1 [cs.CL] 21 Mar 2026
+
+Two major challenges arise in solving SART: (1) detecting shortcut-promoting samples from gradient behavior, and (2) modifying training dynamics to suppress shortcut learning without degrading performance. First, shortcut samples are often correctly labeled and indistinguishable by conventional quality metrics. They produce strong gradients that efficiently reduce training loss, making loss-based detection unreliable. The detection challenge is: how can we identify training samples whose gradients improve loss but harm reasoning generalization? Second, simply down-weighting or removing detected shortcut samples is insufficient—it destabilizes training and discards useful signal. The suppression challenge is: how can we modify training dynamics to neutralize shortcut gradients while preserving generalizable reasoning signals from the same samples? Existing methods only partially address SART. Chain-of-Thought (CoT) training [ 19 , 5] encourages intermediate reasoning traces but does not modify training dynamics: models can generate plausible steps that still rely on shortcuts, and shortcut gradients remain dominant [ 3 ]. Self-Consistency Decoding [ 17 ] samples multiple reasoning paths to detect inconsistencies but operates at inference time, leaving shortcut patterns intact in model parameters. Data filtering and curriculum learning [ 2 ]attempt to remove noisy samples, but shortcut samples are typically correctly labeled, making them invisible to label-quality filters. RLHF [ 11 ] optimizes reward signals based on answer correctness rather than reasoning validity, allowing shortcuts to persist when they produce correct answers. These approaches cannot jointly address shortcut detection from gradient behavior and dynamic suppression during training—a gradient-centric perspective is required. 
+
+Our insights: gradient-aware shortcut detection and correction. We formulate SART as a gradient structure analysis problem. We find that shortcut reasoning samples produce two distinct gradient signatures: (1) low alignment with gradients that improve held-out validation performance, indicating the sample’s gradient direction does not transfer to generalizable reasoning; and (2) high answer-token concentration , where gradient norms are dominated by final answer tokens rather than intermediate reasoning tokens. These signals—gradient alignment with validation gradients and answer-gradient concentration—can be combined into a principled ShortcutScore quantifying the degree to which a sample promotes shortcut learning. Furthermore, harmful shortcut gradient directions can be neutralized via gradient surgery : projecting gradients orthogonally onto subspaces that avoid non-transferable directions, forcing the model to learn from genuine reasoning signals without discarding samples entirely. 
+
+Proposed Approach. This paper presents the first principled shortcut-aware training framework for LLM reasoning via gradient structure analysis, with two goals: (1) precise detection of shortcut-promoting samples through gradient behavior; (2) effective suppression of shortcut learning while preserving generalizable reasoning signals. For Goal 1, we develop the ShortcutScore , a composite metric combining cosine similarity between per-sample gradients and validation gradients (measuring non-transfer alignment) with the ratio of answer-token to reasoning-token gradient norms (measuring answer-dominant credit assignment). Samples with high ShortcutScore are flagged as shortcut-promoting. For Goal 2, we develop a gradient surgery technique that identifies harmful gradient directions—those misaligned with validation gradients or increasing ShortcutScore—and projects them orthogonally to suppress their influence during parameter updates. This ensures training dynamics prioritize reasoning token signals. Our framework is model-agnostic and integrates into any LLM training pipeline without architectural changes. Extensive experiments across mathematical reasoning, commonsense reasoning, and constraint-based planning benchmarks demonstrate significant improvements in robustness under distribution shift, number perturbation, and phrasing variation, validating that our approach reduces shortcut reliance and promotes genuine logical inference. Code is available at https://github. com/fuyanjie/short-cut-aware-data-centric-reasoning .
+
+# 2 Problem Statement 
+
+The SART Problem. We study supervised training of language models on reasoning tasks. Let D =
+
+{(xi, y i)}Ni=1 be a training dataset where xi is an input reasoning problem and yi is the corresponding output comprising intermediate reasoning steps and a final answer. Let V = {(xj , y j )}Mj=1 be a small held-out validation set drawn from a distribution that rewards genuine reasoning, and let θ denote the 2parameters of a language model fθ . Standard training minimizes the empirical risk: 
+
+min 
+
+> θ
+
+1
+
+N
+
+> N
+
+X
+
+> i=1
+
+ℓ(θ; xi, y i), (1) where ℓ is the token-level negative log-likelihood loss. This objective does not distinguish between samples that promote genuine logical inference and those that achieve low loss via superficial patterns—keyword-answer correlations, answer token memorization, or template matching. We call such samples shortcut reasoning samples .Formally, let gs = ∇θ ℓ(θ; s) denote the gradient of a training sample s = ( x, y ), and let 
+
+gV = ∇θ
+
+1
+
+|V| 
+
+X
+
+> v∈V
+
+ℓ(θ; v) (2) be the validation gradient, reflecting parameter updates that improve generalizable reasoning. A sample s is a shortcut reasoning sample if its gradient gs (i) exhibits low alignment with gV , indicating the update does not transfer to genuine reasoning, and (ii) concentrates gradient norm on final answer tokens rather than intermediate reasoning tokens, indicating the model learns what to answer rather than how to reason . Critically, such samples are often correctly labeled and efficiently reduce training loss, rendering them undetectable by conventional data quality or label-noise metrics. 
+
+Shortcut-Aware Reasoning Training (SART) addresses this by learning parameters θ that minimize training loss while suppressing shortcut-promoting gradient directions: 
+
+min 
+
+> θ
+
+1
+
+N
+
+> N
+
+X
+
+> i=1
+
+wi(θ) ℓ(θ; xi, y i), (3) where wi(θ) ∈ [0 , 1] downweights samples that promote shortcut reasoning, subject to gradient updates remaining aligned with gV . SART pursues two goals: (1) detect shortcut samples via gradient structure—specifically, non-transfer alignment and answer-token concentration; and (2) suppress 
+
+shortcut learning by neutralizing harmful gradient directions while preserving generalizable reasoning signals within the same samples. The framework operates purely at the level of training dynamics, requiring neither architectural modifications nor additional human annotations. 
+
+# 3 Overview 
+
+Figure 1 illustrates our proposed shortcut-aware reasoning training (SART) framework, comprising two coupled components: (1) ShortcutScore-based sample reweighting and (2) gradient surgery for shortcut suppression .
+
+Shortcut Detection via ShortcutScore. We identify shortcut reasoning samples by analyzing gradient structure rather than labels or loss values. Signal 1 measures non-transfer gradient alignment :we compute the cosine similarity between each sample’s per-sample gradient and the validation gradient gV . Samples whose gradients are misaligned with gV reduce training loss without improving generalizable reasoning—a hallmark of shortcut exploitation undetectable by label-quality or loss-based filters. Signal 2 measures answer-gradient concentration : we compare gradient norm on final answer tokens to that on intermediate reasoning tokens. Shortcut samples concentrate gradient energy on answer tokens, indicating the model learns what to predict rather than how to reason . We combine both signals into a unified ShortcutScore that quantifies each sample’s shortcut tendency and down-weights it during training. 
+
+Shortcut Suppression via Gradient Surgery. Reweighting reduces shortcut influence but does not eliminate the harmful gradient directions such samples introduce. We therefore project the gradients of high-ShortcutScore samples onto subspaces that avoid directions which increase the ShortcutScore or decrease alignment with gV , retaining useful reasoning signals while neutralizing shortcut-promoting components. Identifying the correct projection subspace is formulated as a 
+
+minimax optimization problem : the inner maximization finds the most harmful gradient direction, while the outer minimization ensures updates avoid it. We develop an efficient solver for this minimax game that performs periodic gradient surgery at each update step without significant computational overhead. Together, ShortcutScore reweighting and gradient surgery steer training dynamics toward genuine reasoning signals rather than superficial patterns. 3Figure 1: Overview of SART. (A) Gradient diagnostics: we compute per-sample gradient alignment with validation gradients and answer-token concentration. (B) ShortcutScore computation combines both signals to identify shortcut-prone samples. (C) Sample reweighting reduces their contribution. (D) Gradient surgery projects harmful components out of updates. (E) Resulting updates prioritize reasoning signals over shortcut patterns. 
+
+3.1 ShortcutScore-Based Sample Reweighting Why ShortcutScore Reweighting Matters. Standard empirical risk minimization treats all training samples equally, optimizing the average token-level loss across the dataset. This is problematic because shortcut reasoning samples—those that achieve low loss by exploiting keyword correlations, answer memorization, or surface pattern matching—generate strong gradients that efficiently reduce training loss but do not support generalizable reasoning. Critically, such samples are often correctly labeled, making them invisible to conventional data quality filters or loss-based selection criteria. The consequence is a systematic training signal misalignment: the model is rewarded for learning spurious strategies, leading to brittleness under distribution shift, number perturbation, or rephrasing. This motivates a reweighting strategy that identifies shortcut-promoting samples from their gradient behavior and reduces their influence on parameter updates—targeting the root cause rather than the symptom. 
+
+Modeling Intuition. Our central insight is that shortcut reasoning samples produce two distinguish-able gradient signatures. First, their per-sample gradients are poorly aligned with the validation gradient gV : the update direction they induce does not improve held-out reasoning performance, signaling that the learned signal does not transfer. Second, their gradient energy is disproportionately concentrated on answer tokens rather than intermediate reasoning tokens: the model learns what to predict rather than how to reason . We combine these two signals into a unified ShortcutScore 
+
+S(s) that quantifies each sample’s tendency to promote shortcut learning, and use it to down-weight shortcut-prone samples during optimization. 
+
+Step 1: Non-Transfer Gradient Alignment. This step measures how well a sample’s gradient direction transfers to generalizable reasoning. For each training sample s = ( x, y ), we compute the per-sample gradient gs = ∇θ ℓ(θ; s) and the validation gradient 
+
+gV = ∇θ
+
+1
+
+|V| 
+
+X
+
+> v∈V
+
+ℓ(θ; v). (4) The non-transfer gradient alignment is then defined as: 
+
+A(s) = cos( gs, gV ) = g⊤ 
+
+> s
+
+gV
+
+∥gs∥∥ gV ∥ . (5) 4A low value of A(s) indicates that the gradient of sample s points in a direction inconsistent with improving validation reasoning performance—a hallmark of shortcut exploitation. 
+
+Step 2: Answer-Gradient Concentration. This step measures how much of the gradient signal is driven by answer tokens versus reasoning tokens. Let Tans and Treason denote the index sets of answer tokens and reasoning tokens in the output sequence, respectively. The answer-gradient concentration is defined as: 
+
+R(s) = 
+
+P 
+
+> t∈Tans
+
+∥∇ θ ℓt∥
+
+P 
+
+> t∈Tans ∪Treason
+
+∥∇ θ ℓt∥ , (6) where ℓt is the token-level loss at position t. A high value of R(s) indicates that the model’s parameter updates are driven predominantly by answer prediction rather than by learning intermediate reasoning steps. 
+
+Step 3: ShortcutScore and Reweighted Objective. We combine the two signals into the Short-cutScore :
+
+S(s) = α · max(0 , τ A − A(s)) + β · max(0 , R (s) − τR), (7) where τA and τR are thresholds defining low alignment and high concentration, and α, β are balancing hyperparameters. Samples with high S(s) are flagged as shortcut-promoting. We assign each sample a weight w(s) = exp( −λS (s)) , so that higher shortcut tendency leads to lower training influence. The reweighted optimization objective becomes: 
+
+min 
+
+> θ
+
+1
+
+N
+
+> N
+
+X
+
+> i=1
+
+w(si) · ℓ(θ; si). (8) The model parameters are updated at each step via: 
+
+θt+1 = θt − η X
+
+> s∈batch
+
+w(s) · ∇ θ ℓ(θ; s), (9) where η is the learning rate. Validation gradients gV are recomputed periodically to keep the alignment signal up to date without excessive overhead. A detailed training procedure is provided in Appendix A.1. 
+
+3.2 Gradient Surgery for Shortcut Suppression Why Gradient Surgery Matters. Reweighting reduces the magnitude of shortcut-promoting gradi-ents but does not correct their direction . Even a down-weighted gradient can still contain a harmful directional component that nudges model parameters away from genuine reasoning. The structural reason is that shortcut samples carry two types of harmful gradient components: (i) directions that are misaligned with validation gradients, and (ii) directions dominated by answer token signals. Simply scaling these gradients down preserves both failure modes. We therefore propose gradient surgery [ 20 ]: an operation that actively projects shortcut gradients onto subspaces that avoid harmful directions, ensuring that only genuine reasoning signals drive parameter updates. 
+
+Modeling Intuition. The intuition is analogous to the flat region concept in continual learning [ 15 ]: we seek parameter update directions that are simultaneously beneficial for reasoning generalization and minimally disruptive to the reasoning signals already learned. For a shortcut sample s, its gradient 
+
+gs can be decomposed into a harmful component (aligned with non-transferable or answer-dominant directions) and a residual component (aligned with genuine reasoning signals). Gradient surgery removes the harmful component and retains the residual, so that the update from sample s contributes constructively to reasoning learning. 
+
+Step 1: Projection for Non-Transfer Gradient Alignment. For samples with low alignment 
+
+A(s) < τ A, we remove the gradient component that lies in the direction of gV , retaining only the orthogonal complement. Formally: 
+
+g′ 
+
+> s
+
+= gs − γ g⊤ 
+
+> s
+
+gV
+
+∥gV ∥2 gV , (10) where γ ∈ [0 , 1] controls the strength of the projection. Setting γ = 1 fully removes the non-transferable component. The resulting g′ 
+
+> s
+
+is orthogonal to gV , ensuring the update does not reinforce non-generalizable directions. 5Step 2: Suppression for Answer-Gradient Concentration. For samples with high concentration 
+
+R(s) > τ R, we decompose gs into answer-token gradients gans  
+
+> s
+
+and reasoning-token gradients 
+
+greason  
+
+> s
+
+, and suppress the answer-dominant component: 
+
+g′′  
+
+> s
+
+= (1 − ρ) gans  
+
+> s
+
++ greason  
+
+> s
+
+, (11) where ρ ∈ [0 , 1] is the suppression coefficient. Setting ρ = 1 entirely removes the answer token gradient contribution, forcing the model to update based solely on intermediate reasoning signals. 
+
+Minimax Formulation for Optimal Surgery. A key challenge is determining the optimal surgery direction and strength automatically, rather than relying on fixed thresholds. We find that this challenge can be reformulated as a minimax game : the inner maximization identifies the most harmful gradient direction ξ within a neighborhood of the current parameters, and the outer minimization finds parameter updates that remain robust under this worst-case perturbation: 
+
+min  
+
+> θ
+
+max 
+
+> ξ
+
+X
+
+> s∈D
+
+w(s) · ℓ(θ + ξ; s)s.t. ξ ∈ M ,
+
+(12) where M is the subspace spanned by previous parameter directions, constraining perturbations to directions relevant to shortcut signals. This formulation automatically identifies both the harmful direction and the appropriate surgery strength, without requiring manual threshold tuning. 
+
+Solving the Optimization. Based on gradient projection [ 13 ], the adversarial perturbation ξ is updated via: 
+
+ξ ← ξ + η1 proj M ∇θ
+
+X
+
+> s∈D
+
+w(s) · ℓ(θ + ξ; s)
+
+!
+
+. (13) The model parameters θ are then updated along the direction orthogonal to M, ensuring minimal disruption to previously learned reasoning knowledge: 
+
+θ ← θ − η2 (I − proj M) ∇θ
+
+X
+
+> s∈D
+
+w(s) · ℓ(θ + ξ; s)
+
+!
+
+, (14) where I is the identity matrix and η2 is the step size. The complete training pipeline integrates ShortcutScore computation, sample reweighting, and gradient surgery at each update step, with periodic recomputation of gV . A full algorithmic description is provided in Appendix A.2. 
+
+# 4 Experiments 
+
+We evaluate SART on three synthetic reasoning benchmarks with controlled shortcut injection, comparing against eleven baselines spanning data-centric, loss-based, distributionally robust, and invariant learning approaches. 
+
+4.1 Experimental Setup Model and Training. We use a GPT-style transformer (4 layers, dmodel = 256 , 8 attention heads, 
+
+dff = 1024 , ≈3.2M parameters) trained for 40 epochs with AdamW [ 9] (learning rate 1×10 −3,weight decay 10 −4, batch size 64, cosine annealing). SART hyperparameters ( α=β=1 .0, τA=0 .3,
+
+τR=0 .5, λ=3 .0, γ=1 .0, ρ=0 .5) are selected via grid search over 80 configurations (§4.4). 
+
+Datasets. We construct three synthetic datasets with controlled shortcut injection, each containing 2,000 training / 500 validation / 1,000 test samples. Training data follows the shortcut rule for 70% of samples and the true rule for 30%; validation and test sets exclusively follow the true rule. The test set is split evenly into clean (shortcut consistent with correct answer) and perturbed (shortcut contradicts the correct answer) subsets. • Math-Arithmetic : Binary classification of a + b ≥ 10 . Shortcut: first operand a ≥ 5; true rule: evaluate the full sum. • Financial-Analysis : Regulatory compliance from four financial features. Shortcut: revenue ≥ 5;true rule: margin ≥ 5 and debt < 5 (multi-feature conjunction). • Causal-Reasoning : Causal direction inference from observed variables with a confounder. Short-cut: correlation ≥ 5; true rule: x ≥ 5 and z < 3 (requires confounder adjustment). 6Table 1: Main results averaged across three synthetic benchmarks. Bold : best; underline : second best. †Requires group annotations. ‡Requires multiple environments.                                                         
+
+> Method Accuracy (↑)Robustness (↑)Reasoning (↑)SC Det. F1 (↑)Standard Fine-Tuning (SFT) 68.8 19.4 55.9 –Self-Consistency 69.1 23.3 55.9 –Data Filtering 74.7 54.6 64.7 0.69 JTT 67.9 19.0 54.9 –Focal Loss 68.2 18.2 55.4 –Group DRO †73.5 36.0 61.5 –IRM ‡73.3 34.4 61.5 –V-REx ‡72.1 34.9 60.6 –Fishr ‡68.1 16.7 56.3 –LfF 69.0 19.4 56.3 –Influence Filtering 76.0 47.7 68.4 –
+> SART (Ours) 92.5 87.9 85.5 0.64
+
+Baselines. We compare against eleven methods: (1) SFT : vanilla cross-entropy; (2) Self-Consistency [18 ]: majority vote over 5 samples ( T =0 .8); (3) Data Filtering : remove high-confidence samples ( > 0.90 ) after warmup; (4) JTT [8]: upweight error-prone samples; (5) Focal Loss [7]: (1 −pt)γ weighting; (6) Group DRO † [14 ]: worst-group optimization with known shortcut annotations; (7) IRM ‡ [ 1]: invariance penalty across environments; (8) V-REx ‡ [6 ]: variance of risks across environments; (9) Fishr ‡ [ 12 ]: gradient variance equalization; (10) LfF [10 ]: learning from failure; (11) Influence Filtering [ 4 ]: remove harmful samples via influence functions. Here †
+
+requires group annotations and ‡ requires multiple environments. 
+
+Metrics. Clean accuracy, perturbed accuracy ( robustness ), reasoning consistency, and shortcut detection F1. 
+
+4.2 Main Results 
+
+Table 1 presents the aggregate results. SART achieves 92.5% accuracy and 87.9% robustness, surpassing the strongest baseline (Influence Filtering: 76.0%/47.7%) by +16.5 pp accuracy and 
+
++40.2 pp robustness. Compared to standard fine-tuning, SART improves accuracy by +23.7 pp and robustness by +68.5 pp. Crucially, SART achieves this without requiring group annotations (unlike Group DRO) or multiple training environments (unlike IRM, V-REx, and Fishr). We observe a clear four-tier stratification among methods: 
+
+Tier 1 (67–69% acc, 16–23% rob): SFT, JTT, Focal Loss, Fishr, LfF, Self-Consistency, and Meta-Reweighting. These methods—spanning loss modification, inference-time voting, and gradient variance equalization—fail to meaningfully address systematic shortcuts, performing near the SFT baseline. 
+
+Tier 2 (72–74% acc, 34–36% rob): Group DRO, IRM, and V-REx. Distributional robustness and invariance-based approaches provide moderate gains but remain fundamentally limited: DRO requires explicit group annotations, while IRM/V-REx depend on environment partitions. 
+
+Tier 3 (74–76% acc, 48–55% rob): Data Filtering and Influence Filtering achieve higher robustness through sample removal but at the cost of discarding training data and exhibiting high per-task variance (see Table 2). 
+
+Tier 4 : SART (92.5% acc, 87.9% rob). By jointly performing gradient-level shortcut detection and correction, SART achieves a qualitative leap—exceeding the best baseline by +16.5 pp accuracy and +40.2 pp robustness. Per-dataset results (Table 2) reveal three important findings: 
+
+(1) SART achieves the best accuracy, robustness, and reasoning on all three datasets. On Math-Arithmetic, SART reaches near-perfect performance (98.0%/95.8%), a +47.8 pp robustness gain over the next-best baseline (Influence Filtering: 50.4%). On Financial-Analysis, SART achieves 7Table 2: Per-dataset results (%). Bold : best; underline: second best per dataset.                                                              
+
+> Dataset Method Clean Acc. (↑)Robustness (↑)Reasoning (↑)MATH
+> SFT 77.6 3.2 77.6 Data Filtering 82.6 26.6 82.6 Group DRO / V-REx 86.8 48.0 86.8 IRM 85.4 44.2 85.4 Influence Filtering 81.4 50.4 81.4
+> SART (Ours) 98.0 95.8 98.0
+> FINANCIAL
+> SFT 66.4 28.6 46.8 Data Filtering 72.6 68.4 60.8 Group DRO 68.0 31.2 48.8 IRM 69.6 30.8 51.6 Influence Filtering 63.4 23.6 59.6
+> SART (Ours) 89.4 78.8 87.4
+> CAUSAL
+> SFT 62.4 26.4 43.4 Data Filtering 69.0 68.8 50.8 Group DRO 65.8 28.8 48.8 IRM 65.0 28.2 47.4 Influence Filtering 83.2 69.2 64.2
+> SART (Ours) 90.2 89.0 71.2
+
+Table 3: Ablation of SART components (averages across three datasets). Grad. Align.: cosine similarity between training and validation gradients (closer to 0 = better alignment with true task objective).                        
+
+> Configuration Accuracy (↑)Robustness (↑)Grad. Align. (↑)SC Det. F1
+> SFT (Baseline) 68.8 19.4 −0.08 –+ Reweighting Only 75.2 40.1 −0.06 0.85 + Gradient Surgery Only 73.5 40.5 −0.14 0.82
+> SART (Full) 92.5 87.9 −0.03 0.64
+
+89.4% accuracy and 87.4% reasoning consistency—a +19.8 pp accuracy gap over IRM and a +26.6 pp reasoning gap over Data Filtering. On Causal-Reasoning, SART achieves 90.2%/89.0%, exceeding Influence Filtering by +7.0 pp accuracy and +19.8 pp robustness. 
+
+(2) Data-removal baselines exhibit extreme cross-task variance. Influence Filtering ranks second on Causal (83.2%/69.2%) but collapses on Financial (63.4%/23.6%)—performing worse than SFT 
+
+on robustness. Data Filtering achieves high Financial robustness (68.4%) but at the cost of severe accuracy drops (e.g., only 82.6% on Math vs. SART’s 98.0%). These methods lack the discriminative power to identify which samples are harmful for complex multi-feature reasoning. 
+
+(3) SART’s advantage scales with task complexity. The accuracy gap between SART and the best baseline increases from Math (+11.2 pp) to Financial (+16.8 pp) to Causal (acc: +7.0 pp, rob: +19.8 pp), demonstrating that gradient-based correction is particularly powerful for multi-feature shortcuts that surface-level filtering cannot detect. 
+
+4.3 Ablation Study 
+
+Table 3 isolates each component’s contribution. Both mechanisms individually improve over SFT: • Reweighting Only : +6.4 pp accuracy, +20.7 pp robustness. By downweighting shortcut-reliant samples, reweighting shifts the effective training distribution toward the true rule, achieving the highest standalone detection F1 (0.85). • Gradient Surgery Only : +4.7 pp accuracy, +21.1 pp robustness. By projecting out shortcut-aligned gradient components, surgery directly corrects the optimization trajectory. 8Table 4: Hyperparameter sensitivity analysis via grid search over 80 configurations ( λ×γ×ρ). Combined = 0 .4×Acc + 0 .6×Rob.                                                  
+
+> Parameter Value Accuracy (↑)Robustness (↑)Combined (↑)
+> λ(reweighting) 1.0 75.8 44.0 56.7 1.5 81.1 52.9 64.2 2.0 86.9 69.6 76.5 3.0 87.6 74.2 79.6
+> 5.0 86.4 73.6 78.7
+> γ(gradient surgery) 0.3 84.0 68.4 74.7 0.5 84.2 70.2 75.8 0.8 82.2 56.4 66.8 1.0 87.6 74.2 79.6
+> ρ(answer suppression) 0.1 86.4 73.6 78.7 0.3 88.0 68.0 76.0 0.5 87.6 74.2 79.6
+> 0.7 86.9 69.6 76.5
+
+Critically, the full combination exhibits dramatic super-additive gains . On robustness, the individual improvements sum to 20 .7 + 21 .1 = 41 .8 pp, yet the full method achieves +68.5 pp —a +26.7 pp synergy bonus (64% more than the sum of parts). Similarly, accuracy gains sum to 11.1 pp individually but reach 23.7 pp combined (+12.6 pp synergy). This exceptional synergy arises because reweighting and gradient surgery operate on complementary axes : reweighting adjusts how much each sample contributes to the loss, while surgery adjusts in which direction each gradient update proceeds. When combined, reweighted gradients are more amenable to precise surgical correction, and surgery amplifies the effect of reweighting by eliminating residual shortcut directions. The full method achieves near-zero gradient misalignment ( −0.03 ), a 2.7× improvement over SFT (−0.08 ). Removing either component causes catastrophic degradation: removing Reweighting drops accuracy by −19.0 pp and robustness by −47.4 pp; removing Gradient Surgery drops accuracy by 
+
+−17.3 pp and robustness by −47.7 pp. Both components are essential and contribute approximately equally. 
+
+4.4 Hyperparameter Sensitivity 
+
+We conduct an exhaustive grid search over 80 configurations (Table 4), revealing three insights into SART’s operating regime: 
+
+(1) Reweighting strength λ is the most influential parameter. Performance increases monotoni-cally from λ=1 .0 to λ=3 .0 (+11.8 pp accuracy, +30.2 pp robustness), plateauing thereafter ( λ=5 .0
+
+yields comparable results). This defines a “sweet spot” where shortcut samples are sufficiently downweighted without catastrophically distorting the training distribution. 
+
+(2) Full-strength gradient surgery ( γ=1 .0) is optimal. Performance at γ=0 .8 (56.4% robustness) drops substantially compared to both γ=0 .5 (70.2%) and γ=1 .0 (74.2%). This non-monotonicity suggests a phase transition: partial projection at intermediate strengths creates unstable gradient dynamics, while complete projection ( γ=1 .0) cleanly eliminates the entire shortcut subspace. 
+
+(3) Moderate answer suppression ( ρ=0 .5) balances the accuracy–robustness trade-off. Both extreme values underperform: too-low ρ (0.1) retains shortcut-correlated answer signals, while too-high ρ (0.7) discards useful reasoning information from the answer pathway. 
+
+4.5 ShortcutScore Validation 
+
+SHORTCUT SCORE achieves an average detection F1 of 0.64 across three datasets, while the closely related Data Filtering approach achieves F1 of 0.69. Although comparable in detection, SART’s advantage lies not in detection alone but in its corrective mechanism : rather than discarding detected shortcut samples entirely (losing valuable training signal), SART simultaneously downweights their contribution and surgically corrects their gradient directions. This “detect-and-correct” paradigm 9Figure 2: Empirical validation of S HORTCUT SCORE . (a) Score vs. true shortcut rate (Pearson 
+
+r = 0 .67 ), showing monotonic correlation. (b) Gradient alignment distribution: shortcut samples (red) skew negative; non-shortcut samples (green) cluster near zero. (c) Exponential reweighting curve with λ = 3 .0.preserves training data while neutralizing shortcuts, explaining SART’s +17.8 pp accuracy advantage over Data Filtering despite similar detection capability. Figure 2(a) confirms a positive monotonic correlation between S(s) and the true shortcut rate (Pearson 
+
+r=0 .67 , p< 0.001 ). The gradient alignment distribution (Figure 2b) reveals clear separation: shortcut samples produce gradients that skew toward negative alignment with the validation objective, while non-shortcut samples cluster symmetrically near zero. 
+
+4.6 Computational Cost 
+
+SART completes in approximately 60 seconds per dataset on Apple M-series hardware (3.2M-parameter model, 2,000 training samples) and under 3 minutes per dataset on NVIDIA H100 NVL GPUs at server scale. The overhead relative to SFT is approximately 2.5×, arising from per-sample gradient computation during ShortcutScore evaluation and gradient projection during surgery. Validation gradients are recomputed every k=5 steps rather than per-step, keeping overhead manageable. 
+
+# 5 Related Work 
+
+Language Model Training. Prevailing training paradigms—supervised learning, reinforcement learning from human feedback, and hybrid methods [ 16 ]—optimize primarily for answer correctness, which structurally favors shortcuts such as surface pattern matching and answer memorization that efficiently reduce training loss. These shortcuts yield brittle models that fail under distribution shift, relying on spurious correlations rather than causal mechanisms. Our approach targets this failure at its source by modifying training dynamics rather than the objective or architecture. 
+
+Reasoning in AI. Chain-of-Thought (CoT) training and Self-Consistency Decoding [ 16 ] improve reasoning trace generation and output consistency at inference time, but leave training dynamics— where shortcut biases are encoded—unchanged. CoT can produce plausible reasoning steps that still exploit shortcuts, and Self-Consistency detects inconsistencies without correcting the learned parameters that cause them. Effective shortcut suppression requires intervening during training rather than at inference. 
+
+Gradient-Based Optimization. Standard gradient-based optimizers [ 16 ] apply updates uniformly across samples, with no mechanism to distinguish gradients that promote genuine reasoning from those that reinforce spurious patterns. Shortcut samples often generate strong gradients that dominate the learning signal while reducing training loss efficiently, a failure mode invisible to standard optimization. We exploit the observation that shortcut samples exhibit distinct gradient signatures— poor alignment with validation gradients and high concentration on answer tokens—to enable targeted correction. 
+
+Closest Prior Work. Prior work on gradient modification [ 16 ] and training signal adjustment for reasoning validity [ 16 ] addresses robustness in general but lacks a principled mechanism to identify 10 which gradients arise from shortcut reasoning specifically. Without a way to quantify sample-level shortcut tendency from gradient behavior, these methods cannot perform targeted suppression and leave core shortcut learning mechanisms intact. By unifying gradient alignment and answer-gradient concentration into a S HORTCUT SCORE , SART enables precise shortcut identification and combines reweighting with gradient surgery for a more principled intervention than prior approaches. 
+
+# 6 Conclusion 
+
+Recent advancements in large language models (LLMs) have showcased impressive reasoning capabilities, yet these models often rely on reasoning shortcuts rather than genuine logical inference. This reliance, a critical issue within the field, stems from training signal misalignment where shortcuts reduce training loss but hinder generalizable reasoning. Existing approaches fail to adequately address this by either not modifying training dynamics (e.g., Self-Consistency Decoding) or being unable to detect shortcut-promoting gradients (e.g., Data Filtering). This leads to models that appear to reason correctly but fail when distributions shift, resulting in degraded reliability in mission-critical systems and significant financial or safety risks. This study addresses these limitations by developing novel techniques: the ShortcutScore for reweighting training samples and gradient surgery to modify gradient directions. Our technical contributions introduce ShortcutScore-based reweighting and gradient modification strategies that directly improve reasoning robustness and model reliability. We observe that shortcut reasoning samples produce distinct gradient signatures—low alignment with validation gradients and high concentration on answer tokens. This structural insight allows us to quantify shortcut propensity and intervene during training. The experimental results demonstrate that our approach significantly improves reasoning robustness across diverse tasks, substantiating the effectiveness of our methods. Theoretically, this work advances the understanding of gradient alignment and reasoning signal correction, offering new insights into LLM training dynamics. Practically, the implications are profound for applications in domains such as finance and scientific discovery, where enhanced model robustness can lead to more reliable decision-making. Future research could explore additional datasets and further refine the methodology to enhance its applicability, building upon this foundational framework for addressing shortcut reasoning in LLMs and paving the way for more reliable and robust reasoning models. 
+
+# Acknowledgments and Disclosure of Funding 
+
+This work was supported by the National Science Foundation under Grant No. 7813331468. 
+
+# References 
+
+[1] Martin Arjovsky, Léon Bottou, Ishaan Gulrajani, and David Lopez-Paz. Invariant risk mini-mization, 2020. [2] Yoshua Bengio, Jérôme Louradour, Ronan Collobert, and Jason Weston. Curriculum learning. In Proceedings of the 26th Annual International Conference on Machine Learning , pages 41–48, 2009. [3] Namgyu Ho, Laura Schmid, and Se-Young Yun. Large language models are reasoning teachers. 
+
+arXiv preprint arXiv:2212.10071 , 2022. [4] Pang Wei Koh and Percy Liang. Understanding black-box predictions via influence functions, 2020. [5] Takeshi Kojima, Shixiang Shane Gu, Machel Reid, Yutaka Matsuo, and Yusuke Iwasawa. Large language models are zero-shot reasoners. Advances in Neural Information Processing Systems ,35:22199–22213, 2022. [6] David Krueger, Ethan Caballero, Joern-Henrik Jacobsen, Amy Zhang, Jonathan Binas, Dinghuai Zhang, Remi Le Priol, and Aaron Courville. Out-of-distribution generalization via risk extrapo-lation (rex), 2021. 11 [7] Tsung-Yi Lin, Priya Goyal, Ross Girshick, Kaiming He, and Piotr Dollár. Focal loss for dense object detection, 2018. [8] Evan Zheran Liu, Behzad Haghgoo, Annie S. Chen, Aditi Raghunathan, Pang Wei Koh, Shiori Sagawa, Percy Liang, and Chelsea Finn. Just train twice: Improving group robustness without training group information, 2021. [9] Ilya Loshchilov and Frank Hutter. Decoupled weight decay regularization. In International Conference on Learning Representations , 2019. [10] Junhyun Nam, Hyuntak Cha, Sungsoo Ahn, Jaeho Lee, and Jinwoo Shin. Learning from failure: Training debiased classifier from biased classifier, 2020. [11] Long Ouyang, Jeffrey Wu, Xu Jiang, Diogo Almeida, Carroll Wainwright, Pamela Mishkin, Chong Zhang, Sandhini Agarwal, Katarina Slama, Alex Ray, et al. Training language models to follow instructions with human feedback. Advances in Neural Information Processing Systems ,35:27730–27744, 2022. [12] Alexandre Rame, Corentin Dancette, and Matthieu Cord. Fishr: Invariant gradient variances for out-of-distribution generalization, 2022. [13] J. B. Rosen. The gradient projection method for nonlinear programming. part i. linear constraints. 
+
+Journal of the Society for Industrial and Applied Mathematics , 8(1):181–217, 1960. [14] Shiori Sagawa, Pang Wei Koh, Tatsunori B. Hashimoto, and Percy Liang. Distributionally robust neural networks for group shifts: On the importance of regularization for worst-case generalization, 2020. [15] John Schulman, Sergey Levine, Pieter Abbeel, Michael Jordan, and Philipp Moritz. Trust region policy optimization. In International Conference on Machine Learning , pages 1889–1897. PMLR, 2015. [16] Jiankai Sun, Chuanyang Zheng, Enze Xie, Zhengying Liu, Ruihang Chu, Jianing Qiu, Jiaqi Xu, Mingyu Ding, Hongyang Li, Mengzhe Geng, et al. A survey of reasoning with foundation models. arXiv preprint arXiv:2312.11562 , 2023. [17] Xuezhi Wang, Jason Wei, Dale Schuurmans, Quoc V Le, Ed H Chi, Sharan Narang, Aakanksha Chowdhery, and Denny Zhou. Self-consistency improves chain of thought reasoning in language models. arXiv preprint arXiv:2203.11171 , 2022. [18] Xuezhi Wang, Jason Wei, Dale Schuurmans, Quoc V Le, Ed H Chi, Sharan Narang, Aakanksha Chowdhery, and Denny Zhou. Self-consistency improves chain of thought reasoning in language models. arXiv preprint arXiv:2203.11171 , 2023. [19] Jason Wei, Xuezhi Wang, Dale Schuurmans, Maarten Bosma, Brian Ichter, Fei Xia, Ed Chi, Quoc V Le, and Denny Zhou. Chain-of-thought prompting elicits reasoning in large language models. Advances in Neural Information Processing Systems , 35:24824–24837, 2022. [20] Tianhe Yu, Saurabh Kumar, Abhishek Gupta, Sergey Levine, Karol Hausman, and Chelsea Finn. Gradient surgery for multi-task learning. In Advances in Neural Information Processing Systems , volume 33, pages 5824–5836, 2020. 12

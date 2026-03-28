@@ -1,0 +1,389 @@
+Title: Prompt replay: speeding up grpo with on-policy reuse of high-signal prompts
+
+URL Source: https://arxiv.org/pdf/2603.21177v1
+
+Published Time: Tue, 24 Mar 2026 01:31:23 GMT
+
+Number of Pages: 17
+
+Markdown Content:
+# PROMPT REPLAY : SPEEDING UP GRPO WITH ON-POLICY REUSE OF HIGH -S IGNAL PROMPTS 
+
+Andrei Baroian ∗ Rutger Berger 
+
+Leiden Institute of Advanced Computer Science Leiden University 
+
+# ABSTRACT 
+
+Reinforcement learning with verifiable rewards (RLVR) plays a crucial role in expanding the capacities of LLM reasoning, but GRPO-style training is dominated by expensive rollouts and wastes compute on unusable prompts. We propose 
+
+Prompt Replay , an overhead-free online data selection method for GRPO that reuses prompts only (not trajectories), to preserve on-policy optimization. After each step, we insert prompts with medium difficulty into a buffer, and prioritize prompts closer to a pass rate of 0.5 (half answers correct, half wrong) to maximize the advantage, thus learning signal. Training batches are formed by mixing reused prompts with fresh samples, with cooldown steps and max reuse times controlling aggressiveness vs risk of overfitting. Across multiple model families (Llama-3.2-3B, Qwen3-8B) and training datasets (Dolci, Polaris), evaluated using average accuracy on six standard math benchmarks, Prompt Replay reduces zero-variance prompts, increases mean absolute advantage and shows faster initial accuracy gains. Yet, it plateaus and converges with the baseline, as too aggressive configuration was used. The method is most efficient when the rollouts are the primary bottleneck and the dataset is difficult for the model. We additionally observe that Qwen2.5-Math can exhibit spurious-reward effects that invalidates ablations, raising a warning signal for using it as a sole testbed for GRPO method research. 
+
+# 1 INTRODUCTION 
+
+Recently, Reinforcement Learning (RL) has emerged as a central technique within the fine-tuning paradigm of Large Language Models (LLMs). Various state of the art open-source methods, such as DeepSeek R1 (Guo et al., 2025), have shown to push the LLM’s reasoning capacities by incorporating RL with Verifiable Rewards (RLVR) inside post-training recipes (Olmo et al., 2025; Team et al., 2025; An et al.; Lambert et al., 2025). RLVR essentially uses binary rewards to grade correctness and has proven to be extremely powerful, enabling LLMs to achieve human-level capacities with regard to math olympiad questions (Liu et al., 2025a; Luo et al., 2025). Algorithmic implementations in RLVR moved from a PPO -style actor-critic version towards GRPO 
+
+(Shao et al., 2024), Dr. GRPO (Liu et al., 2025b) and DAPO (Yu et al., 2025), as to avoid the expensive critic model. However, with advantage calculated based on a group of multiple rollouts, rollouts are known to become an important bottleneck in the training stage, being responsible for the majority of computational costs (Olmo et al., 2025). Moreover, a lot of compute is wasted on prompts with zero variance (where answers are all correct or all wrong), which cannot be used for training. As a consequence, two directions emerged in the literature to optimize the expensive RL loop for LLMs: (i) predicting if a prompt has zero variance without performing all the rollouts, (ii) increasing sample efficiency by using prompts with higher learning signal. Some works propose to store high learnable off-policy trajectories inside a replay buffer (Zhan et al., 2025; Zhang et al., 2025c). By replaying prompts with corresponding rollouts, the authors boost sample efficiency; however, they inherently introduce noise by including off-policy reasoning behaviours. 
+
+> ∗
+
+Correspondence: m.a.baroian@umail.leidenuniv.nl 
+
+1
+
+> arXiv:2603.21177v1 [cs.LG] 22 Mar 2026
+
+Figure 1: Prompt Replay visualization. In each step, we insert prompts with high learnability into a buffer. Training batches are formed by mixing reused prompts with fresh samples, with cooldown steps and max reuse times are controlling aggressiveness vs risk of overfitting. Meanwhile, static data selection methods, such as LIMR (Li et al., 2025) or s1 (Muennighoff et al., 2025), filter datasets offline , based on predefined quality scores, to carefully select only the most useful questions. However, as the policy evolves, static metrics do not capture the dynamic nature of a model’s capabilities. Consequently, much work has been put into Online Curriculum Learning for RLVR (Shi et al., 2025; Zheng et al., 2025; Zeng et al., 2025), where prompts are filtered based on current performance. Despite these advances, a significant challenge remains. Most online methods suffer from what can be called a “measurement tax": to determine if a prompt is suitable, they often rely on redundant rollouts (rejection sampling) (Bae et al., 2025; Zhang et al., 2025b), external models (Gao et al., 2025), or rather complicated (and therefore not very attractive) ways to estimate usefulness (Zeng et al., 2025). Recently, GRESO (Zheng et al., 2025) proposed a method to overcome this measurement tax, resulting in far fewer roll-outs required to achieve convergence. However, the authors leave sorting prompts on learnability for future research, and it relies on epoch-level statistics; one must wait for a full training epoch to update the data distribution. Moreover, none of these works combine sorting techniques (train from high to low utility) with predicting zero variance prompts. In this work, we propose Prompt Replay , a dynamic data selection framework that addresses this gap in research. Following the intuition built in GRESO (Zheng et al., 2025), we argue that an ideal selective rollout algorithm must obey two principles: 1) Online data selection , and 2) Zero additional overhead for difficulty estimation. Prompt Replay stores prompts only (without their responses) with high learnability in a buffer, and they are reused later in the training, balancing them with fresh prompts (global data). Inside the replay buffer, we sort prompts based on learnability, closer to a pass rate of 0.5 (half the answers were correct, half wrong). With this method, we significantly reduce the required number of rollouts and simultaneously increase the mean advantage per rollout, which leads to an increase in efficiency. Our experiments cover different models (Qwen (Yang et al., 2025), Llama (Meta, 2024)), different sizes (1.5B, 3B, 8B), and different math datasets (Dolci RL-Zero Math (Olmo et al., 2025), Polaris 53k (An et al., 2025)). We evaluate using the averaged accuracy on 6 common math benchmarks, and use the recently released OLMo-RL (Olmo et al., 2025) algorithm as a strong baseline. Results show Prompt Replay dramatically reduces the number of zero-variance prompts, achieves a higher absolute mean advantage, and achieves high accuracy faster than the baseline, yet, it eventually plateaus and converges with the baseline. We test different cooldown steps on Qwen 2.5 Math 1.5B (Yang et al., 2024) and find out that applying our method on this model is unreliable, as it does not generalize to other model families. Our main contributions can be summarized as follows: • Prompt Replay: an Overhead-Free Online Filtering method. We propose a data selection framework that uses a Replay Buffer to prioritize prompts with the highest theoretical learning signal. It significantly reduces the required number of rollouts and simultaneously increases the mean advantage, with zero additional overhead. 2• Robust Generalization and Efficiency. We validate our method across multiple training datasets and three distinct models and a diverse set of benchmarks. We highlight that Prompt Replay’s advantages shine in scenarios where rollouts are the bottleneck and the dataset is difficult for the model at hand. • We raise a warning signal against using Qwen 2.5 Math model family, which has become close to a standard in the GRPO literature, as it provides a false positive signal for researchers, by gaining easy improvements in accuracy, but has poor generalization to other models. 
+
+# 2 PRELIMINARIES 
+
+GROUP RELATIVE POLICY OPTIMIZATION (GRPO) GRPO generates a group of G candidate responses {yj }Gj=1 (i.e., performs rollouts) for each prompt 
+
+x (question) using the LLM as policy. The response is checked against the ground-truth answer provided by the dataset, and a binary reward is assigned: r(x, y ) = 1 if the final answer matches the ground truth, and r(x, y ) = 0 otherwise. It then assigns each response a group-relative advantage by subtracting from its reward the mean of the other responses for the same prompt. Building upon the original Group Relative Policy Optimization (GRPO) algorithm (Shao et al., 2024), much effort has been put into optimizing the GRPO framework (Shao et al., 2024; Yu et al., 2025; Liu et al., 2025b). Our method builds upon the formulation of OLMo-RL (Olmo et al., 2025), which includes most of the latest established advancements. Formally, the objective function is defined as: 
+
+J(θ) = 1
+
+PGi=1 TiGX
+
+> i=1
+> Ti
+
+X
+
+> t=1
+
+min 
+
+ πθ (yi,t | x, y i,<t )
+
+πθold (yi,t | x, y i,<t ) , η 
+
+
+
+· min 
+
+
+
+ρi,t (θ) ˆAi, clip( ρi,t (θ), 1 − ϵlow , 1 + ϵhigh ) ˆAi
+
+
+
+,
+
+(1) where Ti is the length of response yi. The term ρi,t (θ) = πθ (yi,t |x,y i,<t )  
+
+> πθold (yi,t |x,y i,<t )
+
+represents the token-level probability ratio between the current and old policies. The hyperparameters ϵlow and ϵhigh control the clipping range, while η serves as a truncated importance sampling cap (Yao et al., 2025). The responses yi are sampled from the old policy yi ∼ πθold (· | x). Consistent with the GRPO formulation, the advantage ˆAi applies to all tokens t in response yi and is calculated based on the relative reward within the group: 
+
+ˆAi = r(x, y i) − mean  {r(x, y j )}Gj=1 
+
+ (2) where x denotes the input prompt, yi = ( yi, 1, . . . , y i,T i ) is the generated response sequence, and 
+
+r(x, y i) is the scalar reward assigned to response yi for prompt x. Note that this variant uses mean-centering without standard deviation normalization. PASS RATE AND THEORETICAL EFFICIENCY OF GRADIENT UPDATES .In the RL framework, we can define training efficiency not strictly by the number of update steps, but rather by the magnitude of loss reduction per optimization step. It is shown that this efficiency is bounded by the variance of the reward signal and maximizes at medium difficulty questions, where half of the responses are correct (pass rate, or pθ (x) = 0 .5) (Zeng et al., 2025; Foster et al., 2025; Bae et al., 2025). A pass rate of 0.5 creates the highest mean absolute advantage and subsequently the highest gradient signal. Prior work demonstrated this on slightly different objectives and advantage; we write the derivation with the used objective in Appendix A. 
+
+# 3 RELATED WORK 
+
+RL for LLM Reasoning Recently, Reinforcement Learning (RL) has evolved from human pref-erence alignment (Christiano et al., 2023; Ouyang et al., 2022; Bai et al., 2022) to Reinforcement 3Learning with Verifiable Rewards (RLVR) for reasoning tasks (Guo et al., 2025; Yu et al., 2025). While early RLVR methods relied on Proximal Policy Optimization (PPO) and (expensive) value models, advances such as Group Relative Policy Optimization (GRPO) (Shao et al., 2024) have signif-icantly reduced computational overhead by proposing group-based advantage estimation. Subsequent optimizations, including Dr. GRPO (Liu et al., 2025b), DAPO (Yu et al., 2025), or OLMO 3 (Olmo et al., 2025), further refine efficiency through importance sampling truncation, length-bias mitigation, and the removal of the KL penalty. Our work builds upon these algorithmic refinements, following most recent line of research (Olmo et al., 2025). 
+
+Data Selection and Prompt Utility Besides algorithmic changes, data selection strategies aim to optimize efficiency by training on the most informative samples. Essentially, many prompts remain unusable for many epochs, being either too difficult or too easy, delivering limited training signals. Offline selection methods like LIMR (Li et al., 2025) and s1 (Muennighoff et al., 2025) prune datasets based on static quality scores. However, as the policy evolves, static selection fails to capture the dynamic nature of the model’s capacity. Recent work defines prompt utility through various lenses: signal-to-noise maximization (Zhang et al., 2025b), maximal gradient norms (Zeng et al., 2025), or estimated learning impact (Li et al., 2025; Foster et al., 2025). Independent of the lens looked through, it is shown that the most useful prompts are of medium difficulty, where half of the rollouts obtain a reward (i.e. half the answers are correct, half wrong). 
+
+Curriculum Learning and Online Filtering Curriculum learning (CL) organizes tasks from easy to hard to improve convergence (Bengio et al., 2009). In the context of LLMs, static curricula (Luo et al., 2025; Song et al., 2025) use hand-crafted difficulty schedules, while online strategies (Shi et al., 2025; Gao et al., 2025; Zheng et al., 2025) adaptively filter prompts based on the model’s current performance. However, a significant bottleneck remains: many online methods (Bae et al., 2025; Zhang et al., 2025b), rely on additional rollouts to estimate difficulty, introducing computational overhead. In other work (Zhang et al., 2025b), redundant models are introduced to perform the same task. Methods like CurES (Zeng et al., 2025) use Bayesian estimation to mitigate this, but still require complex scheduling. 
+
+Experience Replay and Stability Experience Replay (ER) is a reinforcement learning technique originally proposed to stabilize training and improve sample efficiency by storing and re-sampling previously generated experiences (Lin, 1992). While on-policy algorithms like GRPO typically discard rollouts after a single update, recent works have adapted ER for LLMs to optimize the training loop, showing notable improvements in convergence speed and learning capabilities (Zhan et al., 2025; Zhang et al., 2025a; Dou et al., 2025). However, integrating ER into on-policy LLM training introduces two new challenges. First, defining which data to keep inside the buffer is non-trivial (Zhan et al., 2025; Schaul et al., 2016). Second, standard ER implementations often store full trajectories (prompts and responses). While this increases sample efficiency (Qu et al., 2025; Sun et al., 2025; Zhang et al., 2025c), it introduces off-policy noise from previous, less capable model behaviours. Furthermore, aggressive reuse without regularization can lead to catastrophic forgetting, particularly when the KL divergence penalty is removed. To mitigate these concerns, we replay only prompts to maintain on-policy optimization and mix these with global (fresh) data samples. 
+
+# 4 METHODOLOGY 
+
+4.1 PROMPT REPLAY 
+
+To maximize sample efficiency, we maintain a dynamic replay buffer B. After each training step, we estimate the pass rate pθ (x) for each sampled prompt x. Prompts with intermediate difficulty, 
+
+pθ (x) ∈ [pmin , p max ], are inserted into the buffer. At step t, we build a batch of size N by mixing fresh prompts from the original dataset with prompts drawn from the buffer. We reuse up to a fraction ϵ of the batch, but the realized fraction ϵt ≤ ϵ
+
+depends on how many buffer prompts are eligible (a prompt is eligible if its cooldown has expired). This yields the mixed prompt-sampling distribution 
+
+Dmix ,t = (1 − ϵt) Dfresh + ϵt Dbuf ,t , (3) 4where Dfresh is the default sampling distribution over the full dataset (i.e., the standard sampler used without replay), and Dbuf ,t is the distribution induced by sampling eligible prompts from Bt.Prompt Replay is on-policy : buffer entries store only prompts (no trajectories), and for each reused prompt we generate new completions using the current policy. Within Bt, we prioritize medium-difficulty prompts by ranking eligible prompts by |pθ (x) − 0.5| and sampling from the top of this ordering (ties sampled uniformly). When a prompt is inserted into B, a cooldown period C prevents it from being reused for the next 
+
+C training steps. Each prompt can be reused at most R times; after R reuses it is removed from Bt
+
+but remains available via the standard sampler Dfresh , preventing depletion in long multi-epoch runs. After each reuse, we recompute pθ (x) under the current policy and reinsert the prompt into B only if 
+
+pθ (x) ∈ [pmin , p max ]. Full pseudo code can be found in Appendix 1. The hyperparameters (ϵ, C, R ) trade off sample-efficiency gains against overfitting risk: larger ϵ and 
+
+R and smaller C increase reuse concentration on a small set of prompts. Prompt Replay is a similar concept to Prioritized Experience Replay (Schaul et al., 2016), except that it does not store the trajectories (answers), only the prompts (questions), and it prioritizes based on pass rate rather than TD error. 4.2 THEORETICAL JUSTIFICATION 
+
+We justify our sampling strategy by viewing the training process as a constrained resource allocation problem . We aim to maximize the expected policy improvement per optimization step while ensuring the coverage of the support with the global data distribution. Let D be the global dataset and B be the fixed batch size for a training step. We seek a subset B ⊂ D 
+
+with |B| = B that maximizes the expected gradient norm, which serves as a proxy for learning speed. As shown in Appendix A, the contribution of a single sample x to the gradient variance is proportional to the variance of its reward distribution: 
+
+E[∥∇ θ J(x)∥2] ∝ Var( r|x) = pθ (x)(1 − pθ (x)) . (4) Let v(x) = pθ (x)(1 − pθ (x)) denote this value function. The function v(x) is strictly concave over 
+
+pθ (x) ∈ [0 , 1] and symmetric around its global maximum at pθ (x) = 0 .5.To maximize the total learning signal of the batch, we solve: 
+
+max 
+
+> B⊂D
+
+X
+
+> x∈B
+
+v(x), s.t. |B| = B. (5) Since v(x) is monotonically decreasing with respect to the distance δ(x) = |pθ (x) − 0.5|, the optimal solution to this maximization problem is the set of B samples with the smallest δ(x). Our sorting mechanism, prioritizing prompts by |pθ (x) − 0.5| is equivalent to a greedy maximization of the expected gradient magnitude per batch. While sorting maximizes the update magnitude, sampling exclusively from the frontier subset 
+
+S (defined as the set of prompts with minimal δ(x)) introduces a distributional shift. The true optimization objective is the expectation over the global distribution D:
+
+Jtrue (θ) = Ex∼D [J(x; θ)] . (6) If we optimize solely on the active subset S, we are optimizing a different objective JS (θ) = 
+
+Ex∼S [J(x; θ)] . Crucially, the gradient ∇JS has zero support on regions where x / ∈ S (i.e., easy or impossible prompts). This leads to two failure modes: 1. Catastrophic Forgetting: The model may degrade on previously solved tasks ( pθ (x) ≈ 1)because the active objective JS imposes no penalty for such degradation. 2. Lack of Exploration: By excluding difficult tasks ( pθ (x) ≈ 0), we could prevent them from ever transitioning into the “learnable” region ( pθ (x) ≈ 0.5) as the model evolves. 5To address this, we define a mixture distribution Q(x) = ϵS(x) + (1 − ϵ)D(x). This ensures that the support of the sampling distribution covers the support of the true distribution ( supp (D) ⊆ supp (Q)). The expected gradient under our mixture strategy is: 
+
+Ex∼Q[∇J(x)] = ϵ Ex∼S [∇J(x)] 
+
+| {z }
+
+> High Variance (Speed)
+
++(1 − ϵ) Ex∼D [∇J(x)] 
+
+| {z }
+
+> Global Anchor (Stability)
+
+. (7) The term (1 − ϵ)Ex∼D [∇J(x)] acts as an approximation of the global constraints. Even if the gradient magnitude on easy tasks is small, it could provide necessary directional information to prevent the policy from drifting away from established knowledge. The coefficient ϵ controls the trade-off between the rate of convergence and the stability of the estimator. 4.3 EXPERIMENTAL SETUP 
+
+OLMo-RL training codebase was used, providing a strong a baseline (Olmo et al., 2025). For evaluation , we report average accuracy over 6 benchmarks: AIME25 (Zhang & Math-AI, 2025), AIME24 (Zhang & Math-AI, 2024), AMC (Zhang & Math-AI, 2023), MATH500 (Lightman et al., 2024), OlympiadBench (He et al., 2024), and MinervaMath (Lewkowycz et al., 2022), all common practice used in the literature. We acknowledge the variance of some of them (AIME24, AIME25, AMC), as they contain a small number of data points (30, 30, and 40, respectively), yet using the average over multiple benchmarks ensures robustness of the evaluation. For the models , we experiment with Qwen3-8B (Yang et al., 2025), and Llama 3.2 3B (Meta, 2024). The method must work regardless of what dataset is chosen, so for training datasets , we use Dolci RL Zero Math from OLMo 3, (Olmo et al., 2025), which contains 13k examples, and Polaris, a more difficult dataset with 53k examples (An et al., 2025) used only for the bigger Qwen3 8B model. These were chosen so they would vary in size and difficulty, and be appropriate for the model sizes chosen. For experiments on the Dolci dataset, we set the total context length at 8192 tokens: 1024 for the prompt (question) and 7168 tokens for the response. For the Polaris dataset, we extend the context to 12,288 tokens total context with the same tokens allocated for the prompt. For hardware , we use 2 nodes of 4 H100 95GB each, one node for learners (weight update) and one for the rollouts (vLLM engines; actors), except for the Dolci dataset, where the context is too big and gets CUDA OOM, where we added another node for the rollouts, having two GPUs per vLLM engine. For hyperparameter tuning , we test the cooldown steps C = [2 , 5, 10 , 20] on Qwen 2.5 Math 1.5B (Yang et al., 2024) on the Dolci dataset with a total context of 4092, on a single node with 4 H100s, divided equally between learners and actors. For Prompt Replay main results, we used C = 10 cooldown steps, R = 15 max reuse times, 
+
+pmin = 0 .25 , p max = 0 .75 and with prompt replay fraction ϵ = 0 .75 .Learning rate is constant at 1e-6, sampling temperature set to 1 for rollouts and set to 0 for evaluation. We use a batch size of 32 prompts with 16 rollouts per prompt, resulting in 512 rollouts per training step. Full hyperparameter list in Appendix 1. 
+
+# 5 RESULTS 
+
+5.1 MAIN RESULTS 
+
+Figure 2 compares Prompt Replay with the baseline OLMo-RL: the first row represents the average accuracy of the 6 benchmarks, the second row represents the number of prompts with the pass rate equal to 0, and third row represents the mean absolute advantage. Prompt Replay works as expected, where it has a higher mean absolute advantage from reusing the prompts that are closer to a pass rate equal to 0.5 and saves compute by not performing rollouts on prompts that end up having pass rate of 0, thus performing more steps in the same amount of time (see Appendix 5 ) for figure with training steps over training time). These translate into faster gains in accuracy on the benchmarks early on, but eventually plateau and converge with the baseline. 6Llama 3.1 4B (Dolci) Qwen 3 8B (Dolci) Qwen 3 8B (Polaris) Accuracy vs time No. of prompts px=0 Mean  |Adv |
+
+Figure 2: Prompt Replay vs Baseline (OLMo-RL) . Prompt Replay shows: higher mean |Adv | (3rd row), resulting in more signal from the data; lower number of prompts (2nd row) with pass rate = 0, wasting less compute on unusable prompts; earlier gains in the average accuracy over 6 benchmarks (1st row), but plateaus and converges with the baseline; benchmark score is max at 10 instead of 100 The plateau of the prompt replay can be explained by two factors: (i) the hyperparameter configuration chosen might be too aggressive - it might reuse prompts too many times or too often - which possibly led to overfitting over a small number of prompts and stagnation of the accuracy; small experiments were run to test different configurations, yet the search space is large so the optimal might not have been found. An extensive hyperparameter optimization remains for future work. (ii) the baselines plateau as well; for Qwen 3 8B Dolci, it is clear from the figure 2, while for the other two experiments, the baseline was run for longer and showed the same plateau roughly 2% points higher. So the plateau behaviour is expected, but occurs earlier for prompt replay due to aggressive hyperparameter choice. There are two reasons why Qwen 3 8B models show smaller initial improvements compared to the Llama: (i) one of the benefits of prompt replay is that it saves up compute (and speeds up training) by reducing the rollouts done on those unusable prompts; Qwen is a bigger model, so on the same training dataset, it has a lower number of prompts with a pass rate of 0 meaning lower gains from prompt replay; this can be seen in Fig 2 second row, as the gap between baseline and prompt replay. (ii) On Qwen3-8B Polaris, the longer context forced us to double rollout GPUs (4 →8; two GPUs per vLLM engine), so rollouts stopped being the bottleneck and Prompt Replay’s compute savings from fewer zero-variance prompts didn’t translate into faster training; the rollout GPUs were partially idle during weight updates. These results show that Prompt Replay benefits are higher when (a) rollouts (generating the answer) are the bottleneck and (b) the dataset is difficult for the model (i.e. the fraction of prompts where model did not answer correct is high). 7(a) Different cooldown periods (2, 5, 10, 20) vs baseline. All cooldown periods are above the base-line, yet with marginal gains. 
+
+> (b) Only 2 cooldown steps prompt replay vs base-line, for readability. Surprisingly it does not show signs of overfitting and maintains better accuracy
+
+Figure 3: Average accuracy over 6 benchmarks over time for cooldown-step ablation on Qwen2.5 1.5B, Dolci dataset; All cooldown steps have similar performance; The baseline was trained for 800 steps, a prompt was reused maximum 15 times. 5.2 VARYING COOLDOWN STEPS 
+
+Our method comes with four hyperparameters. Cooldown period C determines how often prompts re-occur, regulating overfitting. Fraction ϵ is the max prompts that can be reused in a batch. The pair 
+
+pmin , p max determines the range of pass-rates to filter prompts upon for the replay buffer and, finally, 
+
+R determines how often the algorithm is allowed to reuse certain prompts. We perform a sensitivity analysis only to the cooldown steps, using the values [2,5,10,20]. Figure 3 presents results of cooldown steps sensitivity analysis where different cooldown steps C
+
+were tested [2, 5, 10, 20]. All cooldown steps have similar performance. This is a surprising result, as it was expected that a low value of 2 (meaning using the same prompt every other training step) would lead to overfitting. Yet, it performs as well as the other configurations. We investigate this further in the discussion. 
+
+# 6 DISCUSSION 
+
+6.1 INSENSITIVITY TO COOLDOWN STEPS 
+
+Figure 4: Avg Accuracy over 6 benchmarks, Baseline OLMo-RL Qwen 2.5 1.5B on Dolci, training on full dataset vs 32 prompts Surprised by the results from Figure 3, where 2 cooldown training steps were used, and overfitting did not appear, we decided to test the limits and try an experiment similar to 1 cooldown steps without a max reuse number - that is having the whole training size equal to the batch size. The same exact 32 prompts were used for training every single step, and compared with the baseline on the full dataset of 13k data points. Results are in Fig. 4 and shockingly, it performs similarly or better than the baseline. This can be explained by spurious rewards: Shao et al. (2025) explained the phenomenon, where Qwen 2.5 models, in particular, show an increase in performance even when giving random rewards; this does not happen with Llama and OLMo models; why this happens is not yet understood. Other papers try to take advantage of this phenomenon and come up with methods where a single data point (prompt) is being used and shows better accuracy (Li et al., 2026; Wang et al., 2025). For these reasons, we consider the ablations invalid and use different models for the main results. Small tests were done to ensure they are not susceptible to spurious rewards. 86.2 LIMITATIONS & F UTURE WORK 
+
+Reflecting on the prompt replay method, although it is similar to the well-known Prioritized Experi-ence Replay (PER), but without storing the actions (responses), only the states (prompts), it might be worth investigating what happens if, instead of using cooldown steps, the method would borrow more ideas from PER. For example, prompts could be stored in a buffer until it reaches a certain size, then each prompt would be given a probability of being reused based on its pass rate; this would make the sampling from the buffer stochastic, while the current prompt replay method uses a deterministic one. Although sensitivity analysis was conducted on the cooldown steps, it proved unreliable. More robust hyperparameter optimization and ablations were not performed due to time and computational constraints. Future work could test the 4 hyperparameters mentioned in the method, and ablate prioritizing prompts with a pass rate closer to 0.5, to clearly separate the effect of speed-ups due to fewer zero-variance prompts and speed-ups due to higher advantage. Another limitation is the number of model types, model sizes, and datasets. Even though we aimed at testing at least two of each, a more robust setting could have three model sizes (1B, 4B, 8B parameters), three model types (Llama, Qwen, OLMo), each with two datasets, as the method performance is highly dependent on the model’s capabilities on a certain dataset, i.e. the number of prompts with pass rate 0. Finally, a limiting factor in academia will always be computing power. Although we run the experiments until the learning curve flattened out, and most of the literature on GRPO and curriculum run experiments at a similar budget, works from Olmo et al. (2025) and Khatri et al. (2025) on show that scaling the compute continues to bring more gains. The authors of the latter spent 100k GPU hours on a single 8B run, while our total budget for the project was 3k. Thus, we leave for future work to scale up the prompt replay method, or incorporate it with together with other methods in an industry-scale training run. Computing is also the reason multiple runs with different seeds were not performed to get statistical significance of the results, an unhealthy practice common in the literature. Yet, because the RL happens on an already trained model, Khatri et al. (2025) claim the variance of GRPO variants is at most 2% error margin. 
+
+# 7 CONCLUSION 
+
+We presented Prompt Replay , an overhead-free online data selection method for GRPO-style RLVR that reuses prompts only . By reusing and prioritizing medium-difficulty prompts (pass rate near 0.5), Prompt Replay reduces wasted rollouts on zero-variance prompts and increases the mean absolute advantage, yielding faster early gains in benchmark accuracy. We observe consistent improvements in rollout efficiency and initial learning speed, but aggressive reuse can lead to earlier plateauing and eventual convergence with the baseline. Finally, we find Qwen2.5-Math exhibits spurious-reward behavior that can invalidate ablations, suggesting it should not be used as the sole testbed for GRPO method research. ACKNOWLEDGEMENTS 
+
+We thank Thomas Moerland for valuable feedback and discussions that helped shape this work. We also thank LIACS and Rob van Nieuwpoort for granting access to Snellius, the Dutch national supercomputer, which made the experiments possible. 
+
+# REFERENCES 
+
+Chenxin An, Zhihui Xie, Xiaonan Li, Lei Li, Jun Zhang, Shansan Gong, Ming Zhong, Jingjing Xu, Xipeng Qiu, Mingxuan Wang, et al. Polaris: A post-training recipe for scaling reinforcement learning on advanced reasoning models, 2025. URL https://hkunlp.github.io/blog/2025/Polaris .Chenxin An, Zhihui Xie, Xiaonan Li, Lei Li, Jun Zhang, Shansan Gong, Ming Zhong, Jingjing Xu, Xipeng Qiu, Mingxuan Wang, and Lingpeng Kong. Polaris: A post-training recipe for scaling reinforcement learning on advanced reasoning models, 2025. URL https://hkunlp. github.io/blog/2025/Polaris .9Sanghwan Bae, Jiwoo Hong, Min Young Lee, Hanbyul Kim, JeongYeon Nam, and Donghyun Kwak. Online difficulty filtering for reasoning oriented reinforcement learning. arXiv preprint arXiv:2504.03380 , 2025. Yuntao Bai, Andy Jones, Kamal Ndousse, Amanda Askell, Anna Chen, Nova DasSarma, Dawn Drain, Stanislav Fort, Deep Ganguli, Tom Henighan, Nicholas Joseph, Saurav Kadavath, Jackson Kernion, Tom Conerly, Sheer El-Showk, Nelson Elhage, Zac Hatfield-Dodds, Danny Hernandez, Tristan Hume, Scott Johnston, Shauna Kravec, Liane Lovitt, Neel Nanda, Catherine Olsson, Dario Amodei, Tom Brown, Jack Clark, Sam McCandlish, Chris Olah, Ben Mann, and Jared Kaplan. Training a helpful and harmless assistant with reinforcement learning from human feedback, 2022. URL https://arxiv.org/abs/2204.05862 .Yoshua Bengio, Jérôme Louradour, Ronan Collobert, and Jason Weston. Curriculum learning. In 
+
+Proceedings of the 26th annual international conference on machine learning , pp. 41–48, 2009. Paul Christiano, Jan Leike, Tom B. Brown, Miljan Martic, Shane Legg, and Dario Amodei. Deep reinforcement learning from human preferences, 2023. URL https://arxiv.org/abs/ 1706.03741 .Shihan Dou, Muling Wu, Jingwen Xu, Rui Zheng, Tao Gui, Qi Zhang, and Xuanjing Huang. Improving rl exploration for llm reasoning through retrospective replay, 2025. URL https: //arxiv.org/abs/2504.14363 .Thomas Foster, Anya Sims, Johannes Forkel, Mattie Fellows, and Jakob Foerster. Learning to reason at the frontier of learnability, 2025. URL https://arxiv.org/abs/2502.12272 .Zhaolin Gao, Joongwon Kim, Wen Sun, Thorsten Joachims, Sid Wang, Richard Yuanzhe Pang, and Liang Tan. Prompt curriculum learning for efficient llm post-training. arXiv preprint arXiv:2510.01135 , 2025. Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song, Peiyi Wang, Qihao Zhu, Runxin Xu, Ruoyu Zhang, Shirong Ma, Xiao Bi, Xiaokang Zhang, Xingkai Yu, Yu Wu, Z. F. Wu, Zhibin Gou, Zhihong Shao, Zhuoshu Li, Ziyi Gao, Aixin Liu, Bing Xue, Bingxuan Wang, Bochao Wu, Bei Feng, Chengda Lu, Chenggang Zhao, Chengqi Deng, Chong Ruan, Damai Dai, Deli Chen, Dongjie Ji, Erhang Li, Fangyun Lin, Fucong Dai, Fuli Luo, Guangbo Hao, Guanting Chen, Guowei Li, H. Zhang, Hanwei Xu, Honghui Ding, Huazuo Gao, Hui Qu, Hui Li, Jianzhong Guo, Jiashi Li, Jingchang Chen, Jingyang Yuan, Jinhao Tu, Junjie Qiu, Junlong Li, J. L. Cai, Jiaqi Ni, Jian Liang, Jin Chen, Kai Dong, Kai Hu, Kaichao You, Kaige Gao, Kang Guan, Kexin Huang, Kuai Yu, Lean Wang, Lecong Zhang, Liang Zhao, Litong Wang, Liyue Zhang, Lei Xu, Leyi Xia, Mingchuan Zhang, Minghua Zhang, Minghui Tang, Mingxu Zhou, Meng Li, Miaojun Wang, Mingming Li, Ning Tian, Panpan Huang, Peng Zhang, Qiancheng Wang, Qinyu Chen, Qiushi Du, Ruiqi Ge, Ruisong Zhang, Ruizhe Pan, Runji Wang, R. J. Chen, R. L. Jin, Ruyi Chen, Shanghao Lu, Shangyan Zhou, Shanhuang Chen, Shengfeng Ye, Shiyu Wang, Shuiping Yu, Shunfeng Zhou, Shuting Pan, S. S. Li, Shuang Zhou, Shaoqing Wu, Tao Yun, Tian Pei, Tianyu Sun, T. Wang, Wangding Zeng, Wen Liu, Wenfeng Liang, Wenjun Gao, Wenqin Yu, Wentao Zhang, W. L. Xiao, Wei An, Xiaodong Liu, Xiaohan Wang, Xiaokang Chen, Xiaotao Nie, Xin Cheng, Xin Liu, Xin Xie, Xingchao Liu, Xinyu Yang, Xinyuan Li, Xuecheng Su, Xuheng Lin, X. Q. Li, Xiangyue Jin, Xiaojin Shen, Xiaosha Chen, Xiaowen Sun, Xiaoxiang Wang, Xinnan Song, Xinyi Zhou, Xianzu Wang, Xinxia Shan, Y. K. Li, Y. Q. Wang, Y. X. Wei, Yang Zhang, Yanhong Xu, Yao Li, Yao Zhao, Yaofeng Sun, Yaohui Wang, Yi Yu, Yichao Zhang, Yifan Shi, Yiliang Xiong, Ying He, Yishi Piao, Yisong Wang, Yixuan Tan, Yiyang Ma, Yiyuan Liu, Yongqiang Guo, Yuan Ou, Yuduan Wang, Yue Gong, Yuheng Zou, Yujia He, Yunfan Xiong, Yuxiang Luo, Yuxiang You, Yuxuan Liu, Yuyang Zhou, Y. X. Zhu, Yanping Huang, Yaohui Li, Yi Zheng, Yuchen Zhu, Yunxian Ma, Ying Tang, Yukun Zha, Yuting Yan, Z. Z. Ren, Zehui Ren, Zhangli Sha, Zhe Fu, Zhean Xu, Zhenda Xie, Zhengyan Zhang, Zhewen Hao, Zhicheng Ma, Zhigang Yan, Zhiyu Wu, Zihui Gu, Zijia Zhu, Zijun Liu, Zilin Li, Ziwei Xie, Ziyang Song, Zizheng Pan, Zhen Huang, Zhipeng Xu, Zhongyu Zhang, and Zhen Zhang. Deepseek-r1 incentivizes reasoning in llms through reinforcement learning. Nature , 645 (8081):633–638, September 2025. ISSN 1476-4687. doi: 10.1038/s41586-025-09422-z. URL 
+
+http://dx.doi.org/10.1038/s41586-025-09422-z .10 Chaoqun He, Renjie Luo, Yuzhuo Bai, Shengding Hu, Zhen Thai, Junhao Shen, Jinyi Hu, Xu Han, Yujie Huang, Yuxiang Zhang, Jie Liu, Lei Qi, Zhiyuan Liu, and Maosong Sun. Olympiad-Bench: A challenging benchmark for promoting AGI with olympiad-level bilingual multimodal scientific problems. In Proceedings of the 62nd Annual Meeting of the Association for Com-putational Linguistics (Volume 1: Long Papers) , pp. 3828–3850, Bangkok, Thailand, August 2024. Association for Computational Linguistics. doi: 10.18653/v1/2024.acl-long.211. URL 
+
+https://aclanthology.org/2024.acl-long.211/ .Devvrit Khatri, Lovish Madaan, Rishabh Tiwari, Rachit Bansal, Sai Surya Duvvuri, Manzil Zaheer, Inderjit S. Dhillon, David Brandfonbrener, and Rishabh Agarwal. The art of scaling reinforcement learning compute for llms, 2025. URL https://arxiv.org/abs/2510.13786 .Nathan Lambert, Jacob Morrison, Valentina Pyatkin, Shengyi Huang, Hamish Ivison, Faeze Brahman, Lester James V. Miranda, Alisa Liu, Nouha Dziri, Shane Lyu, Yuling Gu, Saumya Malik, Victoria Graf, Jena D. Hwang, Jiangjiang Yang, Ronan Le Bras, Oyvind Tafjord, Chris Wilhelm, Luca Soldaini, Noah A. Smith, Yizhong Wang, Pradeep Dasigi, and Hannaneh Hajishirzi. Tulu 3: Pushing frontiers in open language model post-training, 2025. URL https://arxiv.org/ abs/2411.15124 .Aitor Lewkowycz, Anders Andreassen, David Dohan, Ethan Dyer, Henryk Michalewski, Vinay V. Ramasesh, Ambrose Slone, Cem Anil, Imanol Schlag, Theo Gutman-Solo, Yuhuai Wu, Behnam Neyshabur, Guy Gur-Ari, and Vedant Misra. Solving quantitative reasoning problems with language models. In Advances in Neural Information Processing Systems 35 (NeurIPS 2022) , 2022. URL http://papers.nips.cc/paper_files/paper/2022/hash/ 18abbeef8cfe9203fdf9053c9c4fe191-Abstract-Conference.html .Xuefeng Li, Haoyang Zou, and Pengfei Liu. Limr: Less is more for rl scaling. arXiv preprint arXiv:2502.11886 , 2025. Yiyuan Li, Zhen Huang, Yanan Wu, Weixun Wang, Xuefeng Li, Yijia Luo, Wenbo Su, Bo Zheng, and Pengfei Liu. One sample to rule them all: Extreme data efficiency in rl scaling, 2026. URL 
+
+https://arxiv.org/abs/2601.03111 .Hunter Lightman, Vineet Kosaraju, Yura Burda, Harrison Edwards, Bowen Baker, Teddy Lee, Jan Leike, John Schulman, Ilya Sutskever, and Karl Cobbe. Let’s verify step by step. In The Twelfth International Conference on Learning Representations (ICLR) , 2024. URL https: //openreview.net/forum?id=v8L0pN6EOi . Introduces PRM800K and the MATH-500 evaluation split. Long-Ji Lin. Self-improving reactive agents based on reinforcement learning, planning and teaching. 
+
+Machine learning , 8(3):293–321, 1992. Mingjie Liu, Shizhe Diao, Ximing Lu, Jian Hu, Xin Dong, Yejin Choi, Jan Kautz, and Yi Dong. Prorl: Prolonged reinforcement learning expands reasoning boundaries in large language models. 
+
+arXiv preprint arXiv:2505.24864 , 2025a. Zichen Liu, Changyu Chen, Wenjun Li, Penghui Qi, Tianyu Pang, Chao Du, Wee Sun Lee, and Min Lin. Understanding r1-zero-like training: A critical perspective, 2025b. URL https: //arxiv.org/abs/2503.20783 .Michael Luo, Sijun Tan, Justin Wong, Xiaoxiang Shi, William Y Tang, Manan Roongta, Colin Cai, Jeffrey Luo, Tianjun Zhang, Li Erran Li, et al. Deepscaler: Surpassing o1-preview with a 1.5 b model by scaling rl. Notion Blog , 2025. Meta. meta-llama/llama-3.2-3b-instruct (model card). https://huggingface.co/ meta-llama/Llama-3.2-3B-Instruct , 2024. Accessed 2026-01-29. Niklas Muennighoff, Zitong Yang, Weijia Shi, Xiang Lisa Li, Li Fei-Fei, Hannaneh Hajishirzi, Luke Zettlemoyer, Percy Liang, Emmanuel Candès, and Tatsunori Hashimoto. s1: Simple test-time scaling, 2025. URL https://arxiv.org/abs/2501.19393 .11 Team Olmo, :, Allyson Ettinger, Amanda Bertsch, Bailey Kuehl, David Graham, David Heineman, Dirk Groeneveld, Faeze Brahman, Finbarr Timbers, Hamish Ivison, Jacob Morrison, Jake Poznan-ski, Kyle Lo, Luca Soldaini, Matt Jordan, Mayee Chen, Michael Noukhovitch, Nathan Lambert, Pete Walsh, Pradeep Dasigi, Robert Berry, Saumya Malik, Saurabh Shah, Scott Geng, Shane Arora, Shashank Gupta, Taira Anderson, Teng Xiao, Tyler Murray, Tyler Romero, Victoria Graf, Akari Asai, Akshita Bhagia, Alexander Wettig, Alisa Liu, Aman Rangapur, Chloe Anastasiades, Costa Huang, Dustin Schwenk, Harsh Trivedi, Ian Magnusson, Jaron Lochner, Jiacheng Liu, Lester James V. Miranda, Maarten Sap, Malia Morgan, Michael Schmitz, Michal Guerquin, Michael Wilson, Regan Huff, Ronan Le Bras, Rui Xin, Rulin Shao, Sam Skjonsberg, Shannon Zejiang Shen, Shuyue Stella Li, Tucker Wilde, Valentina Pyatkin, Will Merrill, Yapei Chang, Yuling Gu, Zhiyuan Zeng, Ashish Sabharwal, Luke Zettlemoyer, Pang Wei Koh, Ali Farhadi, Noah A. Smith, and Hannaneh Hajishirzi. Olmo 3, 2025. URL https://arxiv.org/abs/2512.13961 .Long Ouyang, Jeff Wu, Xu Jiang, Diogo Almeida, Carroll L. Wainwright, Pamela Mishkin, Chong Zhang, Sandhini Agarwal, Katarina Slama, Alex Ray, John Schulman, Jacob Hilton, Fraser Kelton, Luke Miller, Maddie Simens, Amanda Askell, Peter Welinder, Paul Christiano, Jan Leike, and Ryan Lowe. Training language models to follow instructions with human feedback, 2022. URL 
+
+https://arxiv.org/abs/2203.02155 .Yun Qu, Qi Wang, Yixiu Mao, Vincent Tao Hu, Björn Ommer, and Xiangyang Ji. Can prompt difficulty be online predicted for accelerating rl finetuning of reasoning models? arXiv preprint arXiv:2507.04632 , 2025. Tom Schaul, John Quan, Ioannis Antonoglou, and David Silver. Prioritized experience replay, 2016. URL https://arxiv.org/abs/1511.05952 .Rulin Shao, Shuyue Stella Li, Rui Xin, Scott Geng, Yiping Wang, Sewoong Oh, Simon Shaolei Du, Nathan Lambert, Sewon Min, Ranjay Krishna, Yulia Tsvetkov, Hannaneh Hajishirzi, Pang Wei Koh, and Luke Zettlemoyer. Spurious rewards: Rethinking training signals in rlvr, 2025. URL 
+
+https://arxiv.org/abs/2506.10947 .Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, Y. K. Li, Y. Wu, and Daya Guo. Deepseekmath: Pushing the limits of mathematical reasoning in open language models, 2024. URL https://arxiv.org/abs/ 2402.03300 .Taiwei Shi, Yiyang Wu, Linxin Song, Tianyi Zhou, and Jieyu Zhao. Efficient reinforcement finetuning via adaptive curriculum learning. arXiv preprint arXiv:2504.05520 , 2025. Mingyang Song, Mao Zheng, Zheng Li, Wenjie Yang, Xuan Luo, Yue Pan, and Feng Zhang. Fastcurl: Curriculum reinforcement learning with stage-wise context scaling for efficient training r1-like reasoning models, 2025. URL https://arxiv.org/abs/2503.17287 .Yifan Sun, Jingyan Shen, Yibin Wang, Tianyu Chen, Zhendong Wang, Mingyuan Zhou, and Huan Zhang. Improving data efficiency for llm reinforcement fine-tuning through difficulty-targeted online data selection and rollout replay. arXiv preprint arXiv:2506.05316 , 2025. Kimi Team, Angang Du, Bofei Gao, Bowei Xing, Changjiu Jiang, Cheng Chen, Cheng Li, Chenjun Xiao, Chenzhuang Du, Chonghua Liao, et al. Kimi k1. 5: Scaling reinforcement learning with llms. arXiv preprint arXiv:2501.12599 , 2025. Yiping Wang, Qing Yang, Zhiyuan Zeng, Liliang Ren, Liyuan Liu, Baolin Peng, Hao Cheng, Xuehai He, Kuan Wang, Jianfeng Gao, Weizhu Chen, Shuohang Wang, Simon Shaolei Du, and Yelong Shen. Reinforcement learning for reasoning in large language models with one training example, 2025. URL https://arxiv.org/abs/2504.20571 .An Yang, Beichen Zhang, Binyuan Hui, Bofei Gao, Bowen Yu, Chengpeng Li, Dayiheng Liu, Jianhong Tu, Jingren Zhou, Junyang Lin, Keming Lu, Mingfeng Xue, Runji Lin, Tianyu Liu, Xingzhang Ren, and Zhenru Zhang. Qwen2.5-math technical report: Toward mathematical expert model via self-improvement. 2024. An Yang et al. Qwen3 technical report. 2025. 12 Feng Yao, Liyuan Liu, Dinghuai Zhang, Chengyu Dong, Jingbo Shang, and Jianfeng Gao. Your efficient rl framework secretly brings you off-policy rl training. Feng Yao’s Notion , 2025. Qiying Yu, Zheng Zhang, Ruofei Zhu, Yufeng Yuan, Xiaochen Zuo, Yu Yue, Weinan Dai, Tiantian Fan, Gaohong Liu, Lingjun Liu, et al. Dapo: An open-source llm reinforcement learning system at scale. arXiv preprint arXiv:2503.14476 , 2025. Yongcheng Zeng, Zexu Sun, Bokai Ji, Erxue Min, Hengyi Cai, Shuaiqiang Wang, Dawei Yin, Haifeng Zhang, Xu Chen, and Jun Wang. Cures: From gradient analysis to efficient curriculum learning for reasoning llms. arXiv preprint arXiv:2510.01037 , 2025. Runzhe Zhan, Yafu Li, Zhi Wang, Xiaoye Qu, Dongrui Liu, Jing Shao, Derek F. Wong, and Yu Cheng. Exgrpo: Learning to reason from experience, 2025. URL https://arxiv.org/abs/2510. 02245 .Hongzhi Zhang, Jia Fu, Jingyuan Zhang, Kai Fu, Qi Wang, Fuzheng Zhang, and Guorui Zhou. Rlep: Reinforcement learning with experience replay for llm reasoning, 2025a. URL https: //arxiv.org/abs/2507.07451 .Ruiqi Zhang, Daman Arora, Song Mei, and Andrea Zanette. Speed-rl: Faster training of reasoning models via online curriculum learning. arXiv preprint arXiv:2506.09016 , 2025b. Yifan Zhang and Team Math-AI. American mathematics competition (amc) 2023. https:// huggingface.co/datasets/math-ai/amc23 , 2023. Accessed 2026-01-28. Yifan Zhang and Team Math-AI. American invitational mathematics examination (aime) 2024. 
+
+https://huggingface.co/datasets/math-ai/aime24 , 2024. Accessed 2026-01-28. Yifan Zhang and Team Math-AI. American invitational mathematics examination (aime) 2025. 
+
+https://huggingface.co/datasets/math-ai/aime25 , 2025. Accessed 2026-01-28. Yuheng Zhang, Wenlin Yao, Changlong Yu, Yao Liu, Qingyu Yin, Bing Yin, Hyokun Yun, and Lihong Li. Improving sampling efficiency in rlvr through adaptive rollout and response reuse, 2025c. URL https://arxiv.org/abs/2509.25808 .Haizhong Zheng, Yang Zhou, Brian R Bartoldson, Bhavya Kailkhura, Fan Lai, Jiawei Zhao, and Beidi Chen. Act only when it pays: Efficient reinforcement learning for llm reasoning via selective rollouts. arXiv preprint arXiv:2506.02177 , 2025. 13 APPENDIX 
+
+# A PASS RATE AND THEORETICAL EFFICIENCY OF GRADIENT UPDATES 
+
+It is shown that the maximum optimization step is bounded by the variance of the reward signal and maximizes at medium difficulty questions, where half of the responses are correct (pass rate, or 
+
+pθ (x) = 0 .5). To ground this statement, we follow earlier work (Foster et al., 2025) which states we can approximate the expected policy improvement under a learning rate β using a first-order Taylor expansion: 
+
+Eπ [J(θnew ) − J(θold )] ≈ βEπ [∥∇ θ J(θ)∥2]. (8) This shows that optimization speed is proportional to the Gradient Signal Energy (∥∇ J∥2), which measures the steepness of the slope of the loss landscape. For advantage-based algorithms, this decomposes into the Fisher Information Trace of the policy and the scale of the advantage function: 
+
+Eπ [∥∇ θ J∥2] ∝ E
+
+ X
+
+> t
+
+∇ log π(at|st)
+
+> 2
+
+| {z }
+
+> Fisher Information Trace
+
+× E[( A(s, a )) 2]
+
+| {z }
+
+> Advantage Magnitude
+
+. (9) The Trace of the Fisher Information Matrix (FIM) measures how sensitive a probability distribution is to changes in weights ( θ). A high value means a tiny change in weights causes a large shift in output probabilities. For this purpose, we must assume that the Fisher Information Trace is independent of the Advantage Magnitude, an assumption also made in (Foster et al., 2025). Now, define question difficulty as the model’s accuracy in answering questions. Formally, 
+
+pθ (x) = Ey∼πθ [r(x, y )] . (10) In binary reasoning tasks (which is our case), the reward r ∈ { 0, 1} follows a Bernoulli distribution with pass rate pθ (x). When the advantage is defined as A = r − μ (as with Dr. GRPO ), the magnitude term becomes the reward variance: 
+
+E[( r − pθ (x)) 2] = Var( r) = pθ (x)(1 − pθ (x)) . (11) Note that we ignore the finite-sample correction ( 1 − 1 
+
+> G
+
+) for simplicity. Combining these results, we can state that the upper bound on the loss reduction is proportional to the variance of the rewards: 
+
+|L(θnew ) − L(θold )| ∝ pθ (x)(1 − pθ (x)) . (12) This shows that the gradient signal vanishes for deterministic outputs ( pθ (x) → 0 or 1) and peaks at 
+
+pθ (x) = 0 .5. In other words, optimal prompts are of medium difficulty, with a 50% pass rate. 
+
+# B ALGORITHM 
+
+The full pseudo code is of our algorithm is as follows; 14 Algorithm 1 GRPO with Prompt Replay 
+
+Require: Dataset Dfresh , Policy πθ , Reference πθold , Group size G.
+
+Require: Hyperparameters: ϵ (max replay fraction), C (cooldown), R (max reuse), pmin , p max 
+
+(difficulty bounds). 
+
+Require: Objective params: η, ϵ low , ϵ high (for Eq. 1). 
+
+1: Initialize Replay Buffer B ← ∅ 
+
+2: Initialize prompt metadata (usage count ux, last used step tx) for buffer entries. 
+
+3: for training step t = 1 , 2, . . . do 
+
+4: // Batch Construction (Prompt Replay) 
+
+5: Identify eligible prompts Et = {x ∈ B | t − tx > C }
+
+6: Rank Et by priority |pθ (x) − 0.5| (ascending) 
+
+7: Determine replay size Nbuf = min( ⌊ϵ · N ⌋, |E t|) and fresh size Nfresh = N − Nbuf 
+
+8: Sample batch Xbuf from top-Nbuf of Et
+
+9: Sample batch Xfresh from Dfresh 
+
+10: Combined batch X ← Xbuf ∪ Xfresh 
+
+11: // Rollout and Advantage Estimation 
+
+12: for each prompt x ∈ X do 
+
+13: Generate G responses {yj }Gj=1 ∼ πθold (· | x)
+
+14: Compute rewards {r(x, y j )}Gj=1 S
+
+15: Estimate pass rate pθ (x) ← 1
+
+> G
+
+PGj=1 r(x, y j )
+
+16: Compute mean reward ¯r ← 1
+
+> G
+
+PGj=1 r(x, y j )
+
+17: for i = 1 to G do 
+
+18: Compute advantage ˆAi ← r(x, y i) − ¯r {Eq. 2} 
+
+19: end for 
+
+20: // Buffer Update 
+
+21: Update usage: if x ∈ Xbuf , ux ← ux + 1 
+
+22: Update last used step: tx ← t
+
+23: if pθ (x) ∈ [pmin , p max ] and (x / ∈ B or ux < R ) then 
+
+24: Add/Update x in B with new pθ (x)
+
+25: else 
+
+26: Remove x from B (if exists) 
+
+27: end if 
+
+28: end for 
+
+29: // Policy Optimization 
+
+30: Compute token-level ratios ρi,t (θ) and clipped terms using Eq. 1 
+
+31: Update θ by maximizing J(θ):
+
+∇θ J(θ) ≈ ∇ θ
+
+ 1
+
+P Ti
+
+X
+
+> i,t
+
+min 
+
+ πθ
+
+πθold 
+
+, η 
+
+
+
+min 
+
+
+
+ρi,t ˆAi, clip (. . . ) ˆAi
+
+
+
+32: πθold ← πθ
+
+33: end for 
+
+15 C FULL HYPERPARAMETERS DETAILS 
+
+Table 1: Experiment Configuration Summary 
+
+Qwen3-8B Polaris Llama-3.2-3B Dolci Qwen3-8B Dolci 
+
+Batch size 32 32 32 Rollouts per Batch 16 16 16 Prompt replay fraction 0.75 0.75 0.75 Prompt replay max reuse 15 15 15 Prompt replay min pass rate 0.25 0.25 0.25 Prompt replay max pass rate 0.75 0.75 0.75 Replay cooldown steps 10 10 10 Seed 123 123 123 Pack length 12,288 8,192 8,192 Response length 11,264 7,168 7,168 Max prompt length 1,024 1,024 1,024 vLLM engines 4 4 4Tensor parallel (TP) 2 1 1Num learners 4 4 4Samples per prompt 16 16 16 Unique prompts per rollout 32 32 32 Learning rate 1.0 × 10 −6 1.0 × 10 −6 1.0 × 10 −6
+
+Sampling temperature 1 1 1
+
+# D SUPPLEMENTARY RESULTS ON THE MAIN RUNS : S TEPS VS TIME ,SEQUENCE LENGTH , R EWARD , E NTROPY 
+
+For 5 a) when Prompt Replay takes effect, Llama shows more steps than the baseline 150 training steps in 4 fours compared to 50 from baseline - this was effect was seen in the avg benchmark accuracy yet it plateaus. Investigating the plateau of steps Prompt Replay, logs show a 20 minute for a single step where the usual time was 1-2 minute. This could be partially explained by the increase in sequence length, but likely bugs appeared at the infrastructure which stalled the run, the real cause remain unknown. Qwen 3 8B trained on Dolci dataset (Fig. 5 b))shows the expected behaviour where prompt replay trains faster, and the gap increases over time, where at the end of training, Prompt replay reach about 30% more steps. Qwen 3 8B trained on Polaris dataset (Fig. 5 c)) shows the steps over time are very similar, the reason being that the run was given twice the GPU count for rollouts (thus generating responses was no longer the bottleneck), even though Prompt Replay has less rollouts wasted on zero variance prompts. This was unexpected, as its sequence length (Fig 5 f) ) remains fairly constant at around 1000-1200 tokens. It was expected that the sequence length to have a sharp incline to half of the allowed answer length, that is around 6000 tokens. That can be seen is happening for the same model train on Dolci dataset in Fig. 5 e). We can see in the Fig. 5 k) and l) that the Qwen model has a sharper entropy decline, reaching much lower values than Llama, reducing exploration. 16 (a) Llama 3.1 3B Dolci (b) Qwen 3 8B Dolci (c) Qwen 3 8B Polaris 
+
+# (d) Llama 3.1 3B (Dolci) (e) Qwen 3 8B Dolci (f) Qwen 3 8B Polaris 
+
+# (g) Llama 3.1 3B (Dolci) (h) Qwen 3 8B Dolci (i) Qwen 3 8B Polaris 
+
+# (j) Llama 3.1 3B (Dolci) (k) Qwen 3 8B Dolci (l) Qwen 3 8B Polaris
